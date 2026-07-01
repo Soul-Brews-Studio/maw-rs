@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/maw-matcher", "crates/maw-calver", "crates/maw-policy", "crates/maw-worktree", "crates/maw-transport", "crates/maw-routing", "crates/maw-tmux", "crates/maw-identity", "crates/maw-bring", "crates/maw-split", "crates/maw-peer", "crates/maw-hub", "crates/maw-feed", "crates/maw-auth", "crates/maw-xdg", "crates/maw-bind", "crates/maw-fuzzy", "crates/maw-plugin-scaffold", "crates/maw-plugin-manifest", "crates/maw-cli", "crates/maw-auto-wake", "crates/maw-discord"]
+members = ["crates/maw-matcher", "crates/maw-calver", "crates/maw-policy", "crates/maw-worktree", "crates/maw-transport", "crates/maw-routing", "crates/maw-tmux", "crates/maw-identity", "crates/maw-bring", "crates/maw-split", "crates/maw-peer", "crates/maw-hub", "crates/maw-feed", "crates/maw-auth", "crates/maw-xdg", "crates/maw-bind", "crates/maw-fuzzy", "crates/maw-plugin-scaffold", "crates/maw-plugin-manifest", "crates/maw-cli", "crates/maw-auto-wake", "crates/maw-discord", "crates/maw-discord-backfill"]
 resolver = "2"
 
 [workspace.package]
