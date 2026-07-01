@@ -73,12 +73,11 @@ pub fn write_channel_json(out_root: &Path, guild: &str, channel: &str, messages:
 }
 
 fn chrono_lite_now() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    format!("{secs}")
+    use time::format_description::well_known::Rfc3339;
+    use time::OffsetDateTime;
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_owned())
 }
 
 #[cfg(test)]
