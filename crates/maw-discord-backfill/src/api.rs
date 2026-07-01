@@ -249,6 +249,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fetch_messages_sets_cap_hit_at_limit() {
+        let channel = "cap-test";
+        let mut responses = BTreeMap::new();
+        responses.insert(
+            format!("/channels/{channel}/messages?limit=5"),
+            DiscordHttpResponse {
+                status: 200,
+                body: json!([
+                    {"id": "1000000000000000005", "content": "e"},
+                    {"id": "1000000000000000004", "content": "d"},
+                    {"id": "1000000000000000003", "content": "c"},
+                    {"id": "1000000000000000002", "content": "b"},
+                    {"id": "1000000000000000001", "content": "a"},
+                ]),
+                retry_after: None,
+            },
+        );
+        let rest = MockRest::new(responses);
+        let out = fetch_messages(&rest, "tok", channel, 5, None)
+            .await
+            .expect("fetch");
+        assert_eq!(out.messages.len(), 5);
+        assert!(out.cap_hit);
+    }
+
+    #[tokio::test]
     async fn fetch_messages_stops_at_watermark_and_sorts() {
         let channel = "1500775333283237970";
         let mut responses = BTreeMap::new();

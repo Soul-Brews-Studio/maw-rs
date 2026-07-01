@@ -198,9 +198,11 @@ pub async fn run_backfill(
             continue;
         }
 
+        let mut guild_subtotal = 0usize;
         for ch in targets {
             let mut channel_opts = opts.clone();
             channel_opts.limit = limit;
+            let before = grand_total;
             tally_channel_result(
                 &ch.name,
                 backfill_channel(rest, token, &ch.id, &ch.name, &g.name, &channel_opts, log).await,
@@ -208,10 +210,13 @@ pub async fn run_backfill(
                 &mut grand_total,
                 &mut channel_count,
             )?;
+            guild_subtotal += grand_total.saturating_sub(before);
             sleep(Duration::from_millis(1000)).await;
         }
 
-        log.log(&format!("  guild total: {grand_total} msgs"));
+        if !opts.list_only {
+            log.log(&format!("  guild total: {guild_subtotal} msgs"));
+        }
     }
 
     Ok((grand_total, channel_count))
