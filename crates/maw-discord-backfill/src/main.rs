@@ -23,9 +23,6 @@ enum Commands {
     List {
         #[command(subcommand)]
         target: ListTarget,
-        /// Filter guild by name or id
-        #[arg(long)]
-        guild: Option<String>,
     },
     /// Show incremental watermark
     Cursor {
@@ -69,7 +66,12 @@ enum Commands {
 #[derive(Subcommand)]
 enum ListTarget {
     Guilds,
-    Channels,
+    /// List text channels (optional guild filter — parity Bun 8f570de)
+    Channels {
+        /// Filter guild by name or id
+        #[arg(long)]
+        guild: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -93,14 +95,9 @@ async fn run() -> maw_discord_backfill::Result<()> {
             let id = me.get("id").and_then(|v| v.as_str()).unwrap_or("?");
             println!("✓ @{username} ({id})");
         }
-        Commands::List { target, guild } => {
+        Commands::List { target } => {
             let mut log = |line: &str| println!("{line}");
             let mut sink = LogSink(&mut log);
-            let opts = BackfillOptions {
-                guild_filter: guild,
-                list_only: true,
-                ..Default::default()
-            };
             match target {
                 ListTarget::Guilds => {
                     let guilds = maw_discord_backfill::api::list_guilds(&rest, &token).await?;
@@ -109,7 +106,12 @@ async fn run() -> maw_discord_backfill::Result<()> {
                     }
                     println!("{} guild(s)", guilds.len());
                 }
-                ListTarget::Channels => {
+                ListTarget::Channels { guild } => {
+                    let opts = BackfillOptions {
+                        guild_filter: guild,
+                        list_only: true,
+                        ..Default::default()
+                    };
                     run_backfill(&rest, &token, &opts, &mut sink).await?;
                 }
             }
