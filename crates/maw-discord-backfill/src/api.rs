@@ -90,6 +90,14 @@ pub fn filter_text_channels(channels: &[Channel]) -> Vec<Channel> {
     channels.iter().filter(|c| c.kind == 0).cloned().collect()
 }
 
+/// Snowflake id ordering — numeric compare with string fallback.
+pub fn snowflake_le(a: &str, b: &str) -> bool {
+    match (a.parse::<u128>(), b.parse::<u128>()) {
+        (Ok(a_id), Ok(b_id)) => a_id <= b_id,
+        _ => a <= b,
+    }
+}
+
 pub async fn fetch_messages(
     rest: &dyn DiscordRest,
     token: &str,
@@ -115,7 +123,7 @@ pub async fn fetch_messages(
         let mut hit_stop = false;
         for msg in batch {
             if let Some(stop) = stop_at_id {
-                if msg.id.as_str() <= stop {
+                if snowflake_le(msg.id.as_str(), stop) {
                     hit_stop = true;
                     break;
                 }
@@ -250,6 +258,13 @@ mod tests {
             .expect("fetch");
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].id, "1000000000000000100");
+    }
+
+    #[test]
+    fn snowflake_le_orders_numeric_ids() {
+        assert!(snowflake_le("1492501367409873087", "1521691823519567873"));
+        assert!(!snowflake_le("1521691823519567873", "1492501367409873087"));
+        assert!(snowflake_le("1000000000000000095", "1000000000000000100"));
     }
 
     #[test]

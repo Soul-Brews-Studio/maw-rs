@@ -128,25 +128,31 @@ async fn run() -> maw_discord_backfill::Result<()> {
             no_incremental,
         } => {
             println!("backfill channel {channel_id} limit={limit}");
-            let state = default_state_dir();
-            let cur = load_cursor(&state, &channel_id);
-            if let Some(ref newest) = cur.live_newest_id {
-                println!("incremental since {newest}");
+            let incremental = !no_incremental;
+            if incremental {
+                let state = default_state_dir();
+                let cur = load_cursor(&state, &channel_id);
+                if let Some(ref newest) = cur.live_newest_id {
+                    println!("incremental since {newest}");
+                }
+            } else {
+                println!("full fetch (no incremental watermark)");
             }
             let mut log = |line: &str| println!("{line}");
             let mut sink = LogSink(&mut log);
             let opts = BackfillOptions {
-                guild_filter: guild,
+                guild_filter: guild.clone(),
                 limit,
-                incremental: !no_incremental,
+                incremental,
                 ..Default::default()
             };
+            let guild_name = guild.as_deref().unwrap_or("direct");
             let n = backfill_channel(
                 &rest,
                 &token,
                 &channel_id,
                 &channel_id,
-                opts.guild_filter.as_deref().unwrap_or("direct"),
+                guild_name,
                 &opts,
                 &mut sink,
             )

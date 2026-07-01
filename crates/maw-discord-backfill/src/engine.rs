@@ -30,6 +30,31 @@ fn guild_matches(g: &Guild, filter: &str) -> bool {
     g.id.contains(filter) || g.name.to_lowercase().contains(&filter.to_lowercase())
 }
 
+fn is_channel_forbidden(err: &crate::error::Error) -> bool {
+    matches!(err, crate::error::Error::Api(msg) if msg.contains("403"))
+}
+
+fn tally_channel_result(
+    ch_name: &str,
+    result: Result<usize>,
+    log: &mut LogSink<'_>,
+    grand_total: &mut usize,
+    channel_count: &mut usize,
+) -> Result<()> {
+    match result {
+        Ok(n) => {
+            *grand_total += n;
+            *channel_count += 1;
+            Ok(())
+        }
+        Err(e) if is_channel_forbidden(&e) => {
+            log.log(&format!("  ✗ #{ch_name}: access denied (403)"));
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
+}
+
 pub async fn backfill_channel(
     rest: &dyn DiscordRest,
     token: &str,
@@ -51,7 +76,12 @@ pub async fn backfill_channel(
     let stop = cur.live_newest_id.as_deref();
     let msgs = api::fetch_messages(rest, token, channel_id, limit, stop).await?;
     let slim: Vec<_> = msgs.iter().map(slim_message).collect();
-    let path = output::write_channel_json(&out_root, guild_name, channel_name, &slim)?;
+    let (path, written) = if opts.incremental {
+        output::merge_channel_json(&out_root, guild_name, channel_name, &slim)?
+    } else {
+        let path = output::write_channel_json(&out_root, guild_name, channel_name, &slim)?;
+        (path, msgs.len())
+    };
 
     if !msgs.is_empty() {
         output::save_cursor(
@@ -68,8 +98,21 @@ pub async fn backfill_channel(
         )?;
     }
 
-    log.log(&format!("  ✓ #{channel_name}: {} msgs → {}", msgs.len(), path.display()));
-    Ok(msgs.len())
+    if opts.incremental && msgs.is_empty() {
+        log.log(&format!(
+            "  ✓ #{channel_name}: 0 new (kept existing) → {}",
+            path.display()
+        ));
+    } else if opts.incremental {
+        log.log(&format!(
+            "  ✓ #{channel_name}: +{written} new ({} fetched) → {}",
+            msgs.len(),
+            path.display()
+        ));
+    } else {
+        log.log(&format!("  ✓ #{channel_name}: {} msgs → {}", msgs.len(), path.display()));
+    }
+    Ok(if opts.incremental { written } else { msgs.len() })
 }
 
 pub async fn run_backfill(
@@ -135,9 +178,13 @@ pub async fn run_backfill(
             if let Some(ref cid) = opts.channel_id {
                 let mut channel_opts = opts.clone();
                 channel_opts.limit = limit;
-                let n = backfill_channel(rest, token, cid, cid, &g.name, &channel_opts, log).await?;
-                grand_total += n;
-                channel_count += 1;
+                tally_channel_result(
+                    cid,
+                    backfill_channel(rest, token, cid, cid, &g.name, &channel_opts, log).await,
+                    log,
+                    &mut grand_total,
+                    &mut channel_count,
+                )?;
             }
             continue;
         }
@@ -145,9 +192,13 @@ pub async fn run_backfill(
         for ch in targets {
             let mut channel_opts = opts.clone();
             channel_opts.limit = limit;
-            let n = backfill_channel(rest, token, &ch.id, &ch.name, &g.name, &channel_opts, log).await?;
-            grand_total += n;
-            channel_count += 1;
+            tally_channel_result(
+                &ch.name,
+                backfill_channel(rest, token, &ch.id, &ch.name, &g.name, &channel_opts, log).await,
+                log,
+                &mut grand_total,
+                &mut channel_count,
+            )?;
             sleep(Duration::from_millis(1000)).await;
         }
 
