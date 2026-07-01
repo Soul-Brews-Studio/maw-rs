@@ -74,7 +74,13 @@ pub async fn backfill_channel(
         CursorState::default()
     };
     let stop = cur.live_newest_id.as_deref();
-    let msgs = api::fetch_messages(rest, token, channel_id, limit, stop).await?;
+    let outcome = api::fetch_messages(rest, token, channel_id, limit, stop).await?;
+    let msgs = outcome.messages;
+    if outcome.cap_hit {
+        log.log(&format!(
+            "  ⚠ #{channel_name}: hit limit {limit} — older history may remain (re-run with higher --limit or --all)"
+        ));
+    }
     let slim: Vec<_> = msgs.iter().map(slim_message).collect();
     let (path, written) = if opts.incremental {
         output::merge_channel_json(&out_root, guild_name, channel_name, &slim)?
@@ -84,15 +90,18 @@ pub async fn backfill_channel(
     };
 
     if !msgs.is_empty() {
+        let oldest = if opts.incremental {
+            cur.backfill_oldest_id
+                .unwrap_or_else(|| msgs.first().expect("non-empty").id.clone())
+        } else {
+            msgs.first().expect("non-empty").id.clone()
+        };
         output::save_cursor(
             &state_root,
             channel_id,
             CursorState {
                 live_newest_id: Some(msgs.last().expect("non-empty").id.clone()),
-                backfill_oldest_id: Some(
-                    cur.backfill_oldest_id
-                        .unwrap_or_else(|| msgs.first().expect("non-empty").id.clone()),
-                ),
+                backfill_oldest_id: Some(oldest),
                 updated_at: None,
             },
         )?;

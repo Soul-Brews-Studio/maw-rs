@@ -98,15 +98,23 @@ pub fn snowflake_le(a: &str, b: &str) -> bool {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct FetchOutcome {
+    pub messages: Vec<Message>,
+    /// True when `limit` was reached but channel history may continue older.
+    pub cap_hit: bool,
+}
+
 pub async fn fetch_messages(
     rest: &dyn DiscordRest,
     token: &str,
     channel_id: &str,
     limit: usize,
     stop_at_id: Option<&str>,
-) -> Result<Vec<Message>> {
+) -> Result<FetchOutcome> {
     let mut all = Vec::new();
     let mut before: Option<String> = None;
+    let mut cap_hit = false;
 
     while all.len() < limit {
         let want = limit.saturating_sub(all.len()).min(100);
@@ -130,6 +138,7 @@ pub async fn fetch_messages(
             }
             all.push(msg);
             if all.len() >= limit {
+                cap_hit = !hit_stop;
                 break;
             }
         }
@@ -141,7 +150,10 @@ pub async fn fetch_messages(
     }
 
     all.sort_by(|a, b| a.id.cmp(&b.id));
-    Ok(all)
+    Ok(FetchOutcome {
+        messages: all,
+        cap_hit,
+    })
 }
 
 pub fn slim_message(m: &Message) -> Message {
@@ -253,11 +265,12 @@ mod tests {
             },
         );
         let rest = MockRest::new(responses);
-        let msgs = fetch_messages(&rest, "tok", channel, 5, Some("1000000000000000095"))
+        let out = fetch_messages(&rest, "tok", channel, 5, Some("1000000000000000095"))
             .await
             .expect("fetch");
-        assert_eq!(msgs.len(), 1);
-        assert_eq!(msgs[0].id, "1000000000000000100");
+        assert_eq!(out.messages.len(), 1);
+        assert_eq!(out.messages[0].id, "1000000000000000100");
+        assert!(!out.cap_hit);
     }
 
     #[test]
