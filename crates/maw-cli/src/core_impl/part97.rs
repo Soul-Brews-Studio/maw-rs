@@ -39,6 +39,7 @@ struct PairAcceptLive {
     remote_node: String,
     remote_url: String,
     token_received: bool,
+    pubkey_pinned: bool,
     peers_written: bool,
 }
 
@@ -274,7 +275,7 @@ fn pair_render_accept(plan: &PairAcceptPlan, config: &PairConfig, live: &PairAcc
     let warning = pair_plain_http_warning(&plan.remote_url);
     let local_url = format!("http://localhost:{}", config.port);
     format!(
-        "🤝 pair accept live\n   remote: {}/api/pair/{}\n   code: {}\n   body: {{\"node\":{},\"url\":{}}}\n{}   peer: {} {}\n   federation token: {}\n   peers.json: {}\n   human consent required; no auto-approve surface is exposed\n",
+        "🤝 pair accept live\n   remote: {}/api/pair/{}\n   code: {}\n   body: {{\"node\":{},\"url\":{}}}\n{}   peer: {} {}\n   federation token: {}\n   pubkey: {}\n   peers.json: {}\n   human consent required; no auto-approve surface is exposed\n",
         plan.remote_url,
         plan.code_normalized,
         pair_pretty_code(&plan.code_normalized),
@@ -284,6 +285,7 @@ fn pair_render_accept(plan: &PairAcceptPlan, config: &PairConfig, live: &PairAcc
         live.remote_node,
         live.remote_url,
         if live.token_received { "received (redacted)" } else { "missing" },
+        if live.pubkey_pinned { "pinned" } else { "missing (v3 signing will fail)" },
         if live.peers_written { "atomic write ok" } else { "not written" }
     )
 }
@@ -308,18 +310,50 @@ fn pair_system_accept_live(plan: &PairAcceptPlan, config: &PairConfig) -> Result
     let response = pair_http_json("POST", &url, Some(body))?;
     if !(200..300).contains(&response.status) { return Err(format!("pair accept failed: HTTP {}", response.status)); }
     let value = pair_parse_json(&response.body, "pair accept")?;
-    let remote_node = pair_json_string(&value, "node").ok_or_else(|| "pair accept: missing node".to_owned())?;
-    let remote_url = pair_json_string(&value, "url").ok_or_else(|| "pair accept: missing url".to_owned())?;
+    let handshake_node = pair_json_string(&value, "node").ok_or_else(|| "pair accept: missing node".to_owned())?;
     let token_received = pair_json_string(&value, "federationToken").is_some();
+    // Pin the peer at the URL we actually reached (the operator-supplied remote
+    // URL), never the generator's self-reported `http://localhost:PORT` base URL.
+    // Then fetch the remote's published identity (node + peer-key pubkey) so v3
+    // request signing can authenticate future cross-node `maw hey` traffic. This
+    // mirrors maw-js `cmdAdd → probePeer → /api/identity` TOFU pinning: the
+    // handshake alone never carries a pubkey, so a bare accept would pin
+    // `pubkey: null` and every signed request would fail with HTTP 401.
+    let remote_url = plan.remote_url.clone();
+    let identity = pair_fetch_remote_identity(&remote_url);
+    let remote_node = identity
+        .as_ref()
+        .and_then(|value| pair_json_string(value, "host").or_else(|| pair_json_string(value, "node")))
+        .unwrap_or_else(|| handshake_node.clone());
+    let remote_oracle = identity
+        .as_ref()
+        .and_then(|value| pair_json_string(value, "oracle"))
+        .unwrap_or_else(|| "mawjs".to_owned());
+    let pubkey = identity
+        .as_ref()
+        .and_then(|value| pair_json_string(value, "pubkey"));
     pair_validate_peer_identity(&remote_node, &remote_url)?;
-    pair_write_peer(&remote_node, &remote_url)?;
-    Ok(PairAcceptLive { remote_node, remote_url, token_received, peers_written: true })
+    pair_write_peer(&remote_node, &remote_oracle, &remote_url, pubkey.as_deref())?;
+    Ok(PairAcceptLive {
+        remote_node,
+        remote_url,
+        token_received,
+        pubkey_pinned: pubkey.is_some(),
+        peers_written: true,
+    })
+}
+
+fn pair_fetch_remote_identity(remote_url: &str) -> Option<serde_json::Value> {
+    let response = pair_http_json("GET", &format!("{remote_url}/api/identity"), None).ok()?;
+    if !(200..300).contains(&response.status) {
+        return None;
+    }
+    pair_parse_json(&response.body, "pair identity").ok()
 }
 
 fn pair_http_json(method: &str, url: &str, body: Option<String>) -> Result<maw_transport::HttpResponse, String> {
     let io = ReqwestHttpTransportIo::new(5_000)?;
-    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|error| format!("pair http runtime failed: {error}"))?;
-    runtime.block_on(io.request(&TransportHttpRequest {
+    let http_request = TransportHttpRequest {
         method: method.to_owned(),
         url: url.to_owned(),
         headers: BTreeMap::from([("content-type".to_owned(), "application/json".to_owned())]),
@@ -327,7 +361,21 @@ fn pair_http_json(method: &str, url: &str, body: Option<String>) -> Result<maw_t
         timeout_ms: Some(5_000),
         follow_redirects: false,
         pinned_addr: None,
-    }))
+    };
+    // The CLI executes inside a multi-threaded tokio runtime (see
+    // `#[tokio::main(flavor = "multi_thread")]` in maw-cli's binary). Building a
+    // nested runtime here and calling `block_on` panics with "Cannot start a
+    // runtime from within a runtime". Reuse the current runtime handle via
+    // `block_in_place` when one is present, and only build a standalone
+    // current-thread runtime when called outside any runtime (e.g. sync tests).
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(io.request(&http_request))),
+        Err(_) => tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| format!("pair http runtime failed: {error}"))?
+            .block_on(io.request(&http_request)),
+    }
 }
 
 fn pair_parse_json(raw: &str, label: &str) -> Result<serde_json::Value, String> {
@@ -344,13 +392,15 @@ fn pair_validate_peer_identity(node: &str, url: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn pair_write_peer(node: &str, url: &str) -> Result<(), String> {
+fn pair_write_peer(node: &str, oracle: &str, url: &str, pubkey: Option<&str>) -> Result<(), String> {
     let env = pair_peer_store_env();
-    pair_write_peer_to_env(&env, node, url)
+    pair_write_peer_to_env(&env, node, oracle, url, pubkey)
 }
 
-fn pair_write_peer_to_env(env: &maw_peer::PeerStoreEnv, node: &str, url: &str) -> Result<(), String> {
+fn pair_write_peer_to_env(env: &maw_peer::PeerStoreEnv, node: &str, oracle: &str, url: &str, pubkey: Option<&str>) -> Result<(), String> {
     let now = now_iso_utc();
+    let pubkey = pubkey.map(ToOwned::to_owned);
+    let pubkey_first_seen = pubkey.as_ref().map(|_| now.clone());
     maw_peer::mutate_peer_store(env, |store| {
         store.peers.insert(node.to_owned(), maw_peer::PeerRecord {
             url: url.to_owned(),
@@ -359,9 +409,9 @@ fn pair_write_peer_to_env(env: &maw_peer::PeerStoreEnv, node: &str, url: &str) -
             last_seen: Some(now.clone()),
             last_error: None,
             nickname: None,
-            pubkey: None,
-            pubkey_first_seen: None,
-            identity: Some(maw_peer::PeerIdentity { oracle: "mawjs".to_owned(), node: node.to_owned() }),
+            pubkey: pubkey.clone(),
+            pubkey_first_seen: pubkey_first_seen.clone(),
+            identity: Some(maw_peer::PeerIdentity { oracle: oracle.to_owned(), node: node.to_owned() }),
             one_way: Some(false),
             last_symmetric_check: Some(now.clone()),
         });
@@ -414,6 +464,7 @@ mod pair_tests {
                 remote_node: "peer-node".to_owned(),
                 remote_url: "https://peer.example".to_owned(),
                 token_received: true,
+                pubkey_pinned: true,
                 peers_written: true,
             })
         }
@@ -505,10 +556,15 @@ mod pair_tests {
             root.clone(),
             [("PEERS_FILE", peers.to_string_lossy().to_string())],
         );
-        pair_write_peer_to_env(&env, "peer-node", "https://peer.example").expect("write peer");
+        let pinned_pubkey = "a".repeat(64);
+        pair_write_peer_to_env(&env, "peer-node", "mawjs", "https://peer.example", Some(&pinned_pubkey)).expect("write peer");
         let raw = std::fs::read_to_string(&peers).expect("read peers");
         let value: serde_json::Value = serde_json::from_str(&raw).expect("json");
         assert_eq!(value["peers"]["peer-node"]["url"], "https://peer.example");
+        assert_eq!(value["peers"]["peer-node"]["pubkey"], pinned_pubkey);
+        assert_eq!(value["peers"]["peer-node"]["identity"]["oracle"], "mawjs");
+        assert_eq!(value["peers"]["peer-node"]["identity"]["node"], "peer-node");
+        assert!(value["peers"]["peer-node"]["pubkeyFirstSeen"].is_string());
         assert!(!peers.with_extension("json.tmp").exists());
         let _ = std::fs::remove_dir_all(root);
     }
