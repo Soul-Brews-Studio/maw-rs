@@ -1965,7 +1965,7 @@ mod inbox_tests {
         assert!(!part62_prod.contains("current_exe"));
         assert!(!part62_prod.contains("MAW_ACL_BYPASS"));
 
-        let part29 = std::fs::read_to_string(manifest_dir.join("src/core_impl/part29.rs"))
+        let part29 = std::fs::read_to_string(manifest_dir.join("src/core_impl/async_messaging_tests.rs"))
             .expect("read part29");
         let part29_prod = part29
             .split_once("#[cfg(test)]")
