@@ -1,3 +1,4 @@
+use std::collections::{BTreeSet, HashSet};
 use std::env;
 use std::fmt::Write as _;
 use std::fs;
@@ -10,11 +11,12 @@ use std::time::{Duration, Instant};
 const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
 const GIT_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
-#[derive(Debug)]
-struct PartFile {
-    number: u32,
-    path: PathBuf,
-}
+/// Ordered manifest of the `core_impl` fragment files (one file name per line).
+/// This is the single source of truth for which fragments are compiled in and in
+/// what order the dispatch/tmux fragment arrays are assembled — decoupled from the
+/// file names, so fragments can be renamed to semantic names without touching
+/// dispatch behaviour.
+const MANIFEST_FILE: &str = "parts.order";
 
 fn main() {
     if let Err(error) = generate() {
@@ -31,49 +33,50 @@ fn generate() -> io::Result<()> {
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR set"));
 
     println!("cargo:rerun-if-changed=src/core_impl");
+    println!("cargo:rerun-if-changed=src/core_impl/{MANIFEST_FILE}");
 
-    let parts = collect_part_files(&core_impl_dir)?;
+    let ordered = read_manifest(&core_impl_dir)?;
+    validate_membership(&core_impl_dir, &ordered)?;
+
     let mut includes = String::new();
     let mut dispatch_numbers = Vec::new();
     let mut tmux_sub_numbers = Vec::new();
+    let mut seen_dispatch = HashSet::new();
+    let mut seen_tmux = HashSet::new();
 
-    for part in &parts {
-        println!("cargo:rerun-if-changed={}", part.path.display());
-        writeln!(includes, "include!({:?});", part.path.display().to_string())
-            .expect("write to String");
+    for file_name in &ordered {
+        let path = core_impl_dir.join(file_name);
+        println!("cargo:rerun-if-changed={}", path.display());
+        writeln!(includes, "include!({:?});", path.display().to_string()).expect("write to String");
 
-        let contents = fs::read_to_string(&part.path)?;
+        let contents = fs::read_to_string(&path)?;
         if let Some(dispatch_number) = find_dispatch_const_number(&contents) {
-            assert_eq!(
-                dispatch_number,
-                part.number,
-                "{} declares DISPATCH_{dispatch_number:02}, expected DISPATCH_{:02}",
-                part.path.display(),
-                part.number
+            assert!(
+                seen_dispatch.insert(dispatch_number),
+                "duplicate DISPATCH_{dispatch_number:02} const (declared again in {file_name})"
             );
             dispatch_numbers.push(dispatch_number);
         }
         if let Some(tmux_sub_number) = find_tmux_sub_const_number(&contents) {
-            assert_eq!(
-                tmux_sub_number,
-                part.number,
-                "{} declares TMUX_SUB_{tmux_sub_number:02}, expected TMUX_SUB_{:02}",
-                part.path.display(),
-                part.number
+            assert!(
+                seen_tmux.insert(tmux_sub_number),
+                "duplicate TMUX_SUB_{tmux_sub_number:02} const (declared again in {file_name})"
             );
             tmux_sub_numbers.push(tmux_sub_number);
         }
     }
 
-    let mut fragments =
-        String::from("#[allow(clippy::needless_borrow)]\npub(crate) const DISPATCHER_FRAGMENTS: &[&[DispatcherEntry]] = &[\n");
+    let mut fragments = String::from(
+        "#[allow(clippy::needless_borrow)]\npub(crate) const DISPATCHER_FRAGMENTS: &[&[DispatcherEntry]] = &[\n",
+    );
     for number in dispatch_numbers {
         writeln!(fragments, "    &DISPATCH_{number:02},").expect("write to String");
     }
     fragments.push_str("];\n");
 
-    let mut tmux_fragments =
-        String::from("#[allow(clippy::needless_borrow)]\npub(crate) const TMUX_SUB_FRAGMENTS: &[&[TmuxSubcommandEntry]] = &[\n");
+    let mut tmux_fragments = String::from(
+        "#[allow(clippy::needless_borrow)]\npub(crate) const TMUX_SUB_FRAGMENTS: &[&[TmuxSubcommandEntry]] = &[\n",
+    );
     for number in tmux_sub_numbers {
         writeln!(tmux_fragments, "    &TMUX_SUB_{number:02},").expect("write to String");
     }
@@ -85,39 +88,96 @@ fn generate() -> io::Result<()> {
     Ok(())
 }
 
-fn collect_part_files(core_impl_dir: &Path) -> io::Result<Vec<PartFile>> {
-    let mut parts = Vec::new();
+/// Read `parts.order` into the ordered list of fragment file names.
+/// Blank lines and `#` comments are ignored; duplicate entries are rejected.
+fn read_manifest(core_impl_dir: &Path) -> io::Result<Vec<String>> {
+    let contents = fs::read_to_string(core_impl_dir.join(MANIFEST_FILE))?;
+    let mut ordered = Vec::new();
+    let mut seen = HashSet::new();
+    for raw in contents.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        assert!(
+            seen.insert(line.to_owned()),
+            "duplicate entry {line} in {MANIFEST_FILE}"
+        );
+        ordered.push(line.to_owned());
+    }
+    Ok(ordered)
+}
+
+/// Ensure the manifest exactly describes the fragment set: every `.rs` in `core_impl`
+/// (except `mod.rs` and files pulled in by a nested `include!`, e.g.
+/// `attach_private_tests.rs`) is listed exactly once, and every listed entry is a
+/// real top-level fragment. Catches a new part added without a manifest entry, a
+/// stale entry, or an accidental double-include.
+fn validate_membership(core_impl_dir: &Path, ordered: &[String]) -> io::Result<()> {
+    let listed: HashSet<&str> = ordered.iter().map(String::as_str).collect();
+
+    let mut nested = HashSet::new();
+    for file_name in ordered {
+        let path = core_impl_dir.join(file_name);
+        assert!(
+            path.is_file(),
+            "{MANIFEST_FILE} lists {file_name} but that file does not exist"
+        );
+        for included in nested_includes(&fs::read_to_string(&path)?) {
+            nested.insert(included);
+        }
+    }
+
+    let mut on_disk = BTreeSet::new();
     for entry in fs::read_dir(core_impl_dir)? {
         let path = entry?.path();
         if !path.is_file() {
             continue;
         }
-        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
-        let Some(number) = part_number(file_name) else {
+        if !has_rs_extension(name) || name == "mod.rs" || nested.contains(name) {
             continue;
-        };
-        parts.push(PartFile { number, path });
+        }
+        on_disk.insert(name.to_owned());
     }
 
-    parts.sort_by_key(|part| part.number);
-    for window in parts.windows(2) {
-        assert_ne!(
-            window[0].number, window[1].number,
-            "duplicate core_impl part number {:02}",
-            window[0].number
+    for name in &on_disk {
+        assert!(
+            listed.contains(name.as_str()),
+            "{name} exists in core_impl but is missing from {MANIFEST_FILE}"
         );
     }
-    Ok(parts)
+    for name in ordered {
+        assert!(
+            on_disk.contains(name),
+            "{MANIFEST_FILE} lists {name}, which is not a top-level fragment (nested-included or absent)"
+        );
+    }
+    Ok(())
 }
 
-fn part_number(file_name: &str) -> Option<u32> {
-    let rest = file_name.strip_prefix("part")?.strip_suffix(".rs")?;
-    if rest.is_empty() || !rest.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    rest.parse().ok()
+/// File names referenced by a bare same-directory `include!("name.rs")`.
+fn nested_includes(contents: &str) -> Vec<String> {
+    contents
+        .lines()
+        .filter_map(|line| {
+            let rest = line.trim().strip_prefix("include!(\"")?;
+            let path = &rest[..rest.find("\")")?];
+            if path.contains('/') || !has_rs_extension(path) {
+                return None;
+            }
+            Some(path.to_owned())
+        })
+        .collect()
+}
+
+/// True if `name` has a `.rs` extension (case-insensitive).
+fn has_rs_extension(name: &str) -> bool {
+    Path::new(name)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"))
 }
 
 fn find_dispatch_const_number(contents: &str) -> Option<u32> {
