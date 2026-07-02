@@ -423,16 +423,14 @@ fn wake_sanitize_branch(value: &str) -> String {
     value.chars().map(|ch| if ch.is_ascii_alphanumeric() || ch == '-' { ch } else { '-' }).collect()
 }
 
-/// Resolve an engine alias through `maw.config.json` `commands` (matches
+/// Resolve an engine alias through merged maw config `commands` (matches
 /// `workon` + maw-js): custom engines like `omx-1` expand to their full shell
 /// command; real binaries (codex/claude) fall through to the literal name.
 /// Fixes the fleet codex-team recipe (omx-N) that previously ran a bare `omx-1`.
 fn wake_resolve_engine_command(engine: &str) -> String {
-    let config = active_config_dir().join("maw.config.json");
-    std::fs::read_to_string(config)
-        .ok()
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .and_then(|value| value.get("commands").cloned())
+    merged_config_value()
+        .get("commands")
+        .cloned()
         .and_then(|commands| {
             commands
                 .get(engine)
@@ -585,16 +583,17 @@ mod wake_tests {
         let options = wake_parse_args(&wake_strings(&["neo", "-e", "omx-1"])).expect("parse -e");
         assert_eq!(options.engine.as_deref(), Some("omx-1"));
 
-        // custom engines resolve to their full command from maw.config.json `commands`;
+        // custom engines resolve to their full command from merged config `commands`;
         // real binaries not in the map fall through to the literal name.
         wake_with_fixture(|_| {
             let dir = active_config_dir();
             std::fs::create_dir_all(&dir).expect("config dir");
             std::fs::write(
-                dir.join("maw.config.json"),
+                dir.join("maw.config.50.json"),
                 r#"{"commands":{"omx-1":"bun codex-setup.ts 1 && CODEX_HOME=$PWD/.codex omx --direct --madmax","default":"claude"}}"#,
             )
             .expect("write config");
+            assert!(!dir.join("maw.config.json").exists());
             assert_eq!(
                 wake_resolve_engine_command("omx-1"),
                 "bun codex-setup.ts 1 && CODEX_HOME=$PWD/.codex omx --direct --madmax"

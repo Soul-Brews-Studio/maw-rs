@@ -269,9 +269,7 @@ fn detect_about_session(oracle: &str, sessions: &[TmuxSession]) -> Option<String
 
 #[cfg(not(test))]
 fn about_config_session(oracle: &str) -> Option<String> {
-    let path = active_config_dir().join("maw.config.json");
-    let text = std::fs::read_to_string(path).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let value = merged_config_value();
     value
         .get("sessions")
         .and_then(|sessions| sessions.get(oracle))

@@ -175,7 +175,7 @@ fn inbox_real_env() -> InboxEnv {
     let xdg = current_xdg_env();
     let config_dir = maw_config_dir(&xdg);
     let state_dir = maw_state_dir(&xdg);
-    let config = inbox_read_config(&config_dir.join("maw.config.json"));
+    let config = merged_config_value_for_env(&xdg);
     let inbox_dir = inbox_resolve_dir(&config);
     InboxEnv {
         inbox_dir,
@@ -188,13 +188,6 @@ fn inbox_real_env() -> InboxEnv {
 
 fn inbox_state_pending_dir(env: &InboxEnv) -> std::path::PathBuf {
     env.state_dir.join("pending")
-}
-
-fn inbox_read_config(path: &std::path::Path) -> serde_json::Value {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or(serde_json::Value::Null)
 }
 
 fn inbox_config_string(config: &serde_json::Value, key: &str, fallback: &str) -> String {

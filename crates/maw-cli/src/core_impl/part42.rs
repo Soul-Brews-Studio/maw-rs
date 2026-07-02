@@ -31,7 +31,7 @@ fn on_run_command_impl(argv: &[String]) -> Result<String, String> {
         return Ok(on_usage_text());
     };
 
-    let path = active_config_dir().join("maw.config.json");
+    let path = config_target_path();
     let mut config = on_read_config(&path)?;
     on_append_trigger(&mut config, &options)?;
     write_json_atomic(&path, &config)?;

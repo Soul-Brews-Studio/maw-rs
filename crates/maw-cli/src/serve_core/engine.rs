@@ -62,8 +62,8 @@ pub(crate) fn serveengine_run_with_timeout(
     let mut child = Command::new(program)
         .args(argv)
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .current_dir(cwd)
         .spawn()
         .map_err(|error| format!("serve-orchestration: spawn failed: {error}"))?;
@@ -158,7 +158,7 @@ printf '{{"cwd":"%s","argv":["%s","%s","%s","%s"]}}' "$(pwd)" "$1" "$2" "$3" "$4
                 "nested".to_owned(),
             ],
             &root,
-            Duration::from_secs(2),
+            Duration::from_secs(10),
         )
         .expect("run");
         let body = fs::read_to_string(marker).expect("marker");

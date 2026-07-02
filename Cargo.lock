@@ -1703,6 +1703,9 @@ dependencies = [
 [[package]]
 name = "maw-xdg"
 version = "0.1.0-alpha.1"
+dependencies = [
+ "serde_json",
+]
 
 [[package]]
 name = "maybe-owned"

@@ -362,9 +362,7 @@ fn agents_state_cell(state: &str) -> String {
 }
 
 fn agents_load_node() -> Option<String> {
-    let path = maw_config_path(&current_xdg_env(), &["maw.config.json"]);
-    let raw = std::fs::read_to_string(path).ok()?;
-    let value = serde_json::from_str::<serde_json::Value>(&raw).ok()?;
+    let value = merged_config_value();
     value
         .get("node")
         .and_then(serde_json::Value::as_str)

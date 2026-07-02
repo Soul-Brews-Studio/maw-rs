@@ -951,9 +951,7 @@ fn receiver_inbox_strip_psi_suffix(path: &std::path::Path) -> std::path::PathBuf
 
 fn receiver_inbox_config_psi_path() -> Option<std::path::PathBuf> {
     let env = real_xdg_env();
-    let path = maw_config_path(&env, &["maw.config.json"]);
-    let raw = std::fs::read_to_string(path).ok()?;
-    let value = serde_json::from_str::<Value>(&raw).ok()?;
+    let value = merged_config_value_for_env(&env);
     value
         .get("psiPath")
         .and_then(Value::as_str)
@@ -1860,9 +1858,7 @@ fn load_serve_workspace_key() -> Option<String> {
         }
     }
     let env = real_xdg_env();
-    let path = maw_config_path(&env, &["maw.config.json"]);
-    let raw = std::fs::read_to_string(path).ok()?;
-    let value = serde_json::from_str::<Value>(&raw).ok()?;
+    let value = merged_config_value_for_env(&env);
     value
         .get("federationToken")
         .and_then(Value::as_str)
@@ -1873,20 +1869,15 @@ fn load_serve_workspace_key() -> Option<String> {
 
 fn load_inbound_peer_pubkeys() -> Vec<ServePeerPubkey> {
     let env = real_xdg_env();
-    let paths = [
-        maw_state_path(&env, &["peers.json"]),
-        maw_config_path(&env, &["maw.config.json"]),
-    ];
     let mut entries = Vec::new();
-    for path in paths {
-        let Ok(raw) = std::fs::read_to_string(path) else {
-            continue;
-        };
-        let Ok(value) = serde_json::from_str::<Value>(&raw) else {
-            continue;
-        };
-        collect_peer_pubkeys(&value, None, &mut entries);
+    let peer_path = maw_state_path(&env, &["peers.json"]);
+    if let Ok(raw) = std::fs::read_to_string(peer_path) {
+        if let Ok(value) = serde_json::from_str::<Value>(&raw) {
+            collect_peer_pubkeys(&value, None, &mut entries);
+        }
     }
+    let config = merged_config_value_for_env(&env);
+    collect_peer_pubkeys(&config, None, &mut entries);
     entries
 }
 

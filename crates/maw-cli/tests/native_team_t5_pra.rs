@@ -50,9 +50,11 @@ fn run_fake_exec(args: &[&str], root: &Path, log: &Path) -> std::process::Output
 }
 
 fn normalize(root: &Path, bytes: Vec<u8>) -> String {
-    String::from_utf8(bytes)
-        .expect("utf8")
-        .replace(&root.display().to_string(), "<ROOT>")
+    let mut text = String::from_utf8(bytes).expect("utf8");
+    if let Ok(canonical_root) = root.canonicalize() {
+        text = text.replace(&canonical_root.display().to_string(), "<ROOT>");
+    }
+    text.replace(&root.display().to_string(), "<ROOT>")
         .replace(&bin().display().to_string(), "<BIN>")
 }
 

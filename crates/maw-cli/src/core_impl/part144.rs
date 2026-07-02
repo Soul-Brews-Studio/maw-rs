@@ -39,16 +39,10 @@ fn triggers_parse_args_136(argv: &[String]) -> Result<(), String> {
 }
 
 fn triggers_load_config_136() -> Result<Vec<TriggerConfig136>, String> {
-    let path = active_config_dir().join("maw.config.json");
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(format!("triggers: read {}: {error}", path.display())),
-    };
-    let value = serde_json::from_str::<serde_json::Value>(&text).map_err(|error| format!("triggers: parse {}: {error}", path.display()))?;
+    let value = merged_config_value();
     let Some(raw_triggers) = value.get("triggers") else { return Ok(Vec::new()); };
     if !raw_triggers.is_array() { return Ok(Vec::new()); }
-    let config = serde_json::from_value::<TriggersConfigFile136>(value).map_err(|error| format!("triggers: parse {}: {error}", path.display()))?;
+    let config = serde_json::from_value::<TriggersConfigFile136>(value).map_err(|error| format!("triggers: parse config: {error}"))?;
     Ok(config.triggers.into_iter().filter(triggers_valid_136).collect())
 }
 

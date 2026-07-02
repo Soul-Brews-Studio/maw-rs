@@ -156,7 +156,7 @@ async fn zenohscout_execute(args: ZenohScoutArgs) -> CliOutput {
 }
 
 fn zenohscout_read_config() -> ZenohScoutConfigNative {
-    let value = zenohscout_read_config_json().unwrap_or(serde_json::Value::Null);
+    let value = zenohscout_read_config_json();
     let zenoh = value.get("zenoh").and_then(serde_json::Value::as_object);
     let scout = zenoh.and_then(|map| map.get("scout")).and_then(serde_json::Value::as_object);
     let node = value.get("node").and_then(serde_json::Value::as_str).unwrap_or("local");
@@ -174,11 +174,9 @@ fn zenohscout_read_config() -> ZenohScoutConfigNative {
     }
 }
 
-fn zenohscout_read_config_json() -> Option<serde_json::Value> {
+fn zenohscout_read_config_json() -> serde_json::Value {
     let env = real_xdg_env();
-    let path = maw_config_path(&env, &["maw.config.json"]);
-    let raw = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str(&raw).ok()
+    merged_config_value_for_env(&env)
 }
 
 fn zenohscout_config_string(map: Option<&serde_json::Map<String, serde_json::Value>>, key: &str) -> Option<String> {
@@ -319,7 +317,11 @@ async fn zenohscout_fetch_discoveries(all: bool, limit: Option<usize>, timeout_m
 struct ZenohScoutHttpRequest { port: u16, path: String }
 
 fn zenohscout_discoveries_request(all: bool, limit: Option<usize>) -> ZenohScoutHttpRequest {
-    let port = zenohscout_read_config_json().and_then(|value| value.get("port").and_then(serde_json::Value::as_u64)).and_then(|port| u16::try_from(port).ok()).unwrap_or(3456);
+    let port = zenohscout_read_config_json()
+        .get("port")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|port| u16::try_from(port).ok())
+        .unwrap_or(3456);
     let mut query = Vec::new();
     if all { query.push("all=1".to_owned()); }
     if let Some(limit) = limit { query.push(format!("limit={limit}")); }

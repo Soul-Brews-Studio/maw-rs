@@ -101,6 +101,18 @@ pub const MAW_RS_VERSION_STRING: &str = concat!(
     env!("MAW_RS_BUILD_DATE")
 );
 
+fn merged_config_value() -> serde_json::Value {
+    merged_config_value_for_env(&current_xdg_env())
+}
+
+fn merged_config_value_in_dir(cwd: &Path) -> serde_json::Value {
+    maw_xdg::load_merged_config_in_dir(&current_xdg_env(), cwd).config
+}
+
+fn merged_config_value_for_env(env: &MawXdgEnv) -> serde_json::Value {
+    maw_xdg::load_merged_config(env).config
+}
+
 #[cfg(test)]
 fn env_test_lock() -> &'static std::sync::Mutex<()> {
     static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();

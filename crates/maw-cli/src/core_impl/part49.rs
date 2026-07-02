@@ -273,19 +273,15 @@ fn workon_tmux_run_owned<R: maw_tmux::TmuxRunner>(
 }
 
 fn workon_build_command_in_dir(agent_name: &str, cwd: &std::path::Path) -> String {
-    let config = active_config_dir().join("maw.config.json");
-    let command = std::fs::read_to_string(config)
-        .ok()
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .and_then(|value| value.get("commands").cloned())
+    merged_config_value_in_dir(cwd)
+        .get("commands")
+        .cloned()
         .and_then(|commands| {
             commands.get(agent_name).and_then(serde_json::Value::as_str)
                 .or_else(|| commands.get("default").and_then(serde_json::Value::as_str))
                 .map(str::to_owned)
         })
-        .unwrap_or_else(|| "claude".to_owned());
-    let _ = cwd;
-    command
+        .unwrap_or_else(|| "claude".to_owned())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -361,6 +357,15 @@ mod workon_tests {
 
     fn workon_strings(values: &[&str]) -> Vec<String> { values.iter().map(|value| (*value).to_owned()).collect() }
 
+    fn workon_temp_root(label: &str) -> std::path::PathBuf {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let seq = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("maw-rs-workon-{label}-{}-{seq}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("temp root");
+        path
+    }
+
     #[test]
     fn workon_parse_layout_and_usage() {
         assert!(workon_parse_args(&[]).expect_err("usage").contains("usage: maw workon"));
@@ -398,5 +403,26 @@ mod workon_tests {
 
         assert!(err.contains("tmux target/session"));
         assert_eq!(runner.calls.len(), 1);
+    }
+
+    #[test]
+    fn workon_build_command_resolves_weighted_only_commands_config() {
+        let _guard = env_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _home = EnvVarRestore::capture("MAW_HOME");
+        let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
+        let root = workon_temp_root("commands");
+        std::env::remove_var("MAW_HOME");
+        std::env::set_var("MAW_CONFIG_DIR", root.join("config"));
+        std::fs::create_dir_all(root.join("config")).expect("config dir");
+        std::fs::write(
+            root.join("config/maw.config.50.json"),
+            r#"{"commands":{"omx":"CODEX_HOME=$PWD/.codex omx --direct","default":"claude --continue"}}"#,
+        )
+        .expect("config");
+
+        assert!(!root.join("config/maw.config.json").exists());
+        assert_eq!(workon_build_command_in_dir("omx", &root), "CODEX_HOME=$PWD/.codex omx --direct");
+        assert_eq!(workon_build_command_in_dir("unknown", &root), "claude --continue");
+        let _ = std::fs::remove_dir_all(root);
     }
 }

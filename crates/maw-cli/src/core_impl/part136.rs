@@ -97,7 +97,7 @@ fn config_sources(json: bool) -> Result<String, String> {
             .map(|source| {
                 serde_json::json!({
                     "weight": source.weight,
-                    "scope": source.scope,
+                    "scope": source.scope.as_str(),
                     "local": source.is_local,
                     "file": source.path.display().to_string(),
                 })
@@ -114,7 +114,7 @@ fn config_sources(json: bool) -> Result<String, String> {
             out,
             "{:>3} {:<7} {} {}",
             source.weight,
-            source.scope,
+            source.scope.as_str(),
             local,
             source.path.display()
         );
@@ -178,14 +178,7 @@ fn config_explain(argv: &[String], json: bool) -> Result<String, String> {
 }
 
 
-#[derive(Clone, Debug)]
-struct ConfigLayerSource {
-    path: std::path::PathBuf,
-    weight: u32,
-    is_local: bool,
-    scope: &'static str,
-    scope_rank: u32,
-}
+type ConfigLayerSource = maw_xdg::MawConfigLayerSource;
 
 #[derive(Clone, Debug)]
 struct ConfigProvenanceEntry {
@@ -205,14 +198,18 @@ struct ConfigLoadedLayers {
 }
 
 fn config_load_layers() -> Result<ConfigLoadedLayers, String> {
-    let mut sources = config_discover_sources();
+    let env = current_xdg_env();
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let config_file = maw_config_path(&env, &["maw.config.json"]);
+    let mut sources = maw_xdg::discover_config_layers(&env, &cwd);
     if sources.is_empty() {
-        sources.push(ConfigLayerSource {
-            path: maw_config_path(&current_xdg_env(), &["maw.config.json"]),
+        sources.push(maw_xdg::MawConfigLayerSource {
+            path: config_file.clone(),
             weight: 50,
             is_local: false,
-            scope: "legacy",
+            scope: maw_xdg::MawConfigScope::Legacy,
             scope_rank: 20,
+            depth: 0,
         });
     }
     let mut merged = serde_json::json!({});
@@ -231,93 +228,30 @@ fn config_load_layers() -> Result<ConfigLoadedLayers, String> {
         }
         loaded_any = true;
         config_record_provenance(&mut provenance, source, &layer, "");
-        config_deep_merge(&mut merged, layer);
+        maw_xdg::deep_merge_config(&mut merged, &layer);
     }
-    if !loaded_any {
-        merged = serde_json::json!({});
+    if !loaded_any && !sources.iter().any(|source| source.path == config_file) {
+        let legacy = maw_xdg::MawConfigLayerSource {
+            path: config_file,
+            weight: 50,
+            is_local: false,
+            scope: maw_xdg::MawConfigScope::Legacy,
+            scope_rank: 20,
+            depth: 0,
+        };
+        if legacy.path.exists() {
+            let raw = std::fs::read_to_string(&legacy.path)
+                .map_err(|error| format!("maw config: failed to read config: {error}"))?;
+            let layer = serde_json::from_str::<serde_json::Value>(&raw)
+                .map_err(|error| format!("maw config: failed to parse config JSON: {error}"))?;
+            if layer.is_object() {
+                sources = vec![legacy];
+                config_record_provenance(&mut provenance, &sources[0], &layer, "");
+                maw_xdg::deep_merge_config(&mut merged, &layer);
+            }
+        }
     }
     Ok(ConfigLoadedLayers { config: merged, sources, provenance, warnings: Vec::new() })
-}
-
-fn config_discover_sources() -> Vec<ConfigLayerSource> {
-    let env = current_xdg_env();
-    let mut found = Vec::new();
-    let config_dir = maw_config_dir(&env);
-    let user_weighted = config_scan_dir(&config_dir, "user", 20);
-    if user_weighted.is_empty() {
-        let legacy = maw_config_path(&env, &["maw.config.json"]);
-        if legacy.exists() {
-            found.push(ConfigLayerSource { path: legacy, weight: 50, is_local: false, scope: "legacy", scope_rank: 20 });
-        }
-    } else {
-        found.extend(user_weighted);
-    }
-
-    let mut chain = Vec::new();
-    let mut dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    for _ in 0..32 {
-        chain.push(dir.clone());
-        let Some(parent) = dir.parent() else { break; };
-        if parent == dir { break; }
-        dir = parent.to_path_buf();
-    }
-    chain.reverse();
-    for (index, dir) in (0u32..).zip(chain) {
-        found.extend(config_scan_dir(&dir.join(".maw"), "project", 30 + index));
-    }
-    found.sort_by(|a, b| {
-        a.weight
-            .cmp(&b.weight)
-            .then(a.scope_rank.cmp(&b.scope_rank))
-            .then(a.is_local.cmp(&b.is_local))
-            .then(a.path.cmp(&b.path))
-    });
-    found
-}
-
-fn config_scan_dir(dir: &std::path::Path, scope: &'static str, scope_rank: u32) -> Vec<ConfigLayerSource> {
-    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new(); };
-    let mut out = Vec::new();
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else { continue; };
-        let Some((weight, is_local)) = config_parse_layer_name(name) else { continue; };
-        out.push(ConfigLayerSource { path: entry.path(), weight, is_local, scope, scope_rank });
-    }
-    out
-}
-
-fn config_parse_layer_name(name: &str) -> Option<(u32, bool)> {
-    let rest = name.strip_prefix("maw.config.")?;
-    let (digits, is_local) = rest
-        .strip_suffix(".local.json")
-        .map_or_else(|| rest.strip_suffix(".json").map(|value| (value, false)), |value| Some((value, true)))?;
-    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    Some((digits.parse().ok()?, is_local))
-}
-
-fn config_deep_merge(target: &mut serde_json::Value, layer: serde_json::Value) {
-    let (Some(target_map), Some(layer_map)) = (target.as_object_mut(), layer.as_object()) else {
-        *target = layer;
-        return;
-    };
-    for (key, value) in layer_map {
-        if value.is_null() {
-            target_map.remove(key);
-        } else if value.is_object() && target_map.get(key).is_some_and(serde_json::Value::is_object) {
-            if let Some(target_child) = target_map.get_mut(key) {
-                config_deep_merge(target_child, value.clone());
-            }
-        } else if value.is_object() {
-            let mut child = serde_json::json!({});
-            config_deep_merge(&mut child, value.clone());
-            target_map.insert(key.clone(), child);
-        } else {
-            target_map.insert(key.clone(), value.clone());
-        }
-    }
 }
 
 fn config_record_provenance(
@@ -343,7 +277,7 @@ fn config_provenance_entry(source: &ConfigLayerSource, value: serde_json::Value,
     ConfigProvenanceEntry {
         path: source.path.display().to_string(),
         weight: source.weight,
-        scope: source.scope,
+        scope: source.scope.as_str(),
         is_local: source.is_local,
         value,
         action,

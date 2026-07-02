@@ -270,8 +270,16 @@ fn doctor_check_stale_peers() -> DoctorCheckNative {
 }
 
 fn doctor_check_hub() -> DoctorCheckNative {
-    let cfg = maw_config_path(&doctor_xdg_env(), &["maw.config.json"]);
-    if cfg.exists() { doctor_info("hub", &format!("config readable at {}", cfg.display())) } else { doctor_warn("hub", &format!("config missing at {}", cfg.display()), &["maw init"]) }
+    let env = doctor_xdg_env();
+    let cfg = maw_config_path(&env, &["maw.config.json"]);
+    let sources = maw_xdg::discover_config_layers(&env, &std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
+    if let Some(source) = sources.first() {
+        doctor_info("hub", &format!("config readable at {}", source.path.display()))
+    } else if cfg.exists() {
+        doctor_info("hub", &format!("config readable at {}", cfg.display()))
+    } else {
+        doctor_warn("hub", &format!("config missing at {}", cfg.display()), &["maw init"])
+    }
 }
 
 fn doctor_check_disk() -> DoctorCheckNative {
@@ -489,8 +497,7 @@ fn doctor_gateway_kind(options: &DoctorOptions) -> String {
 }
 
 fn doctor_config_gateway() -> Option<String> {
-    let raw = std::fs::read_to_string(maw_config_path(&doctor_xdg_env(), &["maw.config.json"])).ok()?;
-    let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let parsed = merged_config_value_for_env(&doctor_xdg_env());
     parsed.get("gateway")?.as_str().map(str::to_owned)
 }
 

@@ -161,8 +161,7 @@ fn avengers_status_code(head: &str) -> Result<u16, String> {
 }
 
 fn avengers_config_url() -> Option<String> {
-    let raw = std::fs::read_to_string(maw_config_path(&current_xdg_env(), &["maw.config.json"])).ok()?;
-    let value = serde_json::from_str::<serde_json::Value>(&raw).ok()?;
+    let value = merged_config_value();
     value.get("avengers").and_then(serde_json::Value::as_str).filter(|value| !value.is_empty()).map(ToOwned::to_owned)
 }
 

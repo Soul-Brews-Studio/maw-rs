@@ -153,26 +153,17 @@ fn fleet_load_state() -> Result<FleetState, String> {
     let env = current_xdg_env();
     let config_dir = maw_config_dir(&env);
     let ghq_root = ghq_root();
-    let config = fleet_load_config(&config_dir)?;
+    let config = fleet_load_config(&env);
     let (sessions, disabled_count) = fleet_load_sessions(&config_dir)?;
     Ok(FleetState { config_dir, ghq_root, config, sessions, disabled_count })
 }
 
-fn fleet_load_config(config_dir: &std::path::Path) -> Result<FleetConfigSummary, String> {
-    let path = config_dir.join("maw.config.json");
-    let value = fleet_read_json_or_empty(&path)?;
+fn fleet_load_config(env: &MawXdgEnv) -> FleetConfigSummary {
+    let value = merged_config_value_for_env(env);
     let node = value.get("node").and_then(serde_json::Value::as_str).unwrap_or("local").to_owned();
     let peers = fleet_parse_peers(&value);
     let agents = fleet_parse_agents(&value);
-    Ok(FleetConfigSummary { node, peers, agents })
-}
-
-fn fleet_read_json_or_empty(path: &std::path::Path) -> Result<serde_json::Value, String> {
-    match std::fs::read_to_string(path) {
-        Ok(text) => serde_json::from_str(&text).map_err(|error| format!("fleet: invalid json {}: {error}", path.display())),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(serde_json::json!({})),
-        Err(error) => Err(format!("fleet: cannot read {}: {error}", path.display())),
-    }
+    FleetConfigSummary { node, peers, agents }
 }
 
 fn fleet_parse_peers(value: &serde_json::Value) -> Vec<FleetPeerSummary> {

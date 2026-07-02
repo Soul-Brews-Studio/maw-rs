@@ -269,8 +269,7 @@ fn team_invite_pending_json(request: &TeamInviteConsentRequest125) -> serde_json
 }
 
 fn team_invite_load_config() -> TeamInviteConfig125 {
-    let path = maw_config_path(&current_xdg_env(), &["maw.config.json"]);
-    std::fs::read_to_string(path).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
+    serde_json::from_value(merged_config_value()).unwrap_or_default()
 }
 
 fn team_invite_trust_json_contains(value: &serde_json::Value, from: &str, to: &str, action: &str) -> bool {

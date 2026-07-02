@@ -195,9 +195,7 @@ fn serveidentity_unique_sorted(values: Vec<String>) -> Vec<String> {
 #[allow(dead_code)]
 fn serveidentity_load_config() -> ServeidentityConfig {
     let env = real_xdg_env();
-    let path = maw_config_path(&env, &["maw.config.json"]);
-    let Ok(raw) = std::fs::read_to_string(path) else { return ServeidentityConfig::default(); };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else { return ServeidentityConfig::default(); };
+    let value = merged_config_value_for_env(&env);
     ServeidentityConfig {
         node: serveidentity_json_string(&value, "node"),
         oracle: serveidentity_json_string(&value, "oracle"),

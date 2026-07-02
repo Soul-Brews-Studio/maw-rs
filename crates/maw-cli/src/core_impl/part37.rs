@@ -463,9 +463,7 @@ fn costs_resolve_costs_projects_dir() -> std::path::PathBuf {
 
 fn costs_projects_dir_from_config() -> Option<String> {
     let env = real_xdg_env();
-    let path = maw_config_path(&env, &["maw.config.json"]);
-    let raw = std::fs::read_to_string(path).ok()?;
-    let value = serde_json::from_str::<serde_json::Value>(&raw).ok()?;
+    let value = merged_config_value_for_env(&env);
     let configured = [
         value.pointer("/env/MAW_CLAUDE_PROJECTS_DIR"),
         value.pointer("/costs/projectsDir"),

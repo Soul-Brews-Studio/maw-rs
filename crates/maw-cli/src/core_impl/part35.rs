@@ -230,9 +230,7 @@ fn resolve_contacts_psi_path() -> Result<std::path::PathBuf, String> {
 
 fn load_config_psi_path() -> Option<String> {
     let env = real_xdg_env();
-    let path = maw_config_path(&env, &["maw.config.json"]);
-    let raw = std::fs::read_to_string(path).ok()?;
-    let value = serde_json::from_str::<serde_json::Value>(&raw).ok()?;
+    let value = merged_config_value_for_env(&env);
     value
         .get("psiPath")
         .and_then(serde_json::Value::as_str)

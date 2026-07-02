@@ -186,16 +186,12 @@ fn reindex_index_path_from_env_or_config() -> Result<std::path::PathBuf, String>
 }
 
 fn reindex_config_string(key: &str) -> Option<String> {
-    let path = maw_config_path(&current_xdg_env(), &["maw.config.json"]);
-    let text = std::fs::read_to_string(path).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let value = merged_config_value();
     value.get(key).and_then(serde_json::Value::as_str).map(str::to_owned)
 }
 
 fn reindex_config_nested_string(parent: &str, key: &str) -> Option<String> {
-    let path = maw_config_path(&current_xdg_env(), &["maw.config.json"]);
-    let text = std::fs::read_to_string(path).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let value = merged_config_value();
     value.get(parent)?.get(key).and_then(serde_json::Value::as_str).map(str::to_owned)
 }
 

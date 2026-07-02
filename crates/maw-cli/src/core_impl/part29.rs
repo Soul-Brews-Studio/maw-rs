@@ -678,13 +678,7 @@ fn route_sessions_from_tmux(
 
 fn load_hey_config() -> HeyConfig {
     let env = real_xdg_env();
-    let path = maw_config_path(&env, &["maw.config.json"]);
-    let Ok(raw) = std::fs::read_to_string(path) else {
-        return HeyConfig::default();
-    };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
-        return HeyConfig::default();
-    };
+    let value = merged_config_value_for_env(&env);
     let node = value
         .get("node")
         .and_then(serde_json::Value::as_str)
@@ -830,6 +824,7 @@ fn real_xdg_env() -> MawXdgEnv {
         "XDG_DATA_HOME",
         "XDG_STATE_HOME",
         "XDG_CACHE_HOME",
+        "MAW_TEST_MODE",
     ]
     .into_iter()
     .filter_map(|name| std::env::var(name).ok().map(|value| (name.to_owned(), value)));
@@ -1001,9 +996,7 @@ fn localserver_port_label() -> String {
 
 fn load_hey_config_port() -> Option<u16> {
     let env = real_xdg_env();
-    let path = maw_config_path(&env, &["maw.config.json"]);
-    let raw = std::fs::read_to_string(path).ok()?;
-    let value = serde_json::from_str::<serde_json::Value>(&raw).ok()?;
+    let value = merged_config_value_for_env(&env);
     value.get("port").and_then(|port| port.as_u64().and_then(|n| u16::try_from(n).ok()).or_else(|| port.as_str()?.parse::<u16>().ok()))
 }
 

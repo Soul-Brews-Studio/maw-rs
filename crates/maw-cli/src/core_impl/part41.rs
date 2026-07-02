@@ -462,13 +462,7 @@ fn locate_load_registry_cache() -> Option<LocateRegistryCache> {
 }
 
 fn locate_load_config() -> LocateConfig {
-    let path = maw_config_path(&current_xdg_env(), &["maw.config.json"]);
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return LocateConfig::default();
-    };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return LocateConfig::default();
-    };
+    let value = merged_config_value();
     LocateConfig {
         node: value.get("node").and_then(serde_json::Value::as_str).map(ToOwned::to_owned),
         agents: locate_string_map(value.get("agents")),

@@ -114,9 +114,7 @@ fn forwarderror_resolve_target(explicit: Option<&str>) -> Result<String, String>
 
 fn forwarderror_config_target() -> Option<String> {
     let env = real_xdg_env();
-    let path = maw_config_path(&env, &["maw.config.json"]);
-    let raw = std::fs::read_to_string(path).ok()?;
-    let value = serde_json::from_str::<serde_json::Value>(&raw).ok()?;
+    let value = merged_config_value_for_env(&env);
     value
         .get("errorForward")
         .and_then(|item| item.get("target"))

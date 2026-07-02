@@ -63,9 +63,11 @@ fn servepeerstartupwarnings_parse(argv: &[String]) -> Result<(), (i32, String)> 
 }
 
 fn servepeerstartupwarnings_load_config() -> ServepeerstartupwarningsConfig {
-    let path = maw_config_path(&current_xdg_env(), &["maw.config.json"]);
-    let raw = std::fs::read_to_string(path).unwrap_or_else(|_| "{}".to_owned());
-    servepeerstartupwarnings_parse_config(&raw).unwrap_or_default()
+    let value = merged_config_value();
+    serde_json::to_string(&value)
+        .ok()
+        .and_then(|raw| servepeerstartupwarnings_parse_config(&raw))
+        .unwrap_or_default()
 }
 
 fn servepeerstartupwarnings_parse_config(raw: &str) -> Option<ServepeerstartupwarningsConfig> {

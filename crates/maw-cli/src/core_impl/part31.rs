@@ -476,6 +476,7 @@ fn current_xdg_env() -> MawXdgEnv {
         "MAW_DATA_DIR",
         "XDG_CACHE_HOME",
         "MAW_CACHE_DIR",
+        "MAW_TEST_MODE",
     ]
     .into_iter()
     .filter_map(|key| std::env::var(key).ok().map(|value| (key.to_owned(), value)));
