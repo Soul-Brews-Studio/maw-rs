@@ -479,8 +479,10 @@ fn dispatch_cli_plugin(argv: &[String]) -> Option<CliOutput> {
     // Ship-tier WASM dispatch runs on the real Extism runtime so plugins that import
     // host functions (maw.exec.*, maw.fs.*, …) load. The MvpWasmInvokeRuntime toy
     // parser rejected any module with imports and is retained only for no-deps unit
-    // tests in maw-plugin-manifest.
-    let mut runtime = ExtismWasmInvokeRuntime::default();
+    // tests in maw-plugin-manifest. with_manifest_fs_roots grants declared fs caps
+    // from the fixed registry (e.g. fs:read:teams) — same wiring as the internal
+    // plugin-manifest invoke path; without it every maw.fs.* call is denied here.
+    let mut runtime = ExtismWasmInvokeRuntime::default().with_manifest_fs_roots();
     Some(render_cli_plugin_result(invoke_plugin(plugin, &ctx, &mut runtime)))
 }
 
