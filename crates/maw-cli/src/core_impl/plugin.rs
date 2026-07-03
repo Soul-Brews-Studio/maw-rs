@@ -670,7 +670,7 @@ fn plugin_validate_wasm_sdk_dir(path: std::path::PathBuf) -> Result<std::path::P
     } else {
         Err(format!(
             "plugin build: WASM SDK toolchain missing: expected {}\nset MAW_WASM_SDK_DIR to packages/wasm-sdk from this repo",
-            path_string(&path.join("package.json"))
+            path_string(path.join("package.json"))
         ))
     }
 }
