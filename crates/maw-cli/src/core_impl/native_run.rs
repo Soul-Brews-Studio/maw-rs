@@ -63,11 +63,7 @@ impl RunSystemTmux {
 
 impl RunTmux for RunSystemTmux {
     fn run_sessions(&mut self) -> Vec<RouteSession> {
-        self.client
-            .list_all()
-            .into_iter()
-            .map(run_route_session_from_tmux)
-            .collect()
+        tmux_sessions_to_route_sessions(self.client.list_all())
     }
 
     fn run_send_text(&mut self, target: &str, text: &str) -> Result<(), String> {
@@ -363,23 +359,6 @@ fn run_parse_peer_response(node: &str, peer_url: &str, raw: &str) -> Result<RunP
 
 fn run_route_error(detail: &str, hint: Option<String>) -> String {
     hint.map_or_else(|| detail.to_owned(), |hint| format!("{detail} — {hint}"))
-}
-
-fn run_route_session_from_tmux(session: TmuxSession) -> RouteSession {
-    RouteSession {
-        name: session.name,
-        source: None,
-        windows: session
-            .windows
-            .into_iter()
-            .map(|window| RouteWindow {
-                index: window.index,
-                name: window.name,
-                active: window.active,
-                kind: None,
-            })
-            .collect(),
-    }
 }
 
 fn run_load_peer_key() -> Result<String, String> {

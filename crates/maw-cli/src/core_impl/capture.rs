@@ -11,23 +11,6 @@ struct CaptureOptions {
     full: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct CaptureSession {
-    name: String,
-    windows: Vec<CaptureWindow>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct CaptureWindow {
-    index: u32,
-    name: String,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct CaptureFleetEntry {
-    name: String,
-}
-
 fn capture_run_command(argv: &[String]) -> CliOutput {
     match capture_with_runner(argv, &mut maw_tmux::CommandTmuxRunner::new()) {
         Ok(output) => output,
@@ -44,8 +27,11 @@ fn capture_with_runner<R: maw_tmux::TmuxRunner>(
     runner: &mut R,
 ) -> Result<CliOutput, String> {
     let options = capture_parse_args(argv)?;
-    let sessions = capture_list_sessions(runner)?;
-    let target = capture_resolve_target(&options, &sessions, &capture_load_fleet())?;
+    capture_validate_tmux_target(&options.target)?;
+    let target = capture_apply_pane(
+        resolve_local_tmux_runner_target(runner, &options.target, "capture")?,
+        options.pane,
+    );
     capture_validate_tmux_target(&target)?;
     let raw = capture_capture_pane(runner, &target, &options)?;
     Ok(CliOutput {
@@ -107,174 +93,11 @@ fn capture_flag_like_target(target: &str) -> String {
     format!("\"{target}\" looks like a flag, not a target.\n  usage: maw capture <target>  (see: maw peek for quick glance)")
 }
 
-fn capture_list_sessions<R: maw_tmux::TmuxRunner>(runner: &mut R) -> Result<Vec<CaptureSession>, String> {
-    let raw = runner
-        .run(
-            "list-windows",
-            &[
-                "-a".to_owned(),
-                "-F".to_owned(),
-                "#{session_name}\t#{window_index}\t#{window_name}".to_owned(),
-            ],
-        )
-        .map_err(|error| format!("capture failed: {}", error.message))?;
-    Ok(capture_parse_sessions(&raw))
-}
-
-fn capture_parse_sessions(raw: &str) -> Vec<CaptureSession> {
-    let mut sessions = Vec::<CaptureSession>::new();
-    for line in raw.lines().filter(|line| !line.is_empty()) {
-        let mut parts = line.splitn(3, '\t');
-        let name = parts.next().unwrap_or_default();
-        let index = parts.next().and_then(|value| value.parse::<u32>().ok()).unwrap_or(0);
-        let window = parts.next().unwrap_or_default();
-        if let Some(session) = sessions.iter_mut().find(|session| session.name == name) {
-            session.windows.push(CaptureWindow { index, name: window.to_owned() });
-        } else {
-            sessions.push(CaptureSession {
-                name: name.to_owned(),
-                windows: vec![CaptureWindow { index, name: window.to_owned() }],
-            });
-        }
-    }
-    sessions
-}
-
-fn capture_load_fleet() -> Vec<CaptureFleetEntry> {
-    load_native_fleet()
-        .into_iter()
-        .map(|session| CaptureFleetEntry { name: session.name })
-        .collect()
-}
-
-fn capture_resolve_target(
-    options: &CaptureOptions,
-    sessions: &[CaptureSession],
-    fleet: &[CaptureFleetEntry],
-) -> Result<String, String> {
-    let (raw_session, explicit_window) = capture_split_target(&options.target);
-    capture_validate_query(&raw_session)?;
-    let session = capture_resolve_session(&raw_session, sessions, fleet)?;
-    let window = explicit_window.unwrap_or_else(|| capture_default_window(session));
-    let mut target = format!("{}:{window}", session.name);
-    if let Some(pane) = options.pane {
+fn capture_apply_pane(mut target: String, pane: Option<u32>) -> String {
+    if let Some(pane) = pane {
         let _ = write!(target, ".{pane}");
     }
-    Ok(target)
-}
-
-fn capture_split_target(target: &str) -> (String, Option<String>) {
-    let Some((left, right)) = target.split_once(':') else { return (target.to_owned(), None); };
-    if capture_is_tmux_window_suffix(right) {
-        (left.to_owned(), Some(right.to_owned()))
-    } else {
-        (right.to_owned(), None)
-    }
-}
-
-fn capture_is_tmux_window_suffix(value: &str) -> bool {
-    let Some((left, right)) = value.split_once('.') else {
-        return !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit());
-    };
-    !left.is_empty()
-        && !right.is_empty()
-        && left.bytes().all(|byte| byte.is_ascii_digit())
-        && right.bytes().all(|byte| byte.is_ascii_digit())
-}
-
-fn capture_resolve_session<'a>(
-    raw_session: &str,
-    sessions: &'a [CaptureSession],
-    fleet: &[CaptureFleetEntry],
-) -> Result<&'a CaptureSession, String> {
-    let matches = sessions
-        .iter()
-        .filter(|session| capture_running_match(session, raw_session))
-        .collect::<Vec<_>>();
-    capture_pick_session(raw_session, &matches, fleet).ok_or_else(|| {
-        format!("session '{raw_session}' not found\n  \x1b[90m  try: maw ls\x1b[0m")
-    })
-}
-
-fn capture_pick_session<'a>(
-    target: &str,
-    matches: &[&'a CaptureSession],
-    fleet: &[CaptureFleetEntry],
-) -> Option<&'a CaptureSession> {
-    match matches {
-        [] => None,
-        [single] => Some(*single),
-        _ => capture_exact_session(target, matches).or_else(|| capture_trusted_session(matches, fleet)),
-    }
-}
-
-fn capture_exact_session<'a>(target: &str, matches: &[&'a CaptureSession]) -> Option<&'a CaptureSession> {
-    matches.iter().copied().find(|session| session.name.eq_ignore_ascii_case(target))
-}
-
-fn capture_trusted_session<'a>(
-    matches: &[&'a CaptureSession],
-    fleet: &[CaptureFleetEntry],
-) -> Option<&'a CaptureSession> {
-    let registered = matches
-        .iter()
-        .copied()
-        .filter(|session| fleet.iter().any(|entry| entry.name.eq_ignore_ascii_case(&session.name)))
-        .collect::<Vec<_>>();
-    if registered.len() == 1 { return Some(registered[0]); }
-    let numbered = matches.iter().copied().filter(|session| capture_numbered(&session.name)).collect::<Vec<_>>();
-    (numbered.len() == 1).then_some(numbered[0])
-}
-
-fn capture_running_match(session: &CaptureSession, target: &str) -> bool {
-    capture_name_matches(&session.name, target)
-        || session.windows.iter().any(|window| capture_exact_oracle_window(&window.name, target))
-}
-
-fn capture_name_matches(name: &str, target: &str) -> bool {
-    let n = name.to_ascii_lowercase();
-    let t = target.to_ascii_lowercase();
-    n == t
-        || n.ends_with(&format!("-{t}"))
-        || n == format!("{t}-oracle")
-        || n.ends_with(&format!("-{t}-oracle"))
-        || capture_strip_dash(&n) == capture_strip_dash(&t)
-        || capture_legacy_dashless_match(&n, &t)
-}
-
-fn capture_exact_oracle_window(name: &str, target: &str) -> bool {
-    let n = name.to_ascii_lowercase();
-    let t = target.to_ascii_lowercase();
-    n == t || n == format!("{t}-oracle") || n.ends_with(&format!("-{t}-oracle"))
-}
-
-fn capture_strip_dash(value: &str) -> &str { value.trim_end_matches('-') }
-
-fn capture_legacy_dashless_match(name: &str, target: &str) -> bool {
-    target.contains('-')
-        && capture_strip_fleet_oracle(name).replace('-', "")
-            == capture_strip_fleet_oracle(target).replace('-', "")
-}
-
-fn capture_strip_fleet_oracle(value: &str) -> String {
-    let value = value.trim_start_matches(|ch: char| ch.is_ascii_digit()).trim_start_matches('-');
-    value.strip_suffix("-oracle").unwrap_or(value).to_owned()
-}
-
-fn capture_numbered(name: &str) -> bool {
-    name.as_bytes().first().is_some_and(u8::is_ascii_digit) && name.contains('-')
-}
-
-fn capture_default_window(session: &CaptureSession) -> String {
-    session.windows.first().map_or_else(|| "0".to_owned(), |window| window.index.to_string())
-}
-
-fn capture_validate_query(query: &str) -> Result<(), String> {
-    if query.is_empty() || query.trim() != query || query.starts_with('-') || query == "--" {
-        Err("capture target must be non-empty, unpadded, and not start with '-'".to_owned())
-    } else {
-        Ok(())
-    }
+    target
 }
 
 fn capture_validate_tmux_target(target: &str) -> Result<(), String> {
@@ -368,7 +191,7 @@ mod capture_tests {
         let _lock = super::env_test_lock().lock().expect("lock");
         let _env = CaptureEnvGuard::new();
         let mut tmux = CaptureMockTmux {
-            windows: "03-neo\t2\tmain\n".to_owned(),
+            windows: "03-neo|||2|||main|||1|||\n".to_owned(),
             capture: "hello\n".to_owned(),
             ..CaptureMockTmux::default()
         };
@@ -376,7 +199,17 @@ mod capture_tests {
         let output = capture_with_runner(&capture_strings(&["neo"]), &mut tmux).expect("capture");
 
         assert_eq!(output.stdout, "hello\n");
-        assert_eq!(tmux.calls[0], ("list-windows".to_owned(), capture_strings(&["-a", "-F", "#{session_name}\t#{window_index}\t#{window_name}"])));
+        assert_eq!(
+            tmux.calls[0],
+            (
+                "list-windows".to_owned(),
+                capture_strings(&[
+                    "-a",
+                    "-F",
+                    "#{session_name}|||#{window_index}|||#{window_name}|||#{window_active}|||#{pane_current_path}",
+                ]),
+            )
+        );
         assert_eq!(tmux.calls[1], ("capture-pane".to_owned(), capture_strings(&["-t", "03-neo:2", "-p", "-S", "-50"])));
     }
 
@@ -384,7 +217,7 @@ mod capture_tests {
     fn capture_full_and_pane_override_lines() {
         let _lock = super::env_test_lock().lock().expect("lock");
         let _env = CaptureEnvGuard::new();
-        let mut tmux = CaptureMockTmux { windows: "neo\t0\tzsh\n".to_owned(), ..CaptureMockTmux::default() };
+        let mut tmux = CaptureMockTmux { windows: "neo|||1|||zsh|||1|||\n".to_owned(), ..CaptureMockTmux::default() };
         let args = capture_strings(&["neo:1", "--pane", "3", "--lines", "7", "--full"]);
 
         let output = capture_with_runner(&args, &mut tmux).expect("capture");
@@ -414,7 +247,7 @@ mod capture_tests {
         let _lock = super::env_test_lock().lock().expect("lock");
         let _env = CaptureEnvGuard::new();
         let mut tmux = CaptureMockTmux {
-            windows: "03-neo\t0\tmain\n03-neo\t1\tneo-oracle\n".to_owned(),
+            windows: "03-neo|||0|||main|||1|||\n03-neo|||1|||neo-oracle|||0|||\n".to_owned(),
             fail_capture: true,
             ..CaptureMockTmux::default()
         };
@@ -422,12 +255,56 @@ mod capture_tests {
         let error = capture_with_runner(&capture_strings(&["neo-oracle"]), &mut tmux).expect_err("fail");
 
         assert_eq!(error, "capture failed: no pane");
-        assert_eq!(tmux.calls[1].1, capture_strings(&["-t", "03-neo:0", "-p", "-S", "-50"]));
+        assert_eq!(tmux.calls[1].1, capture_strings(&["-t", "03-neo:1", "-p", "-S", "-50"]));
     }
 
     #[test]
     fn capture_validate_rejects_bad_resolved_tmux_target() {
         let error = capture_validate_tmux_target("neo:bad pane").expect_err("guard");
         assert!(error.contains("whitespace"));
+    }
+
+    #[test]
+    fn capture_explicit_session_window_pins_duplicate_window_names() {
+        let _lock = super::env_test_lock().lock().expect("lock");
+        let _env = CaptureEnvGuard::new();
+        let mut tmux = CaptureMockTmux {
+            windows: concat!(
+                "webhook-relay-v3|||2|||codex-1|||1|||\n",
+                "arra-oracle-v3|||4|||codex-1|||0|||\n"
+            )
+            .to_owned(),
+            capture: "right pane\n".to_owned(),
+            ..CaptureMockTmux::default()
+        };
+
+        let output = capture_with_runner(&capture_strings(&["webhook-relay-v3:codex-1"]), &mut tmux)
+            .expect("capture");
+
+        assert_eq!(output.stdout, "right pane\n");
+        assert_eq!(
+            tmux.calls[1],
+            ("capture-pane".to_owned(), capture_strings(&["-t", "webhook-relay-v3:2", "-p", "-S", "-50"]))
+        );
+    }
+
+    #[test]
+    fn capture_explicit_session_window_miss_is_loud_without_cross_session_fallback() {
+        let _lock = super::env_test_lock().lock().expect("lock");
+        let _env = CaptureEnvGuard::new();
+        let mut tmux = CaptureMockTmux {
+            windows: concat!(
+                "webhook-relay-v3|||0|||oracle|||1|||\n",
+                "arra-oracle-v3|||4|||codex-1|||0|||\n"
+            )
+            .to_owned(),
+            ..CaptureMockTmux::default()
+        };
+
+        let error = capture_with_runner(&capture_strings(&["webhook-relay-v3:codex-1"]), &mut tmux)
+            .expect_err("missing window");
+
+        assert!(error.contains("no window 'codex-1' in session 'webhook-relay-v3'"), "{error}");
+        assert_eq!(tmux.calls.len(), 1, "{:?}", tmux.calls);
     }
 }

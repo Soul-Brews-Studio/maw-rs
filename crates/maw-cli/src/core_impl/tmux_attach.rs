@@ -321,40 +321,8 @@ fn resolve_local_tmux_command_target(
     client: &mut TmuxClient<maw_tmux::CommandTmuxRunner>,
     query: &str,
 ) -> Result<String, String> {
-    if query.starts_with('%') {
-        return Ok(query.to_owned());
-    }
-    let sessions = client
-        .list_all()
-        .into_iter()
-        .map(|session| RouteSession {
-            name: session.name,
-            windows: session
-                .windows
-                .into_iter()
-                .map(|window| RouteWindow {
-                    index: window.index,
-                    name: window.name,
-                    active: window.active,
-                    kind: None,
-                })
-                .collect(),
-            source: None,
-        })
-        .collect::<Vec<_>>();
-    match resolve_route_target(query, &RouteConfig::default(), &sessions) {
-        RouteResult::Local { target } | RouteResult::SelfNode { target } => Ok(target),
-        RouteResult::Peer { node, target, .. } => Err(format!(
-            "cross-node target '{query}' (node '{node}', target '{target}') is not supported"
-        )),
-        RouteResult::Error { detail, hint, .. } => {
-            if let Some(hint) = hint {
-                Err(format!("{detail} — {hint}"))
-            } else {
-                Err(detail)
-            }
-        }
-    }
+    let sessions = tmux_sessions_to_route_sessions(client.list_all());
+    resolve_local_tmux_target_from_sessions(query, &sessions)
 }
 
 fn command_target_error(command: &str, message: &str) -> CliOutput {

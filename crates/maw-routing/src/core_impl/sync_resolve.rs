@@ -518,6 +518,12 @@ pub fn resolve_target_with_current_session(
     let writable = writable_sessions(sessions);
     let self_node = config.node.as_deref().unwrap_or("local");
 
+    if let Some(result) =
+        resolve_explicit_local_session_window_target(query, &writable, RouteType::Local)
+    {
+        return result;
+    }
+
     if !query.contains(':') {
         if let Some(result) =
             resolve_session_alias_window_target(query, &writable, RouteType::Local)

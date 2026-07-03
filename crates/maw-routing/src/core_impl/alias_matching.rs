@@ -196,6 +196,65 @@ fn find_named_fleet_window(session: &Session, query: &str) -> Option<String> {
     None
 }
 
+fn resolve_explicit_local_session_window_target(
+    query: &str,
+    sessions: &[Session],
+    route_type: RouteType,
+) -> Option<ResolveResult> {
+    let (session_part, raw_window_part) = query.split_once(':')?;
+    let session = match_session(sessions, session_part, true)?;
+
+    if raw_window_part.is_empty() {
+        return Some(route_target(
+            route_type,
+            session.windows.first().map_or_else(
+                || format!("{}:", session.name),
+                |window| format!("{}:{}", session.name, window.index),
+            ),
+        ));
+    }
+
+    Some(resolve_exact_session_window(
+        session,
+        raw_window_part,
+        route_type,
+    ))
+}
+
+fn resolve_exact_session_window(
+    session: &Session,
+    raw_window_part: &str,
+    route_type: RouteType,
+) -> ResolveResult {
+    let (window_part, pane_suffix) = split_pane_suffix(raw_window_part);
+    if window_part.bytes().all(|byte| byte.is_ascii_digit()) {
+        if let Ok(index) = window_part.parse::<u32>() {
+            if let Some(window) = session.windows.iter().find(|window| window.index == index) {
+                return route_target(route_type, format!("{}:{}{pane_suffix}", session.name, window.index));
+            }
+        }
+        return session_window_not_found_error(session, window_part);
+    }
+
+    if let Some(window) = session
+        .windows
+        .iter()
+        .find(|window| window.name.eq_ignore_ascii_case(window_part))
+    {
+        return route_target(route_type, format!("{}:{}{pane_suffix}", session.name, window.index));
+    }
+
+    session_window_not_found_error(session, window_part)
+}
+
+fn session_window_not_found_error(session: &Session, window_part: &str) -> ResolveResult {
+    error(
+        "session_window_not_found",
+        format!("no window '{window_part}' in session '{}'", session.name),
+        Some(format!("windows: {}", session_window_list(session))),
+    )
+}
+
 fn fleet_window_candidate_names(query: &str) -> Vec<String> {
     let raw = query.trim();
     let stripped = raw.strip_suffix("-oracle").unwrap_or(raw);
@@ -844,6 +903,55 @@ mod coverage_gap_tests {
             ),
             ResolveResult::Local {
                 target: "188-maw-rs:1".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn explicit_session_window_pins_duplicate_names_to_named_session() {
+        let sessions = vec![
+            session("webhook-relay-v3", vec![window(2, "codex-1")]),
+            session("arra-oracle-v3", vec![window(4, "codex-1")]),
+        ];
+
+        assert_eq!(
+            resolve_target("webhook-relay-v3:codex-1", &MawConfig::default(), &sessions),
+            ResolveResult::Local {
+                target: "webhook-relay-v3:2".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn explicit_session_window_miss_is_loud_and_never_cross_session() {
+        let sessions = vec![
+            session("webhook-relay-v3", vec![window(0, "oracle")]),
+            session("arra-oracle-v3", vec![window(4, "codex-1")]),
+        ];
+
+        assert_eq!(
+            resolve_target("webhook-relay-v3:codex-1", &MawConfig::default(), &sessions),
+            ResolveResult::Error {
+                reason: "session_window_not_found".to_owned(),
+                detail: "no window 'codex-1' in session 'webhook-relay-v3'".to_owned(),
+                hint: Some("windows: webhook-relay-v3:0 (oracle)".to_owned()),
+            }
+        );
+    }
+
+    #[test]
+    fn explicit_session_window_does_not_substring_match_inside_session() {
+        let sessions = vec![session(
+            "webhook-relay-v3",
+            vec![window(4, "webhook-codex-10")],
+        )];
+
+        assert_eq!(
+            resolve_target("webhook-relay-v3:codex-1", &MawConfig::default(), &sessions),
+            ResolveResult::Error {
+                reason: "session_window_not_found".to_owned(),
+                detail: "no window 'codex-1' in session 'webhook-relay-v3'".to_owned(),
+                hint: Some("windows: webhook-relay-v3:4 (webhook-codex-10)".to_owned()),
             }
         );
     }

@@ -749,23 +749,7 @@ fn format_local_hey_message(text: &str, config: &HeyConfig, from: Option<&str>) 
 fn route_sessions_from_tmux(
     tmux: &mut TmuxClient<maw_tmux::CommandTmuxRunner>,
 ) -> Vec<RouteSession> {
-    tmux.list_all()
-        .into_iter()
-        .map(|session| RouteSession {
-            name: session.name,
-            source: None,
-            windows: session
-                .windows
-                .into_iter()
-                .map(|window| RouteWindow {
-                    index: window.index,
-                    name: window.name,
-                    active: window.active,
-                    kind: None,
-                })
-                .collect(),
-        })
-        .collect()
+    tmux_sessions_to_route_sessions(tmux.list_all())
 }
 
 fn load_hey_config() -> HeyConfig {

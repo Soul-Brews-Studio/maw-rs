@@ -38,11 +38,14 @@ fn peek_with_runner<R: maw_tmux::TmuxRunner>(
     let options = peek_parse(argv)?;
     if let Some(target) = options.target.as_deref() {
         peek_validate_tmux_target(target).map_err(|message| (1, message))?;
-        let content = peek_capture(runner, target, options.lines, options.history)
+        let resolved = resolve_local_tmux_runner_target(runner, target, "peek")
+            .map_err(|message| (1, message))?;
+        peek_validate_tmux_target(&resolved).map_err(|message| (1, message))?;
+        let content = peek_capture(runner, &resolved, options.lines, options.history)
             .map_err(|message| (1, message))?;
         return Ok(CliOutput {
             code: 0,
-            stdout: format!("\x1b[36m--- {target} ---\x1b[0m\n{content}"),
+            stdout: format!("\x1b[36m--- {resolved} ---\x1b[0m\n{content}"),
             stderr: String::new(),
         });
     }
@@ -239,14 +242,17 @@ mod peek_tests {
 
     #[test]
     fn peek_single_target_uses_argv_vector_capture() {
-        let mut runner = PeekFakeRunner::default();
+        let mut runner = PeekFakeRunner {
+            list: "sess|||1|||main|||1|||\n".to_owned(),
+            ..PeekFakeRunner::default()
+        };
         runner.captures.insert("sess:1.0".to_owned(), "pane output\n".to_owned());
 
         let output = peek_with_runner(&args(&["sess:1.0", "--lines", "12"]), &mut runner).expect("peek");
 
         assert_eq!(output.stdout, "\x1b[36m--- sess:1.0 ---\x1b[0m\npane output\n");
         assert_eq!(
-            runner.calls[0],
+            runner.calls[1],
             (
                 "capture-pane".to_owned(),
                 args(&["-p", "-t", "sess:1.0", "-S", "-12", "-J"]),
@@ -285,5 +291,44 @@ mod peek_tests {
         assert!(output.stdout.contains("dead"));
         assert!(output.stdout.contains("(unreachable)"));
         assert_eq!(runner.calls[1].1, args(&["-p", "-t", "s:0", "-S", "-3", "-J"]));
+    }
+
+    #[test]
+    fn peek_explicit_session_window_pins_duplicate_window_names() {
+        let mut runner = PeekFakeRunner {
+            list: concat!(
+                "webhook-relay-v3|||2|||codex-1|||1|||\n",
+                "arra-oracle-v3|||4|||codex-1|||0|||\n"
+            )
+            .to_owned(),
+            ..PeekFakeRunner::default()
+        };
+        runner.captures.insert("webhook-relay-v3:2".to_owned(), "right pane\n".to_owned());
+        runner.captures.insert("arra-oracle-v3:4".to_owned(), "wrong pane\n".to_owned());
+
+        let output = peek_with_runner(&args(&["webhook-relay-v3:codex-1"]), &mut runner)
+            .expect("peek");
+
+        assert_eq!(output.stdout, "\x1b[36m--- webhook-relay-v3:2 ---\x1b[0m\nright pane\n");
+        assert_eq!(runner.calls[1].1, args(&["-p", "-t", "webhook-relay-v3:2", "-S", "-30", "-J"]));
+    }
+
+    #[test]
+    fn peek_explicit_session_window_miss_is_loud_without_cross_session_fallback() {
+        let mut runner = PeekFakeRunner {
+            list: concat!(
+                "webhook-relay-v3|||0|||oracle|||1|||\n",
+                "arra-oracle-v3|||4|||codex-1|||0|||\n"
+            )
+            .to_owned(),
+            ..PeekFakeRunner::default()
+        };
+
+        let error = peek_with_runner(&args(&["webhook-relay-v3:codex-1"]), &mut runner)
+            .expect_err("missing window");
+
+        assert_eq!(error.0, 1);
+        assert!(error.1.contains("no window 'codex-1' in session 'webhook-relay-v3'"), "{error:?}");
+        assert_eq!(runner.calls.len(), 1, "{:?}", runner.calls);
     }
 }
