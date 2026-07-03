@@ -1,7 +1,7 @@
-include!("part01.rs");
-include!("part02.rs");
-include!("part03.rs");
-include!("part04.rs");
-include!("part05.rs");
-include!("part06.rs");
-include!("part07.rs");
+include!("surface_parsers.rs");
+include!("capability_parsers.rs");
+include!("discovery_runtime.rs");
+include!("mvp_wasm.rs");
+include!("discovery_helpers.rs");
+include!("wasm_host.rs");
+include!("js_plugin_build.rs");

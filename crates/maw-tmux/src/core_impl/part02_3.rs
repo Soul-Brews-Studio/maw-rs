@@ -38,8 +38,14 @@ where
 
     /// Check whether captured pane text still appears to contain unsubmitted input.
     pub fn pane_input_pending(&mut self, target: &str) -> bool {
+        self.pane_pending_input(target).is_some()
+    }
+
+    /// Return the captured pending prompt text, when the current pane prompt has any.
+    pub fn pane_pending_input(&mut self, target: &str) -> Option<String> {
         self.capture(target, Some(5))
-            .is_ok_and(|content| pane_input_pending_from_capture(&content))
+            .ok()
+            .and_then(|content| pane_pending_input_from_capture(&content))
     }
 
     /// Set a tmux environment variable.
@@ -96,4 +102,3 @@ where
         self.runner.run(subcommand, args).unwrap_or_default()
     }
 }
-

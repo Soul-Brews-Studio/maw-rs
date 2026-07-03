@@ -41,8 +41,10 @@ impl TeamEnterTmux240 {
         for _ in 1..=maw_tmux::MAX_SUBMIT_ATTEMPTS {
             self.team_send_enter(pane_id)?;
             self.team_sleep240(maw_tmux::SUBMIT_CONFIRM_MS);
-            if !self.team_pane_input_pending(pane_id) {
-                return Ok(());
+            match self.team_pending_state_after_grace(pane_id, text) {
+                maw_tmux::PendingInputState::Cleared
+                | maw_tmux::PendingInputState::DifferentInput => return Ok(()),
+                maw_tmux::PendingInputState::MatchesSent => {}
             }
         }
         Ok(())
@@ -53,21 +55,48 @@ impl TeamEnterTmux240 {
         self.team_tmux_run240("send-keys", &maw_tmux::tmux_send_enter_args(pane_id)).map(|_| ())
     }
 
-    fn team_pane_input_pending(&mut self, pane_id: &str) -> bool {
-        team_validate_pane_id240(pane_id).is_ok()
-            && self
-                .team_tmux_run240(
-                    "capture-pane",
-                    &[
-                        "-t".to_owned(),
-                        pane_id.to_owned(),
-                        "-e".to_owned(),
-                        "-p".to_owned(),
-                        "-S".to_owned(),
-                        "-5".to_owned(),
-                    ],
-                )
-                .is_ok_and(|content| maw_tmux::pane_input_pending_from_capture(&content))
+    fn team_pending_state_after_grace(
+        &mut self,
+        pane_id: &str,
+        text: &str,
+    ) -> maw_tmux::PendingInputState {
+        let _confirm_state = self.team_pending_input_state(pane_id, text);
+        self.team_sleep240(maw_tmux::SUBMIT_GRACE_MS);
+        self.team_pending_input_state(pane_id, text)
+    }
+
+    fn team_pending_input_state(
+        &mut self,
+        pane_id: &str,
+        text: &str,
+    ) -> maw_tmux::PendingInputState {
+        let Some(pending) = self.team_pending_input(pane_id) else {
+            return maw_tmux::PendingInputState::Cleared;
+        };
+        if maw_tmux::pending_input_matches_sent(&pending, text) {
+            maw_tmux::PendingInputState::MatchesSent
+        } else {
+            maw_tmux::PendingInputState::DifferentInput
+        }
+    }
+
+    fn team_pending_input(&mut self, pane_id: &str) -> Option<String> {
+        if team_validate_pane_id240(pane_id).is_err() {
+            return None;
+        }
+        self.team_tmux_run240(
+            "capture-pane",
+            &[
+                "-t".to_owned(),
+                pane_id.to_owned(),
+                "-e".to_owned(),
+                "-p".to_owned(),
+                "-S".to_owned(),
+                "-5".to_owned(),
+            ],
+        )
+        .ok()
+        .and_then(|content| maw_tmux::pane_pending_input_from_capture(&content))
     }
 
     fn team_sleep240(&self, millis: u64) {

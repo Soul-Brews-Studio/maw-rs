@@ -488,7 +488,8 @@ mod workon_tests {
         assert_eq!(runner.calls[3].0, "send-keys");
         assert_eq!(runner.calls[4].0, "send-keys");
         assert_eq!(runner.calls[5].0, "capture-pane");
-        assert_eq!(runner.calls.len(), 6);
+        assert_eq!(runner.calls[6].0, "capture-pane");
+        assert_eq!(runner.calls.len(), 7);
     }
 
     #[test]

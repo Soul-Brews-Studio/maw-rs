@@ -490,6 +490,7 @@ fn wake_apply(
     if !resolved.repo_path.is_dir() { return Err(format!("wake: repo path missing: {}", resolved.repo_path.display())); }
     let session_exists = tmux.wake_has_session(&resolved.session);
     if session_exists { wake_create_or_reuse_window(options, resolved, tmux, out)?; } else { wake_create_session(resolved, tmux, out)?; }
+    wake_register_fleet_session(resolved, tmux)?;
     if options.attach { tmux.wake_select_window(&resolved.target)?; }
     Ok(())
 }
@@ -518,6 +519,36 @@ fn wake_create_or_reuse_window(
     Ok(())
 }
 
+fn wake_register_fleet_session(
+    resolved: &WakeResolvedNative,
+    tmux: &mut impl WakeTmuxNative,
+) -> Result<(), String> {
+    let windows = wake_registry_windows(resolved, tmux);
+    if windows.is_empty() {
+        return Ok(());
+    }
+    fleet_registry_upsert_session(&resolved.session, &windows, "maw wake")
+        .map(|_| ())
+        .map_err(|error| format!("wake: {error}"))
+}
+
+fn wake_registry_windows(
+    resolved: &WakeResolvedNative,
+    tmux: &mut impl WakeTmuxNative,
+) -> Vec<FleetWindowSummary> {
+    let mut windows = tmux
+        .wake_list()
+        .into_iter()
+        .find(|session| session.name == resolved.session)
+        .map_or_else(Vec::new, |session| fleet_registry_windows_from_tmux(&session.windows, None));
+    if !windows.iter().any(|window| window.name == resolved.window) {
+        if let Some(repo) = fleet_repo_slug_from_path(&resolved.repo_path, None) {
+            windows.push(FleetWindowSummary { name: resolved.window.clone(), repo });
+        }
+    }
+    windows
+}
+
 #[cfg(test)]
 mod wake_tests {
     use super::*;
@@ -538,6 +569,14 @@ mod wake_tests {
         }
         fn wake_new_window(&mut self, session: &str, window: &str, cwd: &std::path::Path) -> Result<(), String> {
             self.actions.push(format!("new-window {session} {window} {}", cwd.display()));
+            if let Some(existing) = self.sessions.iter_mut().find(|item| item.name == session) {
+                existing.windows.push(maw_tmux::TmuxWindow {
+                    index: u32::try_from(existing.windows.len()).unwrap_or(u32::MAX),
+                    name: window.to_owned(),
+                    active: false,
+                    cwd: Some(cwd.display().to_string()),
+                });
+            }
             Ok(())
         }
         fn wake_send_text(&mut self, target: &str, text: &str) -> Result<(), String> {
@@ -680,6 +719,37 @@ mod wake_tests {
             assert!(tmux.actions.iter().any(|action| action.starts_with("new-session")));
             assert!(tmux.actions.iter().any(|action| action.contains(&root.join("ghq/github.com/acme/neo-oracle").display().to_string())));
             assert!(!tmux.actions.iter().any(|action| action.starts_with("select")));
+        });
+    }
+
+    #[test]
+    fn wake_auto_registers_fleet_json_and_merges_new_windows() {
+        wake_with_fixture(|root| {
+            let _now = EnvVarRestore::capture("MAW_RS_FLEET_REGISTRY_NOW");
+            std::env::set_var("MAW_RS_FLEET_REGISTRY_NOW", "2026-07-03T02:03:04.000Z");
+            let mut tmux = WakeMockTmux::default();
+
+            let (code, stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("first wake");
+            assert_eq!(code, 0, "{stdout}");
+            let session = tmux.sessions.first().expect("session").name.clone();
+            let path = root.join("home/.maw/fleet").join(format!("{session}.json"));
+            let first: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).expect("registry")).expect("json");
+            assert_eq!(first["name"], session);
+            assert_eq!(first["created_at"], "2026-07-03T02:03:04.000Z");
+            assert_eq!(first["created_by"], "maw wake");
+            assert_eq!(first["auto_registered"], true);
+            assert_eq!(first["windows"].as_array().expect("windows").len(), 1);
+            assert_eq!(first["windows"][0]["name"], "neo");
+            assert_eq!(first["windows"][0]["repo"], "github.com/acme/neo-oracle");
+
+            let (code, stdout) = wake_run(&wake_strings(&["neo", "--task", "issue-90", "--no-attach"]), &mut tmux).expect("task wake");
+            assert_eq!(code, 0, "{stdout}");
+            let updated: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).expect("updated registry")).expect("json");
+            let windows = updated["windows"].as_array().expect("windows");
+            assert_eq!(windows.len(), 2);
+            assert!(windows.iter().any(|window| window["name"] == "neo"));
+            assert!(windows.iter().any(|window| window["name"] == "neo-issue-90"));
+            assert_eq!(updated["created_at"], "2026-07-03T02:03:04.000Z");
         });
     }
 

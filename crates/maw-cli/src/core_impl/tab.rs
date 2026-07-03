@@ -20,6 +20,10 @@ fn tab_with_runner<R: maw_tmux::TmuxRunner>(
     argv: &[String],
     runner: &mut R,
 ) -> Result<CliOutput, (i32, String)> {
+    if matches!(argv.first().map(String::as_str), Some("new")) {
+        return tab_new_with_runner(&argv[1..], runner);
+    }
+
     let session = tab_current_session(runner)?;
     tab_validate_tmux_target(&session).map_err(|message| (1, message))?;
     let tab_num = argv.first().and_then(|value| parse_js_i32_prefix(value));
@@ -68,6 +72,126 @@ fn tab_with_runner<R: maw_tmux::TmuxRunner>(
 
     let message = remaining.join(" ");
     tab_send_message(runner, tab.1.as_str(), &message, force, talk)
+}
+
+const TAB_NEW_USAGE: &str = "usage: maw tab new [<session>] [--name <window>] [--cmd <command>]";
+const TAB_NEW_DEFAULT_WINDOW: &str = "shell";
+
+#[derive(Debug, PartialEq, Eq)]
+struct TabNewOptions {
+    session: Option<String>,
+    name: String,
+    command: Option<String>,
+}
+
+fn tab_new_with_runner<R: maw_tmux::TmuxRunner>(
+    argv: &[String],
+    runner: &mut R,
+) -> Result<CliOutput, (i32, String)> {
+    if matches!(argv.first().map(String::as_str), Some("--help" | "-h")) {
+        return Ok(CliOutput {
+            code: 0,
+            stdout: format!("{TAB_NEW_USAGE}\n"),
+            stderr: String::new(),
+        });
+    }
+
+    let options = tab_parse_new_options(argv)?;
+    let session = match options.session {
+        Some(session) => session,
+        None => tab_current_session(runner).map_err(|_| {
+            tab_new_usage_error("tab new: session required outside tmux; pass <session>")
+        })?,
+    };
+    tab_validate_tmux_target(&session).map_err(|message| (1, message))?;
+    tab_validate_tmux_window_name(&options.name).map_err(|message| (1, message))?;
+
+    let tabs = tab_list_windows(runner, &session)?;
+    if tabs.iter().any(|tab| tab.1 == options.name) {
+        return Err((
+            1,
+            format!(
+                "tab new: window '{}' already exists in session {session}",
+                options.name
+            ),
+        ));
+    }
+
+    let session_target = format!("{session}:");
+    runner
+        .run(
+            "new-window",
+            &[
+                "-t".to_owned(),
+                session_target,
+                "-n".to_owned(),
+                options.name.clone(),
+            ],
+        )
+        .map_err(|error| (1, format!("tab new: {}", error.message)))?;
+
+    let target = format!("{session}:{}", options.name);
+    tab_validate_tmux_target(&target).map_err(|message| (1, message))?;
+    if let Some(command) = options.command {
+        tab_send_text_confirmed(runner, &target, &command)?;
+    }
+
+    Ok(CliOutput {
+        code: 0,
+        stdout: format!("created → {target}\n"),
+        stderr: String::new(),
+    })
+}
+
+fn tab_parse_new_options(argv: &[String]) -> Result<TabNewOptions, (i32, String)> {
+    let mut session = None;
+    let mut name = TAB_NEW_DEFAULT_WINDOW.to_owned();
+    let mut command = None;
+    let mut index = 0;
+
+    while index < argv.len() {
+        match argv[index].as_str() {
+            "--name" => {
+                index += 1;
+                let Some(value) = argv.get(index) else {
+                    return Err(tab_new_usage_error("tab new: --name requires a value"));
+                };
+                name.clone_from(value);
+            }
+            "--cmd" => {
+                index += 1;
+                let Some(value) = argv.get(index) else {
+                    return Err(tab_new_usage_error("tab new: --cmd requires a value"));
+                };
+                if value.is_empty() {
+                    return Err(tab_new_usage_error("tab new: --cmd requires a non-empty value"));
+                }
+                command = Some(value.clone());
+            }
+            value if value.starts_with('-') => {
+                return Err(tab_new_usage_error(format!("tab new: unexpected option {value}")));
+            }
+            value => {
+                if session.is_some() {
+                    return Err(tab_new_usage_error(format!(
+                        "tab new: unexpected argument {value}"
+                    )));
+                }
+                session = Some(value.to_owned());
+            }
+        }
+        index += 1;
+    }
+
+    Ok(TabNewOptions {
+        session,
+        name,
+        command,
+    })
+}
+
+fn tab_new_usage_error(message: impl Into<String>) -> (i32, String) {
+    (2, format!("{}\n{TAB_NEW_USAGE}", message.into()))
 }
 
 fn tab_current_session<R: maw_tmux::TmuxRunner>(runner: &mut R) -> Result<String, (i32, String)> {
@@ -203,6 +327,14 @@ fn tab_validate_tmux_target(target: &str) -> Result<(), String> {
     }
 }
 
+fn tab_validate_tmux_window_name(name: &str) -> Result<(), String> {
+    if name.is_empty() || name.trim() != name || name.starts_with('-') {
+        Err("tmux window name must be non-empty, unpadded, and not start with '-'".to_owned())
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tab_tests {
     use super::*;
@@ -214,16 +346,25 @@ mod tab_tests {
         windows: String,
         pane_command: String,
         capture: String,
+        display_error: Option<String>,
+        new_window_error: Option<String>,
     }
 
     impl maw_tmux::TmuxRunner for MockTmuxRunner {
         fn run(&mut self, subcommand: &str, args: &[String]) -> Result<String, maw_tmux::TmuxError> {
             self.calls.push((subcommand.to_owned(), args.to_vec()));
             match subcommand {
-                "display-message" => Ok(self.session.clone()),
+                "display-message" => self.display_error.as_ref().map_or_else(
+                    || Ok(self.session.clone()),
+                    |message| Err(maw_tmux::TmuxError::new(message.clone())),
+                ),
                 "list-windows" => Ok(self.windows.clone()),
                 "list-panes" => Ok(self.pane_command.clone()),
                 "capture-pane" => Ok(self.capture.clone()),
+                "new-window" => self.new_window_error.as_ref().map_or_else(
+                    || Ok(String::new()),
+                    |message| Err(maw_tmux::TmuxError::new(message.clone())),
+                ),
                 "send-keys" => Ok(String::new()),
                 other => Err(maw_tmux::TmuxError::new(format!("unexpected {other}"))),
             }
@@ -232,6 +373,147 @@ mod tab_tests {
 
     fn strings(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    #[test]
+    fn tab_new_defaults_to_current_session_and_plain_shell_window() {
+        let mut runner = MockTmuxRunner {
+            session: "neo\n".to_owned(),
+            windows: "0:work:0\n".to_owned(),
+            ..MockTmuxRunner::default()
+        };
+
+        let output = tab_with_runner(&strings(&["new"]), &mut runner).expect("tab new");
+
+        assert_eq!(output.code, 0);
+        assert_eq!(output.stdout, "created → neo:shell\n");
+        assert_eq!(
+            runner.calls,
+            vec![
+                ("display-message".to_owned(), strings(&["-p", "#S"])),
+                (
+                    "list-windows".to_owned(),
+                    strings(&["-t", "neo", "-F", "#{window_index}:#{window_name}:#{window_active}"])
+                ),
+                ("new-window".to_owned(), strings(&["-t", "neo:", "-n", "shell"])),
+            ]
+        );
+    }
+
+    #[test]
+    fn tab_new_accepts_explicit_session_without_current_session_probe() {
+        let mut runner = MockTmuxRunner {
+            windows: "0:shell:0\n".to_owned(),
+            ..MockTmuxRunner::default()
+        };
+
+        let output = tab_with_runner(&strings(&["new", "alpha", "--name", "scratch"]), &mut runner)
+            .expect("tab new explicit session");
+
+        assert_eq!(output.stdout, "created → alpha:scratch\n");
+        assert_eq!(
+            runner.calls,
+            vec![
+                (
+                    "list-windows".to_owned(),
+                    strings(&["-t", "alpha", "-F", "#{window_index}:#{window_name}:#{window_active}"])
+                ),
+                ("new-window".to_owned(), strings(&["-t", "alpha:", "-n", "scratch"])),
+            ]
+        );
+    }
+
+    #[test]
+    fn tab_new_cmd_uses_confirmed_submit_send_path() {
+        let mut runner = MockTmuxRunner {
+            windows: "0:shell:0\n".to_owned(),
+            ..MockTmuxRunner::default()
+        };
+
+        let output = tab_with_runner(
+            &strings(&[
+                "new",
+                "alpha",
+                "--name",
+                "scratch",
+                "--cmd",
+                "maw ls -v --watch",
+            ]),
+            &mut runner,
+        )
+        .expect("tab new --cmd");
+
+        assert_eq!(output.stdout, "created → alpha:scratch\n");
+        assert_eq!(runner.calls[0], ("list-windows".to_owned(), strings(&["-t", "alpha", "-F", "#{window_index}:#{window_name}:#{window_active}"])));
+        assert_eq!(runner.calls[1], ("new-window".to_owned(), strings(&["-t", "alpha:", "-n", "scratch"])));
+        assert_eq!(
+            runner.calls[2],
+            (
+                "display-message".to_owned(),
+                strings(&["-t", "alpha:scratch", "-p", "#{pane_in_mode}"])
+            )
+        );
+        assert_eq!(
+            runner.calls[3],
+            (
+                "send-keys".to_owned(),
+                strings(&["-t", "alpha:scratch", "-l", "maw ls -v --watch"])
+            )
+        );
+        assert_eq!(
+            runner.calls[4],
+            ("send-keys".to_owned(), strings(&["-t", "alpha:scratch", "Enter"]))
+        );
+        assert_eq!(runner.calls[5].0, "capture-pane");
+        assert_eq!(runner.calls[5].1[0..2], strings(&["-t", "alpha:scratch"]));
+    }
+
+    #[test]
+    fn tab_new_rejects_name_collisions_before_creating_window() {
+        let mut runner = MockTmuxRunner {
+            session: "neo\n".to_owned(),
+            windows: "0:shell:0\n1:work:1\n".to_owned(),
+            ..MockTmuxRunner::default()
+        };
+
+        let error = tab_with_runner(&strings(&["new"]), &mut runner).expect_err("collision");
+
+        assert_eq!(
+            error,
+            (
+                1,
+                "tab new: window 'shell' already exists in session neo".to_owned()
+            )
+        );
+        assert_eq!(
+            runner.calls,
+            vec![
+                ("display-message".to_owned(), strings(&["-p", "#S"])),
+                (
+                    "list-windows".to_owned(),
+                    strings(&["-t", "neo", "-F", "#{window_index}:#{window_name}:#{window_active}"])
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn tab_new_outside_tmux_requires_session_with_usage() {
+        let mut runner = MockTmuxRunner {
+            display_error: Some("no tmux".to_owned()),
+            ..MockTmuxRunner::default()
+        };
+
+        let error = tab_with_runner(&strings(&["new"]), &mut runner).expect_err("outside tmux");
+
+        assert_eq!(
+            error,
+            (
+                2,
+                "tab new: session required outside tmux; pass <session>\nusage: maw tab new [<session>] [--name <window>] [--cmd <command>]".to_owned()
+            )
+        );
+        assert_eq!(runner.calls, vec![("display-message".to_owned(), strings(&["-p", "#S"]))]);
     }
 
     #[test]

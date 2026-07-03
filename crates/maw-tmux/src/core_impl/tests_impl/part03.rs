@@ -303,7 +303,9 @@
             Ok(""),
             Ok(""),
             Ok("\u{1b}[32m❯\u{1b}[0m deploy now\r"),
+            Ok("\u{1b}[32m❯\u{1b}[0m deploy now\r"),
             Ok(""),
+            Ok("\u{1b}[32m❯\u{1b}[0m \r"),
             Ok("\u{1b}[32m❯\u{1b}[0m \r"),
         ]);
         let mut client = TmuxClient::new(runner);
@@ -324,7 +326,9 @@
             vec![
                 std::time::Duration::from_millis(SEND_SETTLE_MS),
                 std::time::Duration::from_millis(SUBMIT_CONFIRM_MS),
+                std::time::Duration::from_millis(SUBMIT_GRACE_MS),
                 std::time::Duration::from_millis(SUBMIT_CONFIRM_MS),
+                std::time::Duration::from_millis(SUBMIT_GRACE_MS),
             ]
         );
         assert_eq!(client.runner.calls[0].0, "display-message");
@@ -337,8 +341,9 @@
             vec!["-t", "sess:oracle.0", "Enter"]
         );
         assert_eq!(client.runner.calls[3].0, "capture-pane");
+        assert_eq!(client.runner.calls[4].0, "capture-pane");
         assert_eq!(
-            client.runner.calls[4].1,
+            client.runner.calls[5].1,
             vec!["-t", "sess:oracle.0", "Enter"]
         );
         assert_eq!(client.runner.stdin_calls.len(), 0);
@@ -347,7 +352,8 @@
     #[test]
     fn send_text_uses_buffer_path_for_multiline_or_long_payloads() {
         let long_text = "x".repeat(501);
-        let runner = FakeRunner::with_responses(vec![Ok("0"), Ok(""), Ok(""), Ok(""), Ok("$ \r")]);
+        let runner =
+            FakeRunner::with_responses(vec![Ok("0"), Ok(""), Ok(""), Ok(""), Ok("$ \r"), Ok("$ \r")]);
         let mut client = TmuxClient::new(runner);
         let mut sleeps = Vec::new();
         let report = client
@@ -360,6 +366,7 @@
             vec![
                 std::time::Duration::from_millis(SEND_SETTLE_MS),
                 std::time::Duration::from_millis(SUBMIT_CONFIRM_MS),
+                std::time::Duration::from_millis(SUBMIT_GRACE_MS),
             ]
         );
         assert_eq!(
@@ -376,11 +383,15 @@
             Ok(""),
             Ok(""),
             Ok("$ deploy"),
-            Ok(""),
             Ok("$ deploy"),
             Ok(""),
             Ok("$ deploy"),
+            Ok("$ deploy"),
             Ok(""),
+            Ok("$ deploy"),
+            Ok("$ deploy"),
+            Ok(""),
+            Ok("$ deploy"),
             Ok("$ deploy"),
         ]);
         let mut client = TmuxClient::new(runner);
@@ -390,11 +401,12 @@
             .expect("send text ok");
         assert_eq!(report.enter_attempts, 4);
         assert!(report.warned_pending);
-        assert_eq!(sleeps.len(), 5);
+        assert_eq!(sleeps.len(), 9);
         assert_eq!(sleeps[0], std::time::Duration::from_millis(SEND_SETTLE_MS));
-        assert!(sleeps[1..]
-            .iter()
-            .all(|duration| *duration == std::time::Duration::from_millis(SUBMIT_CONFIRM_MS)));
+        for pair in sleeps[1..].chunks_exact(2) {
+            assert_eq!(pair[0], std::time::Duration::from_millis(SUBMIT_CONFIRM_MS));
+            assert_eq!(pair[1], std::time::Duration::from_millis(SUBMIT_GRACE_MS));
+        }
         assert_eq!(
             client
                 .runner
@@ -409,6 +421,122 @@
                         ])
                 .count(),
             4
+        );
+    }
+
+    #[test]
+    fn send_text_does_not_retry_non_matching_pending_input() {
+        let runner = FakeRunner::with_responses(vec![
+            Ok("0"),
+            Ok(""),
+            Ok(""),
+            Ok("❯ deploy"),
+            Ok("❯ different queued input"),
+        ]);
+        let mut client = TmuxClient::new(runner);
+        let mut sleeps = Vec::new();
+        let report = client
+            .send_text_with_sleeper("sess:oracle.0", "deploy", |duration| sleeps.push(duration))
+            .expect("send text ok");
+
+        assert_eq!(report.enter_attempts, 1);
+        assert!(report.warned_pending);
+        assert_eq!(
+            sleeps,
+            vec![
+                std::time::Duration::from_millis(SEND_SETTLE_MS),
+                std::time::Duration::from_millis(SUBMIT_CONFIRM_MS),
+                std::time::Duration::from_millis(SUBMIT_GRACE_MS),
+            ]
+        );
+        assert_eq!(
+            client
+                .runner
+                .calls
+                .iter()
+                .filter(|(subcommand, args)| subcommand == "send-keys"
+                    && args
+                        == &vec![
+                            "-t".to_owned(),
+                            "sess:oracle.0".to_owned(),
+                            "Enter".to_owned()
+                        ])
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn send_text_waits_out_matching_redraw_before_retrying() {
+        let runner = FakeRunner::with_responses(vec![
+            Ok("0"),
+            Ok(""),
+            Ok(""),
+            Ok("❯ deploy"),
+            Ok("❯ "),
+        ]);
+        let mut client = TmuxClient::new(runner);
+        let mut sleeps = Vec::new();
+        let report = client
+            .send_text_with_sleeper("sess:oracle.0", "deploy", |duration| sleeps.push(duration))
+            .expect("send text ok");
+
+        assert_eq!(report.enter_attempts, 1);
+        assert!(!report.warned_pending);
+        assert_eq!(
+            client
+                .runner
+                .calls
+                .iter()
+                .filter(|(subcommand, args)| subcommand == "send-keys"
+                    && args
+                        == &vec![
+                            "-t".to_owned(),
+                            "sess:oracle.0".to_owned(),
+                            "Enter".to_owned()
+                        ])
+                .count(),
+            1
+        );
+        assert_eq!(
+            sleeps,
+            vec![
+                std::time::Duration::from_millis(SEND_SETTLE_MS),
+                std::time::Duration::from_millis(SUBMIT_CONFIRM_MS),
+                std::time::Duration::from_millis(SUBMIT_GRACE_MS),
+            ]
+        );
+    }
+
+    #[test]
+    fn send_text_grace_recheck_catches_false_negative_before_success() {
+        let runner = FakeRunner::with_responses(vec![
+            Ok("0"),
+            Ok(""),
+            Ok(""),
+            Ok("❯ "),
+            Ok("❯ deploy"),
+            Ok(""),
+            Ok("❯ "),
+            Ok("❯ "),
+        ]);
+        let mut client = TmuxClient::new(runner);
+        let mut sleeps = Vec::new();
+        let report = client
+            .send_text_with_sleeper("sess:oracle.0", "deploy", |duration| sleeps.push(duration))
+            .expect("send text ok");
+
+        assert_eq!(report.enter_attempts, 2);
+        assert!(!report.warned_pending);
+        assert_eq!(
+            sleeps,
+            vec![
+                std::time::Duration::from_millis(SEND_SETTLE_MS),
+                std::time::Duration::from_millis(SUBMIT_CONFIRM_MS),
+                std::time::Duration::from_millis(SUBMIT_GRACE_MS),
+                std::time::Duration::from_millis(SUBMIT_CONFIRM_MS),
+                std::time::Duration::from_millis(SUBMIT_GRACE_MS),
+            ]
         );
     }
 
@@ -445,9 +573,147 @@
         assert!(pane_input_pending_from_capture(
             "\u{1b}[32m❯\u{1b}[0m cargo test"
         ));
+        assert!(pane_input_pending_from_capture("› Explain this codebase"));
         assert!(!pane_input_pending_from_capture("old\n$ "));
         assert!(!pane_input_pending_from_capture("command output only"));
         assert_eq!(strip_tmux_ansi("a\u{1b}[31mred\u{1b}[0m"), "ared");
+    }
+
+    #[test]
+    fn pending_input_detection_matches_codex_capture_states() {
+        let idle_empty = [
+            "─ Worked for 20m 43s ─────────────────────────",
+            "",
+            "› ",
+            "",
+            "  gpt-5.5 xhigh · agents/godui-streaming · Context left",
+        ]
+        .join("\n");
+        assert_eq!(pane_pending_input_from_capture(&idle_empty), None);
+
+        let pending = [
+            "─ Worked for 20m 43s ─────────────────────────",
+            "",
+            "\u{1b}[1m›\u{1b}[0m Explain this codebase",
+            "",
+            "  gpt-5.5 xhigh · agents/godui-streaming · Context left",
+        ]
+        .join("\n");
+        assert_eq!(
+            pane_pending_input_from_capture(&pending),
+            Some("Explain this codebase".to_owned())
+        );
+
+        let just_submitted = [
+            "› Explain this codebase",
+            "• Working (1m 21s • esc to interrupt)",
+            "",
+            "  gpt-5.5 xhigh · agents/godui-streaming · Context left",
+        ]
+        .join("\n");
+        assert_eq!(pane_pending_input_from_capture(&just_submitted), None);
+
+        let busy_queued = [
+            "• Working (1m 21s • esc to interrupt)",
+            "",
+            "› Find and fix a bug in @filename",
+            "",
+            "  gpt-5.5 xhigh · agents/send-enter-fix · Context left",
+        ]
+        .join("\n");
+        assert_eq!(
+            pane_pending_input_from_capture(&busy_queued),
+            Some("Find and fix a bug in @filename".to_owned())
+        );
+    }
+
+    #[test]
+    fn pending_input_detection_matches_claude_capture_states() {
+        let idle_empty = [
+            "✻ Twisting… (4m 34s)",
+            "────────────────────────────────────────",
+            "❯\u{a0}",
+            "────────────────────────────────────────",
+            "  🖥 m5 · 3.5 Sonnet · 60%",
+            "  📡 188-maw-rs:1.0",
+        ]
+        .join("\n");
+        assert_eq!(pane_pending_input_from_capture(&idle_empty), None);
+
+        let pending = [
+            "field report duplicate delivery 2x",
+            "────────────────────────────────────────",
+            "❯\u{a0}dispatch broadcast ledger ให้ทีม gen-2 เลยครับ",
+            "────────────────────────────────────────",
+            "  🖥 m5 · 3.5 Sonnet · 60%",
+            "  📡 183-crew-master:1.0",
+        ]
+        .join("\n");
+        assert_eq!(
+            pane_pending_input_from_capture(&pending),
+            Some("dispatch broadcast ledger ให้ทีม gen-2 เลยครับ".to_owned())
+        );
+
+        let just_submitted = [
+            "❯ REBOOT CANCELLED",
+            "✻ Twisting… (0s)",
+            "────────────────────────────────────────",
+            "  🖥 m5 · 3.5 Sonnet · 60%",
+        ]
+        .join("\n");
+        assert_eq!(pane_pending_input_from_capture(&just_submitted), None);
+
+        let busy_queued = [
+            "✻ Twisting… (4m 34s)",
+            "────────────────────────────────────────",
+            "❯\u{a0}ok แจกงานให้ทีมได้เลย #121",
+            "────────────────────────────────────────",
+            "  🖥 m5 · 3.5 Sonnet · 60%",
+            "  📡 142-athena:1.0",
+        ]
+        .join("\n");
+        assert_eq!(
+            pane_pending_input_from_capture(&busy_queued),
+            Some("ok แจกงานให้ทีมได้เลย #121".to_owned())
+        );
+    }
+
+    #[test]
+    fn pending_input_detection_ignores_historical_prompt_lines() {
+        let history_with_current_empty_prompt = [
+            "❯ ทฟไ ะนาำ",
+            "⏺ Error: command not found",
+            "❯ maw token use nh2",
+            "⏺ Token usage printed",
+            "────────────────────────────────────────",
+            "❯\u{a0}",
+            "────────────────────────────────────────",
+            "  🖥 m5 · 3.5 Sonnet · 60%",
+        ]
+        .join("\n");
+        assert_eq!(
+            pane_pending_input_from_capture(&history_with_current_empty_prompt),
+            None
+        );
+    }
+
+    #[test]
+    fn pending_input_matching_is_duplicate_safe() {
+        assert!(pending_input_matches_sent("deploy now", "deploy now"));
+        assert!(pending_input_matches_sent(
+            "first line",
+            "first line\nsecond line"
+        ));
+        assert!(pending_input_matches_sent("deploy now", "\u{a0}deploy now\r"));
+        assert!(!pending_input_matches_sent("different queued input", "deploy now"));
+        assert_eq!(
+            pending_input_state_from_capture("❯ deploy now", "deploy now"),
+            PendingInputState::MatchesSent
+        );
+        assert_eq!(
+            pending_input_state_from_capture("❯ different queued input", "deploy now"),
+            PendingInputState::DifferentInput
+        );
     }
 
     #[test]

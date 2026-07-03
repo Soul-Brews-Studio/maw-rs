@@ -1,2 +1,2 @@
-include!("plugin_manifest_plan/part01.rs");
-include!("plugin_manifest_plan/part02.rs");
+include!("plugin_manifest_plan/manifest_registry_plans.rs");
+include!("plugin_manifest_plan/invoke_runtime_edges.rs");

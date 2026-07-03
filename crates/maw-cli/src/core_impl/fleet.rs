@@ -7,6 +7,7 @@ const DISPATCH_61: &[DispatcherEntry] = &[DispatcherEntry {
 #[allow(clippy::struct_excessive_bools)]
 struct FleetOptions {
     command: FleetCommand,
+    target: Option<String>,
     json: bool,
     dry_run: bool,
     fix: bool,
@@ -18,6 +19,7 @@ struct FleetOptions {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FleetCommand {
+    Add,
     Census,
     Doctor,
     Gc,
@@ -59,7 +61,7 @@ struct FleetWindowSummary {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FleetState {
     config_dir: std::path::PathBuf,
-    ghq_root: std::path::PathBuf,
+    repos_root: std::path::PathBuf,
     config: FleetConfigSummary,
     fleet_entries: Vec<NativeFleetEntry>,
     sessions: Vec<FleetSessionSummary>,
@@ -92,6 +94,38 @@ struct FleetGcResult {
     detail: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FleetRegistryWrite {
+    path: std::path::PathBuf,
+    created: bool,
+    window_count: usize,
+}
+
+trait FleetRuntime {
+    fn fleet_run_command(&mut self, program: &str, args: &[String]) -> Result<String, String>;
+    fn fleet_list_all(&mut self) -> Vec<TmuxSession>;
+}
+
+struct FleetSystemRuntime;
+
+impl FleetRuntime for FleetSystemRuntime {
+    fn fleet_run_command(&mut self, program: &str, args: &[String]) -> Result<String, String> {
+        let output = std::process::Command::new(program)
+            .args(args)
+            .output()
+            .map_err(|error| error.to_string())?;
+        if output.status.success() {
+            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).into_owned())
+        }
+    }
+
+    fn fleet_list_all(&mut self) -> Vec<TmuxSession> {
+        TmuxClient::local().list_all()
+    }
+}
+
 fn run_fleet_command(argv: &[String]) -> CliOutput {
     match fleet_run(argv) {
         Ok((code, stdout)) => CliOutput { code, stdout, stderr: String::new() },
@@ -100,9 +134,15 @@ fn run_fleet_command(argv: &[String]) -> CliOutput {
 }
 
 fn fleet_run(argv: &[String]) -> Result<(i32, String), String> {
+    let mut runtime = FleetSystemRuntime;
+    fleet_run_with(argv, &mut runtime)
+}
+
+fn fleet_run_with(argv: &[String], runtime: &mut impl FleetRuntime) -> Result<(i32, String), String> {
     let options = fleet_parse_args(argv)?;
-    let state = fleet_load_state()?;
+    let state = fleet_load_state_with(runtime)?;
     match options.command {
+        FleetCommand::Add => fleet_run_add(&state, &options, runtime),
         FleetCommand::Census => Ok((0, fleet_render_census(&state, options.json)?)),
         FleetCommand::Doctor | FleetCommand::Health => fleet_run_doctor(&state, &options),
         FleetCommand::Gc => fleet_run_gc(&state, &options, &mut maw_tmux::CommandTmuxRunner::new()),
@@ -129,8 +169,11 @@ fn fleet_parse_args(argv: &[String]) -> Result<FleetOptions, String> {
             "--kill" => options.kill = true,
             "--resume" => options.resume = true,
             value if value.starts_with('-') => return Err(format!("fleet: unknown argument {value}")),
-            value => fleet_set_command(&mut options, &mut command_seen, value)?,
+            value => fleet_parse_positional(&mut options, &mut command_seen, value)?,
         }
+    }
+    if matches!(options.command, FleetCommand::Add) && options.target.is_none() {
+        return Err("fleet add: missing session".to_owned());
     }
     Ok(options)
 }
@@ -138,6 +181,7 @@ fn fleet_parse_args(argv: &[String]) -> Result<FleetOptions, String> {
 fn fleet_default_options() -> FleetOptions {
     FleetOptions {
         command: FleetCommand::Census,
+        target: None,
         json: false,
         dry_run: false,
         fix: false,
@@ -148,9 +192,22 @@ fn fleet_default_options() -> FleetOptions {
     }
 }
 
+fn fleet_parse_positional(options: &mut FleetOptions, seen: &mut bool, value: &str) -> Result<(), String> {
+    if !*seen {
+        return fleet_set_command(options, seen, value);
+    }
+    if matches!(options.command, FleetCommand::Add) && options.target.is_none() {
+        fleet_validate_session_name(value)?;
+        options.target = Some(value.to_owned());
+        return Ok(());
+    }
+    Err(fleet_usage())
+}
+
 fn fleet_set_command(options: &mut FleetOptions, seen: &mut bool, value: &str) -> Result<(), String> {
     if *seen { return Err(fleet_usage()); }
     options.command = match value {
+        "add" => FleetCommand::Add,
         "ls" | "list" | "census" => FleetCommand::Census,
         "doctor" => FleetCommand::Doctor,
         "gc" | "garbage-collect" => FleetCommand::Gc,
@@ -168,18 +225,47 @@ fn fleet_set_command(options: &mut FleetOptions, seen: &mut bool, value: &str) -
 }
 
 fn fleet_usage() -> String {
-    "usage: maw fleet [ls|doctor|health|gc|init|consolidate|resume|sync|wake|sleep] [--json] [--dry-run] [--fix] [--reboot] [--all] [--kill] [--resume]".to_owned()
+    "usage: maw fleet [add <session>|ls|doctor|health|gc|init|consolidate|resume|sync|wake|sleep] [--json] [--dry-run] [--fix] [--reboot] [--all] [--kill] [--resume]".to_owned()
 }
 
-fn fleet_load_state() -> Result<FleetState, String> {
+fn fleet_load_state_with(runtime: &mut impl FleetRuntime) -> Result<FleetState, String> {
     let env = current_xdg_env();
     let config_dir = maw_config_dir(&env);
-    let ghq_root = ghq_root();
+    let repos_root = fleet_repos_root(runtime);
     let config = fleet_load_config(&env);
     let fleet_entries = fleet_load_entries_result_for_env(&env, "fleet")?;
     let sessions = fleet_entries_to_summaries(&fleet_entries);
     let disabled_count = fleet_disabled_count_for_env(&env);
-    Ok(FleetState { config_dir, ghq_root, config, fleet_entries, sessions, disabled_count })
+    Ok(FleetState { config_dir, repos_root, config, fleet_entries, sessions, disabled_count })
+}
+
+fn fleet_repos_root(runtime: &mut impl FleetRuntime) -> std::path::PathBuf {
+    if let Some(root) = std::env::var_os("GHQ_ROOT") {
+        return fleet_normalize_repos_root(std::path::PathBuf::from(root));
+    }
+    if let Ok(stdout) = runtime.fleet_run_command("ghq", &["root".to_owned()]) {
+        let root = stdout.trim();
+        if !root.is_empty() {
+            return fleet_normalize_repos_root(std::path::PathBuf::from(root));
+        }
+    }
+    fleet_normalize_repos_root(std::env::var_os("HOME").map_or_else(
+        || std::path::PathBuf::from(".").join("Code"),
+        |home| std::path::PathBuf::from(home).join("Code"),
+    ))
+}
+
+fn fleet_normalize_repos_root(root: std::path::PathBuf) -> std::path::PathBuf {
+    if root.file_name().is_some_and(|name| name == "github.com") {
+        root
+    } else {
+        root.join("github.com")
+    }
+}
+
+fn fleet_repo_path(repos_root: &std::path::Path, repo: &str) -> std::path::PathBuf {
+    let repo = repo.trim().strip_prefix("github.com/").unwrap_or(repo.trim());
+    repos_root.join(repo)
 }
 
 fn fleet_load_config(env: &MawXdgEnv) -> FleetConfigSummary {
@@ -285,6 +371,49 @@ fn fleet_window_count(state: &FleetState) -> usize {
     state.sessions.iter().map(|session| session.windows.len()).sum()
 }
 
+fn fleet_run_add(
+    state: &FleetState,
+    options: &FleetOptions,
+    runtime: &mut impl FleetRuntime,
+) -> Result<(i32, String), String> {
+    let session = options.target.as_deref().ok_or_else(|| "fleet add: missing session".to_owned())?;
+    let live = runtime
+        .fleet_list_all()
+        .into_iter()
+        .find(|item| item.name == session)
+        .ok_or_else(|| format!("fleet add: live session not found: {session}"))?;
+    let windows = fleet_registry_windows_from_tmux(&live.windows, Some(&state.repos_root));
+    if windows.is_empty() {
+        return Err(format!("fleet add: no repo-backed windows found in session {session}"));
+    }
+    let result = fleet_registry_upsert_session(session, &windows, "maw fleet add")?;
+    if options.json {
+        return Ok((0, fleet_json_add(session, &result)?));
+    }
+    Ok((0, fleet_render_add(session, &result)))
+}
+
+fn fleet_json_add(session: &str, result: &FleetRegistryWrite) -> Result<String, String> {
+    let value = serde_json::json!({
+        "action": "add",
+        "session": session,
+        "path": result.path,
+        "status": if result.created { "created" } else { "updated" },
+        "windowCount": result.window_count,
+    });
+    serde_json::to_string_pretty(&value).map(|text| format!("{text}\n")).map_err(|error| error.to_string())
+}
+
+fn fleet_render_add(session: &str, result: &FleetRegistryWrite) -> String {
+    format!(
+        "fleet add {session}: {} {} ({} window{})\n",
+        if result.created { "created" } else { "updated" },
+        result.path.display(),
+        result.window_count,
+        if result.window_count == 1 { "" } else { "s" },
+    )
+}
+
 fn fleet_run_doctor(state: &FleetState, options: &FleetOptions) -> Result<(i32, String), String> {
     let mut findings = fleet_findings(state);
     if options.reboot { findings.extend(fleet_reboot_findings(state)); }
@@ -370,7 +499,10 @@ fn fleet_known_nodes(state: &FleetState) -> BTreeSet<String> {
 fn fleet_repo_findings(state: &FleetState, findings: &mut Vec<FleetFinding>) {
     for session in &state.sessions {
         for window in &session.windows {
-            let path = state.ghq_root.join("github.com").join(&window.repo);
+            if window.repo.trim().is_empty() {
+                continue;
+            }
+            let path = fleet_repo_path(&state.repos_root, &window.repo);
             if !path.exists() {
                 findings.push(fleet_finding("warn", "missing-repo", &window.repo, &format!("{} missing", path.display())));
             }
@@ -455,7 +587,7 @@ fn fleet_gc_candidates(state: &FleetState, live: &BTreeSet<String>) -> Vec<Fleet
         }
         let missing = repos
             .iter()
-            .filter(|repo| !state.ghq_root.join("github.com").join(repo).exists())
+            .filter(|repo| !fleet_repo_path(&state.repos_root, repo).exists())
             .cloned()
             .collect::<Vec<_>>();
         if missing.len() == repos.len() {
@@ -638,6 +770,160 @@ fn fleet_json_action(
     serde_json::to_string_pretty(&value).map(|text| format!("{text}\n")).map_err(|error| error.to_string())
 }
 
+fn fleet_registry_upsert_session(
+    session: &str,
+    windows: &[FleetWindowSummary],
+    created_by: &str,
+) -> Result<FleetRegistryWrite, String> {
+    fleet_registry_upsert_session_for_env(&current_xdg_env(), session, windows, created_by)
+}
+
+fn fleet_registry_upsert_session_for_env(
+    env: &MawXdgEnv,
+    session: &str,
+    windows: &[FleetWindowSummary],
+    created_by: &str,
+) -> Result<FleetRegistryWrite, String> {
+    fleet_validate_session_name(session)?;
+    let dir = env.home_dir().join(".maw").join("fleet");
+    std::fs::create_dir_all(&dir).map_err(|error| format!("fleet registry: create {}: {error}", dir.display()))?;
+    let path = dir.join(format!("{session}.json"));
+    let (created, mut value) = fleet_registry_read_value(&path)?;
+    {
+        let object = fleet_registry_object(&mut value);
+        object.insert("name".to_owned(), serde_json::json!(session));
+        object
+            .entry("created_at".to_owned())
+            .or_insert_with(|| serde_json::json!(fleet_registry_now_iso()));
+        object.insert("created_by".to_owned(), serde_json::json!(created_by));
+        object.insert("auto_registered".to_owned(), serde_json::json!(true));
+        let merged = fleet_registry_merge_windows(object.get("windows"), windows);
+        object.insert("windows".to_owned(), serde_json::json!(merged));
+    }
+    let body = serde_json::to_string_pretty(&value).map_err(|error| format!("fleet registry: render json: {error}"))? + "\n";
+    std::fs::write(&path, body).map_err(|error| format!("fleet registry: write {}: {error}", path.display()))?;
+    let window_count = value
+        .get("windows")
+        .and_then(serde_json::Value::as_array)
+        .map_or(0, Vec::len);
+    Ok(FleetRegistryWrite { path, created, window_count })
+}
+
+fn fleet_registry_read_value(path: &std::path::Path) -> Result<(bool, serde_json::Value), String> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok((
+            false,
+            serde_json::from_str(&text).unwrap_or_else(|_| serde_json::json!({})),
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok((true, serde_json::json!({}))),
+        Err(error) => Err(format!("fleet registry: read {}: {error}", path.display())),
+    }
+}
+
+fn fleet_registry_object(value: &mut serde_json::Value) -> &mut serde_json::Map<String, serde_json::Value> {
+    if !value.is_object() {
+        *value = serde_json::json!({});
+    }
+    value.as_object_mut().expect("object assigned above")
+}
+
+fn fleet_registry_merge_windows(
+    existing: Option<&serde_json::Value>,
+    updates: &[FleetWindowSummary],
+) -> Vec<serde_json::Value> {
+    let mut windows = Vec::<FleetWindowSummary>::new();
+    if let Some(existing) = existing.and_then(serde_json::Value::as_array) {
+        for item in existing {
+            let Some(name) = item.get("name").and_then(serde_json::Value::as_str).filter(|value| !value.trim().is_empty()) else {
+                continue;
+            };
+            let repo = item.get("repo").and_then(serde_json::Value::as_str).unwrap_or_default();
+            windows.push(FleetWindowSummary { name: name.to_owned(), repo: repo.to_owned() });
+        }
+    }
+    for update in updates.iter().filter(|window| !window.name.trim().is_empty()) {
+        if let Some(existing) = windows.iter_mut().find(|window| window.name == update.name) {
+            existing.repo.clone_from(&update.repo);
+        } else {
+            windows.push(update.clone());
+        }
+    }
+    windows
+        .into_iter()
+        .map(|window| serde_json::json!({"name": window.name, "repo": window.repo}))
+        .collect()
+}
+
+fn fleet_registry_windows_from_tmux(
+    windows: &[maw_tmux::TmuxWindow],
+    repos_root: Option<&std::path::Path>,
+) -> Vec<FleetWindowSummary> {
+    let mut seen = BTreeSet::new();
+    let mut result = Vec::new();
+    for window in windows {
+        let Some(cwd) = window.cwd.as_deref().and_then(|cwd| fleet_repo_slug_from_path(std::path::Path::new(cwd), repos_root)) else {
+            continue;
+        };
+        let name = if window.name.is_empty() { "main".to_owned() } else { window.name.clone() };
+        if seen.insert(name.clone()) {
+            result.push(FleetWindowSummary { name, repo: cwd });
+        }
+    }
+    result
+}
+
+fn fleet_repo_slug_from_path(path: &std::path::Path, repos_root: Option<&std::path::Path>) -> Option<String> {
+    if let Some(root) = repos_root {
+        if let Ok(rel) = path.strip_prefix(root) {
+            return fleet_repo_slug_from_components(rel.components());
+        }
+    }
+    let mut saw_github = false;
+    let mut parts = Vec::new();
+    for component in path.components() {
+        let value = component.as_os_str().to_string_lossy();
+        if saw_github {
+            parts.push(value.to_string());
+            if parts.len() == 2 {
+                return Some(format!("github.com/{}/{}", parts[0], parts[1]));
+            }
+        } else if value == "github.com" {
+            saw_github = true;
+        }
+    }
+    None
+}
+
+fn fleet_repo_slug_from_components(mut components: std::path::Components<'_>) -> Option<String> {
+    let org = components.next()?.as_os_str().to_string_lossy();
+    let repo = components.next()?.as_os_str().to_string_lossy();
+    Some(format!("github.com/{org}/{repo}"))
+}
+
+fn fleet_registry_now_iso() -> String {
+    if let Ok(value) = std::env::var("MAW_RS_FLEET_REGISTRY_NOW") {
+        return value;
+    }
+    let seconds = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |duration| duration.as_secs());
+    let (year, month, day, hour, minute, sec) = epoch_secs_to_ymd_hms(seconds);
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{sec:02}.000Z")
+}
+
+fn fleet_validate_session_name(value: &str) -> Result<(), String> {
+    if value.is_empty()
+        || value.trim() != value
+        || value.starts_with('-')
+        || value.contains('/')
+        || value.contains('\\')
+        || value.contains('\0')
+        || value.chars().any(char::is_control)
+    {
+        Err("fleet: invalid session".to_owned())
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod fleet_tests {
     use super::*;
@@ -656,6 +942,28 @@ mod fleet_tests {
             } else {
                 Err(maw_tmux::TmuxError::new(format!("unexpected tmux command {subcommand}")))
             }
+        }
+    }
+
+    #[derive(Default)]
+    struct FleetFakeRuntime {
+        ghq_root: Option<String>,
+        commands: Vec<(String, Vec<String>)>,
+        sessions: Vec<TmuxSession>,
+    }
+
+    impl FleetRuntime for FleetFakeRuntime {
+        fn fleet_run_command(&mut self, program: &str, args: &[String]) -> Result<String, String> {
+            self.commands.push((program.to_owned(), args.to_vec()));
+            if program == "ghq" && args == ["root".to_owned()] {
+                self.ghq_root.clone().ok_or_else(|| "fake ghq root failed".to_owned())
+            } else {
+                Err(format!("unexpected command {program} {args:?}"))
+            }
+        }
+
+        fn fleet_list_all(&mut self) -> Vec<TmuxSession> {
+            self.sessions.clone()
         }
     }
 
@@ -737,6 +1045,90 @@ mod fleet_tests {
     }
 
     #[test]
+    fn fleet_doctor_uses_ghq_root_once_for_host_prefixed_repo_slugs() {
+        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _home = EnvVarRestore::capture("HOME");
+        let _xdg = EnvVarRestore::capture("XDG_CONFIG_HOME");
+        let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
+        let _ghq = EnvVarRestore::capture("GHQ_ROOT");
+        let root = fleet_temp_root("doctor-ghq-root");
+        std::fs::create_dir_all(root.join("config/fleet")).expect("fleet dir");
+        std::fs::write(
+            root.join("config/fleet/188-maw-rs.json"),
+            r#"{"name":"188-maw-rs","windows":[{"name":"maw-rs-oracle","repo":"github.com/Soul-Brews-Studio/missing"}]}"#,
+        )
+        .expect("fleet json");
+        std::env::set_var("HOME", root.join("wrong-home"));
+        std::env::set_var("MAW_CONFIG_DIR", root.join("config"));
+        std::env::remove_var("GHQ_ROOT");
+        let mut runtime = FleetFakeRuntime {
+            ghq_root: Some(root.join("real-ghq").display().to_string()),
+            ..Default::default()
+        };
+
+        let (code, stdout) = fleet_run_with(&fleet_strings(&["doctor", "--json"]), &mut runtime).expect("doctor");
+
+        assert_eq!(code, 1);
+        assert!(runtime.commands.iter().any(|(program, args)| program == "ghq" && args == &["root".to_owned()]));
+        let single = root.join("real-ghq/github.com/Soul-Brews-Studio/missing").display().to_string();
+        assert!(stdout.contains(&single), "{stdout}");
+        assert!(!stdout.contains("github.com/github.com"), "{stdout}");
+        assert!(!stdout.contains("wrong-home"), "{stdout}");
+    }
+
+    #[test]
+    fn fleet_add_registers_live_session_windows_from_fake_tmux() {
+        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _home = EnvVarRestore::capture("HOME");
+        let _xdg = EnvVarRestore::capture("XDG_CONFIG_HOME");
+        let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
+        let _ghq = EnvVarRestore::capture("GHQ_ROOT");
+        let _now = EnvVarRestore::capture("MAW_RS_FLEET_REGISTRY_NOW");
+        let root = fleet_temp_root("add");
+        std::fs::create_dir_all(root.join("config")).expect("config dir");
+        std::env::set_var("HOME", root.join("home"));
+        std::env::set_var("MAW_CONFIG_DIR", root.join("config"));
+        std::env::remove_var("GHQ_ROOT");
+        std::env::set_var("MAW_RS_FLEET_REGISTRY_NOW", "2026-07-03T01:02:03.000Z");
+        let repo = root.join("real-ghq/github.com/Soul-Brews-Studio/maw-rs");
+        let mut runtime = FleetFakeRuntime {
+            ghq_root: Some(root.join("real-ghq").display().to_string()),
+            sessions: vec![TmuxSession {
+                name: "188-maw-rs".to_owned(),
+                windows: vec![
+                    maw_tmux::TmuxWindow {
+                        index: 0,
+                        name: "maw-rs-oracle".to_owned(),
+                        active: true,
+                        cwd: Some(repo.join("agents/fleet-register").display().to_string()),
+                    },
+                    maw_tmux::TmuxWindow {
+                        index: 1,
+                        name: "scratch".to_owned(),
+                        active: false,
+                        cwd: Some("/tmp/scratch".to_owned()),
+                    },
+                ],
+            }],
+            ..Default::default()
+        };
+
+        let (code, stdout) = fleet_run_with(&fleet_strings(&["add", "188-maw-rs"]), &mut runtime).expect("add");
+
+        assert_eq!(code, 0);
+        assert!(stdout.contains("fleet add 188-maw-rs: created"), "{stdout}");
+        let path = root.join("home/.maw/fleet/188-maw-rs.json");
+        let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).expect("registry")).expect("json");
+        assert_eq!(json["name"], "188-maw-rs");
+        assert_eq!(json["created_at"], "2026-07-03T01:02:03.000Z");
+        assert_eq!(json["created_by"], "maw fleet add");
+        assert_eq!(json["auto_registered"], true);
+        assert_eq!(json["windows"].as_array().expect("windows").len(), 1);
+        assert_eq!(json["windows"][0]["name"], "maw-rs-oracle");
+        assert_eq!(json["windows"][0]["repo"], "github.com/Soul-Brews-Studio/maw-rs");
+    }
+
+    #[test]
     fn fleet_wake_skips_dormant_without_real_tmux() {
         fleet_with_fixture(|_| {
             let output = run_fleet_command(&fleet_strings(&["wake", "--json", "--dry-run"]));
@@ -756,7 +1148,8 @@ mod fleet_tests {
                 r#"{"name":"04-ghost","windows":[{"name":"ghost","repo":"acme/ghost"}]}"#,
             )
             .expect("ghost");
-            let state = fleet_load_state().expect("state");
+            let mut runtime = FleetFakeRuntime::default();
+            let state = fleet_load_state_with(&mut runtime).expect("state");
             let options = fleet_parse_args(&fleet_strings(&["gc", "--dry-run"])).expect("parse");
             let mut tmux = FleetMockTmux { sessions: String::new() };
             let (code, stdout) = fleet_run_gc(&state, &options, &mut tmux).expect("gc");

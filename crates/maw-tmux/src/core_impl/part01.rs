@@ -20,6 +20,7 @@ const DEFAULT_PTY_COLS_LIMIT: u32 = 500;
 const DEFAULT_PTY_ROWS_LIMIT: u32 = 200;
 pub const SEND_SETTLE_MS: u64 = 1_500;
 pub const SUBMIT_CONFIRM_MS: u64 = 700;
+pub const SUBMIT_GRACE_MS: u64 = 300;
 pub const MAX_SUBMIT_ATTEMPTS: u32 = 4;
 const COOLDOWN_MS: u64 = 500;
 const QUOTA_PER_MINUTE: u32 = 100;

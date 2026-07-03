@@ -303,7 +303,8 @@ where
             self.send_keys_literal(target, text)?;
         }
         sleep(std::time::Duration::from_millis(SEND_SETTLE_MS));
-        let (enter_attempts, warned_pending) = self.submit_with_confirm(target, &mut sleep)?;
+        let (enter_attempts, warned_pending) =
+            self.submit_with_confirm(target, text, &mut sleep)?;
         Ok(SendTextReport {
             used_buffer,
             enter_attempts,
@@ -314,6 +315,7 @@ where
     fn submit_with_confirm<F>(
         &mut self,
         target: &str,
+        text: &str,
         sleep: &mut F,
     ) -> Result<(u32, bool), TmuxError>
     where
@@ -322,11 +324,40 @@ where
         for attempt in 1..=MAX_SUBMIT_ATTEMPTS {
             self.send_enter(target)?;
             sleep(std::time::Duration::from_millis(SUBMIT_CONFIRM_MS));
-            if !self.pane_input_pending(target) {
-                return Ok((attempt, false));
+            match self.submit_pending_state_after_grace(target, text, sleep) {
+                PendingInputState::Cleared => return Ok((attempt, false)),
+                PendingInputState::DifferentInput => return Ok((attempt, true)),
+                PendingInputState::MatchesSent => {}
             }
         }
         Ok((MAX_SUBMIT_ATTEMPTS, true))
+    }
+
+    fn submit_pending_state_after_grace<F>(
+        &mut self,
+        target: &str,
+        text: &str,
+        sleep: &mut F,
+    ) -> PendingInputState
+    where
+        F: FnMut(std::time::Duration),
+    {
+        let _confirm_state = self.pending_input_state(target, text);
+        sleep(std::time::Duration::from_millis(SUBMIT_GRACE_MS));
+        self.pending_input_state(target, text)
+    }
+
+    fn pending_input_state(&mut self, target: &str, text: &str) -> PendingInputState {
+        self.pane_pending_input(target).map_or(
+            PendingInputState::Cleared,
+            |pending| {
+                if pending_input_matches_sent(&pending, text) {
+                    PendingInputState::MatchesSent
+                } else {
+                    PendingInputState::DifferentInput
+                }
+            },
+        )
     }
 
     /// Capture recent pane contents using `tmux capture-pane`.

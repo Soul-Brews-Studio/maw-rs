@@ -3,6 +3,8 @@ const DISPATCH_137: &[DispatcherEntry] = &[DispatcherEntry {
     handler: Handler::Sync(run_check_command),
 }];
 
+const CHECK_TOOL_PROBE_TIMEOUT_SECS: u64 = 30;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CheckToolCategory133 {
     Required,
@@ -81,6 +83,10 @@ struct CheckToolProbe133 {
 }
 
 fn check_run_tool_probe(program: &str, args: &[&str]) -> CheckToolProbe133 {
+    if let Some(fake) = check_fake_tool_probe(program) {
+        return fake;
+    }
+
     let Ok(mut child) = std::process::Command::new(program)
         .args(args)
         .stdin(std::process::Stdio::null())
@@ -91,19 +97,16 @@ fn check_run_tool_probe(program: &str, args: &[&str]) -> CheckToolProbe133 {
         return CheckToolProbe133 { present: false, output: String::new() };
     };
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let stdout = child.stdout.take().map(check_read_probe_pipe);
+    let stderr = child.stderr.take().map(check_read_probe_pipe);
+    let deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(CHECK_TOOL_PROBE_TIMEOUT_SECS);
     loop {
         match child.try_wait() {
             Ok(Some(_status)) => {
-                let output = child.wait_with_output().ok();
-                let stdout = output
-                    .as_ref()
-                    .map(|out| String::from_utf8_lossy(&out.stdout).to_string())
-                    .unwrap_or_default();
-                let stderr = output
-                    .as_ref()
-                    .map(|out| String::from_utf8_lossy(&out.stderr).to_string())
-                    .unwrap_or_default();
+                let _ = child.wait();
+                let stdout = check_join_probe_pipe(stdout);
+                let stderr = check_join_probe_pipe(stderr);
                 return CheckToolProbe133 { present: true, output: format!("{stdout}{stderr}") };
             }
             Ok(None) => {
@@ -121,6 +124,34 @@ fn check_run_tool_probe(program: &str, args: &[&str]) -> CheckToolProbe133 {
             }
         }
     }
+}
+
+fn check_fake_tool_probe(program: &str) -> Option<CheckToolProbe133> {
+    let key = format!(
+        "MAW_RS_CHECK_TOOL_PROBE_{}",
+        program.replace('-', "_").to_ascii_uppercase()
+    );
+    let output = std::env::var(key).ok()?;
+    if output == "__missing__" {
+        Some(CheckToolProbe133 { present: false, output: String::new() })
+    } else {
+        Some(CheckToolProbe133 { present: true, output })
+    }
+}
+
+fn check_read_probe_pipe<R>(mut pipe: R) -> std::thread::JoinHandle<String>
+where
+    R: std::io::Read + Send + 'static,
+{
+    std::thread::spawn(move || {
+        let mut text = String::new();
+        let _ = pipe.read_to_string(&mut text);
+        text
+    })
+}
+
+fn check_join_probe_pipe(handle: Option<std::thread::JoinHandle<String>>) -> String {
+    handle.and_then(|handle| handle.join().ok()).unwrap_or_default()
 }
 
 fn check_extract_version(output: &str) -> Option<String> {

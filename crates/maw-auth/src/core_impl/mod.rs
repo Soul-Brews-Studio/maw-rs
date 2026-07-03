@@ -1,3 +1,3 @@
-include!("part01.rs");
-include!("part02.rs");
-include!("part03.rs");
+include!("auth_contract.rs");
+include!("pair_consent.rs");
+include!("request_verify.rs");

@@ -1,4 +1,4 @@
-// Discord is already a native top-level command registered in part01 on alpha.
+// Discord is already a native top-level command registered in dispatcher.rs on alpha.
 // Gap #10 lives in maw-discord itself; this numbered fragment is intentionally
 // empty to reserve part201 for #367 without duplicating dispatcher ownership.
 const DISPATCH_201: &[DispatcherEntry] = &[];

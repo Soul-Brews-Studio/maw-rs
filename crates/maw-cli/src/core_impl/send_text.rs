@@ -63,7 +63,8 @@ where
         runner.run("send-keys", &maw_tmux::tmux_send_keys_literal_args(target, text))?;
     }
     sleep(std::time::Duration::from_millis(maw_tmux::SEND_SETTLE_MS));
-    let (enter_attempts, warned_pending) = sendtext_submit_with_confirm(runner, target, &mut sleep)?;
+    let (enter_attempts, warned_pending) =
+        sendtext_submit_with_confirm(runner, target, text, &mut sleep)?;
     Ok(maw_tmux::SendTextReport {
         used_buffer,
         enter_attempts,
@@ -106,6 +107,7 @@ fn sendtext_exit_mode_if_needed<R: maw_tmux::TmuxRunner>(
 fn sendtext_submit_with_confirm<R, F>(
     runner: &mut R,
     target: &str,
+    text: &str,
     sleep: &mut F,
 ) -> Result<(u32, bool), maw_tmux::TmuxError>
 where
@@ -115,14 +117,46 @@ where
     for attempt in 1..=maw_tmux::MAX_SUBMIT_ATTEMPTS {
         runner.run("send-keys", &maw_tmux::tmux_send_enter_args(target))?;
         sleep(std::time::Duration::from_millis(maw_tmux::SUBMIT_CONFIRM_MS));
-        if !sendtext_pane_input_pending(runner, target) {
-            return Ok((attempt, false));
+        match sendtext_pending_state_after_grace(runner, target, text, sleep) {
+            maw_tmux::PendingInputState::Cleared => return Ok((attempt, false)),
+            maw_tmux::PendingInputState::DifferentInput => return Ok((attempt, true)),
+            maw_tmux::PendingInputState::MatchesSent => {}
         }
     }
     Ok((maw_tmux::MAX_SUBMIT_ATTEMPTS, true))
 }
 
-fn sendtext_pane_input_pending<R: maw_tmux::TmuxRunner>(runner: &mut R, target: &str) -> bool {
+fn sendtext_pending_state_after_grace<R, F>(
+    runner: &mut R,
+    target: &str,
+    text: &str,
+    sleep: &mut F,
+) -> maw_tmux::PendingInputState
+where
+    R: maw_tmux::TmuxRunner,
+    F: FnMut(std::time::Duration),
+{
+    let _confirm_state = sendtext_pending_input_state(runner, target, text);
+    sleep(std::time::Duration::from_millis(maw_tmux::SUBMIT_GRACE_MS));
+    sendtext_pending_input_state(runner, target, text)
+}
+
+fn sendtext_pending_input_state<R: maw_tmux::TmuxRunner>(
+    runner: &mut R,
+    target: &str,
+    text: &str,
+) -> maw_tmux::PendingInputState {
+    let Some(pending) = sendtext_pending_input(runner, target) else {
+        return maw_tmux::PendingInputState::Cleared;
+    };
+    if maw_tmux::pending_input_matches_sent(&pending, text) {
+        maw_tmux::PendingInputState::MatchesSent
+    } else {
+        maw_tmux::PendingInputState::DifferentInput
+    }
+}
+
+fn sendtext_pending_input<R: maw_tmux::TmuxRunner>(runner: &mut R, target: &str) -> Option<String> {
     runner
         .run(
             "capture-pane",
@@ -135,7 +169,8 @@ fn sendtext_pane_input_pending<R: maw_tmux::TmuxRunner>(runner: &mut R, target: 
                 "-5".to_owned(),
             ],
         )
-        .is_ok_and(|content| maw_tmux::pane_input_pending_from_capture(&content))
+        .ok()
+        .and_then(|content| maw_tmux::pane_pending_input_from_capture(&content))
 }
 
 fn sendtext_parse_args(argv: &[String]) -> Result<SendtextOptions, String> {
@@ -309,7 +344,7 @@ mod sendtext_tests {
         let _lock = super::env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let _env = SendtextEnvGuard::sendtext_new();
         let mut tmux =
-            SendtextMockTmux::sendtext_with_responses(vec![Ok("0"), Ok(""), Ok(""), Ok("$ \r")]);
+            SendtextMockTmux::sendtext_with_responses(vec![Ok("0"), Ok(""), Ok(""), Ok("$ \r"), Ok("$ \r")]);
 
         let output = sendtext_with_no_sleep(&sendtext_strings(&["sess:1.0", "hello", "world"]), &mut tmux)
             .expect("send");
@@ -327,7 +362,7 @@ mod sendtext_tests {
         let _env = SendtextEnvGuard::sendtext_new();
         let long_text = "x".repeat(501);
         let mut tmux =
-            SendtextMockTmux::sendtext_with_responses(vec![Ok("0"), Ok(""), Ok(""), Ok("$ \r")]);
+            SendtextMockTmux::sendtext_with_responses(vec![Ok("0"), Ok(""), Ok(""), Ok("$ \r"), Ok("$ \r")]);
 
         let output = sendtext_with_no_sleep(&[String::from("sess:1.0"), long_text.clone()], &mut tmux)
             .expect("send");
@@ -369,11 +404,15 @@ mod sendtext_tests {
             Ok(""),
             Ok(""),
             Ok("$ deploy"),
-            Ok(""),
             Ok("$ deploy"),
             Ok(""),
             Ok("$ deploy"),
+            Ok("$ deploy"),
             Ok(""),
+            Ok("$ deploy"),
+            Ok("$ deploy"),
+            Ok(""),
+            Ok("$ deploy"),
             Ok("$ deploy"),
         ]);
 
@@ -387,6 +426,33 @@ mod sendtext_tests {
                 .filter(|(command, args)| command == "send-keys" && args.last().is_some_and(|arg| arg == "Enter"))
                 .count(),
             4
+        );
+    }
+
+    #[test]
+    fn sendtext_does_not_retry_non_matching_pending_input() {
+        let _lock = super::env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _env = SendtextEnvGuard::sendtext_new();
+        let mut tmux = SendtextMockTmux::sendtext_with_responses(vec![
+            Ok("0"),
+            Ok(""),
+            Ok(""),
+            Ok("$ deploy"),
+            Ok("$ different queued input"),
+        ]);
+
+        let output =
+            sendtext_with_no_sleep(&sendtext_strings(&["sess:1", "deploy"]), &mut tmux)
+                .expect("send");
+
+        assert!(output.stdout.contains("pending input after Enter retries"));
+        assert_eq!(
+            tmux.calls
+                .iter()
+                .filter(|(command, args)| command == "send-keys"
+                    && args.last().is_some_and(|arg| arg == "Enter"))
+                .count(),
+            1
         );
     }
 
