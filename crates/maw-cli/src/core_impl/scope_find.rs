@@ -900,6 +900,9 @@ mod scopefind_ghq_root_tests {
     use std::ffi::OsString;
     use std::path::PathBuf;
 
+    // Shorthand for the injected env-lookup shape; always-Some is the point —
+    // call sites read `os("/opt/Code")` against a `None` alternative.
+    #[allow(clippy::unnecessary_wraps)]
     fn os(value: &str) -> Option<OsString> {
         Some(OsString::from(value))
     }

@@ -158,7 +158,7 @@ mod tests {
             edited_timestamp: None,
             attachments: None,
         };
-        write_channel_json(&dir, "g", "ch", &[m1.clone()]).expect("write");
+        write_channel_json(&dir, "g", "ch", std::slice::from_ref(&m1)).expect("write");
         let (path, added) = merge_channel_json(&dir, "g", "ch", &[]).expect("merge empty");
         assert_eq!(added, 0);
         assert_eq!(load_channel_json(&path).expect("load").len(), 1);

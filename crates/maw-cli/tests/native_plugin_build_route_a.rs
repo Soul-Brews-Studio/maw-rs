@@ -198,8 +198,8 @@ fn plugin_build_ts_missing_local_toolchain_does_not_delegate_to_maw_or_bun() {
 fn plugin_build_ts_assemblyscript_fixture_graduates_to_wasm_and_dispatch_avoids_bun() {
     let root = temp_dir("ts-ship");
     let sdk_dir = root.join("wasm-sdk");
-    let plugins_dir = root.join("plugins");
-    let plugin_dir = plugins_dir.join("ship-demo");
+    let plugins_root = root.join("plugins");
+    let plugin_dir = plugins_root.join("ship-demo");
     let bin_dir = root.join("bin");
     fs::create_dir_all(plugin_dir.join("src")).expect("plugin src");
     fs::create_dir_all(&bin_dir).expect("bin dir");
@@ -283,7 +283,7 @@ fn plugin_build_ts_assemblyscript_fixture_graduates_to_wasm_and_dispatch_avoids_
     let dispatched = Command::new(env!("CARGO_BIN_EXE_maw-rs"))
         .args(["ship-demo", "hello"])
         .env("PATH", path)
-        .env("MAW_PLUGINS_DIR", &plugins_dir)
+        .env("MAW_PLUGINS_DIR", &plugins_root)
         .env("BUN_SHIM_ARGS", &bun_args)
         .env("MAW_JS_REF_DIR", "/nonexistent")
         .output()
