@@ -1,16 +1,23 @@
 //! Integrity + determinism pin-check for the `fleet-plugins/` artifact home (#72).
 //!
-//! `fleet-plugins/<name>/` ships a compiled `plugin.wasm` pinned by `artifact.sha256`
-//! in its ship manifest. This harness is the CI equivalent of the `examples/wasm-parity`
-//! `check:fixtures` golden check: it re-hashes every committed artifact and asserts it
-//! still matches its pin, on the default toolchain-free `cargo test` path so it gates
-//! narrow runs and CI alike.
+//! `fleet-plugins/<name>/` ships a compiled `plugin.wasm` pinned by an `artifact.sha256`
+//! in one of its committed manifests. This harness is the CI equivalent of the
+//! `examples/wasm-parity` `check:fixtures` golden check: it re-hashes every committed
+//! artifact and asserts it still matches its pin, on the default toolchain-free
+//! `cargo test` path so it gates narrow runs and CI alike, and it refuses an unpinned
+//! `plugin.wasm` so no artifact ships unverified.
+//!
+//! Which manifest carries the pin depends on the plugin's active tier. A ship-tier
+//! plugin pins its artifact in `plugin.json` (like the `hostfn-probe` fixture). A plugin
+//! whose *active* tier is still `bun-dev` (e.g. squad, gated on a runtime fs-roots grant)
+//! keeps `plugin.json` as its bun-dev manifest and pins the pre-staged wasm in
+//! `plugin.source.json` instead — so the check reads both.
 //!
 //! `fleet_plugins_rebuild_is_deterministic` is `#[ignore]` and gated on the
 //! `AssemblyScript` toolchain — same pattern as
 //! `plugin_hostfn_probe_acceptance::probe_builds_via_pipeline` — because it shells out to
-//! `maw plugin build`. It proves an artifact is reproducible from its `plugin.source.json`
-//! source form where one is committed.
+//! `maw plugin build`. It rebuilds from `plugin.source.json` and asserts the artifact
+//! reproduces its committed pin.
 
 use maw_cli::run_cli;
 use maw_plugin_manifest::hash_file;
@@ -18,6 +25,12 @@ use serde_json::Value;
 use std::fs::{self, create_dir_all, read_to_string};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Manifest filenames a fleet plugin may use to declare its ship artifact. `plugin.json`
+/// is the active manifest (possibly a bun-dev dev-tier manifest with no artifact);
+/// `plugin.source.json` is the wasm source manifest, and is where a still-bun-dev plugin
+/// pins its pre-staged artifact.
+const MANIFEST_CANDIDATES: [&str; 2] = ["plugin.json", "plugin.source.json"];
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -62,90 +75,99 @@ fn copy_tree(src: &Path, dst: &Path) {
     }
 }
 
-/// The `target` + `artifact` fields of a plugin manifest, as far as the pin check cares.
-struct ShipManifest {
-    name: String,
-    target: Option<String>,
-    artifact_path: Option<String>,
-    artifact_sha256: Option<String>,
+/// An `artifact` pin declared by one manifest: the relative artifact path + its sha256.
+struct ArtifactPin {
+    plugin_name: String,
+    manifest: String,
+    path: String,
+    sha256: String,
 }
 
-fn read_manifest(plugin_dir: &Path) -> Option<ShipManifest> {
-    let raw = read_to_string(plugin_dir.join("plugin.json")).ok()?;
+/// Read the `artifact` pin (path + sha256) from a single manifest file, if it declares one.
+fn read_artifact_pin(manifest_path: &Path) -> Option<ArtifactPin> {
+    let raw = read_to_string(manifest_path).ok()?;
     let value: Value = serde_json::from_str(&raw).ok()?;
-    let name = value.get("name")?.as_str()?.to_owned();
-    let artifact = value.get("artifact");
-    Some(ShipManifest {
-        name,
-        target: value
-            .get("target")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-        artifact_path: artifact
-            .and_then(|artifact| artifact.get("path"))
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-        artifact_sha256: artifact
-            .and_then(|artifact| artifact.get("sha256"))
-            .and_then(Value::as_str)
-            .map(str::to_owned),
+    let plugin_name = value
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("?")
+        .to_owned();
+    let artifact = value.get("artifact")?;
+    let path = artifact.get("path").and_then(Value::as_str)?.to_owned();
+    let sha256 = artifact.get("sha256").and_then(Value::as_str)?.to_owned();
+    Some(ArtifactPin {
+        plugin_name,
+        manifest: manifest_path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned(),
+        path,
+        sha256,
     })
 }
 
-/// `Ok(true)` = a wasm ship artifact was verified against its pin; `Ok(false)` = skipped
-/// (no manifest, or dev-tier source with nothing pinned); `Err` = a wasm ship whose pin
-/// is missing, whose artifact is absent, or whose bytes drifted from the pin.
-fn verify_ship_artifact(plugin_dir: &Path) -> Result<bool, String> {
-    let Some(manifest) = read_manifest(plugin_dir) else {
-        return Ok(false);
-    };
-    let is_wasm_ship = manifest.target.as_deref() == Some("wasm");
-    if !is_wasm_ship && manifest.artifact_sha256.is_none() {
-        // Dev-tier source alongside is allowed; nothing is pinned, so nothing to check.
-        return Ok(false);
+/// Verify every committed artifact under `plugin_dir` against its manifest pin, and refuse
+/// an unpinned `plugin.wasm`. Returns the number of artifacts verified (0 = a source-only
+/// or manifest-less dir with no committed artifact — nothing pinned to check).
+fn verify_pins(plugin_dir: &Path) -> Result<usize, String> {
+    let mut verified_files = Vec::new();
+    let mut checked = 0_usize;
+    for candidate in MANIFEST_CANDIDATES {
+        let Some(pin) = read_artifact_pin(&plugin_dir.join(candidate)) else {
+            continue;
+        };
+        let artifact = plugin_dir.join(&pin.path);
+        if !artifact.is_file() {
+            return Err(format!(
+                "fleet plugin '{}' ({}) pins artifact '{}' but the file is missing",
+                pin.plugin_name, pin.manifest, pin.path
+            ));
+        }
+        let observed = hash_file(&artifact)?;
+        if observed != pin.sha256 {
+            return Err(format!(
+                "fleet plugin '{}' ({}) artifact hash mismatch:\n  expected: {}\n  actual:   {}",
+                pin.plugin_name, pin.manifest, pin.sha256, observed
+            ));
+        }
+        checked += 1;
+        if let Ok(canonical) = artifact.canonicalize() {
+            verified_files.push(canonical);
+        }
     }
-    let expected = manifest.artifact_sha256.ok_or_else(|| {
-        format!(
-            "fleet plugin '{}' declares target=wasm but has no artifact.sha256 — run `maw plugin build`",
-            manifest.name
-        )
-    })?;
-    let relative = manifest.artifact_path.ok_or_else(|| {
-        format!(
-            "fleet plugin '{}' has artifact.sha256 but no artifact.path",
-            manifest.name
-        )
-    })?;
-    let artifact = plugin_dir.join(&relative);
-    if !artifact.is_file() {
-        return Err(format!(
-            "fleet plugin '{}' artifact missing: {relative}",
-            manifest.name
-        ));
+    // Coverage: a committed plugin.wasm must be pinned by one of the manifests above, so an
+    // artifact can never ship unverified.
+    let wasm = plugin_dir.join("plugin.wasm");
+    if wasm.is_file() {
+        let covered = wasm
+            .canonicalize()
+            .is_ok_and(|canonical| verified_files.contains(&canonical));
+        if !covered {
+            return Err(format!(
+                "fleet plugin dir '{}' commits plugin.wasm but no manifest pins it — add \
+                 \"target\":\"wasm\" + \"artifact\":{{\"path\":\"./plugin.wasm\",\"sha256\":\"sha256:<hex>\"}} \
+                 to plugin.source.json (or plugin.json)",
+                plugin_dir.display()
+            ));
+        }
     }
-    let observed = hash_file(&artifact)?;
-    if observed == expected {
-        Ok(true)
-    } else {
-        Err(format!(
-            "fleet plugin '{}' artifact hash mismatch:\n  expected: {expected}\n  actual:   {observed}",
-            manifest.name
-        ))
-    }
+    Ok(checked)
 }
 
-/// The committed `hostfn-probe` fixture is a real ship-form plugin (plugin.json
-/// target=wasm + artifact.sha256 + plugin.wasm). Using it here proves the checker works
-/// independently of whether any fleet plugin has landed yet — keeping this PR standalone.
+/// The committed `hostfn-probe` fixture is a real ship-form plugin (its `plugin.json` has
+/// `target=wasm`, an `artifact.sha256`, and a `plugin.wasm`). Using it here proves the
+/// checker works independently of whether any fleet plugin has landed yet — keeping this
+/// PR standalone.
 fn known_good_ship_fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hostfn-probe")
 }
 
 #[test]
 fn pin_check_verifies_known_good_ship_fixture() {
-    match verify_ship_artifact(&known_good_ship_fixture()) {
-        Ok(true) => {}
-        other => panic!("known-good ship fixture should verify, got {other:?}"),
+    match verify_pins(&known_good_ship_fixture()) {
+        Ok(count) if count >= 1 => {}
+        other => panic!("known-good ship fixture should verify >=1 artifact, got {other:?}"),
     }
 }
 
@@ -159,7 +181,7 @@ fn pin_check_detects_tampered_artifact() {
     bytes[last] ^= 0xff;
     fs::write(&wasm, &bytes).expect("write tampered wasm");
 
-    let result = verify_ship_artifact(&staged);
+    let result = verify_pins(&staged);
     fs::remove_dir_all(&staged).ok();
 
     assert!(
@@ -169,11 +191,33 @@ fn pin_check_detects_tampered_artifact() {
 }
 
 #[test]
+fn pin_check_refuses_unpinned_wasm() {
+    // Squad's exact shape: a bun-dev plugin.json (no artifact) sitting next to a committed
+    // plugin.wasm. Without a pin in some manifest the artifact would ship unverified, so
+    // the check must refuse it.
+    let staged = temp_dir("unpinned");
+    fs::write(
+        staged.join("plugin.json"),
+        r#"{"name":"unpinned","version":"0.1.0","sdk":"*","runtime":"bun-dev","target":"js","entry":"impl.ts"}"#,
+    )
+    .expect("write bun-dev manifest");
+    fs::write(staged.join("plugin.wasm"), b"\0asm\x01\x00\x00\x00").expect("write wasm");
+
+    let result = verify_pins(&staged);
+    fs::remove_dir_all(&staged).ok();
+
+    assert!(
+        matches!(&result, Err(message) if message.contains("no manifest pins it")),
+        "unpinned plugin.wasm should be refused, got {result:?}"
+    );
+}
+
+#[test]
 fn fleet_plugins_artifacts_match_manifest_sha256() {
-    // The real gate: every committed fleet-plugins/<name> ship artifact must match its
-    // pin. Runs on the default toolchain-free path. Before any plugin lands (only
-    // README present) this verifies zero artifacts and passes, so the crate PR stands
-    // alone; it starts covering squad et al. the moment their dirs land.
+    // The real gate: every committed fleet-plugins/<name> artifact must match its pin and
+    // no plugin.wasm may ship unpinned. Runs on the default toolchain-free path. Before any
+    // plugin lands (only README present) this verifies zero artifacts and passes, so the
+    // crate PR stands alone; it starts covering squad et al. the moment their dirs land.
     let dir = fleet_plugins_dir();
     if !dir.is_dir() {
         return;
@@ -185,9 +229,8 @@ fn fleet_plugins_artifacts_match_manifest_sha256() {
         if !path.is_dir() {
             continue;
         }
-        match verify_ship_artifact(&path) {
-            Ok(true) => checked += 1,
-            Ok(false) => {}
+        match verify_pins(&path) {
+            Ok(count) => checked += count,
             Err(message) => failures.push(message),
         }
     }
@@ -204,7 +247,7 @@ fn fleet_plugins_artifacts_match_manifest_sha256() {
 fn fleet_plugins_rebuild_is_deterministic() {
     // Reproduce each fleet artifact from its committed source form and assert the rebuilt
     // bytes reproduce the pin. Gated exactly like probe_builds_via_pipeline. A no-op until
-    // a fleet plugin ships a plugin.source.json alongside its artifact.
+    // a fleet plugin ships a plugin.source.json alongside a pinned artifact.
     let dir = fleet_plugins_dir();
     if !dir.is_dir() {
         return;
@@ -215,15 +258,18 @@ fn fleet_plugins_rebuild_is_deterministic() {
         if !plugin.is_dir() || !plugin.join("plugin.source.json").is_file() {
             continue;
         }
-        let Some(manifest) = read_manifest(&plugin) else {
-            continue;
-        };
-        let Some(expected) = manifest.artifact_sha256 else {
+        // The committed pin to reproduce, from whichever manifest declares it.
+        let Some(expected) = MANIFEST_CANDIDATES
+            .iter()
+            .find_map(|candidate| read_artifact_pin(&plugin.join(candidate)))
+            .map(|pin| pin.sha256)
+        else {
             continue;
         };
 
         let staged = temp_dir("rebuild");
-        let work = staged.join(&manifest.name);
+        let name = plugin.file_name().expect("plugin name").to_owned();
+        let work = staged.join(&name);
         copy_tree(&plugin, &work);
         // Start from the source form so the pipeline actually compiles the .ts.
         let source = read_to_string(work.join("plugin.source.json")).expect("source manifest");
@@ -233,16 +279,20 @@ fn fleet_plugins_rebuild_is_deterministic() {
 
         let build = run_cli(&args(&["plugin", "build", &work.display().to_string()]));
         assert_eq!(
-            build.code, 0,
+            build.code,
+            0,
             "plugin build failed for '{}': {}\n{}",
-            manifest.name, build.stderr, build.stdout
+            name.to_string_lossy(),
+            build.stderr,
+            build.stdout
         );
 
         let observed = hash_file(&work.join("plugin.wasm")).expect("hash rebuilt wasm");
         assert_eq!(
-            observed, expected,
+            observed,
+            expected,
             "fleet plugin '{}' is not reproducible from source",
-            manifest.name
+            name.to_string_lossy()
         );
         fs::remove_dir_all(&staged).ok();
         rebuilt += 1;

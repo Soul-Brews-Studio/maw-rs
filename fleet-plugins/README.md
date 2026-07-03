@@ -18,13 +18,14 @@ model) → **hermes** → **atlas** → **team**.
 ```
 fleet-plugins/
   <name>/
-    plugin.json          # SHIP manifest: target=wasm, artifact.path + artifact.sha256
+    plugin.json          # active manifest (ship-tier wasm, OR bun-dev dev-tier — see below)
     plugin.wasm          # compiled artifact, byte-pinned by artifact.sha256
-    plugin.source.json   # (optional) SOURCE manifest — lets CI rebuild from .ts and diff
-    src/plugin.ts        # (optional) dev-tier AssemblyScript-subset source, kept alongside
+    plugin.source.json   # SOURCE manifest (entry=src/plugin.ts) — rebuild + pin the wasm
+    src/plugin.ts        # AssemblyScript-subset ship source
+    impl.ts              # (optional) bun-dev dev-tier source, for a still-bun-dev plugin
 ```
 
-The **ship manifest** (`plugin.json`) is the one the runtime loads. It must declare:
+A **ship manifest** — the one the runtime loads at the wasm tier — declares:
 
 - `"target": "wasm"`
 - `"artifact": { "path": "./plugin.wasm", "sha256": "sha256:<hex>" }`
@@ -32,10 +33,21 @@ The **ship manifest** (`plugin.json`) is the one the runtime loads. It must decl
 - `"capabilities": [ … ]` — consumed by the runtime/registry capability gates
 - `"cli": { "command": "<name>" }` — the user-facing `maw <name>` verb
 
-Keep the dev-tier `src/` and (recommended) a `plugin.source.json` alongside so the
-artifact can be rebuilt and its determinism proven. `plugin.source.json` is the
-pre-build (source) form of the manifest — same convention as the `hostfn-probe` fixture
-in `crates/maw-cli/tests/fixtures/hostfn-probe/`.
+**Which file carries the pin depends on the active tier:**
+
+- **Ship-tier active** (e.g. `hostfn-probe`): `plugin.json` *is* the ship manifest and
+  carries `target=wasm` + `artifact.sha256`.
+- **Still bun-dev active** (e.g. squad, whose wasm is built and verified but gated on a
+  runtime fs-roots grant): `plugin.json` stays the `runtime=bun-dev` dev manifest, and the
+  pre-staged `plugin.wasm` is pinned in **`plugin.source.json`** (`target=wasm` +
+  `artifact.path` + `artifact.sha256`) instead. This keeps `maw <name>` on the working
+  dev tier while committing a machine-readable pin for the artifact.
+
+**Rule: every committed `plugin.wasm` must be pinned by one of these manifests.** The pin
+check (below) refuses an unpinned artifact — the pin must live in a manifest, never only
+in prose. `plugin.source.json` also names the source entry (`src/plugin.ts`), so one file
+says both "source" and "built artifact + pin" — same convention as the `hostfn-probe`
+fixture in `crates/maw-cli/tests/fixtures/hostfn-probe/`.
 
 ## Rebuilding an artifact
 
@@ -66,10 +78,12 @@ The `artifact.sha256` in the manifest is the pin. It is enforced at **two** poin
 2. **CI / test time (integrity + determinism).**
    `crates/maw-cli/tests/fleet_plugins_pin_check.rs`:
    - `fleet_plugins_artifacts_match_manifest_sha256` — runs on the **default**,
-     toolchain-free `cargo test` path (so it gates every narrow run and CI). It scans
-     every `fleet-plugins/<name>/plugin.json`, and for each `target=wasm` manifest hashes
-     `plugin.wasm` and asserts it equals the declared `artifact.sha256`. A `wasm` manifest
-     with no `artifact.sha256`, or a byte that drifts from the pin, fails the build.
+     toolchain-free `cargo test` path (so it gates every narrow run and CI). For each
+     `fleet-plugins/<name>/`, it reads the `artifact` pin from **both** `plugin.json` and
+     `plugin.source.json`, hashes the referenced artifact, and asserts it equals the
+     declared `artifact.sha256`. It then enforces coverage: a committed `plugin.wasm` that
+     no manifest pins **fails the build**, so no artifact ships unverified. A byte that
+     drifts from the pin fails too.
    - `fleet_plugins_rebuild_is_deterministic` — `#[ignore]`, gated on the AS toolchain
      exactly like `plugin_hostfn_probe_acceptance::probe_builds_via_pipeline`. Where a
      `plugin.source.json` is present it rebuilds via `maw plugin build` and asserts the
