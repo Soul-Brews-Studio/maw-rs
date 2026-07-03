@@ -507,13 +507,53 @@ fn current_xdg_env() -> MawXdgEnv {
 }
 
 fn ghq_root() -> std::path::PathBuf {
-    std::env::var_os("GHQ_ROOT").map_or_else(|| {
-        std::env::var_os("HOME").map_or_else(|| std::path::PathBuf::from(".").join("Code"), |home| std::path::PathBuf::from(home).join("Code"))
-    }, |value| {
-        let mut path = std::path::PathBuf::from(value);
-        if path.file_name().and_then(std::ffi::OsStr::to_str) == Some("github.com") { path.pop(); }
-        path
-    })
+    ghq_root_resolve(std::env::var_os("GHQ_ROOT"), ghq_root_from_git_config, std::env::var_os("HOME"))
+}
+
+// Resolution order mirrors ghq itself: $GHQ_ROOT env → `git config ghq.root` → ~/Code.
+// Without the git-config step, `maw wake <name>` only works in shells that happen to
+// export GHQ_ROOT (e.g. inside a direnv tree) while `ghq` resolves everywhere (#134).
+fn ghq_root_resolve(
+    env_root: Option<std::ffi::OsString>,
+    git_config_root: impl FnOnce() -> Option<String>,
+    home: Option<std::ffi::OsString>,
+) -> std::path::PathBuf {
+    if let Some(value) = env_root {
+        return ghq_root_strip_host(std::path::PathBuf::from(value));
+    }
+    if let Some(value) = git_config_root() {
+        let expanded = ghq_root_expand_tilde(value.trim(), home.as_deref());
+        if !expanded.as_os_str().is_empty() {
+            return ghq_root_strip_host(expanded);
+        }
+    }
+    home.map_or_else(|| std::path::PathBuf::from(".").join("Code"), |home| std::path::PathBuf::from(home).join("Code"))
+}
+
+fn ghq_root_from_git_config() -> Option<String> {
+    let output = std::process::Command::new("git").args(["config", "--get", "ghq.root"]).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8(output.stdout).ok()?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() { None } else { Some(trimmed.to_owned()) }
+}
+
+fn ghq_root_expand_tilde(value: &str, home: Option<&std::ffi::OsStr>) -> std::path::PathBuf {
+    if let Some(rest) = value.strip_prefix("~/") {
+        if let Some(home) = home {
+            return std::path::PathBuf::from(home).join(rest);
+        }
+    }
+    std::path::PathBuf::from(value)
+}
+
+fn ghq_root_strip_host(mut path: std::path::PathBuf) -> std::path::PathBuf {
+    if path.file_name().and_then(std::ffi::OsStr::to_str) == Some("github.com") {
+        path.pop();
+    }
+    path
 }
 
 fn fleet_read_dirs_for_env(env: &MawXdgEnv) -> Vec<std::path::PathBuf> {
@@ -852,4 +892,68 @@ fn flag_value(argv: &[String], flag: &str) -> Option<String> {
 fn now_iso_utc() -> String {
     let seconds = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |duration| duration.as_secs());
     format!("{seconds}")
+}
+
+#[cfg(test)]
+mod scopefind_ghq_root_tests {
+    use super::{ghq_root_expand_tilde, ghq_root_resolve};
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
+    fn os(value: &str) -> Option<OsString> {
+        Some(OsString::from(value))
+    }
+
+    #[test]
+    fn env_var_wins_over_git_config() {
+        let root = ghq_root_resolve(os("/opt/Code"), || Some("/elsewhere".to_owned()), os("/Users/nat"));
+        assert_eq!(root, PathBuf::from("/opt/Code"));
+    }
+
+    #[test]
+    fn env_var_github_host_suffix_is_stripped() {
+        let root = ghq_root_resolve(os("/opt/Code/github.com"), || None, os("/Users/nat"));
+        assert_eq!(root, PathBuf::from("/opt/Code"));
+    }
+
+    #[test]
+    fn git_config_root_used_when_env_unset() {
+        let root = ghq_root_resolve(None, || Some("/opt/Code\n".to_owned()), os("/Users/nat"));
+        assert_eq!(root, PathBuf::from("/opt/Code"));
+    }
+
+    #[test]
+    fn git_config_root_expands_tilde() {
+        let root = ghq_root_resolve(None, || Some("~/ghq".to_owned()), os("/Users/nat"));
+        assert_eq!(root, PathBuf::from("/Users/nat/ghq"));
+    }
+
+    #[test]
+    fn git_config_github_host_suffix_is_stripped() {
+        let root = ghq_root_resolve(None, || Some("/opt/Code/github.com".to_owned()), os("/Users/nat"));
+        assert_eq!(root, PathBuf::from("/opt/Code"));
+    }
+
+    #[test]
+    fn empty_git_config_falls_back_to_home_code() {
+        let root = ghq_root_resolve(None, || Some("   ".to_owned()), os("/Users/nat"));
+        assert_eq!(root, PathBuf::from("/Users/nat/Code"));
+    }
+
+    #[test]
+    fn no_sources_falls_back_to_home_code() {
+        let root = ghq_root_resolve(None, || None, os("/Users/nat"));
+        assert_eq!(root, PathBuf::from("/Users/nat/Code"));
+    }
+
+    #[test]
+    fn no_home_falls_back_to_relative_code() {
+        let root = ghq_root_resolve(None, || None, None);
+        assert_eq!(root, PathBuf::from(".").join("Code"));
+    }
+
+    #[test]
+    fn tilde_without_home_stays_literal() {
+        assert_eq!(ghq_root_expand_tilde("~/ghq", None), PathBuf::from("~/ghq"));
+    }
 }
