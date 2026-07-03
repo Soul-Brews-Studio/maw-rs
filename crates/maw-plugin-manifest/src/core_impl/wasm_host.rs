@@ -210,6 +210,8 @@ pub struct MawWasmHost {
     http_timeout_ms: u64,
     localserver_url: Option<String>,
     http_resolver_overrides: BTreeMap<String, Vec<IpAddr>>,
+    cwd: Option<String>,
+    home: Option<String>,
 }
 
 impl MawWasmHost {
@@ -227,7 +229,37 @@ impl MawWasmHost {
             http_timeout_ms: 10_000,
             localserver_url: None,
             http_resolver_overrides: BTreeMap::new(),
+            cwd: None,
+            home: None,
         }
+    }
+
+    /// Set the cwd/home paths exposed via `maw.paths.get` and injected into
+    /// exec'd children that hold the `exec:home` capability.
+    #[must_use]
+    pub fn with_paths(mut self, cwd: Option<String>, home: Option<String>) -> Self {
+        self.cwd = cwd;
+        self.home = home;
+        self
+    }
+
+    /// Fill cwd/home from the invoke context without clobbering values that
+    /// were already set explicitly (e.g. via `with_paths` in tests).
+    fn apply_context(&mut self, ctx: &InvokeContext) {
+        if self.cwd.is_none() {
+            self.cwd.clone_from(&ctx.cwd);
+        }
+        if self.home.is_none() {
+            self.home.clone_from(&ctx.home);
+        }
+    }
+
+    /// Real user home for exec'd children: the context-supplied value, falling
+    /// back to the host process `$HOME`.
+    fn exec_home(&self) -> Option<String> {
+        self.home.clone().or_else(|| {
+            std::env::var_os("HOME").map(|home| home.to_string_lossy().into_owned())
+        })
     }
 
     #[must_use]
@@ -348,6 +380,7 @@ impl MawWasmHost {
         match name {
             "maw.exec.run" => to_json(&self.exec_run(input)),
             "maw.exec.spawn" => to_json(&self.exec_spawn(input)),
+            "maw.paths.get" => to_json(&self.paths_get(input)),
             "maw.config.get" => to_json(&self.config_get(input)),
             "maw.config.set" => to_json(&self.config_set(input)),
             "maw.consent.read" => to_json(&self.consent_read(input)),
@@ -435,10 +468,18 @@ impl MawWasmHost {
                 return err;
             }
         }
-        let env = match sanitize_env(args.env.as_ref()) {
+        let mut env = match sanitize_env(args.env.as_ref()) {
             Ok(env) => env,
             Err(err) => return err,
         };
+        // sanitize_env strips HOME by default. Re-inject the real user HOME only
+        // when the manifest opts in via the `exec:home` capability, so exec'd
+        // tools that need it (e.g. locating ~/.claude) can find it.
+        if self.caps.contains("exec", "home", None) {
+            if let Some(home) = self.exec_home() {
+                env.insert("HOME".to_owned(), home);
+            }
+        }
         let mut cmd = Command::new(&args.cmd);
         cmd.args(&args.args)
             .env_clear()
@@ -481,6 +522,44 @@ impl MawWasmHost {
         };
         args.allow_non_zero = true;
         self.exec_run(&serde_json::to_string(&args).unwrap_or_default())
+    }
+
+    fn paths_get(&self, input: &str) -> HostResult<Value> {
+        let start = Instant::now();
+        let args = match parse_args::<PathsGetArgs>(input) {
+            Ok(args) => args,
+            Err(err) => return err,
+        };
+        let name = args.name.as_deref().unwrap_or_default();
+        // Fixed allowlist — deliberately NOT a general env/path getter.
+        let value = match name {
+            "home" => self.home.clone(),
+            "cwd" => self.cwd.clone(),
+            "teams" => self.home.as_ref().map(|home| {
+                Path::new(home)
+                    .join(".claude")
+                    .join("teams")
+                    .to_string_lossy()
+                    .into_owned()
+            }),
+            _ => {
+                return HostResult::err(
+                    HostErrorCode::InvalidArgs,
+                    format!("unknown path name '{name}'; allowed: home, cwd, teams"),
+                );
+            }
+        };
+        let result = value.map_or_else(
+            || {
+                HostResult::err(
+                    HostErrorCode::NotFound,
+                    format!("path '{name}' is not available in this context"),
+                )
+            },
+            |path| HostResult::ok(json!({ "name": name, "path": path })),
+        );
+        self.audit("maw.paths.get", "paths:get", name, status_of(&result), start);
+        result
     }
 
     fn config_get(&self, input: &str) -> HostResult<Value> {
@@ -1679,10 +1758,11 @@ impl PluginInvokeRuntime for ExtismWasmInvokeRuntime {
         ctx: &InvokeContext,
         wasm_bytes: &[u8],
     ) -> InvokeResult {
-        let host = self
+        let mut host = self
             .host_overrides
             .remove(&plugin.manifest.name)
             .unwrap_or_else(|| MawWasmHost::new(plugin));
+        host.apply_context(ctx);
         let manifest = ExtismManifest::new([Wasm::data(wasm_bytes.to_vec())])
             .with_allowed_hosts(host.caps.scopes_for("net", "https").into_iter());
         let mut builder = PluginBuilder::new(manifest).with_wasi(false);
@@ -1718,6 +1798,7 @@ impl PluginInvokeRuntime for ExtismWasmInvokeRuntime {
 pub const HOST_FN_NAMES: &[&str] = &[
     "maw.exec.run",
     "maw.exec.spawn",
+    "maw.paths.get",
     "maw.config.get",
     "maw.config.set",
     "maw.consent.read",
@@ -1833,6 +1914,11 @@ struct FsListArgs {
 #[serde(rename_all = "camelCase")]
 struct ConfigGetArgs {
     key: Option<String>,
+}
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PathsGetArgs {
+    name: Option<String>,
 }
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

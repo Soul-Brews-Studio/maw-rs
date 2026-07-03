@@ -125,6 +125,8 @@ fn invoke_plugin_version_only_matches_first_arg_and_non_cli_skips_flags() {
         &InvokeContext {
             source: InvokeSource::Api,
             args: vec!["-v".to_owned()],
+            cwd: None,
+            home: None,
         },
         &mut FakeRuntime::default(),
     );
@@ -200,6 +202,8 @@ fn invoke_plugin_ts_dispatches_through_injected_runtime() {
         &InvokeContext {
             source: InvokeSource::Api,
             args: vec!["a".to_owned(), "b".to_owned()],
+            cwd: None,
+            home: None,
         },
         &mut runtime,
     );
@@ -220,6 +224,8 @@ fn invoke_plugin_ts_without_entry_falls_through_to_wasm_read() {
         &InvokeContext {
             source: InvokeSource::Api,
             args: Vec::new(),
+            cwd: None,
+            home: None,
         },
         &mut FakeRuntime::default(),
     );
@@ -339,6 +345,8 @@ fn cli(args: &[&str]) -> InvokeContext {
     InvokeContext {
         source: InvokeSource::Cli,
         args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+        cwd: None,
+        home: None,
     }
 }
 

@@ -136,6 +136,8 @@ fn plugin_build_route_a_builds_dist_and_extism_loads_fixture() {
         &maw_plugin_manifest::InvokeContext {
             source: maw_plugin_manifest::InvokeSource::Cli,
             args: vec!["probe".to_owned()],
+            cwd: None,
+            home: None,
         },
         &mut runtime,
     );

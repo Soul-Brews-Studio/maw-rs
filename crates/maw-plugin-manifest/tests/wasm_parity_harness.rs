@@ -566,6 +566,8 @@ fn config_wasm_denies_secret_like_set_without_host_call() {
             .iter()
             .map(|arg| (*arg).to_owned())
             .collect(),
+        cwd: None,
+        home: None,
     };
 
     let result = invoke_plugin(&wasm_plugin, &ctx, &mut wasm_runtime);
@@ -891,6 +893,8 @@ fn run_parity_case(case: ParityCase<'_>) {
     let ctx = InvokeContext {
         source: InvokeSource::Cli,
         args: case.args.iter().map(|arg| (*arg).to_owned()).collect(),
+        cwd: None,
+        home: None,
     };
 
     let wasm_plugin = load_wasm_fixture(&fixture, case.manifest_name);

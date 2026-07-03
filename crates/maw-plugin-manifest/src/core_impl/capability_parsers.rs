@@ -420,6 +420,29 @@ pub enum InvokeSource {
 pub struct InvokeContext {
     pub source: InvokeSource,
     pub args: Vec<String>,
+    /// Host process working directory at invoke time, so plugins can resolve
+    /// relative paths. `None` when it could not be determined.
+    pub cwd: Option<String>,
+    /// User home directory (`$HOME`) at invoke time, so plugins can locate
+    /// user paths such as `~/.claude/teams`. `None` when unset.
+    pub home: Option<String>,
+}
+
+impl InvokeContext {
+    /// Build an invoke context, capturing the host process's cwd and `$HOME`
+    /// so the plugin can learn where it is running and where the user's home
+    /// is. This is the constructor invoke sites should use.
+    #[must_use]
+    pub fn new(source: InvokeSource, args: Vec<String>) -> Self {
+        Self {
+            source,
+            args,
+            cwd: std::env::current_dir()
+                .ok()
+                .map(|dir| dir.to_string_lossy().into_owned()),
+            home: std::env::var_os("HOME").map(|home| home.to_string_lossy().into_owned()),
+        }
+    }
 }
 
 impl InvokeSource {

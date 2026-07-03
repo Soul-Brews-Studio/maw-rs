@@ -402,6 +402,8 @@ fn cli(args: &[&str]) -> InvokeContext {
     InvokeContext {
         source: InvokeSource::Cli,
         args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+        cwd: None,
+        home: None,
     }
 }
 

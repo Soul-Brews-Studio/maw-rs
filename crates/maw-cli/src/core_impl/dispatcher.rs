@@ -470,10 +470,7 @@ fn dispatch_cli_plugin(argv: &[String]) -> Option<CliOutput> {
         .filter(|plugin| !plugin.disabled)
         .find_map(|plugin| plugin_cli_args(plugin, argv).map(|args| (plugin, args)))?;
 
-    let ctx = InvokeContext {
-        source: InvokeSource::Cli,
-        args: matched_args.to_vec(),
-    };
+    let ctx = InvokeContext::new(InvokeSource::Cli, matched_args.to_vec());
 
     if plugin.entry_path.is_some() {
         return Some(dispatch_ts_cli_plugin(plugin, &ctx));

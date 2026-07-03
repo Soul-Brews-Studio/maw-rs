@@ -238,6 +238,8 @@ fn cli() -> InvokeContext {
     InvokeContext {
         source: InvokeSource::Cli,
         args: Vec::new(),
+        cwd: None,
+        home: None,
     }
 }
 
