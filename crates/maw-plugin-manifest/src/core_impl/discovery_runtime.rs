@@ -44,11 +44,22 @@ fn optional_string_field(
 }
 
 fn invoke_context_json(ctx: &InvokeContext) -> String {
-    serde_json::json!({
+    // cwd/home are additive maw-rs context fields. Emit them only when known so
+    // the default `{source,args}` shape stays byte-identical to maw-js (and the
+    // committed wasm-parity goldens) for plugins that don't need them.
+    let mut value = serde_json::json!({
         "source": ctx.source.as_str(),
         "args": ctx.args,
-    })
-    .to_string()
+    });
+    if let Some(map) = value.as_object_mut() {
+        if let Some(cwd) = &ctx.cwd {
+            map.insert("cwd".to_owned(), serde_json::Value::from(cwd.as_str()));
+        }
+        if let Some(home) = &ctx.home {
+            map.insert("home".to_owned(), serde_json::Value::from(home.as_str()));
+        }
+    }
+    value.to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -647,5 +658,32 @@ mod part03_coverage_tests {
 
         std::env::set_current_dir(original).expect("restore cwd");
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn invoke_context_json_includes_cwd_and_home() {
+        let ctx = InvokeContext {
+            source: InvokeSource::Cli,
+            args: vec!["start".to_owned()],
+            cwd: Some("/work/here".to_owned()),
+            home: Some("/home/nat".to_owned()),
+        };
+        let value: serde_json::Value =
+            serde_json::from_str(&invoke_context_json(&ctx)).expect("context json");
+        assert_eq!(value["source"], "cli");
+        assert_eq!(value["cwd"], "/work/here");
+        assert_eq!(value["home"], "/home/nat");
+    }
+
+    #[test]
+    fn invoke_context_json_omits_paths_when_absent() {
+        let ctx = InvokeContext {
+            source: InvokeSource::Cli,
+            args: Vec::new(),
+            cwd: None,
+            home: None,
+        };
+        // Default shape stays maw-js-identical: no cwd/home keys at all.
+        assert_eq!(invoke_context_json(&ctx), r#"{"args":[],"source":"cli"}"#);
     }
 }

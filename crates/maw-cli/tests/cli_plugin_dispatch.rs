@@ -150,7 +150,7 @@ fn write_bun_dev_wasm_plugin(plugins_dir: &Path, dir_name: &str, command: &str) 
     let package_dir = plugins_dir.join(dir_name);
     create_dir_all(&package_dir).expect("plugin dir");
     let wasm_path = package_dir.join("plugin.wasm");
-    write(&wasm_path, WASM_HANDLE_ZERO).expect("wasm");
+    write(&wasm_path, WASM_IMPORT_BEARING).expect("wasm");
     let sha256 = hash_file(&wasm_path).expect("wasm hash");
     write(
         package_dir.join("plugin.json"),
@@ -188,7 +188,7 @@ fn write_bun_dev_raw_wasm_with_ts_entry_plugin(plugins_dir: &Path, dir_name: &st
     )
     .expect("entry");
     let wasm_path = package_dir.join("plugin.wasm");
-    write(&wasm_path, WASM_HANDLE_ZERO).expect("wasm");
+    write(&wasm_path, WASM_IMPORT_BEARING).expect("wasm");
     let sha256 = hash_file(&wasm_path).expect("wasm hash");
     write(
         package_dir.join("plugin.json"),
@@ -212,6 +212,76 @@ fn write_bun_dev_raw_wasm_with_ts_entry_plugin(plugins_dir: &Path, dir_name: &st
         .to_string(),
     )
     .expect("manifest");
+}
+
+fn write_ship_tier_wasm_plugin(plugins_dir: &Path, dir_name: &str, command: &str) {
+    let package_dir = plugins_dir.join(dir_name);
+    create_dir_all(&package_dir).expect("plugin dir");
+    let wasm_path = package_dir.join("plugin.wasm");
+    write(&wasm_path, WASM_IMPORT_BEARING).expect("wasm");
+    let sha256 = hash_file(&wasm_path).expect("wasm hash");
+    write(
+        package_dir.join("plugin.json"),
+        json!({
+            "name": dir_name,
+            "version": "1.0.0",
+            "sdk": "*",
+            "target": "wasm",
+            "entry": {
+                "kind": "wasm",
+                "path": "plugin.wasm",
+                "export": "handle"
+            },
+            "artifact": {
+                "path": "plugin.wasm",
+                "sha256": sha256
+            },
+            "cli": {
+                "command": command,
+                "help": format!("maw {command}")
+            }
+        })
+        .to_string(),
+    )
+    .expect("manifest");
+}
+
+/// #72 blocker 1: user-facing `maw <plugin>` must load a WASM module that imports host
+/// functions. The old MVP runtime rejected any import-bearing module ("unresolved
+/// imports" / "failed to parse WebAssembly module"); the Extism runtime instantiates it
+/// and runs it. This drives the real CLI dispatch entrypoint end to end.
+#[test]
+fn dispatch_cli_plugin_runs_import_bearing_wasm_on_extism_runtime() {
+    let _guard = env_lock().lock().expect("env lock");
+    let _restore = EnvRestore::capture();
+    let root = temp_dir("import-bearing-wasm");
+    let plugins_dir = root.join("plugins");
+    create_dir_all(&plugins_dir).expect("plugins dir");
+    write_ship_tier_wasm_plugin(&plugins_dir, "triggers-demo", "triggers");
+    std::env::set_var("MAW_PLUGINS_DIR", &plugins_dir);
+
+    let dispatched = run_cli(&args(&["triggers"]));
+
+    assert_eq!(dispatched.code, 0, "{}", dispatched.stderr);
+    assert!(
+        dispatched.stdout.contains(WASM_IMPORT_BEARING_MARKER),
+        "import-bearing wasm did not run on the Extism dispatch path: {}",
+        dispatched.stdout
+    );
+    assert!(
+        !dispatched.stderr.contains("unresolved imports"),
+        "CLI dispatch still rejects imports via the MVP runtime: {}",
+        dispatched.stderr
+    );
+    assert!(
+        !dispatched
+            .stderr
+            .contains("failed to parse WebAssembly module"),
+        "CLI dispatch still parses wasm via the MVP runtime: {}",
+        dispatched.stderr
+    );
+
+    remove_dir_all(root).expect("cleanup");
 }
 
 #[test]
@@ -351,7 +421,11 @@ fn dispatch_cli_plugin_prefers_wasm_artifact_over_bun_dev_runtime() {
     let dispatched = run_cli(&args(&["weather", "report"]));
 
     assert_eq!(dispatched.code, 0, "{}", dispatched.stderr);
-    assert!(dispatched.stdout.is_empty(), "{}", dispatched.stdout);
+    assert!(
+        dispatched.stdout.contains(WASM_IMPORT_BEARING_MARKER),
+        "wasm artifact did not run on the Extism runtime: {}",
+        dispatched.stdout
+    );
     assert!(dispatched.stderr.is_empty(), "{}", dispatched.stderr);
     assert!(
         !bun_args.exists(),
@@ -380,7 +454,11 @@ fn dispatch_cli_plugin_raw_wasm_field_beats_bun_dev_string_ts_entry() {
     let dispatched = run_cli(&args(&["weather", "report"]));
 
     assert_eq!(dispatched.code, 0, "{}", dispatched.stderr);
-    assert!(dispatched.stdout.is_empty(), "{}", dispatched.stdout);
+    assert!(
+        dispatched.stdout.contains(WASM_IMPORT_BEARING_MARKER),
+        "raw wasm field did not run on the Extism runtime: {}",
+        dispatched.stdout
+    );
     assert!(dispatched.stderr.is_empty(), "{}", dispatched.stderr);
     assert!(
         !bun_args.exists(),
@@ -417,12 +495,17 @@ fn unknown_plugin_command_falls_through_to_cli_error() {
     remove_dir_all(root).expect("cleanup");
 }
 
-const WASM_HANDLE_ZERO: &[u8] = &[
-    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x07, 0x01, 0x60, 0x02, 0x7f, 0x7f, 0x01,
-    0x7f, 0x03, 0x02, 0x01, 0x00, 0x05, 0x03, 0x01, 0x00, 0x01, 0x07, 0x13, 0x02, 0x06, 0x6d, 0x65,
-    0x6d, 0x6f, 0x72, 0x79, 0x02, 0x00, 0x06, 0x68, 0x61, 0x6e, 0x64, 0x6c, 0x65, 0x00, 0x00, 0x0a,
-    0x06, 0x01, 0x04, 0x00, 0x41, 0x00, 0x0b,
-];
+/// A real Extism-compiled WASM plugin that imports host functions (the extism env
+/// imports) yet makes zero maw host calls on the empty-arg path, so it runs to a
+/// deterministic result on the shipping Extism runtime without a seeded host. The old
+/// `MvpWasmInvokeRuntime` toy parser rejected any import-bearing module outright, so
+/// this doubles as proof the CLI dispatch path now uses the Extism runtime (#72
+/// blocker 1). Byte-for-byte copy of the committed wasm-parity `triggers` fixture.
+const WASM_IMPORT_BEARING: &[u8] = include_bytes!("fixtures/wasm-dispatch/import-bearing.wasm");
+
+/// Stable substring of `WASM_IMPORT_BEARING`'s deterministic stdout — asserting on it
+/// proves the module actually instantiated and ran under Extism.
+const WASM_IMPORT_BEARING_MARKER: &str = "No triggers configured";
 
 #[test]
 fn plugin_ls_scans_home_maw_plugins_by_default() {

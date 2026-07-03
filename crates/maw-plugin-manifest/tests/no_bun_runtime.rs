@@ -40,6 +40,8 @@ fn ts_invoke_refuses_without_delegating_to_bun() {
         &InvokeContext {
             source: InvokeSource::Cli,
             args: vec!["--proof".to_owned()],
+            cwd: None,
+            home: None,
         },
         &mut MvpWasmInvokeRuntime,
     );

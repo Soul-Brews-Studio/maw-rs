@@ -1021,12 +1021,12 @@ fn run_plugin_manifest_invoke_plan(
     if plugin.disabled {
         return plugin_manifest_usage_error(&format!("plugin '{plugin_name}' is disabled"));
     }
-    let ctx = InvokeContext { source, args };
+    let ctx = InvokeContext::new(source, args);
     if plugin.kind == LoadedPluginKind::Ts && !plugin_manifest_invoke_is_universal(&ctx) {
         return plugin_manifest_ts_refusal(plugin);
     }
 
-    let mut runtime = ExtismWasmInvokeRuntime::default();
+    let mut runtime = ExtismWasmInvokeRuntime::default().with_manifest_fs_roots();
     let result = invoke_plugin(plugin, &ctx, &mut runtime);
     CliOutput {
         code: 0,

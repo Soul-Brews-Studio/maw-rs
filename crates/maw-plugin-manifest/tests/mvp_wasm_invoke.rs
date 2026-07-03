@@ -28,6 +28,8 @@ fn invoke_source_and_mvp_ts_runtime_report_metadata_contracts() {
         &InvokeContext {
             source: InvokeSource::Api,
             args: vec!["one".to_owned()],
+            cwd: None,
+            home: None,
         },
     );
 
@@ -206,6 +208,8 @@ fn cli() -> InvokeContext {
     InvokeContext {
         source: InvokeSource::Cli,
         args: Vec::new(),
+        cwd: None,
+        home: None,
     }
 }
 
