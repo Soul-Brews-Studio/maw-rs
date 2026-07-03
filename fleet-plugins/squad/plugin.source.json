@@ -1,0 +1,14 @@
+{
+  "name": "squad",
+  "version": "0.1.0",
+  "sdk": "^1.0.0",
+  "description": "The lead IS the team — start / join / say / ls, implicit to the repo you run from.",
+  "author": "athena-oracle",
+  "license": "MIT",
+  "entry": "src/plugin.ts",
+  "capabilities": ["fs:read:teams", "fs:write:teams", "tmux:read", "proc:exec:date"],
+  "cli": {
+    "command": "squad",
+    "help": "maw squad <start|join|say|ls>"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "squad",
+  "version": "0.1.0",
+  "sdk": "^1.0.0",
+  "runtime": "bun-dev",
+  "target": "js",
+  "entry": "impl.ts",
+  "description": "The lead IS the team. Run from the lead oracle's repo — start / join / say / ls, no team name typed. Loud & clear, no ceremony.",
+  "author": "athena-oracle",
+  "license": "MIT",
+  "weight": 0,
+  "schemaVersion": 1,
+  "cli": {
+    "command": "squad",
+    "help": "maw squad <start|join|say|ls> — start | join <oracle> [color] | say <member> <text> | ls  (team = current repo)"
+  }
+}
