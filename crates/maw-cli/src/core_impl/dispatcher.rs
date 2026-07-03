@@ -46,7 +46,7 @@ use maw_plugin_manifest::{
     build_js_plugin_dir, discover_packages, hash_file, import_plugin_symbol, infer_plugin_capabilities,
     init_js_plugin_dir, install_built_plugin_dir, invoke_plugin, load_manifest_from_dir,
     parse_manifest, DiscoverPackagesOptions, ExtismWasmInvokeRuntime, HOST_FN_NAMES, InvokeContext,
-    InvokeResult, InvokeSource, LoadedPlugin, LoadedPluginKind, MvpWasmInvokeRuntime,
+    InvokeResult, InvokeSource, LoadedPlugin, LoadedPluginKind,
     PluginManifest, PluginTier,
 };
 use maw_plugin_scaffold::{
@@ -479,7 +479,11 @@ fn dispatch_cli_plugin(argv: &[String]) -> Option<CliOutput> {
         return Some(dispatch_ts_cli_plugin(plugin, &ctx));
     }
 
-    let mut runtime = MvpWasmInvokeRuntime;
+    // Ship-tier WASM dispatch runs on the real Extism runtime so plugins that import
+    // host functions (maw.exec.*, maw.fs.*, …) load. The MvpWasmInvokeRuntime toy
+    // parser rejected any module with imports and is retained only for no-deps unit
+    // tests in maw-plugin-manifest.
+    let mut runtime = ExtismWasmInvokeRuntime::default();
     Some(render_cli_plugin_result(invoke_plugin(plugin, &ctx, &mut runtime)))
 }
 
