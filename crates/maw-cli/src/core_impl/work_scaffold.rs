@@ -8,7 +8,7 @@ const DISPATCH_93: &[DispatcherEntry] = &[
     DispatcherEntry { command: "snapshots", handler: Handler::Sync(snapshots_run_command) },
 ];
 
-const WORK_USAGE: &str = "usage: maw work <repo> [task] [--layout nested|legacy]";
+const WORK_USAGE: &str = "usage: maw work <repo|.|path|url> [task] [--wt [slug]] [--fresh] [--name <stable>] [-e <engine>] [--layout nested|legacy]";
 const AWAKE_USAGE: &str = "usage: maw awake <name> [wake flags...]";
 const SCAFFOLD_USAGE: &str = "usage: maw scaffold <name> [--rust|--as] [--dest <path>] [--dry-run]";
 const NEW_USAGE: &str = "usage: maw new [session-name] [--path|-p <dir>] [--window <name>] [--cmd|-c <cmd>|--claude] [--shell] [--split [--right|--horizontal|--bottom|--vertical]] [--print|--json] [--attach|-a] [--no-attach] [--dry-run] [--no-fleet]";
@@ -766,7 +766,7 @@ fn new_normalize_startup_command(raw: Option<&str>) -> Result<Option<String>, St
 }
 
 fn new_claude_startup_command(name: &str, cwd: &std::path::Path, parent: Option<&str>, session_id: Option<&str>) -> String {
-    let configured = workon_build_command_in_dir(name, cwd);
+    let configured = workon_build_command_in_dir(name, cwd, None);
     let command = if new_looks_like_claude_command(&configured) { configured } else { "claude".to_owned() };
     let command = format!("env CLAUDECODE=1 CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 {command}");
     new_prefix_spawn_session_env(&command, parent, session_id, cwd)

@@ -64,14 +64,30 @@ mod workon_kind_tests {
         std::env::remove_var("TMUX");
 
         let repo = workon_kind_repo(&root, "foo");
-        let options = WorkonOptions { repo: "foo".to_owned(), task: None, layout: WorkonLayout::Nested };
+        let options = WorkonOptions {
+            repo: "foo".to_owned(),
+            task: None,
+            wt: None,
+            fresh: false,
+            name: None,
+            engine: None,
+            layout: WorkonLayout::Nested,
+        };
         let mut runner = WorkonKindMockTmux::default();
         let (stdout, _attach) = workon_cmd_with_runner(&options, &repo, &mut runner).expect("oracle workon");
         assert!(stdout.contains("fleet registered foo:foo"), "{stdout}");
         assert!(root.join("state/fleet/foo.json").exists());
 
         let repo = workon_kind_repo(&root, "bar-oracle");
-        let options = WorkonOptions { repo: "bar-oracle".to_owned(), task: None, layout: WorkonLayout::Nested };
+        let options = WorkonOptions {
+            repo: "bar-oracle".to_owned(),
+            task: None,
+            wt: None,
+            fresh: false,
+            name: None,
+            engine: None,
+            layout: WorkonLayout::Nested,
+        };
         let mut runner = WorkonKindMockTmux::default();
         let (stdout, _attach) = workon_cmd_with_runner(&options, &repo, &mut runner).expect("project workon");
         assert!(!stdout.contains("fleet registered"), "{stdout}");
