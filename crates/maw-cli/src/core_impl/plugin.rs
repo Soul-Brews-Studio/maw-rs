@@ -4,7 +4,7 @@ const DISPATCH_102: &[DispatcherEntry] = &[DispatcherEntry {
 }];
 
 const PLUGIN_USAGE: &str = "usage: maw plugin <ls|info|install|remove|enable|disable|init|create|build|dev> [args]\n  ls/list                  list installed plugins\n  info <name>              show manifest and resolved paths\n  install <dir> --root R   install a built plugin directory\n  remove <name> --yes      archive installed plugin directory (Nothing Deleted)\n  enable <name...>         enable plugins in the local disabled registry\n  disable <name>           disable one plugin in the local disabled registry\n  init|create <name> [--rust] create file-only JS or Rust WASM plugin scaffold\n  build [dir] [--watch]    build Rust WASM plugins with cargo; JS/TS refused unless prebuilt WASM\n  dev [dir]                bounded one-build dev alias for Rust WASM plugins";
-const PLUGIN_TS_REFUSAL: &str = "plugin build/dev: JS/TS source builds are intentionally deferred in maw-rs to preserve ZERO-BUN (#59); no Bun/JS compiler is vendored and no Bun subprocess fallback is available. Supported path: Rust-WASM plugins via `maw plugin create --rust <name>` then `maw plugin build`, or provide a prebuilt WASM artifact with target=wasm and a relative wasm path in plugin.json.";
+const PLUGIN_TS_REFUSAL: &str = "plugin build/dev: JS/TS source builds are not ship-tier artifacts in maw-rs. Build/dev supports Rust-WASM or prebuilt WASM; CLI dispatch can run explicit dev-tier Bun only when plugin.json sets runtime=\"bun-dev\" (loud banner, unsandboxed). No maw-js subprocess fallback is available. Supported path: Rust-WASM plugins via `maw plugin create --rust <name>` then `maw plugin build`, or provide a prebuilt WASM artifact with target=wasm and a relative wasm path in plugin.json.";
 
 fn plugin_run_command(argv: &[String]) -> CliOutput {
     match plugin_parse_kind(argv).and_then(|kind| plugin_dispatch_kind(kind, &argv[1..])) {
@@ -649,7 +649,7 @@ mod plugin_native_tests {
             let out = plugin_run_command(&plugin_args(&[sub, &root.join("alpha").display().to_string()]));
             assert_eq!(out.code, 2);
             assert!(out.stdout.is_empty());
-            assert!(out.stderr.contains("JS/TS source builds are intentionally deferred"));
+            assert!(out.stderr.contains("JS/TS source builds are not ship-tier artifacts"));
             assert!(!out.stderr.contains("DELEGATED-MAW"));
         }
     }

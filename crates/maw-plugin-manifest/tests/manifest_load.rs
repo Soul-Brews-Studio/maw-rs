@@ -48,7 +48,7 @@ fn load_manifest_from_dir_resolves_wasm_plugin_like_maw_js() {
 }
 
 #[test]
-fn load_manifest_from_dir_uses_entry_before_artifact_before_wasm() {
+fn load_manifest_from_dir_raw_wasm_field_wins_over_ts_entry_and_js_artifact() {
     let dir = make_temp_dir("entry-precedence");
     write(
         dir.join("index.ts"),
@@ -72,8 +72,8 @@ fn load_manifest_from_dir_uses_entry_before_artifact_before_wasm() {
     let loaded = load_manifest_from_dir(&dir)
         .expect("load result")
         .expect("plugin");
-    assert_eq!(loaded.kind, LoadedPluginKind::Ts);
-    assert_eq!(loaded.entry_path, Some(loaded.dir.join("index.ts")));
+    assert_eq!(loaded.kind, LoadedPluginKind::Wasm);
+    assert_eq!(loaded.entry_path, None);
     assert_eq!(loaded.wasm_path, loaded.dir.join("plugin.wasm"));
 
     remove_dir_all(loaded.dir).expect("cleanup");

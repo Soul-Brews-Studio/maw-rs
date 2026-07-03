@@ -189,15 +189,15 @@ pub fn load_manifest_from_dir(dir: &Path) -> Result<Option<LoadedPlugin>, String
     let has_wasm_entry = manifest
         .entry
         .as_ref()
-        .is_some_and(|entry| {
-            Path::new(entry)
-                .extension()
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("wasm"))
-        });
+        .is_some_and(|entry| manifest_path_has_wasm_extension(entry));
+    let has_wasm_artifact = manifest.wasm.is_some()
+        || has_wasm_entry
+        || manifest
+            .artifact
+            .as_ref()
+            .is_some_and(|artifact| manifest_path_has_wasm_extension(&artifact.path));
     let has_artifact_js = manifest.artifact.as_ref().is_some_and(|artifact| {
-        !Path::new(&artifact.path)
-            .extension()
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("wasm"))
+        !manifest_path_has_wasm_extension(&artifact.path)
     });
     let effective_entry = manifest.entry.as_ref().or_else(|| {
         if has_artifact_js {
@@ -212,14 +212,23 @@ pub fn load_manifest_from_dir(dir: &Path) -> Result<Option<LoadedPlugin>, String
             .wasm
             .as_ref()
             .or_else(|| manifest.entry.as_ref().filter(|_| has_wasm_entry))
+            .or_else(|| {
+                manifest
+                    .artifact
+                    .as_ref()
+                    .filter(|artifact| manifest_path_has_wasm_extension(&artifact.path))
+                    .map(|artifact| &artifact.path)
+            })
             .map_or_else(PathBuf::new, |wasm| resolve_dir_path(dir, wasm)),
-        entry_path: effective_entry.filter(|_| !has_wasm_entry)
+        entry_path: effective_entry.filter(|_| !has_wasm_artifact)
             .map(|entry| resolve_dir_path(dir, entry)),
         wasm_export: manifest
             .entry_export
             .clone()
             .unwrap_or_else(|| "handle".to_owned()),
-        kind: if (has_entry && !has_wasm_entry) || has_artifact_js {
+        kind: if has_wasm_artifact {
+            LoadedPluginKind::Wasm
+        } else if has_entry || has_artifact_js {
             LoadedPluginKind::Ts
         } else {
             LoadedPluginKind::Wasm
@@ -228,6 +237,12 @@ pub fn load_manifest_from_dir(dir: &Path) -> Result<Option<LoadedPlugin>, String
         dir: dir.to_path_buf(),
         manifest,
     }))
+}
+
+fn manifest_path_has_wasm_extension(value: &str) -> bool {
+    Path::new(value)
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("wasm"))
 }
 
 /// Scan plugin roots and return packages that pass maw-js Phase A registry gates.
