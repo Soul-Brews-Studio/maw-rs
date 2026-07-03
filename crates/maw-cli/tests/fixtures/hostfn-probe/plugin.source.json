@@ -1,0 +1,9 @@
+{
+  "name": "hostfnprobe",
+  "version": "0.0.1",
+  "sdk": "^1.0.0",
+  "description": "probe: imports and calls one maw host fn via @maw-rs/wasm-sdk",
+  "entry": "src/plugin.ts",
+  "capabilities": ["proc:exec:true"],
+  "cli": { "command": "hostfnprobe", "help": "maw hostfnprobe" }
+}

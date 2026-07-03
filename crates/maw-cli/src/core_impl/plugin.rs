@@ -336,7 +336,8 @@ impl PluginBuildRunner for PluginRealBuildRunner {
         if !asc.is_file() {
             return Err(plugin_assemblyscript_missing_error(sdk_dir, &asc));
         }
-        let args = plugin_assemblyscript_args(dir, entry_path, output_path);
+        plugin_ensure_sdk_self_link(sdk_dir)?;
+        let args = plugin_assemblyscript_args(sdk_dir, dir, entry_path, output_path);
         let child = std::process::Command::new(&asc)
             .args(args)
             .current_dir(dir)
@@ -626,6 +627,7 @@ fn plugin_cargo_build_args() -> Vec<String> {
 }
 
 fn plugin_assemblyscript_args(
+    sdk_dir: &std::path::Path,
     dir: &std::path::Path,
     entry_path: &std::path::Path,
     output_path: &std::path::Path,
@@ -633,10 +635,17 @@ fn plugin_assemblyscript_args(
     let entry_arg = entry_path.strip_prefix(dir).unwrap_or(entry_path);
     let output_arg = output_path.strip_prefix(dir).unwrap_or(output_path);
     let abort_export = entry_arg.with_extension("");
+    // Anchor bare-import resolution at the pinned SDK's node_modules so a plugin's
+    // .ts can `import ... from "@maw-rs/wasm-sdk"` (or the "@extism/as-pdk" it
+    // re-exports) with no per-plugin install. asc walks --path like node_modules;
+    // plugin_ensure_sdk_self_link makes @maw-rs/wasm-sdk resolve to the SDK itself.
+    let sdk_modules = sdk_dir.join("node_modules");
     vec![
         path_string(entry_arg),
         "--outFile".to_owned(),
         path_string(output_arg),
+        "--path".to_owned(),
+        path_string(&sdk_modules),
         "--runtime".to_owned(),
         "stub".to_owned(),
         "--use".to_owned(),
@@ -689,6 +698,39 @@ fn plugin_assemblyscript_missing_error(sdk_dir: &std::path::Path, asc: &std::pat
         path_string(asc),
         path_string(sdk_dir)
     )
+}
+
+// Link the pinned SDK into its own node_modules as @maw-rs/wasm-sdk so `asc --path
+// <sdk>/node_modules` resolves that bare import to the SDK source (asc keys package
+// resolution on the scoped directory name, which only the SDK dir name lacks). The
+// link stays inside the pinned SDK dir — no network, no floating resolution — and is
+// idempotent so repeated builds are cheap.
+fn plugin_ensure_sdk_self_link(sdk_dir: &std::path::Path) -> Result<(), String> {
+    let scope = sdk_dir.join("node_modules").join("@maw-rs");
+    let link = scope.join("wasm-sdk");
+    if link.exists() {
+        return Ok(());
+    }
+    // Clear a stale/broken link so the create below stays idempotent.
+    let _ = std::fs::remove_file(&link);
+    std::fs::create_dir_all(&scope)
+        .map_err(|error| format!("plugin build: wasm-sdk resolution dir create failed: {error}"))?;
+    plugin_symlink_dir(sdk_dir, &link).map_err(|error| {
+        format!(
+            "plugin build: wasm-sdk self-link failed: {error}\nexpected link {}",
+            path_string(&link)
+        )
+    })
+}
+
+#[cfg(unix)]
+fn plugin_symlink_dir(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(windows)]
+fn plugin_symlink_dir(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_dir(target, link)
 }
 
 fn plugin_cargo_failure_detail(output: &PluginCargoOutput) -> String {
@@ -815,8 +857,8 @@ fn plugin_error(code: i32, message: &str) -> CliOutput { CliOutput { code, stdou
 mod plugin_native_tests {
     use super::{
         path_string, plugin_assemblyscript_args, plugin_build_or_dev_with_runner,
-        plugin_cargo_build_args, plugin_run_command, PluginBuildRunner, PluginCargoOutput,
-        DISPATCH_102,
+        plugin_cargo_build_args, plugin_run_command, plugin_wasm_sdk_dir, PluginBuildRunner,
+        PluginCargoOutput, DISPATCH_102,
     };
     use std::path::{Path, PathBuf};
 
@@ -864,12 +906,13 @@ mod plugin_native_tests {
 
         fn plugin_run_assemblyscript(
             &mut self,
-            _sdk_dir: &Path,
+            sdk_dir: &Path,
             dir: &Path,
             entry_path: &Path,
             output_path: &Path,
         ) -> Result<PluginCargoOutput, String> {
-            self.assemblyscript_calls.push(plugin_assemblyscript_args(dir, entry_path, output_path));
+            self.assemblyscript_calls
+                .push(plugin_assemblyscript_args(sdk_dir, dir, entry_path, output_path));
             if let Some(error) = &self.assemblyscript_error {
                 return Err(error.clone());
             }
@@ -911,13 +954,22 @@ mod plugin_native_tests {
         let mut runner = FakeBuildRunner::default();
         let out = plugin_build_or_dev_with_runner("build", &plugin_args(&[&dir.display().to_string()]), &mut runner).expect("build");
         assert!(runner.cargo_calls.is_empty(), "TS build must not call cargo");
+        let sdk_dir = plugin_wasm_sdk_dir().expect("pinned wasm-sdk dir");
         assert_eq!(
             runner.assemblyscript_calls,
             vec![plugin_assemblyscript_args(
+                &sdk_dir,
                 &canonical_dir,
                 &canonical_dir.join("index.ts"),
                 &canonical_dir.join(".maw-build").join("plugin.wasm"),
             )]
+        );
+        let args = &runner.assemblyscript_calls[0];
+        let path_index = args.iter().position(|arg| arg == "--path").expect("asc --path present");
+        assert_eq!(
+            args[path_index + 1],
+            path_string(sdk_dir.join("node_modules")),
+            "asc must resolve bare imports against the pinned SDK node_modules"
         );
         assert!(out.stdout.starts_with("ship tier ready: plugin.wasm (sha256 "), "{}", out.stdout);
         assert!(

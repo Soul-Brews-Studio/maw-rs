@@ -1,0 +1,24 @@
+{
+  "artifact": {
+    "path": "./plugin.wasm",
+    "sha256": "sha256:104e93aad68973817f400503f1c43116da3cda6961f4fdc097f82c64dbfc6d04"
+  },
+  "capabilities": [
+    "proc:exec:true"
+  ],
+  "cli": {
+    "command": "hostfnprobe",
+    "help": "maw hostfnprobe"
+  },
+  "description": "probe: imports and calls one maw host fn via @maw-rs/wasm-sdk",
+  "entry": {
+    "export": "handle",
+    "kind": "wasm",
+    "path": "plugin.wasm"
+  },
+  "name": "hostfnprobe",
+  "sdk": "^1.0.0",
+  "target": "wasm",
+  "version": "0.0.1",
+  "wasm": "./plugin.wasm"
+}
