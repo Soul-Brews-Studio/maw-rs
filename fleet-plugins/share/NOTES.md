@@ -38,6 +38,9 @@ No `plugin.wasm` or `plugin.source.json` is committed yet. Per `fleet-plugins/RE
   reveal them because those commands explicitly return the share URL.
 - The state directory is chmodded to `700`; state files are written `600`.
 - No secrets, URLs, or keys are committed to this repository.
+- The deployed server `ssh.clubsxai.com` currently has a Cloudflare EDGE gate that
+  returns 403 to the sshx gRPC Open call. This is separate from
+  `SSHX_BOARD_PASSWORD`; real use needs a self-hosted server or an edge allowlist.
 
 ## v1 roadmap stubs
 

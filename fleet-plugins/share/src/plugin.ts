@@ -3,9 +3,21 @@
 // maw-rs runs bun-dev plugins with cwd = the plugin directory. Share does not need
 // the caller cwd in v0; labels default to the current tmux session or "default".
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "fs";
+import {
+  chmodSync,
+  closeSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "fs";
 import { basename, join } from "path";
-import { homedir } from "os";
+import { homedir, tmpdir } from "os";
 
 declare const Bun: any;
 declare const process: any;
@@ -167,6 +179,46 @@ function parseSessionUrl(line: string): string {
   return line;
 }
 
+function createStderrCapture(): { dir: string; path: string; fd: number } {
+  const dir = mkdtempSync(join(tmpdir(), "maw-share-"));
+  chmodSync(dir, 0o700);
+  const path = join(dir, "sshx.stderr.log");
+  const fd = openSync(path, "w+");
+  return { dir, path, fd };
+}
+
+function cleanupStderrCapture(capture: { dir: string; fd?: number }): void {
+  if (capture.fd !== undefined) {
+    try {
+      closeSync(capture.fd);
+    } catch {
+      // best effort
+    }
+    capture.fd = undefined;
+  }
+  try {
+    rmSync(capture.dir, { recursive: true, force: true });
+  } catch {
+    // best effort
+  }
+}
+
+function stderrTail(path: string, maxLines = 8, maxChars = 2000): string {
+  try {
+    const text = readFileSync(path, "utf-8").trim();
+    if (!text) return "";
+    const tail = text.split(/\r?\n/).slice(-maxLines).join("\n").trim();
+    return tail.length > maxChars ? tail.slice(-maxChars).trimStart() : tail;
+  } catch {
+    return "";
+  }
+}
+
+function startupErrorMessage(error: unknown, stderr: string): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return stderr ? `${message} — ${stderr}` : message;
+}
+
 function stateFiles(): string[] {
   const dir = ensureStateDir();
   return readdirSync(dir)
@@ -184,12 +236,19 @@ export async function start(log: Log, args: string[]): Promise<void> {
 
   const bin = requireSshxBinary();
   const server = shareServer();
-  const child = Bun.spawn([bin, "--quiet", "--server", server], {
-    stdout: "pipe",
-    stderr: "ignore",
-    stdin: "ignore",
-    detached: true,
-  });
+  const stderr = createStderrCapture();
+  let child: any;
+  try {
+    child = Bun.spawn([bin, "--quiet", "--server", server], {
+      stdout: "pipe",
+      stderr: stderr.fd,
+      stdin: "ignore",
+      detached: true,
+    });
+  } catch (error) {
+    cleanupStderrCapture(stderr);
+    throw error;
+  }
 
   let url: string;
   try {
@@ -200,10 +259,17 @@ export async function start(log: Log, args: string[]): Promise<void> {
     } catch {
       // best effort startup cleanup
     }
-    throw new Error(error?.message || String(error));
+    await Promise.race([
+      child.exited.catch(() => undefined),
+      new Promise((resolve) => setTimeout(resolve, 250)),
+    ]);
+    const tail = stderrTail(stderr.path);
+    cleanupStderrCapture(stderr);
+    throw new Error(startupErrorMessage(error, tail));
   }
 
   child.unref();
+  cleanupStderrCapture(stderr);
   writeState({ name: label, url, pid: child.pid, startedAt: new Date().toISOString() });
   log(url);
 }
