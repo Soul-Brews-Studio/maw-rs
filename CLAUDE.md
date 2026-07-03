@@ -10,13 +10,29 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Both must pass before any PR. No source file exceeds 250 lines.
+Both must pass before any PR.
 
 ## Branches
 
 - `main` — stable, protected. Never push or merge directly.
 - `alpha` — integration branch. All PRs target `alpha`.
 - `agents/*` — throwaway worktree branches for agent/coder work.
+
+## Releases (CalVer)
+
+Version scheme: `v<YY>.<M>.<SEQ>` — two-digit year, unpadded month, release
+**sequence within that month**. The last number is a counter, not a day of
+the month: `v26.7.3`, `v26.7.4`, and `v26.7.5` all shipped on 2026-07-03.
+The exact commit and build time are embedded in the binary (`maw --version`),
+not in the version number.
+
+Cut flow: PRs squash-merge into `alpha`; a release promotes `alpha` → `main`
+via a **merge-commit** PR, then tags `v<YY>.<M>.<SEQ>` on `main` and publishes
+a GitHub release. GitHub auto-closes `Fixes #N` only on default-branch merges,
+so close issues by hand when their PR lands on `alpha`.
+
+macOS install note: copying a new binary over an installed one can SIGKILL on
+next run (stale code-sign cache on the reused inode) — `rm` first, then `cp`.
 
 ## Architecture
 
@@ -42,4 +58,5 @@ Run `cargo tree` for the current, authoritative dependency graph.
 
 See `docs/` for deeper references — including the parity matrix, wire
 protocol, "adding a command" guide, agent/coder team spawn conventions, and
-the WASM migration design.
+the WASM migration design. Shipped fleet plugin artifacts (WASM ship tier,
+sha256 pin lifecycle) live in `fleet-plugins/` — see its README.
