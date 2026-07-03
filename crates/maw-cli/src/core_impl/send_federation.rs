@@ -6,6 +6,7 @@ struct SendArgs {
     from: Option<String>,
     approve: bool,
     trust: bool,
+    dry_run: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -55,6 +56,7 @@ fn send_args_for_inbox_hey(query: &str, message: &str) -> SendArgs {
         from: None,
         approve: false,
         trust: false,
+        dry_run: false,
     }
 }
 
@@ -66,7 +68,18 @@ async fn run_send_like_async_with_args(
     let config = load_hey_config();
     let mut tmux = TmuxClient::local();
     let sessions = route_sessions_from_tmux(&mut tmux);
-    match resolve_route_target(&send_args.target, &config.route, &sessions) {
+    let mut runner = maw_tmux::CommandTmuxRunner::new();
+    let result = resolve_send_route_target(
+        &send_args.target,
+        &config.route,
+        &sessions,
+        std::env::var_os("TMUX").is_some(),
+        &mut runner,
+    );
+    if send_args.dry_run {
+        return send_dry_run_output(command, &send_args, &result);
+    }
+    match result {
         RouteResult::Local { target } | RouteResult::SelfNode { target } => send_local_message(
             command,
             &mut tmux,
@@ -315,6 +328,7 @@ fn parse_send_args(command: &str, argv: &[String]) -> Result<SendArgs, String> {
     let mut positional = Vec::new();
     let mut approve = false;
     let mut trust = false;
+    let mut dry_run = false;
     let mut index = 0;
     while index < argv.len() {
         match argv[index].as_str() {
@@ -322,6 +336,7 @@ fn parse_send_args(command: &str, argv: &[String]) -> Result<SendArgs, String> {
             "--no-inbox" => inbox = Some(false),
             "--approve" => approve = true,
             "--trust" => trust = true,
+            "--dry-run" => dry_run = true,
             "--from" => {
                 let Some(value) = argv.get(index + 1) else {
                     return Err(format!("{command}: missing --from value"));
@@ -350,6 +365,7 @@ fn parse_send_args(command: &str, argv: &[String]) -> Result<SendArgs, String> {
         from,
         approve,
         trust,
+        dry_run,
     })
 }
 
@@ -358,8 +374,90 @@ fn send_usage_error(command: &str, message: &str) -> CliOutput {
         code: 2,
         stdout: String::new(),
         stderr: format!(
-            "{message}\nusage: maw-rs {command} <target> <message> [--inbox|--no-inbox] [--from <oracle:node>] [--approve] [--trust]\n"
+            "{message}\nusage: maw-rs {command} <target> <message> [--inbox|--no-inbox] [--from <oracle:node>] [--approve] [--trust] [--dry-run]\n"
         ),
+    }
+}
+
+fn resolve_send_route_target<R: maw_tmux::TmuxRunner>(
+    query: &str,
+    config: &RouteConfig,
+    sessions: &[RouteSession],
+    inside_tmux: bool,
+    runner: &mut R,
+) -> RouteResult {
+    let current_session = if is_self_target_alias(query) {
+        match send_current_session_name(inside_tmux, runner) {
+            Ok(current_session) => current_session,
+            Err(detail) => {
+                return RouteResult::Error {
+                    reason: "me_needs_tmux".to_owned(),
+                    detail,
+                    hint: Some("run inside tmux so maw can resolve the current session".to_owned()),
+                }
+            }
+        }
+    } else {
+        None
+    };
+    resolve_route_target_with_current_session(query, config, sessions, current_session.as_deref())
+}
+
+fn send_current_session_name<R: maw_tmux::TmuxRunner>(
+    inside_tmux: bool,
+    runner: &mut R,
+) -> Result<Option<String>, String> {
+    if !inside_tmux {
+        return Ok(None);
+    }
+    let raw = runner
+        .run(
+            "display-message",
+            &["-p".to_owned(), "#{session_name}".to_owned()],
+        )
+        .map_err(|error| {
+            format!("'me' needs a tmux context: tmux display-message failed: {}", error.message)
+        })?;
+    let session = raw.trim();
+    if session.is_empty() {
+        return Err("'me' needs a tmux context: tmux did not report a current session".to_owned());
+    }
+    Ok(Some(session.to_owned()))
+}
+
+fn send_dry_run_output(command: &str, args: &SendArgs, result: &RouteResult) -> CliOutput {
+    match result {
+        RouteResult::Local { target } => CliOutput {
+            code: 0,
+            stdout: format!("dry-run: {command} {} -> local {target}\n", args.target),
+            stderr: String::new(),
+        },
+        RouteResult::SelfNode { target } => CliOutput {
+            code: 0,
+            stdout: format!("dry-run: {command} {} -> self-node {target}\n", args.target),
+            stderr: String::new(),
+        },
+        RouteResult::Peer {
+            peer_url,
+            target,
+            node,
+        } => CliOutput {
+            code: 0,
+            stdout: format!(
+                "dry-run: {command} {} -> peer {node} {target} via {peer_url}\n",
+                args.target
+            ),
+            stderr: String::new(),
+        },
+        RouteResult::Error { detail, hint, .. } => CliOutput {
+            code: 2,
+            stdout: String::new(),
+            stderr: if let Some(hint) = hint {
+                format!("{command}: {detail}; {hint}\n")
+            } else {
+                format!("{command}: {detail}\n")
+            },
+        },
     }
 }
 
@@ -1049,6 +1147,32 @@ fn format_reply_list(body: &str) -> String {
 mod send_acl_hotpath_tests {
     use super::*;
 
+    #[derive(Debug, Default)]
+    struct SendFakeTmuxRunner {
+        current_session: Option<Result<String, String>>,
+        calls: Vec<(String, Vec<String>)>,
+    }
+
+    impl maw_tmux::TmuxRunner for SendFakeTmuxRunner {
+        fn run(
+            &mut self,
+            subcommand: &str,
+            args: &[String],
+        ) -> Result<String, maw_tmux::TmuxError> {
+            self.calls.push((subcommand.to_owned(), args.to_vec()));
+            match subcommand {
+                "display-message" => self
+                    .current_session
+                    .clone()
+                    .unwrap_or_else(|| Ok(String::new()))
+                    .map_err(maw_tmux::TmuxError::new),
+                other => Err(maw_tmux::TmuxError::new(format!(
+                    "unexpected tmux command {other}"
+                ))),
+            }
+        }
+    }
+
     struct SendAclEnvGuard {
         _home: EnvVarRestore,
         _maw_home: EnvVarRestore,
@@ -1089,7 +1213,104 @@ mod send_acl_hotpath_tests {
     }
 
     fn send_acl_args(target: &str, text: &str) -> SendArgs {
-        SendArgs { target: target.to_owned(), text: text.to_owned(), inbox: None, from: None, approve: false, trust: false }
+        SendArgs { target: target.to_owned(), text: text.to_owned(), inbox: None, from: None, approve: false, trust: false, dry_run: false }
+    }
+
+    fn send_route_window(index: u32, name: &str) -> RouteWindow {
+        RouteWindow {
+            index,
+            name: name.to_owned(),
+            active: index == 0,
+            kind: None,
+        }
+    }
+
+    fn send_route_session(name: &str, windows: Vec<RouteWindow>) -> RouteSession {
+        RouteSession {
+            name: name.to_owned(),
+            windows,
+            source: None,
+        }
+    }
+
+    #[test]
+    fn send_self_alias_uses_current_tmux_session_from_runner() {
+        let sessions = vec![send_route_session(
+            "188-maw-rs",
+            vec![
+                send_route_window(0, "work"),
+                send_route_window(1, "maw-rs-oracle"),
+            ],
+        )];
+        let mut runner = SendFakeTmuxRunner {
+            current_session: Some(Ok("188-maw-rs\n".to_owned())),
+            ..SendFakeTmuxRunner::default()
+        };
+
+        assert_eq!(
+            resolve_send_route_target(
+                "me",
+                &RouteConfig::default(),
+                &sessions,
+                true,
+                &mut runner
+            ),
+            RouteResult::Local {
+                target: "188-maw-rs:1".to_owned()
+            }
+        );
+        assert_eq!(
+            runner.calls,
+            vec![(
+                "display-message".to_owned(),
+                vec!["-p".to_owned(), "#{session_name}".to_owned()]
+            )]
+        );
+    }
+
+    #[test]
+    fn send_self_alias_outside_tmux_does_not_match_literal_me_window() {
+        let sessions = vec![send_route_session(
+            "scratch",
+            vec![send_route_window(0, "me"), send_route_window(1, "shell")],
+        )];
+        let mut runner = SendFakeTmuxRunner::default();
+
+        let result = resolve_send_route_target(
+            "me",
+            &RouteConfig::default(),
+            &sessions,
+            false,
+            &mut runner,
+        );
+
+        assert!(matches!(
+            result,
+            RouteResult::Error { reason, .. } if reason == "me_needs_tmux"
+        ));
+        assert!(runner.calls.is_empty());
+    }
+
+    #[test]
+    fn send_dry_run_parser_and_output_include_resolved_target() {
+        let args = parse_send_args(
+            "hey",
+            &send_acl_vec(&["me", "--dry-run", "test"]),
+        )
+        .expect("parse");
+        assert!(args.dry_run);
+        assert_eq!(args.target, "me");
+        assert_eq!(args.text, "test");
+
+        let output = send_dry_run_output(
+            "hey",
+            &args,
+            &RouteResult::Local {
+                target: "188-maw-rs:1".to_owned(),
+            },
+        );
+        assert_eq!(output.code, 0);
+        assert_eq!(output.stdout, "dry-run: hey me -> local 188-maw-rs:1\n");
     }
 
     fn send_acl_write_scope(name: &str, members: &[&str]) {

@@ -16,6 +16,12 @@ enum WorkonLayout {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+enum WorkonOutsideSession {
+    Existing(String),
+    Create(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct WorkonRepo {
     repo_path: std::path::PathBuf,
     repo_name: String,
@@ -150,27 +156,54 @@ fn workon_cmd_with_runner<R: maw_tmux::TmuxRunner>(
         return Ok((stdout, None));
     }
 
-    // outside tmux: attach-or-create a session named after the repo
+    // outside tmux: attach-or-create a session for the repo
     // (deliberate divergence — maw-js errors "not in a tmux session" here)
-    let session = repo.repo_name.clone();
-    workon_validate_tmux_target(&session)?;
-    if workon_tmux_run(runner, "has-session", &["-t", &format!("={session}")]).is_err() {
-        workon_tmux_run(
-            runner,
-            "new-session",
-            &["-d", "-s", &session, "-c", workon_path_str(&target_path)?, "-n", &window_name],
-        )?;
-        workon_send_window_command(runner, &session, &window_name, &target_path)?;
-        if taskless_oracle {
-            if let WorkonFleetStatus::Created = workon_ensure_fleet_session_entry(&session, &window_name, &target_path)? {
-                let _ = writeln!(stdout, "\x1b[32m+\x1b[0m fleet registered {session}:{window_name}");
+    match workon_resolve_outside_session(runner, &repo.repo_name)? {
+        WorkonOutsideSession::Create(session) => {
+            workon_tmux_run(
+                runner,
+                "new-session",
+                &["-d", "-s", &session, "-c", workon_path_str(&target_path)?, "-n", &window_name],
+            )?;
+            workon_send_window_command(runner, &session, &window_name, &target_path)?;
+            if taskless_oracle {
+                if let WorkonFleetStatus::Created = workon_ensure_fleet_session_entry(&session, &window_name, &target_path)? {
+                    let _ = writeln!(stdout, "\x1b[32m+\x1b[0m fleet registered {session}:{window_name}");
+                }
             }
+            let _ = writeln!(stdout, "\x1b[32m✅\x1b[0m workon '{window_name}' in new session {session} → {}", target_path.display());
+            Ok((stdout, Some(session)))
         }
-        let _ = writeln!(stdout, "\x1b[32m✅\x1b[0m workon '{window_name}' in new session {session} → {}", target_path.display());
-    } else {
-        workon_ensure_window(runner, &session, &window_name, &target_path, taskless_oracle, &mut stdout)?;
+        WorkonOutsideSession::Existing(session) => {
+            workon_ensure_window(runner, &session, &window_name, &target_path, taskless_oracle, &mut stdout)?;
+            Ok((stdout, Some(session)))
+        }
     }
-    Ok((stdout, Some(session)))
+}
+
+fn workon_resolve_outside_session<R: maw_tmux::TmuxRunner>(
+    runner: &mut R,
+    repo_name: &str,
+) -> Result<WorkonOutsideSession, String> {
+    workon_validate_tmux_target(repo_name)?;
+    if workon_tmux_run(runner, "has-session", &["-t", &format!("={repo_name}")]).is_ok() {
+        return Ok(WorkonOutsideSession::Existing(repo_name.to_owned()));
+    }
+
+    let sessions = workon_list_sessions(runner);
+    match maw_matcher::resolve_numeric_fleet_stem_exact(repo_name, &sessions) {
+        ResolveResult::Exact { matched } => {
+            workon_validate_tmux_target(&matched)?;
+            Ok(WorkonOutsideSession::Existing(matched))
+        }
+        ResolveResult::Ambiguous { candidates } => Err(format!(
+            "workon: '{repo_name}' matches multiple numbered fleet sessions: {}\n  refusing to create sibling session {repo_name}",
+            candidates.join(", ")
+        )),
+        ResolveResult::None { .. } | ResolveResult::Fuzzy { .. } => {
+            Ok(WorkonOutsideSession::Create(repo_name.to_owned()))
+        }
+    }
 }
 
 fn workon_ensure_window<R: maw_tmux::TmuxRunner>(
@@ -343,6 +376,22 @@ fn workon_list_windows<R: maw_tmux::TmuxRunner>(runner: &mut R, session: &str) -
     Ok(raw.lines().map(str::to_owned).filter(|line| !line.is_empty()).collect())
 }
 
+fn workon_list_sessions<R: maw_tmux::TmuxRunner>(runner: &mut R) -> Vec<String> {
+    workon_tmux_run(runner, "list-sessions", &["-F", "#{session_name}"])
+        .map(|raw| {
+            let mut sessions = raw
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>();
+            sessions.sort();
+            sessions.dedup();
+            sessions
+        })
+        .unwrap_or_default()
+}
+
 fn workon_build_command_in_dir(agent_name: &str, cwd: &std::path::Path) -> String {
     merged_config_value_in_dir(cwd)
         .get("commands")
@@ -414,13 +463,20 @@ mod workon_tests {
     use super::*;
 
     #[derive(Default)]
-    struct WorkonMockTmux { calls: Vec<(String, Vec<String>)>, session: String, windows: String, has_session: bool }
+    struct WorkonMockTmux {
+        calls: Vec<(String, Vec<String>)>,
+        session: String,
+        sessions: String,
+        windows: String,
+        has_session: bool,
+    }
 
     impl maw_tmux::TmuxRunner for WorkonMockTmux {
         fn run(&mut self, subcommand: &str, args: &[String]) -> Result<String, maw_tmux::TmuxError> {
             self.calls.push((subcommand.to_owned(), args.to_vec()));
             match subcommand {
                 "display-message" => Ok(self.session.clone()),
+                "list-sessions" => Ok(self.sessions.clone()),
                 "list-windows" => Ok(self.windows.clone()),
                 "has-session" => {
                     if self.has_session { Ok(String::new()) } else { Err(maw_tmux::TmuxError::new("no session")) }
@@ -471,7 +527,10 @@ mod workon_tests {
         let temp = std::env::temp_dir().join("maw-rs-workon-unit");
         let repo = WorkonRepo { repo_path: temp.join("acme/demo"), repo_name: "demo".to_owned(), parent_dir: temp.join("acme") };
         let options = WorkonOptions { repo: "demo".to_owned(), task: None, layout: WorkonLayout::Nested };
-        let mut runner = WorkonMockTmux::default();
+        let mut runner = WorkonMockTmux {
+            sessions: "team-demo\n188-other\n".to_owned(),
+            ..Default::default()
+        };
         let _guard = env_test_lock().lock().unwrap_or_else(|e| e.into_inner());
         let _restore = EnvVarRestore::capture("TMUX");
         std::env::remove_var("TMUX");
@@ -481,23 +540,29 @@ mod workon_tests {
         assert_eq!(attach.as_deref(), Some("demo"));
         assert!(stdout.contains("workon 'demo' in new session demo"), "{stdout}");
         assert_eq!(runner.calls[0], ("has-session".to_owned(), workon_strings(&["-t", "=demo"])));
-        assert_eq!(runner.calls[1].0, "new-session");
-        assert_eq!(&runner.calls[1].1[..3], &workon_strings(&["-d", "-s", "demo"])[..]);
-        assert_eq!(&runner.calls[1].1[5..], &workon_strings(&["-n", "demo"])[..]);
-        assert_eq!(runner.calls[2].0, "display-message");
-        assert_eq!(runner.calls[3].0, "send-keys");
+        assert_eq!(runner.calls[1], ("list-sessions".to_owned(), workon_strings(&["-F", "#{session_name}"])));
+        assert_eq!(runner.calls[2].0, "new-session");
+        assert_eq!(&runner.calls[2].1[..3], &workon_strings(&["-d", "-s", "demo"])[..]);
+        assert_eq!(&runner.calls[2].1[5..], &workon_strings(&["-n", "demo"])[..]);
+        assert_eq!(runner.calls[3].0, "display-message");
         assert_eq!(runner.calls[4].0, "send-keys");
-        assert_eq!(runner.calls[5].0, "capture-pane");
+        assert_eq!(runner.calls[5].0, "send-keys");
         assert_eq!(runner.calls[6].0, "capture-pane");
-        assert_eq!(runner.calls.len(), 7);
+        assert_eq!(runner.calls[7].0, "capture-pane");
+        assert_eq!(runner.calls.len(), 8);
     }
 
     #[test]
-    fn workon_outside_tmux_reuses_live_session_and_window() {
+    fn workon_outside_tmux_exact_session_wins_before_numbered_fleet() {
         let temp = std::env::temp_dir().join("maw-rs-workon-unit");
         let repo = WorkonRepo { repo_path: temp.join("acme/demo"), repo_name: "demo".to_owned(), parent_dir: temp.join("acme") };
         let options = WorkonOptions { repo: "demo".to_owned(), task: None, layout: WorkonLayout::Nested };
-        let mut runner = WorkonMockTmux { has_session: true, windows: "demo\n".to_owned(), ..Default::default() };
+        let mut runner = WorkonMockTmux {
+            has_session: true,
+            sessions: "188-demo\n".to_owned(),
+            windows: "demo\n".to_owned(),
+            ..Default::default()
+        };
         let _guard = env_test_lock().lock().unwrap_or_else(|e| e.into_inner());
         let _restore = EnvVarRestore::capture("TMUX");
         std::env::remove_var("TMUX");
@@ -509,6 +574,55 @@ mod workon_tests {
         assert_eq!(runner.calls[0].0, "has-session");
         assert_eq!(runner.calls[1].0, "list-windows");
         assert_eq!(runner.calls[2], ("select-window".to_owned(), workon_strings(&["-t", "demo:demo"])));
+        assert_eq!(runner.calls.len(), 3);
+    }
+
+    #[test]
+    fn workon_outside_tmux_reuses_numbered_fleet_session() {
+        let temp = std::env::temp_dir().join("maw-rs-workon-unit");
+        let repo = WorkonRepo { repo_path: temp.join("acme/maw-rs"), repo_name: "maw-rs".to_owned(), parent_dir: temp.join("acme") };
+        let options = WorkonOptions { repo: "maw-rs".to_owned(), task: None, layout: WorkonLayout::Nested };
+        let mut runner = WorkonMockTmux {
+            sessions: "188-maw-rs\n".to_owned(),
+            windows: "maw-rs\n".to_owned(),
+            ..Default::default()
+        };
+        let _guard = env_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _restore = EnvVarRestore::capture("TMUX");
+        std::env::remove_var("TMUX");
+
+        let (stdout, attach) = workon_cmd_with_runner(&options, &repo, &mut runner).expect("reuse numbered fleet");
+
+        assert_eq!(attach.as_deref(), Some("188-maw-rs"));
+        assert!(stdout.contains("reusing existing window 'maw-rs' in 188-maw-rs"), "{stdout}");
+        assert_eq!(runner.calls[0], ("has-session".to_owned(), workon_strings(&["-t", "=maw-rs"])));
+        assert_eq!(runner.calls[1], ("list-sessions".to_owned(), workon_strings(&["-F", "#{session_name}"])));
+        assert_eq!(runner.calls[2], ("list-windows".to_owned(), workon_strings(&["-t", "188-maw-rs", "-F", "#{window_name}"])));
+        assert_eq!(runner.calls[3], ("select-window".to_owned(), workon_strings(&["-t", "188-maw-rs:maw-rs"])));
+        assert_eq!(runner.calls.len(), 4);
+    }
+
+    #[test]
+    fn workon_outside_tmux_ambiguous_numbered_fleet_sessions_error_without_create() {
+        let temp = std::env::temp_dir().join("maw-rs-workon-unit");
+        let repo = WorkonRepo { repo_path: temp.join("acme/maw-rs"), repo_name: "maw-rs".to_owned(), parent_dir: temp.join("acme") };
+        let options = WorkonOptions { repo: "maw-rs".to_owned(), task: None, layout: WorkonLayout::Nested };
+        let mut runner = WorkonMockTmux {
+            sessions: "188-maw-rs\n187-maw-rs\n".to_owned(),
+            ..Default::default()
+        };
+        let _guard = env_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _restore = EnvVarRestore::capture("TMUX");
+        std::env::remove_var("TMUX");
+
+        let err = workon_cmd_with_runner(&options, &repo, &mut runner).expect_err("ambiguous fleet");
+
+        assert!(err.contains("matches multiple numbered fleet sessions"), "{err}");
+        assert!(err.contains("187-maw-rs"), "{err}");
+        assert!(err.contains("188-maw-rs"), "{err}");
+        assert_eq!(runner.calls[0], ("has-session".to_owned(), workon_strings(&["-t", "=maw-rs"])));
+        assert_eq!(runner.calls[1], ("list-sessions".to_owned(), workon_strings(&["-F", "#{session_name}"])));
+        assert_eq!(runner.calls.len(), 2);
     }
 
     #[test]

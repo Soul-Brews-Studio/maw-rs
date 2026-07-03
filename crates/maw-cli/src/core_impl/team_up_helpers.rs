@@ -147,7 +147,7 @@ fn team_t3_load_or_quick_charter(opts: &TeamT3Options124) -> Result<TeamCharter1
         if count == 0 { return Err("--quick must be a positive integer".to_owned()); }
         let team = opts.team.clone().unwrap_or_else(|| "quick".to_owned());
         let members = (1..=count).map(|number| TeamCharterMember122 { role: format!("builder-{number}"), name: Some(format!("builder-{number}")), engine: opts.engine.clone(), ..Default::default() }).collect();
-        return Ok(TeamCharter122 { name: team, description: String::new(), goal: String::new(), session: opts.session.clone(), members, governance_requires_human_approval: false });
+        return Ok(TeamCharter122 { name: team, project: None, description: String::new(), goal: String::new(), session: opts.session.clone(), members, defaults_worktree: false, governance_requires_human_approval: false });
     }
     let team = opts.team.as_ref().ok_or_else(|| "team required".to_owned())?;
     let path = team_t3_resolve_charter_path(team, opts.charter_path.as_deref())?;
@@ -232,7 +232,7 @@ fn team_t3_classify(member: &TeamCharterMember122, opts: &TeamT3Options124, sess
     let role = member.role.clone();
     let identity = member.name.clone().unwrap_or_else(|| role.clone());
     let engine = opts.engine.clone().or_else(|| member.engine.clone()).or_else(|| member.model.clone()).unwrap_or_else(|| "claude".to_owned());
-    let worktree = member.cwd.clone().unwrap_or_else(|| identity.clone());
+    let worktree = member.worktree.clone().or_else(|| member.cwd.clone()).unwrap_or_else(|| identity.clone());
     if !opts.only.is_empty() && !team_t3_matches_selectors(member, &opts.only, &identity, &worktree) { return TeamRosterItem124 { role, identity, engine, worktree, state: "skipped".to_owned(), action: String::new(), pane: None }; }
     if !opts.members.is_empty() && !opts.members.iter().any(|item| item == &member.role) { return TeamRosterItem124 { role, identity, engine, worktree, state: "skipped".to_owned(), action: String::new(), pane: None }; }
     let candidates = team_t3_window_candidates(member, &identity, &worktree);

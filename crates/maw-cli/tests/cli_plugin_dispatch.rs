@@ -179,6 +179,41 @@ fn write_bun_dev_wasm_plugin(plugins_dir: &Path, dir_name: &str, command: &str) 
     .expect("manifest");
 }
 
+fn write_bun_dev_raw_wasm_with_ts_entry_plugin(plugins_dir: &Path, dir_name: &str, command: &str) {
+    let package_dir = plugins_dir.join(dir_name);
+    create_dir_all(&package_dir).expect("plugin dir");
+    write(
+        package_dir.join("index.ts"),
+        b"export default async function plugin() {}\n",
+    )
+    .expect("entry");
+    let wasm_path = package_dir.join("plugin.wasm");
+    write(&wasm_path, WASM_HANDLE_ZERO).expect("wasm");
+    let sha256 = hash_file(&wasm_path).expect("wasm hash");
+    write(
+        package_dir.join("plugin.json"),
+        json!({
+            "name": dir_name,
+            "version": "1.0.0",
+            "sdk": "*",
+            "runtime": "bun-dev",
+            "target": "js",
+            "entry": "index.ts",
+            "wasm": "plugin.wasm",
+            "artifact": {
+                "path": "plugin.wasm",
+                "sha256": sha256
+            },
+            "cli": {
+                "command": command,
+                "help": format!("maw {command}")
+            }
+        })
+        .to_string(),
+    )
+    .expect("manifest");
+}
+
 #[test]
 fn dispatch_cli_plugin_finds_matching_ts_plugin_and_refuses_maw_bridge() {
     let _guard = env_lock().lock().expect("env lock");
@@ -321,6 +356,35 @@ fn dispatch_cli_plugin_prefers_wasm_artifact_over_bun_dev_runtime() {
     assert!(
         !bun_args.exists(),
         "fake PATH bun was invoked even though a WASM artifact was dispatchable"
+    );
+
+    remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn dispatch_cli_plugin_raw_wasm_field_beats_bun_dev_string_ts_entry() {
+    let _guard = env_lock().lock().expect("env lock");
+    let _restore = EnvRestore::capture();
+    let root = temp_dir("bun-dev-raw-wasm");
+    let bin_dir = root.join("bin");
+    let plugins_dir = root.join("plugins");
+    let bun_args = root.join("bun-args");
+    create_dir_all(&bin_dir).expect("bin dir");
+    create_dir_all(&plugins_dir).expect("plugins dir");
+    write_bun_shim(&bin_dir);
+    write_bun_dev_raw_wasm_with_ts_entry_plugin(&plugins_dir, "weather-demo", "weather report");
+    std::env::set_var("PATH", &bin_dir);
+    std::env::set_var("MAW_PLUGINS_DIR", &plugins_dir);
+    std::env::set_var("BUN_SHIM_ARGS", &bun_args);
+
+    let dispatched = run_cli(&args(&["weather", "report"]));
+
+    assert_eq!(dispatched.code, 0, "{}", dispatched.stderr);
+    assert!(dispatched.stdout.is_empty(), "{}", dispatched.stdout);
+    assert!(dispatched.stderr.is_empty(), "{}", dispatched.stderr);
+    assert!(
+        !bun_args.exists(),
+        "fake PATH bun was invoked even though raw wasm field must win"
     );
 
     remove_dir_all(root).expect("cleanup");

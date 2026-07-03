@@ -66,10 +66,12 @@ struct TeamOracleMember122 {
 #[derive(Debug, Clone, Default)]
 struct TeamCharter122 {
     name: String,
+    project: Option<String>,
     description: String,
     goal: String,
     session: Option<String>,
     members: Vec<TeamCharterMember122>,
+    defaults_worktree: bool,
     governance_requires_human_approval: bool,
 }
 
@@ -83,6 +85,7 @@ struct TeamCharterMember122 {
     target: Option<String>,
     prompt: Option<String>,
     worktree: Option<String>,
+    branch: Option<String>,
 }
 
 fn team_run_command(argv: &[String]) -> CliOutput {
@@ -433,30 +436,41 @@ fn team_parse_charter(text: &str) -> Result<TeamCharter122, String> {
 fn team_parse_json_charter(text: &str) -> Result<TeamCharter122, String> {
     let value: serde_json::Value = serde_json::from_str(text).map_err(|error| error.to_string())?;
     let name = value["name"].as_str().unwrap_or("").to_owned();
+    let project = value["project"].as_str().map(str::to_owned);
     let session = value["session"].as_str().map(str::to_owned);
     let members = value["members"].as_array().map_or_else(Vec::new, |items| items.iter().map(team_member_from_json).collect());
     let governance = value["governance"]["requires_human_approval"].as_bool().unwrap_or(false);
-    team_charter_finish(&name, value["description"].as_str().unwrap_or("").to_owned(), value["goal"].as_str().unwrap_or("").to_owned(), session, members, governance)
+    let defaults_worktree = value["defaults"].as_object().is_some_and(|defaults| defaults.contains_key("worktree"));
+    team_charter_finish(TeamCharter122 { name, project, description: value["description"].as_str().unwrap_or("").to_owned(), goal: value["goal"].as_str().unwrap_or("").to_owned(), session, members, defaults_worktree, governance_requires_human_approval: governance })
 }
 
 fn team_member_from_json(value: &serde_json::Value) -> TeamCharterMember122 {
-    TeamCharterMember122 { role: value["role"].as_str().unwrap_or("").to_owned(), name: value["name"].as_str().map(str::to_owned), model: value["model"].as_str().map(str::to_owned), cwd: value["cwd"].as_str().map(str::to_owned), engine: value["engine"].as_str().map(str::to_owned), target: value["target"].as_str().map(str::to_owned), prompt: value["prompt"].as_str().map(str::to_owned), worktree: value["worktree"].as_str().map(str::to_owned).or_else(|| value["worktree"].as_bool().map(|v| v.to_string())) }
+    TeamCharterMember122 { role: value["role"].as_str().unwrap_or("").to_owned(), name: value["name"].as_str().map(str::to_owned), model: value["model"].as_str().map(str::to_owned), cwd: value["cwd"].as_str().map(str::to_owned), engine: value["engine"].as_str().map(str::to_owned), target: value["target"].as_str().map(str::to_owned), prompt: value["prompt"].as_str().map(str::to_owned), worktree: value["worktree"].as_str().map(str::to_owned).or_else(|| value["worktree"].as_bool().map(|v| v.to_string())), branch: value["branch"].as_str().map(str::to_owned) }
 }
 
 fn team_parse_yaml_charter(text: &str) -> Result<TeamCharter122, String> {
     let mut charter = TeamCharter122::default();
     let mut current: Option<TeamCharterMember122> = None;
+    let mut in_defaults = false;
     for raw in text.lines() {
         let line = raw.split('#').next().unwrap_or("").trim_end();
         if line.trim().is_empty() { continue; }
+        let indent = line.chars().take_while(|ch| *ch == ' ').count();
+        let trimmed = line.trim();
+        if indent == 0 {
+            in_defaults = trimmed == "defaults:";
+        } else if in_defaults && trimmed.starts_with("worktree:") {
+            charter.defaults_worktree = true;
+        }
         team_yaml_line(line, &mut charter, &mut current);
     }
     if let Some(member) = current.take() { charter.members.push(member); }
-    team_charter_finish(&charter.name, charter.description, charter.goal, charter.session, charter.members, charter.governance_requires_human_approval)
+    team_charter_finish(charter)
 }
 
 fn team_yaml_line(line: &str, charter: &mut TeamCharter122, current: &mut Option<TeamCharterMember122>) {
     if let Some(rest) = line.strip_prefix("name:") { charter.name = team_unquote(rest); return; }
+    if let Some(rest) = line.strip_prefix("project:") { charter.project = Some(team_unquote(rest)); return; }
     if let Some(rest) = line.strip_prefix("description:") { charter.description = team_unquote(rest); return; }
     if let Some(rest) = line.strip_prefix("goal:") { charter.goal = team_unquote(rest); return; }
     if let Some(rest) = line.strip_prefix("session:") { charter.session = Some(team_unquote(rest)); return; }
@@ -466,7 +480,7 @@ fn team_yaml_line(line: &str, charter: &mut TeamCharter122, current: &mut Option
 }
 
 fn team_yaml_member_line(line: &str, member: &mut TeamCharterMember122) {
-    for (key, slot) in [("name:", &mut member.name), ("model:", &mut member.model), ("cwd:", &mut member.cwd), ("engine:", &mut member.engine), ("target:", &mut member.target), ("prompt:", &mut member.prompt), ("worktree:", &mut member.worktree)] {
+    for (key, slot) in [("name:", &mut member.name), ("model:", &mut member.model), ("cwd:", &mut member.cwd), ("engine:", &mut member.engine), ("target:", &mut member.target), ("prompt:", &mut member.prompt), ("worktree:", &mut member.worktree), ("branch:", &mut member.branch)] {
         if let Some(rest) = line.trim_start().strip_prefix(key) { *slot = Some(team_unquote(rest)); }
     }
 }
@@ -475,10 +489,12 @@ fn team_unquote(raw: &str) -> String {
     raw.trim().trim_matches('"').trim_matches('\'').to_owned()
 }
 
-fn team_charter_finish(name: &str, description: String, goal: String, session: Option<String>, members: Vec<TeamCharterMember122>, governance_requires_human_approval: bool) -> Result<TeamCharter122, String> {
-    if name.trim().is_empty() { return Err("team charter requires name".to_owned()); }
-    if members.is_empty() { return Err("team charter requires at least one member".to_owned()); }
-    Ok(TeamCharter122 { name: name.trim().to_owned(), description, goal, session, members, governance_requires_human_approval })
+fn team_charter_finish(mut charter: TeamCharter122) -> Result<TeamCharter122, String> {
+    let name = charter.name.trim().to_owned();
+    if name.is_empty() { return Err("team charter requires name".to_owned()); }
+    if charter.members.is_empty() { return Err("team charter requires at least one member".to_owned()); }
+    charter.name = name;
+    Ok(charter)
 }
 
 fn team_format_plan(charter: &TeamCharter122) -> String {
@@ -509,17 +525,14 @@ fn team_member_bits(member: &TeamCharterMember122) -> String {
     if let Some(model) = &member.model { bits.push(format!("model={model}")); }
     if let Some(cwd) = &member.cwd { bits.push(format!("cwd={cwd}")); }
     if let Some(worktree) = &member.worktree { bits.push(format!("worktree={worktree}")); }
+    if let Some(branch) = &member.branch { bits.push(format!("branch={branch}")); }
     if let Some(engine) = &member.engine { bits.push(format!("engine={engine}")); }
     bits.join(", ")
 }
 
 fn team_format_preflight(charter: &TeamCharter122) -> (String, bool) {
     use std::fmt::Write as _;
-    let mut checks = Vec::new();
-    checks.push((team_validate_name(&charter.name).is_ok(), "team name".to_owned(), format!("'{}' is accepted", charter.name)));
-    checks.push((team_unique_roles(&charter.members), "member roles".to_owned(), format!("{} unique role(s)", charter.members.len())));
-    let collisions = team_plan_artifacts(charter).into_iter().filter(|path| path.exists()).map(|p| p.display().to_string()).collect::<Vec<_>>();
-    checks.push((collisions.is_empty(), "existing artifacts".to_owned(), if collisions.is_empty() { "no config/inbox/manifest collisions found".to_owned() } else { format!("would refuse to overwrite: {}", collisions.join(", ")) }));
+    let checks = team_preflight_checks(charter);
     let errors = checks.iter().any(|(ok, _, _)| !ok);
     let mut out = format!("team charter preflight: {}\nstatus: {}\n\nchecks:\n", charter.name, if errors { "failed" } else { "passed" });
     for (ok, label, detail) in checks { writeln!(out, "  {} {label}: {detail}", if ok { "✓" } else { "✗" }).expect("write string"); }

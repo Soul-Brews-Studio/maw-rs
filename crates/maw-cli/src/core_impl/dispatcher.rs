@@ -55,7 +55,9 @@ use maw_plugin_scaffold::{
 };
 use maw_policy::{default_active_group, weight_to_tier, DEFAULT_TIER, KNOWN_TIERS};
 use maw_routing::{
-    apply_sync_diff, compute_sync_diff, hosted_agents, resolve_target as resolve_route_target,
+    apply_sync_diff, compute_sync_diff, hosted_agents, is_self_target_alias,
+    resolve_target as resolve_route_target,
+    resolve_target_with_current_session as resolve_route_target_with_current_session,
     MawConfig as RouteConfig, NamedPeer as RouteNamedPeer, PeerIdentity as SyncPeerIdentity,
     ResolveResult as RouteResult, Session as RouteSession, SyncApplyOptions, SyncApplyResult,
     SyncDiff, Window as RouteWindow,

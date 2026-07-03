@@ -3,8 +3,8 @@ description: Beta team
 goal: Ship T1
 
 members (2):
-  - builder (target=auto, model=gpt-5.5)
-  - reviewer (target=auto, cwd=/tmp/review)
+  - builder (target=auto, model=gpt-5.5, worktree=<ROOT>/agents/builder, branch=agents/builder, engine=local-builder)
+  - reviewer (target=auto, worktree=<ROOT>/agents/reviewer, branch=agents/reviewer, engine=local-reviewer)
 
 would prepare artifacts:
   - <ROOT>/home/.claude/teams/beta/config.json

@@ -26,6 +26,76 @@ fn route_target(route_type: RouteType, target: String) -> ResolveResult {
     }
 }
 
+fn resolve_self_target_alias_window(
+    current_session: &str,
+    writable: &[Session],
+    route_type: RouteType,
+) -> ResolveResult {
+    let Some(session) = writable
+        .iter()
+        .find(|session| session.name.eq_ignore_ascii_case(current_session))
+    else {
+        let sessions = writable
+            .iter()
+            .map(|session| session.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return error(
+            "me_session_not_found",
+            format!("'me' resolved current tmux session '{current_session}', but it is not in local sessions"),
+            Some(if sessions.is_empty() {
+                "sessions: (none)".to_owned()
+            } else {
+                format!("sessions: {sessions}")
+            }),
+        );
+    };
+
+    let stem = strip_numeric_fleet_prefix(&session.name);
+    let exact_oracle_window = format!("{stem}-oracle");
+    if let Some(window) = session
+        .windows
+        .iter()
+        .filter(|window| self_target_oracle_candidate(window))
+        .find(|window| window.name.eq_ignore_ascii_case(&exact_oracle_window))
+    {
+        return route_target(route_type, format!("{}:{}", session.name, window.index));
+    }
+
+    let oracle_windows = session
+        .windows
+        .iter()
+        .filter(|window| self_target_oracle_candidate(window))
+        .collect::<Vec<_>>();
+    match oracle_windows.as_slice() {
+        [window] => route_target(route_type, format!("{}:{}", session.name, window.index)),
+        [] => error(
+            "me_oracle_window_not_found",
+            format!(
+                "'me' resolved current tmux session '{}', but no *-oracle window was found",
+                session.name
+            ),
+            Some(format!("windows: {}", session_window_list(session))),
+        ),
+        _ => error(
+            "me_oracle_window_ambiguous",
+            format!(
+                "'me' resolved current tmux session '{}', but multiple *-oracle windows were found and none matched '{}'",
+                session.name, exact_oracle_window
+            ),
+            Some(format!("windows: {}", session_window_list(session))),
+        ),
+    }
+}
+
+fn self_target_oracle_candidate(window: &Window) -> bool {
+    match declared_window_kind(window) {
+        Some(RepoKind::Oracle) => true,
+        Some(RepoKind::Project) => false,
+        None => window.name.to_lowercase().ends_with("-oracle"),
+    }
+}
+
 fn resolve_session_alias_window_target(
     query: &str,
     writable: &[Session],
@@ -175,16 +245,22 @@ fn declared_alias_kind(query: &str, sessions: &[Session]) -> Option<RepoKind> {
             .any(|name| candidates.iter().any(|candidate| candidate.eq_ignore_ascii_case(name)));
         for window in &session.windows {
             let window_matches = candidates.iter().any(|candidate| candidate.eq_ignore_ascii_case(&window.name));
-            if (session_matches || window_matches) && window.kind.is_some() {
-                let kind = window.kind;
-                if found.is_some() && found != kind {
+            if !(session_matches || window_matches) {
+                continue;
+            }
+            if let Some(kind) = declared_window_kind(window) {
+                if found.is_some() && found != Some(kind) {
                     return None;
                 }
-                found = kind;
+                found = Some(kind);
             }
         }
     }
     found
+}
+
+fn declared_window_kind(window: &Window) -> Option<RepoKind> {
+    window.kind
 }
 
 fn session_alias_names(name: &str) -> Vec<String> {
@@ -386,6 +462,19 @@ fn quoted_or(names: &[String]) -> String {
         .join(" or ")
 }
 
+fn session_window_list(session: &Session) -> String {
+    let windows = session
+        .windows
+        .iter()
+        .map(|window| format!("{}:{} ({})", session.name, window.index, window.name))
+        .collect::<Vec<_>>();
+    if windows.is_empty() {
+        "(none)".to_owned()
+    } else {
+        windows.join(", ")
+    }
+}
+
 fn error(
     reason: impl Into<String>,
     detail: impl Into<String>,
@@ -482,6 +571,179 @@ mod coverage_gap_tests {
             resolve_target("white:pulse", &config_with_node("white"), &sessions),
             ResolveResult::SelfNode {
                 target: "pulse:3".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn self_target_alias_resolves_numbered_current_session_oracle_window() {
+        let sessions = vec![session(
+            "188-maw-rs",
+            vec![
+                window(0, "work"),
+                window(1, "maw-rs-oracle"),
+                window(2, "maw-rs-codex-6"),
+            ],
+        )];
+
+        assert_eq!(
+            resolve_target_with_current_session(
+                "ME",
+                &MawConfig::default(),
+                &sessions,
+                Some("188-maw-rs")
+            ),
+            ResolveResult::Local {
+                target: "188-maw-rs:1".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn self_target_alias_resolves_unnumbered_current_session_oracle_window() {
+        let sessions = vec![session(
+            "mawjs",
+            vec![window(0, "shell"), window(4, "mawjs-oracle")],
+        )];
+
+        assert_eq!(
+            resolve_target_with_current_session(
+                "me",
+                &MawConfig::default(),
+                &sessions,
+                Some("mawjs")
+            ),
+            ResolveResult::Local {
+                target: "mawjs:4".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn self_target_alias_skips_declared_project_oracle_suffix_window() {
+        let sessions = vec![session(
+            "188-maw-rs",
+            vec![
+                window(0, "work"),
+                window_with_kind(1, "maw-rs-oracle", RepoKind::Project),
+                window_with_kind(4, "maw-rs-codex-6", RepoKind::Oracle),
+            ],
+        )];
+
+        assert_eq!(
+            resolve_target_with_current_session(
+                "me",
+                &MawConfig::default(),
+                &sessions,
+                Some("188-maw-rs")
+            ),
+            ResolveResult::Local {
+                target: "188-maw-rs:4".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn self_target_alias_reports_no_oracle_when_suffix_window_is_declared_project() {
+        let sessions = vec![session(
+            "188-maw-rs",
+            vec![
+                window(0, "work"),
+                window_with_kind(1, "maw-rs-oracle", RepoKind::Project),
+            ],
+        )];
+
+        assert_eq!(
+            resolve_target_with_current_session(
+                "me",
+                &MawConfig::default(),
+                &sessions,
+                Some("188-maw-rs")
+            ),
+            ResolveResult::Error {
+                reason: "me_oracle_window_not_found".to_owned(),
+                detail: "'me' resolved current tmux session '188-maw-rs', but no *-oracle window was found".to_owned(),
+                hint: Some(
+                    "windows: 188-maw-rs:0 (work), 188-maw-rs:1 (maw-rs-oracle)"
+                        .to_owned()
+                ),
+            }
+        );
+    }
+
+    #[test]
+    fn self_target_alias_matches_declared_oracle_window_without_suffix() {
+        let sessions = vec![session(
+            "188-maw-rs",
+            vec![
+                window(0, "work"),
+                window_with_kind(3, "maw-rs-codex-6", RepoKind::Oracle),
+            ],
+        )];
+
+        assert_eq!(
+            resolve_target_with_current_session(
+                "me",
+                &MawConfig::default(),
+                &sessions,
+                Some("188-maw-rs")
+            ),
+            ResolveResult::Local {
+                target: "188-maw-rs:3".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn self_target_alias_reports_no_oracle_window_with_session_windows() {
+        let sessions = vec![session(
+            "188-maw-rs",
+            vec![window(0, "work"), window(2, "maw-rs-codex-6")],
+        )];
+
+        assert_eq!(
+            resolve_target_with_current_session(
+                "me",
+                &MawConfig::default(),
+                &sessions,
+                Some("188-maw-rs")
+            ),
+            ResolveResult::Error {
+                reason: "me_oracle_window_not_found".to_owned(),
+                detail: "'me' resolved current tmux session '188-maw-rs', but no *-oracle window was found".to_owned(),
+                hint: Some(
+                    "windows: 188-maw-rs:0 (work), 188-maw-rs:2 (maw-rs-codex-6)"
+                        .to_owned()
+                ),
+            }
+        );
+    }
+
+    #[test]
+    fn self_target_alias_reports_outside_tmux_context() {
+        assert_eq!(
+            resolve_target_with_current_session("me", &MawConfig::default(), &[], None),
+            ResolveResult::Error {
+                reason: "me_needs_tmux".to_owned(),
+                detail: "'me' needs a tmux context".to_owned(),
+                hint: Some(
+                    "run inside tmux so maw can resolve the current session".to_owned()
+                ),
+            }
+        );
+    }
+
+    #[test]
+    fn literal_me_window_is_reachable_with_full_session_form() {
+        let sessions = vec![session(
+            "scratch",
+            vec![window(0, "shell"), window(3, "me")],
+        )];
+
+        assert_eq!(
+            resolve_target("scratch:me", &MawConfig::default(), &sessions),
+            ResolveResult::Local {
+                target: "scratch:3".to_owned()
             }
         );
     }

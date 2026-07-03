@@ -488,6 +488,21 @@ pub enum ResolveResult {
 #[allow(clippy::too_many_lines)]
 #[must_use]
 pub fn resolve_target(query: &str, config: &MawConfig, sessions: &[Session]) -> ResolveResult {
+    resolve_target_with_current_session(query, config, sessions, None)
+}
+
+/// Resolve a user query with optional tmux caller context.
+///
+/// The exact token `me` is a self-target alias for the current tmux session's
+/// oracle window. Callers outside tmux pass `None` and receive a clear error.
+#[allow(clippy::too_many_lines)]
+#[must_use]
+pub fn resolve_target_with_current_session(
+    query: &str,
+    config: &MawConfig,
+    sessions: &[Session],
+    current_session: Option<&str>,
+) -> ResolveResult {
     if query.is_empty() {
         return error(
             "empty_query",
@@ -496,17 +511,11 @@ pub fn resolve_target(query: &str, config: &MawConfig, sessions: &[Session]) -> 
         );
     }
 
-    let writable: Vec<Session> = sessions
-        .iter()
-        .filter(|session| {
-            !session.name.ends_with("-view")
-                && session
-                    .source
-                    .as_deref()
-                    .is_none_or(|source| source == "local")
-        })
-        .cloned()
-        .collect();
+    if is_self_target_alias(query) {
+        return resolve_self_target_alias(current_session, sessions);
+    }
+
+    let writable = writable_sessions(sessions);
     let self_node = config.node.as_deref().unwrap_or("local");
 
     if !query.contains(':') {
@@ -599,4 +608,40 @@ pub fn resolve_target(query: &str, config: &MawConfig, sessions: &[Session]) -> 
         format!("'{query}' not in local sessions or agents map"),
         Some("check: maw ls"),
     )
+}
+
+#[must_use]
+pub fn is_self_target_alias(query: &str) -> bool {
+    query.trim().eq_ignore_ascii_case("me")
+}
+
+#[must_use]
+pub fn resolve_self_target_alias(
+    current_session: Option<&str>,
+    sessions: &[Session],
+) -> ResolveResult {
+    let Some(current_session) = current_session.map(str::trim).filter(|value| !value.is_empty())
+    else {
+        return error(
+            "me_needs_tmux",
+            "'me' needs a tmux context",
+            Some("run inside tmux so maw can resolve the current session"),
+        );
+    };
+    let writable = writable_sessions(sessions);
+    resolve_self_target_alias_window(current_session, &writable, RouteType::Local)
+}
+
+fn writable_sessions(sessions: &[Session]) -> Vec<Session> {
+    sessions
+        .iter()
+        .filter(|session| {
+            !session.name.ends_with("-view")
+                && session
+                    .source
+                    .as_deref()
+                    .is_none_or(|source| source == "local")
+        })
+        .cloned()
+        .collect()
 }
