@@ -34,24 +34,42 @@ function seenPath(): string {
   return `${hermesHome()}/maw-hermes-seen.json`;
 }
 
-function passShow(name: string): string {
-  const p = Bun.spawnSync(["pass", "show", name]);
+function passDisabled(): boolean {
+  return ["1", "true", "yes"].includes((process.env.MAW_HERMES_DISABLE_PASS || "").trim().toLowerCase());
+}
+
+function missingSecretMessage(envName: string, passName: string): string {
+  return `missing token/config: set $${envName} or install pass secret ${passName}`;
+}
+
+function passShow(name: string, envName: string): string {
+  let p: any;
+  try {
+    p = Bun.spawnSync(["pass", "show", name]);
+  } catch (e: any) {
+    throw new Error(`${missingSecretMessage(envName, name)}${e?.message ? `: ${e.message}` : ""}`);
+  }
   const out = p.stdout.toString().trim();
   if (!out) {
     const err = p.stderr?.toString?.().trim?.() || "";
-    throw new Error(`pass show ${name} returned empty${err ? `: ${err}` : ""}`);
+    throw new Error(`${missingSecretMessage(envName, name)}${err ? `: ${err}` : ""}`);
   }
   return out;
 }
 
+function secretFromEnvOrPass(envName: string, passName: string): string {
+  const env = (process.env[envName] || "").trim();
+  if (env) return env;
+  if (passDisabled()) throw new Error(missingSecretMessage(envName, passName));
+  return passShow(passName, envName);
+}
+
 function discordToken(): string {
-  const env = (process.env.DISCORD_BOT_TOKEN || "").trim();
-  return env || passShow(DISCORD_TOKEN_PASS);
+  return secretFromEnvOrPass("DISCORD_BOT_TOKEN", DISCORD_TOKEN_PASS);
 }
 
 function apiServerKey(): string {
-  const env = (process.env.API_SERVER_KEY || "").trim();
-  return env || passShow(API_KEY_PASS);
+  return secretFromEnvOrPass("API_SERVER_KEY", API_KEY_PASS);
 }
 
 async function httpJson(url: string, init: RequestInit = {}, headers: Record<string, string> = {}): Promise<HttpResult> {
@@ -330,7 +348,7 @@ export async function threads(log: Log, args: string[]): Promise<void> {
 }
 
 async function arra(args: string[]): Promise<string> {
-  const tok = passShow(WEBHOOK_RELAY_TOKEN_PASS);
+  const tok = secretFromEnvOrPass("WEBHOOK_RELAY_TOKEN", WEBHOOK_RELAY_TOKEN_PASS);
   const p = Bun.spawn(["bun", ARRA, ...args], {
     stdout: "pipe",
     stderr: "pipe",
@@ -550,8 +568,16 @@ export const command = {
 export async function cmdHermes(args: string[], log: Log = console.log): Promise<void> {
   const sub = args[0];
   const fn = sub ? commands[sub] : undefined;
-  if (fn) await fn(log, args);
-  else help(log);
+  if (!sub || matchesHelp(sub)) {
+    help(log);
+    return;
+  }
+  if (fn) {
+    await fn(log, args);
+    return;
+  }
+  log(`unknown hermes verb '${sub}' - run maw hermes --help`);
+  help(log);
 }
 
 export default async function handler(ctx: any) {
@@ -577,6 +603,10 @@ function help(log: Log): void {
   log(`  server-api <verb>   (${Object.keys(serverApiVerbs).length} verbs: ${Object.keys(serverApiVerbs).join(", ")})`);
   log("  # LINE read-only helper");
   log("  line <chats|read|search|today|hits|groups>");
+}
+
+function matchesHelp(value: string): boolean {
+  return value === "help" || value === "--help" || value === "-h";
 }
 
 if (import.meta.main) {
