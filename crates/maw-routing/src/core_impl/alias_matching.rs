@@ -56,6 +56,7 @@ fn resolve_self_target_alias_window(
     if let Some(window) = session
         .windows
         .iter()
+        .filter(|window| self_target_oracle_candidate(window))
         .find(|window| window.name.eq_ignore_ascii_case(&exact_oracle_window))
     {
         return route_target(route_type, format!("{}:{}", session.name, window.index));
@@ -64,7 +65,7 @@ fn resolve_self_target_alias_window(
     let oracle_windows = session
         .windows
         .iter()
-        .filter(|window| window.name.to_lowercase().ends_with("-oracle"))
+        .filter(|window| self_target_oracle_candidate(window))
         .collect::<Vec<_>>();
     match oracle_windows.as_slice() {
         [window] => route_target(route_type, format!("{}:{}", session.name, window.index)),
@@ -84,6 +85,14 @@ fn resolve_self_target_alias_window(
             ),
             Some(format!("windows: {}", session_window_list(session))),
         ),
+    }
+}
+
+fn self_target_oracle_candidate(window: &Window) -> bool {
+    match declared_window_kind(window) {
+        Some(RepoKind::Oracle) => true,
+        Some(RepoKind::Project) => false,
+        None => window.name.to_lowercase().ends_with("-oracle"),
     }
 }
 
@@ -236,16 +245,22 @@ fn declared_alias_kind(query: &str, sessions: &[Session]) -> Option<RepoKind> {
             .any(|name| candidates.iter().any(|candidate| candidate.eq_ignore_ascii_case(name)));
         for window in &session.windows {
             let window_matches = candidates.iter().any(|candidate| candidate.eq_ignore_ascii_case(&window.name));
-            if (session_matches || window_matches) && window.kind.is_some() {
-                let kind = window.kind;
-                if found.is_some() && found != kind {
+            if !(session_matches || window_matches) {
+                continue;
+            }
+            if let Some(kind) = declared_window_kind(window) {
+                if found.is_some() && found != Some(kind) {
                     return None;
                 }
-                found = kind;
+                found = Some(kind);
             }
         }
     }
     found
+}
+
+fn declared_window_kind(window: &Window) -> Option<RepoKind> {
+    window.kind
 }
 
 fn session_alias_names(name: &str) -> Vec<String> {
@@ -600,6 +615,81 @@ mod coverage_gap_tests {
             ),
             ResolveResult::Local {
                 target: "mawjs:4".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn self_target_alias_skips_declared_project_oracle_suffix_window() {
+        let sessions = vec![session(
+            "188-maw-rs",
+            vec![
+                window(0, "work"),
+                window_with_kind(1, "maw-rs-oracle", RepoKind::Project),
+                window_with_kind(4, "maw-rs-codex-6", RepoKind::Oracle),
+            ],
+        )];
+
+        assert_eq!(
+            resolve_target_with_current_session(
+                "me",
+                &MawConfig::default(),
+                &sessions,
+                Some("188-maw-rs")
+            ),
+            ResolveResult::Local {
+                target: "188-maw-rs:4".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn self_target_alias_reports_no_oracle_when_suffix_window_is_declared_project() {
+        let sessions = vec![session(
+            "188-maw-rs",
+            vec![
+                window(0, "work"),
+                window_with_kind(1, "maw-rs-oracle", RepoKind::Project),
+            ],
+        )];
+
+        assert_eq!(
+            resolve_target_with_current_session(
+                "me",
+                &MawConfig::default(),
+                &sessions,
+                Some("188-maw-rs")
+            ),
+            ResolveResult::Error {
+                reason: "me_oracle_window_not_found".to_owned(),
+                detail: "'me' resolved current tmux session '188-maw-rs', but no *-oracle window was found".to_owned(),
+                hint: Some(
+                    "windows: 188-maw-rs:0 (work), 188-maw-rs:1 (maw-rs-oracle)"
+                        .to_owned()
+                ),
+            }
+        );
+    }
+
+    #[test]
+    fn self_target_alias_matches_declared_oracle_window_without_suffix() {
+        let sessions = vec![session(
+            "188-maw-rs",
+            vec![
+                window(0, "work"),
+                window_with_kind(3, "maw-rs-codex-6", RepoKind::Oracle),
+            ],
+        )];
+
+        assert_eq!(
+            resolve_target_with_current_session(
+                "me",
+                &MawConfig::default(),
+                &sessions,
+                Some("188-maw-rs")
+            ),
+            ResolveResult::Local {
+                target: "188-maw-rs:3".to_owned()
             }
         );
     }
