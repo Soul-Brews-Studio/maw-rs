@@ -8,64 +8,44 @@ implicit to the repo you run from" — is preserved exactly, including every gua
 
 | file | tier | role |
 |------|------|------|
-| `plugin.json` | dev (bun-dev) | **active manifest** — runs `impl.ts` via Bun through `maw squad` today |
-| `impl.ts` | dev (bun-dev) | node/Bun port of the reference, verified live via real `maw squad` |
-| `src/plugin.ts` | ship (wasm) | AssemblyScript rewrite, compiled to `plugin.wasm` |
-| `plugin.source.json` | ship (wasm) | source manifest for `maw plugin build` (entry = `src/plugin.ts`) |
+| `plugin.json` | ship (wasm) | **active manifest** — `maw squad` runs `plugin.wasm` on Extism (graduated in #145) |
 | `plugin.wasm` | ship (wasm) | built Extism artifact, `sha256:8118879a0415dbdf49db4824fee12afc8d8ce18968ec6d7ab9ebb87d42da5415` |
+| `plugin.source.json` | ship (wasm) | source manifest for `maw plugin build` (entry = `src/plugin.ts`) |
+| `src/plugin.ts` | ship (wasm) | AssemblyScript source of the artifact |
+| `impl.ts` | dev (bun-dev) | node/Bun dev-tier fallback of the reference, kept for iteration |
 
 ## Runtime ladder (issue #72 policy)
 
-- **Dev tier (active):** `plugin.json` opts into `"runtime": "bun-dev"` so the CLI dispatch runs
-  the real TS via Bun. Loud `⚠ [dev-tier: bun]` banner on every invocation. This is what
-  `maw squad` runs today, and it is fully working (verified live: start/adopt/say/ls + guards).
-  Dev-tier note: maw-rs runs bun-dev plugins with cwd = the plugin dir, so `impl.ts` derives the
-  lead repo from `$PWD` (inherited from the invoking shell), not `process.cwd()`.
-
-- **Ship tier (built, verified, gated on one runtime line):** `src/plugin.ts` → `plugin.wasm`
-  via `maw plugin build`. The WASM talks to the host only through capability-gated host fns
+- **Ship tier (ACTIVE — graduated in #145):** `src/plugin.ts` → `plugin.wasm` via
+  `maw plugin build`. The WASM talks to the host only through capability-gated host fns
   (`fs:read:teams` / `fs:write:teams` / `tmux:read` / `proc:exec:date`) and derives cwd/home
-  from the InvokeContext the dispatch injects. It is byte-compatible with athena's roster
-  format (config keys `[name, members, createdAt, leadSessionId, leadRepo]`, member keys
-  `[agentId, name, color, repo, joinedAt]`, message keys `[from, text, timestamp, color, type,
-  read]`) and append-never-clobbers inboxes.
+  from the InvokeContext the dispatch injects (cwd = the invoking process cwd — *not* `$PWD`;
+  tests that steer the team must chdir, see `crates/maw-cli/tests/squad_acceptance.rs`). It is
+  byte-compatible with athena's roster format (config keys `[name, members, createdAt,
+  leadSessionId, leadRepo]`, member keys `[agentId, name, color, repo, joinedAt]`, message keys
+  `[from, text, timestamp, color, type, read]`) and append-never-clobbers inboxes. The
+  `artifact.sha256` pin is enforced at load; `fleet_plugins_pin_check` covers it in CI.
 
-### Why the ship tier is not the active manifest yet
+- **Dev tier (fallback):** flip `plugin.json` back to `"runtime": "bun-dev"` + `entry: impl.ts`
+  to iterate on the TS with a loud `⚠ [dev-tier: bun]` banner. Dev-tier note: maw-rs runs
+  bun-dev plugins with cwd = the plugin dir, so `impl.ts` derives the lead repo from `$PWD`
+  (inherited from the invoking shell), not `process.cwd()`.
 
-`maw squad` (real CLI dispatch) builds the Extism runtime **without** granting manifest fs roots:
+### Graduation history
 
-- `crates/maw-cli/src/core_impl/dispatcher.rs:483`
-  `let mut runtime = ExtismWasmInvokeRuntime::default();`  ← missing `.with_manifest_fs_roots()`
+The ship tier was blocked from real `maw <cmd>` dispatch by one missing grant —
+`dispatcher.rs` built `ExtismWasmInvokeRuntime::default()` without `.with_manifest_fs_roots()`,
+so every `maw.fs.*` call was denied (`filesystem path outside declared write roots`) while the
+internal `plugin-manifest invoke` path worked. The exec-only acceptance probe missed it because
+it never exercises `maw.fs.*`. Fixed in **#144** (CLI dispatch now grants manifest fs roots),
+graduated in **#145** (active manifest = wasm), and the fs-exercising acceptance suite that
+would have caught it landed as `squad_acceptance.rs` (**#142**).
 
-The grant is wired only into the internal invoke path
-(`crates/maw-cli/src/core_impl/plugin_plan.rs:1029`:
-`ExtismWasmInvokeRuntime::default().with_manifest_fs_roots()`). Without it, every `maw.fs.*`
-call from a plugin dispatched via `maw <cmd>` is denied with
-`filesystem path outside declared write roots`, so the wasm cannot touch `~/.claude/teams`.
-
-The wasm is proven correct on the path that *does* grant roots:
-
-```
-maw plugin-manifest invoke --scan-dir <dir> --plugin squad --source cli --arg start
-maw plugin-manifest invoke --scan-dir <dir> --plugin squad --source cli --arg ls
-maw plugin-manifest invoke --scan-dir <dir> --plugin squad --source cli --arg say --arg digger --arg "hi"
-```
-
-all succeed and write byte-compatible roster files.
-
-**Fix (one line, sanctioned mechanism — the same call the internal path already uses):**
-change `dispatcher.rs:483` to `ExtismWasmInvokeRuntime::default().with_manifest_fs_roots()`.
-This is a runtime change outside the plugin surface, flagged for the runtime owners rather than
-applied here. The exec-only acceptance probe (`probe_runs_via_cli_dispatch`) passed because it
-never exercises `maw.fs.*`, so the gap slipped through — a fs-exercising acceptance case would
-catch it.
-
-### Graduation (once the runtime grants CLI-dispatch fs roots)
-
-Swap the active manifest to the ship tier: rebuild from `plugin.source.json`
-(`maw plugin build` with `entry = src/plugin.ts`) and point `plugin.json` at `plugin.wasm`
-(`target: wasm`, `entry: {kind: wasm, path: plugin.wasm, export: handle}`, `artifact.sha256`).
-`impl.ts` stays as the documented dev-tier fallback.
+Graduation recipe for the next fleet plugin (hermes/atlas/team): land bun-dev-active first if
+the wasm tier isn't proven, pin the pre-staged wasm in `plugin.source.json`, then graduate by
+making `plugin.json` the wasm ship manifest (`target: wasm`, `entry: {kind: wasm, path:
+plugin.wasm, export: handle}`, `artifact.sha256`). `plugin.json` is always the active manifest;
+every committed `.wasm` must be pinned by some committed manifest (see `fleet-plugins/README.md`).
 
 ## join
 
