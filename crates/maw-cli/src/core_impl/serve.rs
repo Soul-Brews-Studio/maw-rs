@@ -22,6 +22,7 @@ const DEFAULT_SERVE_BIND: &str = "0.0.0.0";
 const SERVE_FEED_MAX: usize = 200;
 const SERVE_LOG_TEXT_MAX: usize = 2_000;
 const SERVE_LOG_ERROR_MAX: usize = 1_000;
+const DELIVERY_IDEMPOTENCY_TTL_SECONDS: i64 = 24 * 60 * 60;
 #[cfg(test)]
 const NON_LOOPBACK_TEST_PEER: SocketAddr =
     SocketAddr::new(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 10)), 49_152);
@@ -34,6 +35,7 @@ struct ServeState {
     requests: Mutex<RequestReplyStore>,
     delivery: Arc<dyn ServeDelivery>,
     receiver_inbox: Arc<dyn ServeReceiverInbox>,
+    delivery_idempotency: Mutex<DeliveryIdempotencyStore>,
     feed: Mutex<Vec<Value>>,
     #[cfg(test)]
     peer_addr_override: Option<SocketAddr>,
@@ -181,6 +183,7 @@ async fn run_serve_async_impl(raw_args: &[String]) -> CliOutput {
         requests: Mutex::new(RequestReplyStore::default()),
         delivery: Arc::new(ServeSystemDelivery),
         receiver_inbox: Arc::new(ServeSystemReceiverInbox::default()),
+        delivery_idempotency: Mutex::new(DeliveryIdempotencyStore::default()),
         feed: Mutex::new(Vec::new()),
         #[cfg(test)]
         peer_addr_override: None,
@@ -453,6 +456,12 @@ fn serve_deliver_send(
                 requested: &target,
                 resolved: &resolved,
                 message: &message,
+                idempotency_key: serve_delivery_idempotency_key(
+                    headers,
+                    &log_from,
+                    &resolved,
+                    &message,
+                ),
             };
             serve_deliver_local(state, &context)
         }
@@ -514,6 +523,10 @@ fn serve_deliver_inbox(
         serve_log_delivery_failed(state, target, message, log_from, log_to, &error, "inbox");
         return serve_delivery_error(StatusCode::NOT_FOUND, "target-not-live", target, &error);
     }
+    let idempotency_key = match serve_claim_inbox_idempotency(state, headers, parsed, &resolved, context) {
+        ServeInboxIdempotencyClaim::Claimed(key) => key,
+        ServeInboxIdempotencyClaim::Duplicate(response) => return *response,
+    };
     let from = serve_display_from(headers, config);
     match state.receiver_inbox.write_receiver_inbox(ReceiverInboxInput {
         query: target,
@@ -525,6 +538,15 @@ fn serve_deliver_inbox(
     }) {
         ReceiverInboxResult::Ok(inbox) => {
             let reason = "--inbox requested; pane injection skipped";
+            if let Some(key) = idempotency_key.clone() {
+                serve_delivery_idempotency_complete(
+                    state,
+                    key,
+                    &resolved,
+                    "queued",
+                    serve_delivery_idempotency_now(state),
+                );
+            }
             serve_log_lifecycle(
                 state,
                 json!({
@@ -556,8 +578,50 @@ fn serve_deliver_inbox(
             .into_response()
         }
         ReceiverInboxResult::Err { oracle: _, reason } => {
+            if let Some(key) = idempotency_key.as_ref() {
+                serve_delivery_idempotency_cancel(state, key);
+            }
             serve_log_delivery_failed(state, target, message, log_from, log_to, &reason, "inbox");
             serve_delivery_error(StatusCode::BAD_GATEWAY, "receiver-inbox-unavailable", target, &reason)
+        }
+    }
+}
+
+enum ServeInboxIdempotencyClaim {
+    Claimed(Option<DeliveryIdempotencyKey>),
+    Duplicate(Box<axum::response::Response>),
+}
+
+fn serve_claim_inbox_idempotency(
+    state: &ServeState,
+    headers: &HeaderMap,
+    parsed: &SendBody,
+    resolved: &str,
+    context: &ServeInboxContext<'_>,
+) -> ServeInboxIdempotencyClaim {
+    let idempotency_key =
+        serve_delivery_idempotency_key(headers, context.log_from, resolved, context.message);
+    let Some(key) = idempotency_key.clone() else {
+        return ServeInboxIdempotencyClaim::Claimed(None);
+    };
+    match serve_delivery_idempotency_claim(state, key.clone(), serve_delivery_idempotency_now(state)) {
+        DeliveryIdempotencyClaim::Claimed => ServeInboxIdempotencyClaim::Claimed(idempotency_key),
+        DeliveryIdempotencyClaim::Duplicate(record) => {
+            serve_log_delivery_deduped(
+                state,
+                &key,
+                resolved,
+                context.message,
+                context.log_from,
+                context.log_to,
+                "inbox",
+            );
+            ServeInboxIdempotencyClaim::Duplicate(Box::new(serve_delivery_idempotency_response(
+                &record,
+                resolved,
+                &parsed.text.clone().unwrap_or_default(),
+                "inbox",
+            )))
         }
     }
 }
@@ -586,6 +650,217 @@ enum ReceiverInboxResult {
     Err { oracle: Option<String>, reason: String },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct DeliveryIdempotencyKey {
+    source: String,
+    target: String,
+    payload_hash: String,
+    logical_ts: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DeliveryIdempotencyRecord {
+    InFlight { seen_at: i64 },
+    Complete {
+        target: String,
+        state: String,
+        seen_at: i64,
+    },
+}
+
+impl DeliveryIdempotencyRecord {
+    fn response_state(&self) -> &str {
+        match self {
+            Self::InFlight { .. } => "queued",
+            Self::Complete { state, .. } => state,
+        }
+    }
+
+    fn response_target<'a>(&'a self, fallback: &'a str) -> &'a str {
+        match self {
+            Self::InFlight { .. } => fallback,
+            Self::Complete { target, .. } => target,
+        }
+    }
+
+    const fn seen_at(&self) -> i64 {
+        match self {
+            Self::InFlight { seen_at } | Self::Complete { seen_at, .. } => *seen_at,
+        }
+    }
+}
+
+#[derive(Default)]
+struct DeliveryIdempotencyStore {
+    records: HashMap<DeliveryIdempotencyKey, DeliveryIdempotencyRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DeliveryIdempotencyClaim {
+    Claimed,
+    Duplicate(DeliveryIdempotencyRecord),
+}
+
+fn serve_delivery_idempotency_key(
+    headers: &HeaderMap,
+    fallback_source: &str,
+    target: &str,
+    payload: &str,
+) -> Option<DeliveryIdempotencyKey> {
+    let logical_ts = serve_delivery_logical_ts(headers)?;
+    let raw_source = header_to_string(headers, "x-maw-from");
+    let source = raw_source.trim();
+    let source = if source.is_empty() { fallback_source.trim() } else { source };
+    let target = target.trim();
+    if source.is_empty() || target.is_empty() {
+        return None;
+    }
+    let payload_hash = maw_auth::hash_body(Some(payload.as_bytes()));
+    if payload_hash.is_empty() {
+        return None;
+    }
+    Some(DeliveryIdempotencyKey {
+        source: source.to_owned(),
+        target: target.to_owned(),
+        payload_hash,
+        logical_ts,
+    })
+}
+
+fn serve_delivery_logical_ts(headers: &HeaderMap) -> Option<String> {
+    ["x-maw-timestamp", "x-maw-signed-at"]
+        .into_iter()
+        .map(|name| header_to_string(headers, name))
+        .map(|value| value.trim().to_owned())
+        .find(|value| !value.is_empty())
+}
+
+fn serve_delivery_idempotency_claim(
+    state: &ServeState,
+    key: DeliveryIdempotencyKey,
+    now: i64,
+) -> DeliveryIdempotencyClaim {
+    let mut store = state
+        .delivery_idempotency
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    serve_delivery_idempotency_prune(&mut store, now);
+    if let Some(record) = store.records.get(&key).cloned() {
+        return DeliveryIdempotencyClaim::Duplicate(record);
+    }
+    store
+        .records
+        .insert(key, DeliveryIdempotencyRecord::InFlight { seen_at: now });
+    DeliveryIdempotencyClaim::Claimed
+}
+
+fn serve_delivery_idempotency_complete(
+    state: &ServeState,
+    key: DeliveryIdempotencyKey,
+    target: &str,
+    state_name: &str,
+    now: i64,
+) {
+    let mut store = state
+        .delivery_idempotency
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    store.records.insert(
+        key,
+        DeliveryIdempotencyRecord::Complete {
+            target: target.to_owned(),
+            state: state_name.to_owned(),
+            seen_at: now,
+        },
+    );
+}
+
+fn serve_delivery_idempotency_cancel(state: &ServeState, key: &DeliveryIdempotencyKey) {
+    let mut store = state
+        .delivery_idempotency
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if matches!(store.records.get(key), Some(DeliveryIdempotencyRecord::InFlight { .. })) {
+        store.records.remove(key);
+    }
+}
+
+fn serve_delivery_idempotency_prune(store: &mut DeliveryIdempotencyStore, now: i64) {
+    store.records.retain(|_, record| {
+        let age = now.saturating_sub(record.seen_at());
+        age <= DELIVERY_IDEMPOTENCY_TTL_SECONDS
+    });
+}
+
+fn serve_delivery_idempotency_now(state: &ServeState) -> i64 {
+    #[cfg(test)]
+    {
+        state
+            .now_override
+            .unwrap_or_else(|| i64::try_from(current_epoch_seconds()).unwrap_or(i64::MAX))
+    }
+    #[cfg(not(test))]
+    {
+        let _ = state;
+        i64::try_from(current_epoch_seconds()).unwrap_or(i64::MAX)
+    }
+}
+
+fn serve_delivery_idempotency_response(
+    record: &DeliveryIdempotencyRecord,
+    fallback_target: &str,
+    text: &str,
+    source: &str,
+) -> axum::response::Response {
+    let target = record.response_target(fallback_target);
+    let state_name = record.response_state();
+    Json(json!({
+        "ok": true,
+        "target": target,
+        "text": text,
+        "source": source,
+        "state": state_name,
+        "deduped": true,
+        "idempotent": true,
+        "reason": "duplicate delivery dropped by idempotency key",
+        "receipt": ["duplicate_dropped"],
+        "lastLine": "duplicate delivery dropped by idempotency key",
+    }))
+    .into_response()
+}
+
+fn serve_log_delivery_deduped(
+    state: &ServeState,
+    key: &DeliveryIdempotencyKey,
+    target: &str,
+    message: &str,
+    from: &str,
+    to: &str,
+    route: &str,
+) {
+    serve_log_lifecycle(
+        state,
+        json!({
+            "kind": "context.message",
+            "direction": "inbound",
+            "state": "deduped",
+            "route": route,
+            "from": serve_truncate(from, SERVE_LOG_TEXT_MAX),
+            "to": serve_truncate(to, SERVE_LOG_TEXT_MAX),
+            "target": target,
+            "text": serve_truncate(message, SERVE_LOG_TEXT_MAX),
+            "oracle": serve_oracle_from_target(target),
+            "source": "maw-rs-native",
+            "idempotency": {
+                "source": &key.source,
+                "target": &key.target,
+                "payloadHash": &key.payload_hash,
+                "logicalTs": &key.logical_ts,
+            },
+        }),
+    );
+}
+
 struct ServeDeliverContext<'a> {
     config: &'a HeyConfig,
     from: Option<&'a str>,
@@ -594,6 +869,7 @@ struct ServeDeliverContext<'a> {
     requested: &'a str,
     resolved: &'a str,
     message: &'a str,
+    idempotency_key: Option<DeliveryIdempotencyKey>,
 }
 
 fn serve_deliver_local(
@@ -613,8 +889,35 @@ fn serve_deliver_local(
         return serve_delivery_error(StatusCode::NOT_FOUND, "target-disappeared", context.requested, &error);
     }
 
+    let idempotency_key = context.idempotency_key.clone();
+    if let Some(key) = idempotency_key.clone() {
+        match serve_delivery_idempotency_claim(state, key.clone(), serve_delivery_idempotency_now(state)) {
+            DeliveryIdempotencyClaim::Duplicate(record) => {
+                serve_log_delivery_deduped(
+                    state,
+                    &key,
+                    context.resolved,
+                    context.message,
+                    context.log_from,
+                    context.log_to,
+                    "local",
+                );
+                return serve_delivery_idempotency_response(
+                    &record,
+                    context.resolved,
+                    context.message,
+                    "maw-rs",
+                );
+            }
+            DeliveryIdempotencyClaim::Claimed => {}
+        }
+    }
+
     let outbound = format_local_hey_message(context.message, context.config, context.from);
     if let Err(error) = state.delivery.send_literal_enter(context.resolved, &outbound) {
+        if let Some(key) = idempotency_key.as_ref() {
+            serve_delivery_idempotency_cancel(state, key);
+        }
         serve_log_delivery_failed(state, context.requested, context.message, context.log_from, context.log_to, &error, "tmux-send");
         return serve_delivery_error(StatusCode::BAD_GATEWAY, "tmux-send-failed", context.resolved, &error);
     }
@@ -625,6 +928,15 @@ fn serve_deliver_local(
     } else {
         "delivered"
     };
+    if let Some(key) = idempotency_key {
+        serve_delivery_idempotency_complete(
+            state,
+            key,
+            context.resolved,
+            state_name,
+            serve_delivery_idempotency_now(state),
+        );
+    }
     let last_line = serve_last_nonempty_line(&capture);
     serve_log_lifecycle(
         state,
@@ -2439,6 +2751,7 @@ mod serve_tests {
             requests: Mutex::new(RequestReplyStore::default()),
             delivery: serve_test_delivery(),
             receiver_inbox: serve_test_receiver_inbox(),
+            delivery_idempotency: Mutex::new(DeliveryIdempotencyStore::default()),
             feed: Mutex::new(Vec::new()),
             peer_addr_override: Some(NON_LOOPBACK_TEST_PEER),
             now_override: Some(1_782_277_200),
@@ -2527,6 +2840,7 @@ mod serve_tests {
             requests: Mutex::new(RequestReplyStore::default()),
             delivery,
             receiver_inbox,
+            delivery_idempotency: Mutex::new(DeliveryIdempotencyStore::default()),
             feed: Mutex::new(Vec::new()),
             peer_addr_override,
             now_override: Some(now),
@@ -2662,6 +2976,85 @@ mod serve_tests {
         assert_eq!(sends.len(), 1);
         assert_eq!(sends[0].0, "capture-agent:0");
         assert_eq!(sends[0].1, "[alloy:bigboy-vps] hello node fallback");
+    }
+
+    #[tokio::test]
+    async fn serve_api_send_dedups_cross_turn_duplicate_by_delivery_key() {
+        let node_key = "node-key-bigboy-vps-399";
+        let delivery = Arc::new(FakeServeDelivery::with_capture_agent());
+        let app = serve_test_app_with_o6_keys_and_delivery(
+            vec![serve_test_peer_pubkey("nova:bigboy-vps", node_key)],
+            1_782_277_200,
+            Some(NON_LOOPBACK_TEST_PEER),
+            delivery.clone(),
+        );
+        let first_body = r#"{"target":"capture-agent","text":"codex-2 DONE #87 full suite green"}"#;
+        let intervening_body = r#"{"target":"capture-agent","text":"another turn between duplicate emissions"}"#;
+
+        let first = app
+            .clone()
+            .oneshot(signed_json_request(
+                "POST",
+                "/api/send",
+                first_body,
+                node_key,
+                "alloy:bigboy-vps",
+                1_782_277_200,
+            ))
+            .await
+            .expect("first response");
+        let first_payload = response_json(first).await;
+        assert_eq!(first_payload["state"], "delivered");
+
+        let intervening = app
+            .clone()
+            .oneshot(signed_json_request(
+                "POST",
+                "/api/send",
+                intervening_body,
+                node_key,
+                "alloy:bigboy-vps",
+                1_782_277_200,
+            ))
+            .await
+            .expect("intervening response");
+        let intervening_payload = response_json(intervening).await;
+        assert_eq!(intervening_payload["state"], "delivered");
+
+        let duplicate = app
+            .oneshot(signed_json_request(
+                "POST",
+                "/api/send",
+                first_body,
+                node_key,
+                "alloy:bigboy-vps",
+                1_782_277_200,
+            ))
+            .await
+            .expect("duplicate response");
+        let duplicate_status = duplicate.status();
+        let duplicate_payload = response_json(duplicate).await;
+        assert_eq!(duplicate_status, StatusCode::OK, "{duplicate_payload}");
+        assert_eq!(duplicate_payload["state"], "delivered");
+        assert_eq!(duplicate_payload["deduped"], true);
+        assert_eq!(duplicate_payload["receipt"], json!(["duplicate_dropped"]));
+
+        let sends = delivery.sends();
+        assert_eq!(sends.len(), 2, "delayed replay must not reinject");
+        assert_eq!(
+            sends[0],
+            (
+                "capture-agent:0".to_owned(),
+                "[alloy:bigboy-vps] codex-2 DONE #87 full suite green".to_owned()
+            )
+        );
+        assert_eq!(
+            sends[1],
+            (
+                "capture-agent:0".to_owned(),
+                "[alloy:bigboy-vps] another turn between duplicate emissions".to_owned()
+            )
+        );
     }
 
     #[tokio::test]
@@ -3454,6 +3847,7 @@ mod serve_tests {
             requests: Mutex::new(RequestReplyStore::default()),
             delivery: serve_test_delivery(),
             receiver_inbox: serve_test_receiver_inbox(),
+            delivery_idempotency: Mutex::new(DeliveryIdempotencyStore::default()),
             feed: Mutex::new(Vec::new()),
             peer_addr_override: Some(NON_LOOPBACK_TEST_PEER),
             now_override: Some(1_782_277_200),
@@ -3756,6 +4150,7 @@ mod serve_tests {
             requests: Mutex::new(RequestReplyStore::default()),
             delivery: serve_test_delivery(),
             receiver_inbox: serve_test_receiver_inbox(),
+            delivery_idempotency: Mutex::new(DeliveryIdempotencyStore::default()),
             feed: Mutex::new(Vec::new()),
             peer_addr_override: Some(NON_LOOPBACK_TEST_PEER),
             now_override: Some(1_782_277_200),
