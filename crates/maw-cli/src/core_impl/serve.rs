@@ -175,6 +175,16 @@ async fn run_serve_async_impl(raw_args: &[String]) -> CliOutput {
             }
         }
     };
+    let _pidfile = match ServePidFileGuard::write_current_process(serve_pid_path152()) {
+        Ok(pidfile) => pidfile,
+        Err(error) => {
+            return CliOutput {
+                code: 1,
+                stdout: String::new(),
+                stderr: format!("serve: failed to write pidfile: {error}\n"),
+            }
+        }
+    };
     let app = serve_router(ServeState {
         cached_pubkey: args.cached_pubkey,
         peer_pubkeys: load_inbound_peer_pubkeys(),
@@ -210,6 +220,32 @@ async fn run_serve_async_impl(raw_args: &[String]) -> CliOutput {
             stdout: String::new(),
             stderr: format!("serve: server error: {error}\n"),
         },
+    }
+}
+
+struct ServePidFileGuard {
+    path: std::path::PathBuf,
+    pid: u32,
+}
+
+impl ServePidFileGuard {
+    fn write_current_process(path: std::path::PathBuf) -> Result<Self, String> {
+        let pid = std::process::id();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| format!("create {} failed: {error}", parent.display()))?;
+        }
+        std::fs::write(&path, format!("{pid}\n"))
+            .map_err(|error| format!("write {} failed: {error}", path.display()))?;
+        Ok(Self { path, pid })
+    }
+}
+
+impl Drop for ServePidFileGuard {
+    fn drop(&mut self) {
+        if messages_read_pid_file152(&self.path) == Some(self.pid) {
+            let _ = messages_remove_file152(&self.path);
+        }
     }
 }
 

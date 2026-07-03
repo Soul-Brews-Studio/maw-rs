@@ -21,9 +21,27 @@ enum ServeLifecycleAction152 {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ServeLifecycleStatus152 {
     pid: Option<u32>,
-    alive: bool,
     file: std::path::PathBuf,
+    port: u16,
+    port_probe: ServePortProbe152,
+    listener_pid: Option<u32>,
+    pid_process_alive: bool,
+    stale_pid: bool,
+    stale_pid_removed: bool,
     summary: Option<String>,
+}
+
+impl ServeLifecycleStatus152 {
+    fn alive(&self) -> bool {
+        self.port_probe == ServePortProbe152::Responding || self.pid_process_alive
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ServePortProbe152 {
+    Responding,
+    NoListener,
+    Failed(String),
 }
 
 trait MessagesLifecycleHost152 {
@@ -41,7 +59,11 @@ trait ServeLifecycleHost152 {
     fn serve_pid_path(&self) -> std::path::PathBuf;
     fn serve_read_pid(&self, path: &std::path::Path) -> Option<u32>;
     fn serve_pid_alive(&self, pid: u32) -> bool;
+    fn serve_process_is_maw(&self, pid: u32) -> bool;
     fn serve_process_summary(&self, pid: u32) -> String;
+    fn serve_configured_port(&self) -> u16;
+    fn serve_probe_port(&self, port: u16) -> ServePortProbe152;
+    fn serve_listener_pid(&self, port: u16) -> Option<u32>;
     fn serve_remove_pid(&mut self, path: &std::path::Path) -> Result<(), String>;
     fn serve_stop_pid(&mut self, pid: u32) -> Result<(), String>;
 }
@@ -64,7 +86,11 @@ impl ServeLifecycleHost152 for ServeSystemHost152 {
     fn serve_pid_path(&self) -> std::path::PathBuf { serve_pid_path152() }
     fn serve_read_pid(&self, path: &std::path::Path) -> Option<u32> { messages_read_pid_file152(path) }
     fn serve_pid_alive(&self, pid: u32) -> bool { messages_pid_alive152(pid) }
+    fn serve_process_is_maw(&self, pid: u32) -> bool { serve_process_is_maw152(pid) }
     fn serve_process_summary(&self, pid: u32) -> String { serve_process_summary152(pid) }
+    fn serve_configured_port(&self) -> u16 { serve_configured_port152() }
+    fn serve_probe_port(&self, port: u16) -> ServePortProbe152 { serve_probe_port152(port) }
+    fn serve_listener_pid(&self, port: u16) -> Option<u32> { serve_listener_pid152(port) }
     fn serve_remove_pid(&mut self, path: &std::path::Path) -> Result<(), String> { messages_remove_file152(path) }
     fn serve_stop_pid(&mut self, pid: u32) -> Result<(), String> { messages_signal_term152(pid) }
 }
@@ -181,7 +207,11 @@ fn messages_serve152(detach: bool, engine: &str, port: u16, host: &impl Messages
     }
     let _ = writeln!(out, "registered: {MESSAGES_ENGINE_PREFIX_152} on {engine}");
     let _ = writeln!(out, "upstream: built-in maw serve /api/message-ledger (requested port {port})");
-    let _ = writeln!(out, "serve: {}", if serve.alive { "running" } else { "stopped" });
+    let _ = writeln!(
+        out,
+        "serve: {}",
+        if serve.alive() { "running" } else { "stopped" }
+    );
     let _ = writeln!(out, "db: {}", host.messages_db_path().display());
     let _ = writeln!(out, "log: {}", host.messages_log_path().display());
     CliOutput { code: 0, stdout: out, stderr: String::new() }
@@ -192,9 +222,9 @@ fn messages_status152(engine: &str, host: &impl MessagesLifecycleHost152) -> Cli
     let pid = host.messages_read_pid(&pid_path);
     let alive = pid.is_some_and(|pid| host.messages_pid_alive(pid));
     let serve = host.messages_serve_status();
-    let registered = if serve.alive { format!("{MESSAGES_ENGINE_PREFIX_152} → built-in maw serve") } else { "no".to_owned() };
+    let registered = if serve.alive() { format!("{MESSAGES_ENGINE_PREFIX_152} → built-in maw serve") } else { "no".to_owned() };
     let mut out = String::new();
-    let _ = writeln!(out, "maw messages serve: {}{}", if alive || serve.alive { "running" } else { "stopped" }, pid.map_or_else(String::new, |pid| format!(" (PID {pid})")));
+    let _ = writeln!(out, "maw messages serve: {}{}", if alive || serve.alive() { "running" } else { "stopped" }, pid.map_or_else(String::new, |pid| format!(" (PID {pid})")));
     let _ = writeln!(out, "engine: {engine}");
     let _ = writeln!(out, "registered: {registered}");
     let _ = writeln!(out, "db: {}", host.messages_db_path().display());
@@ -221,42 +251,102 @@ fn messages_stop152(engine: &str, host: &mut impl MessagesLifecycleHost152) -> C
             lines.push("removed stale pid file".to_owned());
         }
     }
-    if host.messages_serve_status().alive { lines.push(format!("native route remains served by maw serve at {MESSAGES_ENGINE_PREFIX_152}")); }
+    if host.messages_serve_status().alive() { lines.push(format!("native route remains served by maw serve at {MESSAGES_ENGINE_PREFIX_152}")); }
     CliOutput { code: 0, stdout: format!("{}\n", lines.join("\n")), stderr: String::new() }
 }
 
-fn serve_status152(host: &impl ServeLifecycleHost152) -> CliOutput {
-    let status = serve_status_with_host152(host);
+fn serve_status152(host: &mut impl ServeLifecycleHost152) -> CliOutput {
+    let mut status = serve_status_with_host152(host);
+    if status.stale_pid {
+        if let Err(error) = host.serve_remove_pid(&status.file) {
+            return messages_lifecycle_error152(1, &format!("serve status: {error}"));
+        }
+        status.stale_pid_removed = true;
+    }
     let stdout = serve_render_status152(&status);
     CliOutput { code: 0, stdout, stderr: String::new() }
 }
 
 fn serve_stop152(host: &mut impl ServeLifecycleHost152) -> CliOutput {
     let status = serve_status_with_host152(host);
-    if status.pid.is_none() { return CliOutput { code: 0, stdout: "maw serve: already stopped\n".to_owned(), stderr: String::new() }; }
-    let pid = status.pid.expect("pid");
-    if !status.alive {
-        if let Err(error) = host.serve_remove_pid(&status.file) { return messages_lifecycle_error152(1, &format!("serve stop: {error}")); }
+    let pid = if status.alive() { status.listener_pid.or(status.pid.filter(|_| status.pid_process_alive)) } else { status.pid };
+    let Some(pid) = pid else { return CliOutput { code: 0, stdout: "maw serve: already stopped\n".to_owned(), stderr: String::new() }; };
+    if !status.alive() {
+        if status.stale_pid {
+            if let Err(error) = host.serve_remove_pid(&status.file) { return messages_lifecycle_error152(1, &format!("serve stop: {error}")); }
+        }
         return CliOutput { code: 0, stdout: format!("maw serve: removed stale PID {pid}\n"), stderr: String::new() };
     }
     if let Err(error) = host.serve_stop_pid(pid) { return messages_lifecycle_error152(1, &format!("serve stop: {error}")); }
-    if let Err(error) = host.serve_remove_pid(&status.file) { return messages_lifecycle_error152(1, &format!("serve stop: {error}")); }
+    if status.pid.is_some() {
+        if let Err(error) = host.serve_remove_pid(&status.file) { return messages_lifecycle_error152(1, &format!("serve stop: {error}")); }
+    }
     CliOutput { code: 0, stdout: format!("maw serve: stopped PID {pid}\n"), stderr: String::new() }
 }
 
 fn serve_status_with_host152(host: &impl ServeLifecycleHost152) -> ServeLifecycleStatus152 {
     let file = host.serve_pid_path();
     let pid = host.serve_read_pid(&file);
-    let alive = pid.is_some_and(|pid| host.serve_pid_alive(pid));
-    let summary = pid.filter(|_| alive).map(|pid| host.serve_process_summary(pid));
-    ServeLifecycleStatus152 { pid, alive, file, summary }
+    let port = host.serve_configured_port();
+    let port_probe = host.serve_probe_port(port);
+    let port_responding = port_probe == ServePortProbe152::Responding;
+    let listener_pid = port_responding.then(|| host.serve_listener_pid(port)).flatten();
+    let pid_process_alive = pid.is_some_and(|pid| host.serve_pid_alive(pid) && host.serve_process_is_maw(pid));
+    let summary = pid.filter(|_| pid_process_alive).map(|pid| host.serve_process_summary(pid));
+    let stale_pid = match (pid, listener_pid) {
+        (Some(pid), Some(listener_pid)) if pid != listener_pid => true,
+        (Some(_), _) if !pid_process_alive => true,
+        _ => false,
+    };
+    ServeLifecycleStatus152 {
+        pid,
+        file,
+        port,
+        port_probe,
+        listener_pid,
+        pid_process_alive,
+        stale_pid,
+        stale_pid_removed: false,
+        summary,
+    }
 }
 
 fn serve_render_status152(status: &ServeLifecycleStatus152) -> String {
-    match (status.pid, status.alive) {
-        (None, _) => format!("maw serve: stopped ({})\n", status.file.display()),
-        (Some(pid), true) => format!("maw serve: running (PID {pid}{})\n", status.summary.as_deref().unwrap_or_default()),
-        (Some(pid), false) => format!("maw serve: stopped — removed stale PID {pid} ({})\n", status.file.display()),
+    let stale_note = if status.stale_pid_removed { Some("stale pidfile removed") } else { None };
+    if status.alive() {
+        let mut evidence = Vec::new();
+        if let Some(pid) = serve_status_evidence_pid152(status) {
+            evidence.push(format!("pid {pid}"));
+        }
+        if status.port_probe == ServePortProbe152::Responding {
+            evidence.push(format!(":{} responding", status.port));
+        } else if status.pid_process_alive {
+            evidence.push(format!(
+                "maw process alive{}",
+                status.summary.as_deref().unwrap_or_default()
+            ));
+        }
+        if let Some(note) = stale_note {
+            evidence.push(note.to_owned());
+        }
+        return format!("maw serve: running ({})\n", evidence.join(", "));
+    }
+    let mut evidence = vec![serve_probe_stopped_evidence152(&status.port_probe, status.port)];
+    if let Some(note) = stale_note {
+        evidence.push(note.to_owned());
+    }
+    format!("maw serve: stopped ({})\n", evidence.join("; "))
+}
+
+fn serve_status_evidence_pid152(status: &ServeLifecycleStatus152) -> Option<u32> {
+    status.listener_pid.or_else(|| status.pid.filter(|_| status.pid_process_alive))
+}
+
+fn serve_probe_stopped_evidence152(probe: &ServePortProbe152, port: u16) -> String {
+    match probe {
+        ServePortProbe152::Responding => format!(":{port} responding"),
+        ServePortProbe152::NoListener => format!("no listener on :{port}"),
+        ServePortProbe152::Failed(reason) => format!("health probe failed on :{port}: {reason}"),
     }
 }
 
@@ -299,6 +389,25 @@ fn messages_log_path152() -> std::path::PathBuf { maw_state_path(&current_xdg_en
 fn messages_db_path152() -> std::path::PathBuf { maw_data_path(&current_xdg_env(), &["message-ledger.sqlite"]) }
 fn serve_pid_path152() -> std::path::PathBuf { maw_runtime_home_dir(&current_xdg_env()).join("maw.pid") }
 
+fn serve_configured_port152() -> u16 {
+    std::env::var("MAW_PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .filter(|port| *port > 0)
+        .or_else(|| {
+            let value = merged_config_value_for_env(&current_xdg_env());
+            value
+                .get("port")
+                .and_then(|port| {
+                    port.as_u64()
+                        .and_then(|number| u16::try_from(number).ok())
+                        .or_else(|| port.as_str()?.parse::<u16>().ok())
+                })
+                .filter(|port| *port > 0)
+        })
+        .unwrap_or(DEFAULT_SERVE_PORT)
+}
+
 fn messages_read_pid_file152(path: &std::path::Path) -> Option<u32> {
     let raw = std::fs::read_to_string(path).ok()?;
     let trimmed = raw.trim();
@@ -315,7 +424,11 @@ fn messages_remove_file152(path: &std::path::Path) -> Result<(), String> {
 }
 
 fn messages_pid_alive152(pid: u32) -> bool {
-    std::path::Path::new("/proc").join(pid.to_string()).exists()
+    let output = std::process::Command::new("kill").arg("-0").arg(pid.to_string()).output();
+    match output {
+        Ok(output) => output.status.success(),
+        Err(_) => std::path::Path::new("/proc").join(pid.to_string()).exists(),
+    }
 }
 
 fn messages_signal_term152(pid: u32) -> Result<(), String> {
@@ -346,6 +459,73 @@ fn serve_process_summary152(pid: u32) -> String {
     format!(", uptime {elapsed}, cmd: {}", messages_truncate152(&command, 80))
 }
 
+fn serve_process_is_maw152(pid: u32) -> bool {
+    let Some(command) = serve_process_command152(pid) else { return false; };
+    serve_command_is_maw152(&command)
+}
+
+fn serve_process_command152(pid: u32) -> Option<String> {
+    let output = std::process::Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "command="])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(str::to_owned)
+}
+
+fn serve_command_is_maw152(command: &str) -> bool {
+    command
+        .split_whitespace()
+        .next()
+        .and_then(|program| std::path::Path::new(program).file_name())
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == "maw" || name == "maw-rs" || name.starts_with("maw-rs-"))
+}
+
+fn serve_probe_port152(port: u16) -> ServePortProbe152 {
+    use std::io::{Read as _, Write as _};
+
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let timeout = std::time::Duration::from_millis(250);
+    let Ok(mut stream) = std::net::TcpStream::connect_timeout(&addr, timeout) else {
+        return ServePortProbe152::NoListener;
+    };
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(timeout));
+    if let Err(error) = stream.write_all(b"GET /api/health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n") {
+        return ServePortProbe152::Failed(error.to_string());
+    }
+    let mut response = String::new();
+    if let Err(error) = stream.read_to_string(&mut response) {
+        return ServePortProbe152::Failed(error.to_string());
+    }
+    if response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200") {
+        ServePortProbe152::Responding
+    } else {
+        ServePortProbe152::Failed("unexpected /api/health response".to_owned())
+    }
+}
+
+fn serve_listener_pid152(port: u16) -> Option<u32> {
+    let output = std::process::Command::new("lsof")
+        .args(["-nP", &format!("-iTCP:{port}"), "-sTCP:LISTEN", "-t"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .find_map(|line| line.parse::<u32>().ok().filter(|pid| *pid > 0))
+}
+
 fn messages_truncate152(value: &str, max: usize) -> String {
     if value.chars().count() <= max { return value.to_owned(); }
     let mut out = value.chars().take(max.saturating_sub(1)).collect::<String>();
@@ -363,6 +543,9 @@ mod messages_serve_lifecycle_tests152 {
         messages_alive: bool,
         serve_pid: Option<u32>,
         serve_alive: bool,
+        serve_port_probe: Option<ServePortProbe152>,
+        serve_listener_pid: Option<u32>,
+        serve_port: u16,
         removed: Vec<String>,
         stopped: Vec<u32>,
     }
@@ -375,14 +558,22 @@ mod messages_serve_lifecycle_tests152 {
         fn messages_pid_alive(&self, pid: u32) -> bool { self.messages_alive && Some(pid) == self.messages_pid }
         fn messages_remove_pid(&mut self, path: &std::path::Path) -> Result<(), String> { self.removed.push(path.display().to_string()); Ok(()) }
         fn messages_stop_pid(&mut self, pid: u32) -> Result<(), String> { self.stopped.push(pid); Ok(()) }
-        fn messages_serve_status(&self) -> ServeLifecycleStatus152 { ServeLifecycleStatus152 { pid: self.serve_pid, alive: self.serve_alive, file: std::path::PathBuf::from("/tmp/maw/maw.pid"), summary: None } }
+        fn messages_serve_status(&self) -> ServeLifecycleStatus152 { serve_status_with_host152(self) }
     }
 
     impl ServeLifecycleHost152 for FakeHost152 {
         fn serve_pid_path(&self) -> std::path::PathBuf { std::path::PathBuf::from("/tmp/maw/maw.pid") }
         fn serve_read_pid(&self, _path: &std::path::Path) -> Option<u32> { self.serve_pid }
         fn serve_pid_alive(&self, pid: u32) -> bool { self.serve_alive && Some(pid) == self.serve_pid }
+        fn serve_process_is_maw(&self, pid: u32) -> bool { self.serve_alive && Some(pid) == self.serve_pid }
         fn serve_process_summary(&self, _pid: u32) -> String { ", uptime 00:01, cmd: maw serve".to_owned() }
+        fn serve_configured_port(&self) -> u16 {
+            if self.serve_port == 0 { DEFAULT_SERVE_PORT } else { self.serve_port }
+        }
+        fn serve_probe_port(&self, _port: u16) -> ServePortProbe152 {
+            self.serve_port_probe.clone().unwrap_or(ServePortProbe152::NoListener)
+        }
+        fn serve_listener_pid(&self, _port: u16) -> Option<u32> { self.serve_listener_pid }
         fn serve_remove_pid(&mut self, path: &std::path::Path) -> Result<(), String> { self.removed.push(path.display().to_string()); Ok(()) }
         fn serve_stop_pid(&mut self, pid: u32) -> Result<(), String> { self.stopped.push(pid); Ok(()) }
     }
@@ -412,12 +603,69 @@ mod messages_serve_lifecycle_tests152 {
 
     #[test]
     fn serve_status_and_stop_follow_pid_file_state() {
-        let mut host = FakeHost152 { serve_pid: Some(999), serve_alive: true, ..FakeHost152::default() };
+        let mut host = FakeHost152 {
+            serve_pid: Some(999),
+            serve_alive: true,
+            serve_port_probe: Some(ServePortProbe152::Responding),
+            serve_listener_pid: Some(999),
+            ..FakeHost152::default()
+        };
         let status = serve_lifecycle_run152(&args(&["status"]), &mut host);
-        assert_eq!(status.stdout, "maw serve: running (PID 999, uptime 00:01, cmd: maw serve)\n");
+        assert_eq!(status.stdout, "maw serve: running (pid 999, :3456 responding)\n");
         let stop = serve_lifecycle_run152(&args(&["stop"]), &mut host);
         assert_eq!(stop.stdout, "maw serve: stopped PID 999\n");
         assert_eq!(host.stopped, vec![999]);
+        assert_eq!(host.removed, vec!["/tmp/maw/maw.pid"]);
+    }
+
+    #[test]
+    fn serve_status_reports_responding_port_without_pidfile() {
+        let mut host = FakeHost152 {
+            serve_port_probe: Some(ServePortProbe152::Responding),
+            serve_listener_pid: Some(31_999),
+            ..FakeHost152::default()
+        };
+
+        let status = serve_lifecycle_run152(&args(&["status"]), &mut host);
+
+        assert_eq!(status.stdout, "maw serve: running (pid 31999, :3456 responding)\n");
+        assert!(host.removed.is_empty());
+    }
+
+    #[test]
+    fn serve_status_removes_stale_pid_when_no_listener() {
+        let mut host = FakeHost152 {
+            serve_pid: Some(123),
+            serve_alive: false,
+            serve_port_probe: Some(ServePortProbe152::NoListener),
+            ..FakeHost152::default()
+        };
+
+        let status = serve_lifecycle_run152(&args(&["status"]), &mut host);
+
+        assert_eq!(
+            status.stdout,
+            "maw serve: stopped (no listener on :3456; stale pidfile removed)\n"
+        );
+        assert_eq!(host.removed, vec!["/tmp/maw/maw.pid"]);
+    }
+
+    #[test]
+    fn serve_status_removes_stale_pid_while_reporting_live_listener() {
+        let mut host = FakeHost152 {
+            serve_pid: Some(123),
+            serve_alive: false,
+            serve_port_probe: Some(ServePortProbe152::Responding),
+            serve_listener_pid: Some(31_999),
+            ..FakeHost152::default()
+        };
+
+        let status = serve_lifecycle_run152(&args(&["status"]), &mut host);
+
+        assert_eq!(
+            status.stdout,
+            "maw serve: running (pid 31999, :3456 responding, stale pidfile removed)\n"
+        );
         assert_eq!(host.removed, vec!["/tmp/maw/maw.pid"]);
     }
 
