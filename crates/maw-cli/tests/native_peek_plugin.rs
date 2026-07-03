@@ -44,9 +44,20 @@ fn write_fake_tmux(bin_dir: &Path) {
 cmd="$1"
 shift
 case "$cmd" in
+  list-sessions)
+    printf 'sess\n'
+    ;;
   list-windows)
-    printf 'sess\t0\tactive\t1\n'
-    printf 'sess\t1\tblank\t0\n'
+    case "$*" in
+      *'|||'*)
+        printf 'sess|||0|||active|||1|||/tmp\n'
+        printf 'sess|||1|||blank|||0|||/tmp\n'
+        ;;
+      *)
+        printf 'sess\t0\tactive\t1\n'
+        printf 'sess\t1\tblank\t0\n'
+        ;;
+    esac
     ;;
   capture-pane)
     target=""
