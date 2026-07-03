@@ -41,6 +41,9 @@ fn run(args: &[&str], fake_path: &Path) -> Output {
         .env("MAW_HOME", "/tmp/maw-rs-native-ms-fixed")
         .env("MAW_JS_REF_DIR", "/nonexistent")
         .env("MAW_ENGINE_URL", "http://127.0.0.1:3456")
+        // Force a deterministic port probe so `serve status` doesn't report
+        // "running" on a dev box that has a real daemon on :3456 (see #152).
+        .env("MAW_SERVE_FAKE_PROBE", "nolistener")
         .env("PATH", format!("{}:{old_path}", fake_path.display()))
         .output()
         .expect("run maw-rs")

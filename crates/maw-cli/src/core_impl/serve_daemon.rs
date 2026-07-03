@@ -491,6 +491,18 @@ fn serve_command_is_maw152(command: &str) -> bool {
 fn serve_probe_port152(port: u16) -> ServePortProbe152 {
     use std::io::{Read as _, Write as _};
 
+    // Test seam: force a deterministic probe result so the golden serve-status
+    // integration test doesn't depend on whether a real daemon happens to be
+    // bound to the configured port on the machine running the test. Mirrors the
+    // MAW_HERMES_DISABLE_PASS / MAW_RS_ATLAS_FAKE_DISCORD hooks. Unset in prod.
+    if let Ok(forced) = std::env::var("MAW_SERVE_FAKE_PROBE") {
+        return match forced.trim() {
+            "nolistener" => ServePortProbe152::NoListener,
+            "responding" => ServePortProbe152::Responding,
+            other => ServePortProbe152::Failed(format!("forced probe: {other}")),
+        };
+    }
+
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     let timeout = std::time::Duration::from_millis(250);
     let Ok(mut stream) = std::net::TcpStream::connect_timeout(&addr, timeout) else {
