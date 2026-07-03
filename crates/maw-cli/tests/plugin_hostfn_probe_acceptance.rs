@@ -120,12 +120,9 @@ fn probe_runs_via_manifest_invoke() {
 }
 
 #[test]
-#[ignore = "flip on once rt-dispatch swaps CLI dispatch to the Extism runtime (#72); \
-            today `dispatch_cli_plugin` uses MvpWasmInvokeRuntime which rejects host imports"]
 fn probe_runs_via_cli_dispatch() {
-    // Acceptance proof for the user-facing path. On current alpha this FAILS by design
-    // ("wasm compile error: failed to parse WebAssembly module") because dispatch still
-    // runs on the MVP runtime. Once dispatch uses the Extism runtime, this passes as-is.
+    // Acceptance proof for the user-facing path: a host-fn-importing WASM plugin must
+    // load and run through `dispatch_cli_plugin` on the Extism runtime (#72).
     let _guard = env_lock().lock().expect("env lock");
     let previous = std::env::var_os("MAW_PLUGINS_DIR");
     let root = temp_dir("dispatch");
