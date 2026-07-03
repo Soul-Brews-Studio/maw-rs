@@ -11,7 +11,7 @@ const DONE_ALL_USAGE: &str = "usage: maw done --all [<oracle>] [--force] [--dry-
 struct DoneOptions { all: bool, force: bool, dry_run: bool, clean_branch: bool, target: Option<String>, worktree: Option<std::path::PathBuf> }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct DoneWindow { session: String, index: i32, name: String }
+struct DoneWindow { session: String, index: i32, name: String, cwd: Option<String> }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DoneWorktree { main_path: std::path::PathBuf, full_path: std::path::PathBuf, label: String }
@@ -137,9 +137,7 @@ fn done_run_one_with_context(target: &str, options: &DoneOptions, session_filter
     let target_lower = target.to_lowercase();
     let matched = done_find_window(&sessions, &target_lower, session_filter);
     if let Some(window) = &matched { done_assert_may_target_lead(window, &sessions, local, &mut stdout)?; }
-    let pane_info = matched.as_ref().and_then(|window| {
-        local.done_pane_info(&done_tmux_target(window)).map(|(command, cwd)| DonePaneInfo { command, cwd })
-    });
+    let pane_info = matched.as_ref().and_then(|window| done_live_pane_info(window, local));
     let selected_worktree = done_select_worktree(target, &target_lower, options, pane_info.as_ref(), local, context, &mut stdout)?;
     if let Some(window) = &matched {
         if !options.force {
@@ -232,8 +230,10 @@ fn done_parse_window_line(line: &str) -> Option<DoneWindow> {
     let session = parts.next()?.to_owned();
     let index = parts.next()?.parse::<i32>().ok()?;
     let name = parts.next()?.to_owned();
+    let _ = parts.next();
+    let cwd = parts.next().map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned);
     if session.is_empty() || name.is_empty() { return None; }
-    Some(DoneWindow { session, index, name })
+    Some(DoneWindow { session, index, name, cwd })
 }
 
 fn done_find_window(windows: &[DoneWindow], target_lower: &str, session_filter: Option<&str>) -> Option<DoneWindow> {
@@ -292,6 +292,18 @@ fn done_repos_root_from_cwd(cwd: &std::path::Path) -> Option<std::path::PathBuf>
 }
 
 fn done_tmux_target(window: &DoneWindow) -> String { format!("{}:{}", window.session, window.name) }
+
+fn done_live_pane_info(window: &DoneWindow, local: &mut impl DoneRuntime) -> Option<DonePaneInfo> {
+    let listed_cwd = window.cwd.as_deref().unwrap_or_default();
+    match local.done_pane_info(&done_tmux_target(window)) {
+        Some((command, cwd)) => {
+            let cwd = if cwd.is_empty() { listed_cwd.to_owned() } else { cwd };
+            Some(DonePaneInfo { command, cwd })
+        }
+        None if !listed_cwd.is_empty() => Some(DonePaneInfo { command: String::new(), cwd: listed_cwd.to_owned() }),
+        None => None,
+    }
+}
 
 fn done_auto_save(window: &DoneWindow, options: &DoneOptions, local: &mut impl DoneRuntime, pane_info: Option<&DonePaneInfo>, worktree: Option<&DoneWorktree>, stdout: &mut String) {
     let target = done_tmux_target(window);
@@ -622,7 +634,11 @@ mod done_tests {
     }
 
     fn done_test_window(name: &str) -> DoneWindow {
-        DoneWindow { session: "s".to_owned(), index: if name == "lead" { 1 } else { 2 }, name: name.to_owned() }
+        DoneWindow { session: "s".to_owned(), index: if name == "lead" { 1 } else { 2 }, name: name.to_owned(), cwd: None }
+    }
+
+    fn done_test_window_with_cwd(name: &str, cwd: &std::path::Path) -> DoneWindow {
+        DoneWindow { session: "s".to_owned(), index: if name == "lead" { 1 } else { 2 }, name: name.to_owned(), cwd: Some(cwd.display().to_string()) }
     }
 
     fn done_write_fleet(root: &DoneTempRoot, window: &str, repo: &str) {
@@ -671,6 +687,28 @@ mod done_tests {
         assert!(out.contains(&format!("worktree: using live pane cwd {} (registry said {}, stale)", live.display(), stale.display())), "{out}");
         assert!(out.contains("would remove worktree acme/app/agents/live-task"), "{out}");
         assert!(!out.contains("would remove worktree acme/app/agents/stale-task"), "{out}");
+    }
+
+    #[test]
+    fn done_cd_redispatched_window_resolves_listed_live_cwd_not_stale_registry() {
+        let root = DoneTempRoot::new("listed-live-wins");
+        let context = root.context();
+        let main = context.repos_root.join("acme/app");
+        let live = main.join("agents/new-task");
+        let stale = main.join("agents/old-task");
+        done_write_fleet(&root, "worker", "acme/app/agents/old-task");
+
+        let mut runtime = DoneFakeRuntime {
+            windows: vec![done_test_window("lead"), done_test_window_with_cwd("worker", &live)],
+            ..DoneFakeRuntime::default()
+        };
+        runtime.register_worktree(&main, &live);
+        runtime.register_worktree(&main, &stale);
+
+        let out = done_run_with_context(&done_args(&["worker", "--dry-run"]), &mut runtime, &context).expect("done");
+        assert!(out.contains(&format!("worktree: using live pane cwd {} (registry said {}, stale)", live.display(), stale.display())), "{out}");
+        assert!(out.contains("would remove worktree acme/app/agents/new-task"), "{out}");
+        assert!(!out.contains("would remove worktree acme/app/agents/old-task"), "{out}");
     }
 
     #[test]
