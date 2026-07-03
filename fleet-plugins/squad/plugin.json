@@ -2,10 +2,18 @@
   "name": "squad",
   "version": "0.1.0",
   "sdk": "^1.0.0",
-  "runtime": "bun-dev",
-  "target": "js",
-  "entry": "impl.ts",
-  "description": "The lead IS the team. Run from the lead oracle's repo — start / join / say / ls, no team name typed. Loud & clear, no ceremony.",
+  "target": "wasm",
+  "entry": {
+    "kind": "wasm",
+    "path": "plugin.wasm",
+    "export": "handle"
+  },
+  "artifact": {
+    "path": "plugin.wasm",
+    "sha256": "sha256:8118879a0415dbdf49db4824fee12afc8d8ce18968ec6d7ab9ebb87d42da5415"
+  },
+  "capabilities": ["fs:read:teams", "fs:write:teams", "tmux:read", "proc:exec:date"],
+  "description": "The lead IS the team. Run from the lead oracle's repo — start / join / say / ls, no team name typed. Loud & clear, no ceremony. Ship tier: WASM (dev fallback: impl.ts, runtime=bun-dev).",
   "author": "athena-oracle",
   "license": "MIT",
   "weight": 0,
