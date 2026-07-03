@@ -11,17 +11,18 @@
 //! standalone and lights up automatically when the port merges.
 //!
 //! Isolation: squad writes under `~/.claude/teams/` (`~` = `os.homedir()` = `HOME` on
-//! POSIX) and derives the team name from the repo it runs in
-//! (`basename(cwd)` minus `-oracle`). The bun-dev runtime spawns the entry with
-//! `current_dir = <plugin dir>` and inherits the parent env, so the harness stages the
-//! plugin into a dir it names `athena-oracle` (→ team `athena`, exercising the
-//! `-oracle` strip) and points `HOME` at a tempdir. Everything lands inside that
-//! tempdir; nothing touches the real `~/.claude`.
+//! POSIX) and derives the team name from the *lead repo* — the directory the user runs
+//! `maw squad` from, `basename` minus `-oracle`. The bun-dev runtime forces the plugin's
+//! cwd to the plugin dir, so the port recovers the lead repo from the invoking shell's
+//! `PWD` env var (not cwd). The harness therefore points `HOME` at a tempdir and `PWD`
+//! at a git-init'd lead repo it names `athena-oracle` (→ team `athena`, exercising the
+//! `-oracle` strip). Everything lands inside that tempdir; nothing touches the real
+//! `~/.claude`.
 //!
-//! Tiers (detected from the port's `plugin.json`):
-//!   * bun-dev  — TS entry + `"runtime":"bun-dev"`; needs `bun` on PATH (gated, skips).
-//!   * ship     — a WASM artifact; runs on the Extism runtime, no toolchain needed.
-//! A port that declares neither is an incomplete port and the tests skip loudly.
+//! Tiers, detected from the port's `plugin.json`: the bun-dev tier is a TS entry with
+//! `"runtime":"bun-dev"` and needs `bun` on PATH (gated — skips if absent); the ship
+//! tier is a WASM artifact that runs on the Extism runtime with no toolchain. A port
+//! that declares neither is an incomplete port and the tests skip loudly.
 //!
 //! Guards are asserted tier-agnostically as: process exits non-zero (loud) AND zero
 //! bytes are written under the teams root. The single live-tmux path (join's
@@ -131,22 +132,23 @@ fn copy_tree(src: &Path, dst: &Path) {
     }
 }
 
+fn walk(base: &Path, dir: &Path, out: &mut BTreeSet<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            walk(base, &path, out);
+        } else if let Ok(rel) = path.strip_prefix(base) {
+            out.insert(rel.to_path_buf());
+        }
+    }
+}
+
 /// Relative paths of every file under `dir`, for zero-writes assertions.
 fn snapshot(dir: &Path) -> BTreeSet<PathBuf> {
     let mut out = BTreeSet::new();
-    fn walk(base: &Path, dir: &Path, out: &mut BTreeSet<PathBuf>) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                walk(base, &path, out);
-            } else if let Ok(rel) = path.strip_prefix(base) {
-                out.insert(rel.to_path_buf());
-            }
-        }
-    }
     walk(dir, dir, &mut out);
     out
 }
@@ -155,6 +157,7 @@ struct EnvRestore {
     home: Option<OsString>,
     maw_home: Option<OsString>,
     maw_plugins_dir: Option<OsString>,
+    pwd: Option<OsString>,
 }
 
 impl EnvRestore {
@@ -163,6 +166,7 @@ impl EnvRestore {
             home: std::env::var_os("HOME"),
             maw_home: std::env::var_os("MAW_HOME"),
             maw_plugins_dir: std::env::var_os("MAW_PLUGINS_DIR"),
+            pwd: std::env::var_os("PWD"),
         }
     }
 }
@@ -172,6 +176,7 @@ impl Drop for EnvRestore {
         restore("HOME", self.home.take());
         restore("MAW_HOME", self.maw_home.take());
         restore("MAW_PLUGINS_DIR", self.maw_plugins_dir.take());
+        restore("PWD", self.pwd.take());
     }
 }
 
@@ -188,7 +193,7 @@ struct Harness {
     root: PathBuf,
     team: String,
     team_dir: PathBuf,
-    teams_dir: PathBuf,
+    teams_root: PathBuf,
     // Dropped after `root` cleanup, in declaration order: restore env, then release lock.
     _restore: EnvRestore,
     _guard: MutexGuard<'static, ()>,
@@ -202,8 +207,9 @@ impl Drop for Harness {
 
 impl Harness {
     /// Locks env, gates on the port's presence/tier, stages it into an isolated
-    /// tempdir, and points HOME + MAW_PLUGINS_DIR at it. Returns `None` (after printing
-    /// a skip reason) when a precondition is missing, so callers early-return green.
+    /// tempdir, and points `HOME` + `MAW_PLUGINS_DIR` + `PWD` at it. Returns `None`
+    /// (after printing a skip reason) when a precondition is missing, so callers
+    /// early-return green.
     fn try_new(label: &str) -> Option<Self> {
         let guard = env_lock().lock().expect("env lock");
 
@@ -233,15 +239,18 @@ impl Harness {
         let root = temp_root(label);
         let home = root.join("home");
         let plugins_dir = root.join("plugins");
-        // Directory basename doubles as the lead repo name; the `-oracle` suffix is
-        // stripped to yield the team, so this exercises that rule and pins team=athena.
-        let plugin_dir = plugins_dir.join("athena-oracle");
-        copy_tree(&source, &plugin_dir);
-        // Make `git rev-parse --show-toplevel` resolve to the staged dir regardless of
-        // any ambient repo above the tempdir, so the team name is deterministic.
+        copy_tree(&source, &plugins_dir.join("squad"));
+        // The lead repo: the directory the user "runs maw squad from". The bun-dev
+        // runtime forces the plugin's cwd to the plugin dir, so the port recovers the
+        // lead repo from the invoking shell's PWD (env), not cwd — the harness must set
+        // PWD to this dir. Its basename minus `-oracle` is the team, so `athena-oracle`
+        // pins team=athena and exercises the `-oracle` strip. git-init'd so
+        // `git -C <lead> rev-parse --show-toplevel` resolves here deterministically.
+        let lead_repo = root.join("lead").join("athena-oracle");
+        create_dir_all(&lead_repo).expect("lead repo dir");
         std::process::Command::new("git")
             .args(["init", "-q"])
-            .current_dir(&plugin_dir)
+            .current_dir(&lead_repo)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
@@ -251,16 +260,17 @@ impl Harness {
         let restore = EnvRestore::capture();
         std::env::set_var("HOME", &home);
         std::env::set_var("MAW_PLUGINS_DIR", &plugins_dir);
+        std::env::set_var("PWD", &lead_repo);
         std::env::remove_var("MAW_HOME");
 
         let team = "athena".to_owned();
-        let teams_dir = home.join(".claude").join("teams");
-        let team_dir = teams_dir.join(&team);
+        let teams_root = home.join(".claude").join("teams");
+        let team_dir = teams_root.join(&team);
         Some(Self {
             root,
             team,
             team_dir,
-            teams_dir,
+            teams_root,
             _restore: restore,
             _guard: guard,
         })
@@ -306,12 +316,13 @@ impl Harness {
             .expect("read inbox");
         serde_json::from_str(&text).expect("inbox is JSON")
     }
+}
 
-    fn squad(&self, argv: &[&str]) -> maw_cli::CliOutput {
-        let mut full = vec!["squad"];
-        full.extend_from_slice(argv);
-        run_cli(&args(&full))
-    }
+/// Drive the real CLI dispatch path for `maw squad <argv…>`.
+fn run_squad(argv: &[&str]) -> maw_cli::CliOutput {
+    let mut full = vec!["squad"];
+    full.extend_from_slice(argv);
+    run_cli(&args(&full))
 }
 
 // ---------------------------------------------------------------------------
@@ -324,7 +335,7 @@ fn start_creates_team_structure() {
         return;
     };
 
-    let out = h.squad(&["start"]);
+    let out = run_squad(&["start"]);
     assert_eq!(out.code, 0, "start failed: {}\n{}", out.stderr, out.stdout);
 
     let config = h.config();
@@ -368,7 +379,7 @@ fn start_adopts_existing_without_clobber() {
     h.seed_team(&[("digger", "cyan")]);
     let created_at = h.config()["createdAt"].clone();
 
-    let out = h.squad(&["start"]);
+    let out = run_squad(&["start"]);
     assert_eq!(out.code, 0, "start (adopt) failed: {}", out.stderr);
 
     let config = h.config();
@@ -406,9 +417,9 @@ fn say_appends_and_never_clobbers() {
     };
     h.seed_team(&[("digger", "cyan")]);
 
-    let first = h.squad(&["say", "digger", "hello", "one"]);
+    let first = run_squad(&["say", "digger", "hello", "one"]);
     assert_eq!(first.code, 0, "first say failed: {}", first.stderr);
-    let second = h.squad(&["say", "digger", "hello", "two"]);
+    let second = run_squad(&["say", "digger", "hello", "two"]);
     assert_eq!(second.code, 0, "second say failed: {}", second.stderr);
 
     let inbox = h.inbox("digger");
@@ -445,9 +456,9 @@ fn say_to_non_member_is_loud_and_writes_nothing() {
         return;
     };
     h.seed_team(&[]); // started, empty roster
-    let before = snapshot(&h.teams_dir);
+    let before = snapshot(&h.teams_root);
 
-    let out = h.squad(&["say", "ghost", "hi"]);
+    let out = run_squad(&["say", "ghost", "hi"]);
 
     assert_ne!(
         out.code, 0,
@@ -460,7 +471,7 @@ fn say_to_non_member_is_loud_and_writes_nothing() {
     );
     assert_eq!(
         before,
-        snapshot(&h.teams_dir),
+        snapshot(&h.teams_root),
         "non-member say must write nothing"
     );
 }
@@ -471,9 +482,9 @@ fn say_rejects_path_traversal_member() {
         return;
     };
     h.seed_team(&[]);
-    let before = snapshot(&h.teams_dir);
+    let before = snapshot(&h.teams_root);
 
-    let out = h.squad(&["say", "../evil", "hi"]);
+    let out = run_squad(&["say", "../evil", "hi"]);
 
     assert_ne!(
         out.code, 0,
@@ -489,7 +500,7 @@ fn say_rejects_path_traversal_member() {
     );
     assert_eq!(
         before,
-        snapshot(&h.teams_dir),
+        snapshot(&h.teams_root),
         "rejected say must write nothing"
     );
 }
@@ -516,7 +527,7 @@ fn ls_reflects_roster_and_unread() {
     )
     .expect("seed inbox");
 
-    let out = h.squad(&["ls"]);
+    let out = run_squad(&["ls"]);
     assert_eq!(out.code, 0, "ls failed: {}", out.stderr);
     assert!(
         out.stdout.contains("squad: athena"),
@@ -550,10 +561,10 @@ fn join_rejects_invalid_color() {
         return;
     };
     h.seed_team(&[]);
-    let before = snapshot(&h.teams_dir);
+    let before = snapshot(&h.teams_root);
 
     // `orange` is invalid — the guard throws before any tmux/mawjs spawn.
-    let out = h.squad(&["join", "digger", "orange"]);
+    let out = run_squad(&["join", "digger", "orange"]);
 
     assert_ne!(
         out.code, 0,
@@ -567,7 +578,7 @@ fn join_rejects_invalid_color() {
     );
     assert_eq!(
         before,
-        snapshot(&h.teams_dir),
+        snapshot(&h.teams_root),
         "rejected join must write nothing"
     );
 }
@@ -578,9 +589,9 @@ fn join_rejects_path_traversal_name() {
         return;
     };
     h.seed_team(&[]);
-    let before = snapshot(&h.teams_dir);
+    let before = snapshot(&h.teams_root);
 
-    let out = h.squad(&["join", "../evil", "cyan"]);
+    let out = run_squad(&["join", "../evil", "cyan"]);
 
     assert_ne!(
         out.code, 0,
@@ -589,7 +600,7 @@ fn join_rejects_path_traversal_name() {
     );
     assert_eq!(
         before,
-        snapshot(&h.teams_dir),
+        snapshot(&h.teams_root),
         "rejected join must write nothing"
     );
 }
@@ -624,7 +635,7 @@ fn join_refuses_when_session_already_live() {
         .expect("spawn tmux session");
 
     // A member named after the live session must be refused before any spawn.
-    let out = h.squad(&["join", &session, "cyan"]);
+    let out = run_squad(&["join", &session, "cyan"]);
 
     std::process::Command::new("tmux")
         .args(["kill-session", "-t", &session])

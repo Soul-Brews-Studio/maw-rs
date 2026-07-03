@@ -21,15 +21,25 @@ and the team name is **derived**, never typed:
 team = basename(repo) with a trailing "-oracle" stripped
 ```
 
-`repo` is `git rev-parse --show-toplevel`, falling back to the process cwd when that
+`repo` is `git rev-parse --show-toplevel`, falling back to the lead-repo dir when that
 is not a git repo. Examples: `athena-oracle` → team `athena`; `maw-rs-oracle` →
 `maw-rs`; `foo` → `foo`. Empty derivation is a hard error
 (`can't derive a team name from this directory`).
 
-Consequence for the maw-rs dev tier: the bun-dev runtime spawns the entry with
-`current_dir = <plugin dir>` (see `dispatcher.rs::dispatch_bun_dev_plugin`), so the
-team name is the plugin directory's basename minus `-oracle`. The harness exploits
-this by staging the plugin into a dir it names (e.g. `athena-oracle`).
+**Non-obvious — how the lead repo is located under the maw-rs bun-dev runtime.** The
+golden athena impl reads the lead repo from the process cwd, because athena's maw-js
+runtime runs the plugin *in* the lead repo. maw-rs is different: the bun-dev runtime
+spawns the entry with `current_dir = <plugin dir>` (see
+`dispatcher.rs::dispatch_bun_dev_plugin`), so `process.cwd()` points at the plugin dir,
+**not** the lead repo. `.current_dir()` does not rewrite the child's `PWD` env var,
+though — the child inherits `PWD` from the invoking shell unchanged. So the port must
+recover the lead repo from `process.env.PWD` (the dir the user actually ran
+`maw squad` from), falling back to cwd only when `PWD` is unset. The team is then
+`basename(git -C $PWD rev-parse --show-toplevel)` minus `-oracle`. A port that reads
+`process.cwd()` here would silently derive the wrong team (the plugin dir). The
+acceptance harness pins this by setting `PWD` to a git-init'd lead repo it names
+`athena-oracle` while the plugin stages elsewhere — mirroring real invocation, where
+lead repo and plugin dir are distinct.
 
 ## 2. On-disk layout — one folder per team
 
