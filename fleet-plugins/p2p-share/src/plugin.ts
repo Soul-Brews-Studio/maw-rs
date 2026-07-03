@@ -20,8 +20,8 @@ type Werift = {
   RTCIceCandidate: any;
 };
 
-const VIEWER_PORT = 7742;
-const DEFAULT_SIGNAL_URL = "wss://phd-signaling.laris.workers.dev/ws";
+export const VIEWER_PORT = 7742;
+export const DEFAULT_SIGNAL_URL = "wss://phd-signaling.laris.workers.dev/ws";
 
 export const command = {
   name: "p2p-share",
@@ -38,7 +38,7 @@ function usage(log: Log): void {
   log("  maw p2p-share status");
 }
 
-function flagValue(args: string[], flag: string): string {
+export function getFlag(args: string[], flag: string): string {
   const exact = args.find((arg) => arg.startsWith(`${flag}=`));
   if (exact) return exact.slice(flag.length + 1);
   const idx = args.indexOf(flag);
@@ -48,6 +48,20 @@ function flagValue(args: string[], flag: string): string {
 
 function sanitizePeerName(value: string): string {
   return value.replace(/[:.]/g, "-");
+}
+
+export function parseShareOptions(args: string[]): {
+  target: string;
+  signalUrl: string;
+  peerName: string;
+  port: number;
+} {
+  const target = args[1] || "";
+  const signalUrl = getFlag(args, "--signal") || DEFAULT_SIGNAL_URL;
+  const peerName = getFlag(args, "--name") || `share-${sanitizePeerName(target)}`;
+  const parsedPort = Number.parseInt(getFlag(args, "--port") || String(VIEWER_PORT), 10);
+  const port = Number.isFinite(parsedPort) && parsedPort > 0 ? parsedPort : VIEWER_PORT;
+  return { target, signalUrl, peerName, port };
 }
 
 function sanitizeTmpSuffix(value: string): string {
@@ -113,9 +127,11 @@ function startPtyStream(
   };
 }
 
-async function loadWerift(): Promise<Werift> {
+export async function loadWerift(
+  importer: (specifier: string) => Promise<unknown> = (specifier) => import(specifier),
+): Promise<Werift> {
   try {
-    return await import("werift") as Werift;
+    return await importer("werift") as Werift;
   } catch (err) {
     throw new Error(
       `missing dependency 'werift' (${err instanceof Error ? err.message : String(err)}). ` +
@@ -315,10 +331,7 @@ async function handleP2pShare(args: string[], log: Log): Promise<number> {
     return 1;
   }
 
-  const signalUrl = flagValue(args, "--signal") || DEFAULT_SIGNAL_URL;
-  const peerName = flagValue(args, "--name") || `share-${sanitizePeerName(target)}`;
-  const parsedPort = Number.parseInt(flagValue(args, "--port") || String(VIEWER_PORT), 10);
-  const port = Number.isFinite(parsedPort) && parsedPort > 0 ? parsedPort : VIEWER_PORT;
+  const { signalUrl, peerName, port } = parseShareOptions(args);
   const authKey = process.env.P2P_SHARE_KEY || process.env.AUTH_KEY || "";
 
   log("P2P Share starting...");
