@@ -347,7 +347,7 @@ fn done_select_worktree(target: &str, window_lower: &str, options: &DoneOptions,
         if info.cwd.is_empty() { return Ok(None); }
         if let Some(live) = done_resolve_registered_worktree(local, std::path::Path::new(&info.cwd), context)? {
             if let Some(registry) = done_worktree_from_config(window_lower, context) {
-                if registry.full_path != live.full_path {
+                if !done_same_path(&registry.full_path, &live.full_path) {
                     let _ = writeln!(stdout, "  worktree: using live pane cwd {} (registry said {}, stale)", live.full_path.display(), registry.full_path.display());
                 }
             }
@@ -388,8 +388,14 @@ fn done_resolve_registered_worktree(local: &mut impl DoneRuntime, path: &std::pa
         Ok(output) => std::path::PathBuf::from(output.trim()),
         Err(_) => return Ok(None),
     };
-    let Some(worktree) = done_parse_worktree_path(&top_level, &context.repos_root) else { return Ok(None); };
+    let Some(worktree) = done_parse_live_worktree_path(&top_level, context) else { return Ok(None); };
     if done_is_registered_worktree(local, &worktree)? { Ok(Some(worktree)) } else { Ok(None) }
+}
+
+fn done_parse_live_worktree_path(full_path: &std::path::Path, context: &DoneContext) -> Option<DoneWorktree> {
+    done_parse_worktree_path(full_path, &context.repos_root).or_else(|| {
+        done_repos_root_from_cwd(full_path).and_then(|repos_root| done_parse_worktree_path(full_path, &repos_root))
+    })
 }
 
 fn done_is_registered_worktree(local: &mut impl DoneRuntime, worktree: &DoneWorktree) -> Result<bool, String> {
@@ -397,7 +403,38 @@ fn done_is_registered_worktree(local: &mut impl DoneRuntime, worktree: &DoneWork
     let Ok(raw) = local.done_git(&["-C".to_owned(), worktree.main_path.display().to_string(), "worktree".to_owned(), "list".to_owned(), "--porcelain".to_owned()]) else {
         return Ok(false);
     };
-    Ok(raw.lines().filter_map(|line| line.strip_prefix("worktree ")).any(|path| std::path::Path::new(path) == worktree.full_path))
+    Ok(raw.lines().filter_map(|line| line.strip_prefix("worktree ")).any(|path| done_same_path(std::path::Path::new(path), &worktree.full_path)))
+}
+
+fn done_same_path(left: &std::path::Path, right: &std::path::Path) -> bool {
+    if left == right { return true; }
+    let Ok(left) = std::fs::canonicalize(left) else { return false; };
+    let Ok(right) = std::fs::canonicalize(right) else { return false; };
+    left == right
+}
+
+#[cfg(test)]
+fn done_run_process(command: &str, args: &[&str], cwd: Option<&std::path::Path>) -> String {
+    let mut process = if command == "git" { std::process::Command::new(done_git_executable()) } else { std::process::Command::new(command) };
+    process.args(args);
+    if let Some(cwd) = cwd { process.current_dir(cwd); }
+    let output = process.output().unwrap_or_else(|error| panic!("failed to run {process:?}: {error}"));
+    assert!(
+        output.status.success(),
+        "{process:?} failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).to_string()
+}
+
+#[cfg(test)]
+fn done_git_executable() -> std::path::PathBuf {
+    ["/opt/homebrew/bin/git", "/usr/local/bin/git", "/usr/bin/git", "/bin/git"]
+        .into_iter()
+        .map(std::path::PathBuf::from)
+        .find(|path| path.is_file())
+        .unwrap_or_else(|| std::path::PathBuf::from("git"))
 }
 
 fn done_worktree_by_scan(target: &str, repos_root: &std::path::Path, stdout: &mut String) -> Option<DoneWorktree> {
@@ -608,6 +645,29 @@ mod done_tests {
         }
     }
 
+    struct DoneRealGitRuntime { git: std::path::PathBuf }
+
+    impl Default for DoneRealGitRuntime {
+        fn default() -> Self { Self { git: done_git_executable() } }
+    }
+
+    impl DoneRuntime for DoneRealGitRuntime {
+        fn done_list_windows(&mut self) -> Vec<DoneWindow> { Vec::new() }
+
+        fn done_current_identity(&mut self) -> Option<(String, i32)> { None }
+
+        fn done_pane_info(&mut self, _target: &str) -> Option<(String, String)> { None }
+
+        fn done_tmux(&mut self, _command: &str, _args: &[String]) -> Result<String, String> { Err("tmux unavailable in real-git test runtime".to_owned()) }
+
+        fn done_send_text(&mut self, _target: &str, _text: &str) -> Result<(), String> { Err("tmux unavailable in real-git test runtime".to_owned()) }
+
+        fn done_git(&mut self, args: &[String]) -> Result<String, String> {
+            let output = std::process::Command::new(&self.git).args(args).output().map_err(|error| format!("git failed: {error}"))?;
+            if output.status.success() { Ok(String::from_utf8_lossy(&output.stdout).to_string()) } else { Err(String::from_utf8_lossy(&output.stderr).trim().to_owned()) }
+        }
+    }
+
     struct DoneTempRoot { path: std::path::PathBuf }
 
     impl DoneTempRoot {
@@ -709,6 +769,28 @@ mod done_tests {
         assert!(out.contains(&format!("worktree: using live pane cwd {} (registry said {}, stale)", live.display(), stale.display())), "{out}");
         assert!(out.contains("would remove worktree acme/app/agents/new-task"), "{out}");
         assert!(!out.contains("would remove worktree acme/app/agents/old-task"), "{out}");
+    }
+
+    #[test]
+    fn done_real_git_worktree_resolves_when_context_repos_root_differs() {
+        let root = DoneTempRoot::new("real-git-live-root");
+        let main = root.repos_root().join("acme/app");
+        let live = main.join("agents/live-task");
+        std::fs::create_dir_all(&main).expect("main repo dir");
+        std::fs::create_dir_all(main.join("agents")).expect("agents dir");
+
+        done_run_process("git", &["init"], Some(&main));
+        done_run_process("git", &["-c", "user.name=maw-test", "-c", "user.email=maw-test@example.invalid", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "init"], Some(&main));
+        let live_path = live.display().to_string();
+        done_run_process("git", &["worktree", "add", "-b", "agents/live-task", &live_path], Some(&main));
+
+        let wrong_context = DoneContext { repos_root: root.path.join("wrong-ghq/github.com"), fleet_dirs: Vec::new() };
+        let mut runtime = DoneRealGitRuntime::default();
+        let resolved = done_resolve_registered_worktree(&mut runtime, &live, &wrong_context).expect("resolve").expect("registered worktree");
+
+        assert!(done_same_path(&resolved.main_path, &main), "{} != {}", resolved.main_path.display(), main.display());
+        assert!(done_same_path(&resolved.full_path, &live), "{} != {}", resolved.full_path.display(), live.display());
+        assert_eq!(resolved.label, "acme/app/agents/live-task");
     }
 
     #[test]
