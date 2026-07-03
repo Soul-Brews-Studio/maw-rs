@@ -36,6 +36,43 @@ jobs:
         with:
           bun-version: latest
 
+      - name: Fleet-plugin bun tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          found=0
+          for plugin in fleet-plugins/*; do
+            [ -d "$plugin" ] || continue
+
+            if [ -f "$plugin/package.json" ]; then
+              echo "::group::bun install $(basename "$plugin")"
+              (cd "$plugin" && bun install)
+              echo "::endgroup::"
+            fi
+
+            shopt -s nullglob
+            tests=("$plugin"/src/*.test.ts)
+            shopt -u nullglob
+            if [ "${#tests[@]}" -eq 0 ]; then
+              echo "No bun tests in $plugin; skipping"
+              continue
+            fi
+
+            found=1
+            rel_tests=()
+            for test in "${tests[@]}"; do
+              rel_tests+=("./${test#$plugin/}")
+            done
+
+            echo "::group::bun test $(basename "$plugin")"
+            (cd "$plugin" && bun test "${rel_tests[@]}")
+            echo "::endgroup::"
+          done
+
+          if [ "$found" -eq 0 ]; then
+            echo "No fleet-plugin bun tests found; skipping"
+          fi
+
       - name: Setup Node cache for WASM fixtures
         uses: actions/setup-node@v4
         with:
