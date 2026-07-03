@@ -12,6 +12,9 @@ struct CaptureOptions {
 }
 
 fn capture_run_command(argv: &[String]) -> CliOutput {
+    if wants_help(argv, &["--pane", "--lines"]) {
+        return help_output(capture_usage_cli());
+    }
     match capture_with_runner(argv, &mut maw_tmux::CommandTmuxRunner::new()) {
         Ok(output) => output,
         Err(message) => CliOutput {

@@ -89,6 +89,9 @@ struct TeamCharterMember122 {
 }
 
 fn team_run_command(argv: &[String]) -> CliOutput {
+    if wants_help_before_positionals(argv, &[]) {
+        return help_output(TEAM_USAGE);
+    }
     team_output_from_result(team_run(argv))
 }
 

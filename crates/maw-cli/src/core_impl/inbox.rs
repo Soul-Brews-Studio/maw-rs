@@ -149,10 +149,7 @@ async fn inbox_run(
     env: &InboxEnv,
     sender: &mut impl InboxSender,
 ) -> Result<String, String> {
-    if argv
-        .first()
-        .is_some_and(|arg| matches!(arg.as_str(), "--help" | "-h"))
-    {
+    if wants_help_before_positionals(argv, &["--from", "--last"]) {
         return Ok(format!("usage: {INBOX_USAGE}\n"));
     }
     match argv.first().map(String::as_str) {
@@ -1721,6 +1718,16 @@ mod inbox_tests {
             "2026-06-25T00:00:00.000Z",
             body,
         );
+    }
+
+    #[test]
+    fn inbox_help_prints_usage_to_stdout_path() {
+        let env = inbox_temp_env("help");
+        let mut sender = InboxFakeSender::default();
+
+        let output = inbox_run_test(&inbox_strings(&["--help"]), &env, &mut sender).unwrap();
+
+        assert_eq!(output, format!("usage: {INBOX_USAGE}\n"));
     }
 
     fn inbox_write_fixture_at(

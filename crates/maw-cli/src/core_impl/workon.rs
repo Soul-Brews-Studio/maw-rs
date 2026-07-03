@@ -68,6 +68,9 @@ impl maw_matcher::Named for WorkonWorktree {
 }
 
 fn run_workon_command(argv: &[String]) -> CliOutput {
+    if wants_help(argv, workon_help_value_flags()) {
+        return help_output(workon_usage());
+    }
     match workon_parse_args(argv).and_then(|options| workon_cmd(&options)) {
         Ok(stdout) => CliOutput { code: 0, stdout, stderr: String::new() },
         Err(message) => CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") },
@@ -168,6 +171,10 @@ fn workon_parse_layout(raw: &str) -> Result<WorkonLayout, String> {
 
 fn workon_usage() -> String {
     "usage: maw workon <repo|.|path|url> [task] [--wt [slug]] [--fresh] [--name <stable>] [-e <engine>] [--layout nested|legacy]".to_owned()
+}
+
+fn workon_help_value_flags() -> &'static [&'static str] {
+    &["--layout", "--name", "-e", "--engine"]
 }
 
 fn workon_cmd(options: &WorkonOptions) -> Result<String, String> {
@@ -885,6 +892,15 @@ mod workon_tests {
         assert!(parsed.fresh);
         assert_eq!(parsed.engine.as_deref(), Some("codex"));
         assert!(workon_parse_args(&workon_strings(&["repo", "task", "--wt", "other"])).is_err());
+    }
+
+    #[test]
+    fn workon_help_prints_usage_to_stdout_zero() {
+        let output = run_workon_command(&workon_strings(&["--help"]));
+
+        assert_eq!(output.code, 0);
+        assert!(output.stdout.contains("usage: maw workon"));
+        assert!(output.stderr.is_empty());
     }
 
     #[test]

@@ -248,6 +248,9 @@ fn attach_action_session(action: &TmuxAttachAction) -> &str {
 
 
 fn run_send_enter_command(argv: &[String]) -> CliOutput {
+    if wants_help(argv, &["--N", "-N", "--n"]) {
+        return help_output(send_enter_usage());
+    }
     let (target, count) = match parse_send_enter_command_args(argv) {
         Ok(parsed) => parsed,
         Err(message) => return send_enter_usage_error(&message),
@@ -305,7 +308,7 @@ fn parse_send_enter_command_args(argv: &[String]) -> Result<(String, usize), Str
         index += 1;
     }
     let Some(target) = target else {
-        return Err("usage: maw-rs send-enter <target> [--N <count>]".to_owned());
+        return Err(send_enter_usage().to_owned());
     };
     Ok((target, count))
 }
@@ -337,6 +340,10 @@ fn send_enter_usage_error(message: &str) -> CliOutput {
     CliOutput {
         code: 2,
         stdout: String::new(),
-        stderr: format!("{message}\nusage: maw-rs send-enter <target> [--N <count>]\n"),
+        stderr: format!("{message}\n{}\n", send_enter_usage()),
     }
+}
+
+fn send_enter_usage() -> &'static str {
+    "usage: maw-rs send-enter <target> [--N <count>]"
 }

@@ -365,6 +365,9 @@ struct SnapshotsOptionsNative {
 }
 
 fn work_run_command(argv: &[String]) -> CliOutput {
+    if wants_help(argv, workon_help_value_flags()) {
+        return help_output(WORK_USAGE);
+    }
     if argv.iter().any(|arg| arg == "--") {
         return work_error("work: -- separator is not allowed");
     }

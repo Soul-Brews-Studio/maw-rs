@@ -146,6 +146,9 @@ fn run_serve_async(args: Vec<String>) -> Pin<Box<dyn Future<Output = CliOutput> 
 }
 
 async fn run_serve_async_impl(raw_args: &[String]) -> CliOutput {
+    if wants_help(raw_args, &["--host", "--bind", "--port", "--cached-pubkey"]) {
+        return help_output(serve_usage_text());
+    }
     if let Some(output) = serve_lifecycle_subcommand152(raw_args) { return output; }
     let args = match parse_serve_args(raw_args) {
         Ok(args) => args,
@@ -311,10 +314,12 @@ fn serve_usage_error(message: &str) -> CliOutput {
     CliOutput {
         code: 2,
         stdout: String::new(),
-        stderr: format!(
-            "{prefix}usage: maw-rs serve [--host 0.0.0.0] [--port <port>] [--cached-pubkey <key>] | maw-rs serve status|--status|stop\n"
-        ),
+        stderr: format!("{prefix}{}\n", serve_usage_text()),
     }
+}
+
+fn serve_usage_text() -> &'static str {
+    "usage: maw-rs serve [--host 0.0.0.0] [--port <port>] [--cached-pubkey <key>] | maw-rs serve status|--status|stop"
 }
 
 fn default_bind_host() -> String {

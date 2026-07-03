@@ -10,6 +10,9 @@ struct SendtextOptions {
 }
 
 fn sendtext_run_command(argv: &[String]) -> CliOutput {
+    if wants_help_before_positionals(argv, &[]) {
+        return help_output(sendtext_usage());
+    }
     match sendtext_with_runner(argv, &mut maw_tmux::CommandTmuxRunner::new()) {
         Ok(output) => output,
         Err(message) => CliOutput {

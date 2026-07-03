@@ -36,6 +36,9 @@ fn run_wake_async(args: Vec<String>) -> Pin<Box<dyn Future<Output = CliOutput> +
 }
 
 async fn run_send_like_async_impl(command: &str, raw_args: &[String]) -> CliOutput {
+    if wants_help_before_positionals(raw_args, &["--from"]) {
+        return help_output(send_usage(command));
+    }
     let send_args = match parse_send_args(command, raw_args) {
         Ok(parsed) => parsed,
         Err(message) => return send_usage_error(command, &message),
@@ -373,10 +376,14 @@ fn send_usage_error(command: &str, message: &str) -> CliOutput {
     CliOutput {
         code: 2,
         stdout: String::new(),
-        stderr: format!(
-            "{message}\nusage: maw-rs {command} <target> <message> [--inbox|--no-inbox] [--from <oracle:node>] [--approve] [--trust] [--dry-run]\n"
-        ),
+        stderr: format!("{message}\n{}\n", send_usage(command)),
     }
+}
+
+fn send_usage(command: &str) -> String {
+    format!(
+        "usage: maw-rs {command} <target> <message> [--inbox|--no-inbox] [--from <oracle:node>] [--approve] [--trust] [--dry-run]"
+    )
 }
 
 fn resolve_send_route_target<R: maw_tmux::TmuxRunner>(
@@ -465,10 +472,12 @@ fn wake_usage_error(message: &str) -> CliOutput {
     CliOutput {
         code: 2,
         stdout: String::new(),
-        stderr: format!(
-            "{message}\nusage: maw-rs wake <target> [--task <task>] [--from <oracle:node>]\n"
-        ),
+        stderr: format!("{message}\n{}\n", wake_peer_usage()),
     }
+}
+
+fn wake_peer_usage() -> &'static str {
+    "usage: maw-rs wake <target> [--task <task>] [--from <oracle:node>]"
 }
 
 fn send_local_message(
@@ -560,6 +569,9 @@ async fn send_peer_message(
 
 
 async fn run_wake_async_impl(raw_args: &[String]) -> CliOutput {
+    if wants_help(raw_args, &["--from", "--task"]) {
+        return help_output(wake_peer_usage());
+    }
     let wake_args = match parse_wake_args(raw_args) {
         Ok(parsed) => parsed,
         Err(message) => return wake_usage_error(&message),
@@ -1295,6 +1307,18 @@ mod send_acl_hotpath_tests {
         );
         assert_eq!(output.code, 0);
         assert_eq!(output.stdout, "dry-run: hey me -> local 188-maw-rs:1\n");
+    }
+
+    #[test]
+    fn hey_help_prints_usage_to_stdout_zero() {
+        let output = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(run_send_like_async_impl("hey", &send_acl_vec(&["--help"])));
+
+        assert_eq!(output.code, 0);
+        assert!(output.stdout.contains("usage: maw-rs hey <target> <message>"));
+        assert!(output.stderr.is_empty());
+        assert!(!wants_help_before_positionals(&send_acl_vec(&["bob", "hello", "--help"]), &["--from"]));
     }
 
     fn send_acl_write_scope(name: &str, members: &[&str]) {

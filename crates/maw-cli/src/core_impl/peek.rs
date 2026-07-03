@@ -21,6 +21,9 @@ struct PeekWindow {
 }
 
 fn peek_run_command(argv: &[String]) -> CliOutput {
+    if wants_help(argv, &["--lines"]) {
+        return help_output(PEEK_USAGE);
+    }
     match peek_with_runner(argv, &mut maw_tmux::CommandTmuxRunner::new()) {
         Ok(output) => output,
         Err((code, message)) => CliOutput {

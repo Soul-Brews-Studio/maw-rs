@@ -115,6 +115,9 @@ fn run_native_command_with(
     peer_key: fn() -> Result<String, String>,
     now: fn() -> i64,
 ) -> CliOutput {
+    if wants_help_before_positionals(argv, &[]) {
+        return help_output(RUN_USAGE);
+    }
     match run_run(argv, tmux, peer, config, peer_key, now) {
         Ok(stdout) => CliOutput {
             code: 0,

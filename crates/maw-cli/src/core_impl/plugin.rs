@@ -7,6 +7,9 @@ const PLUGIN_USAGE: &str = "usage: maw plugin <ls|info|install|remove|enable|dis
 const PLUGIN_AS_TS_BOUNDARY: &str = "AssemblyScript ship-tier builds accept the repo's AS-compatible .ts subset; arbitrary Bun/Node TS still needs Javy (`cargo install javy`) or a prebuilt WASM artifact.";
 
 fn plugin_run_command(argv: &[String]) -> CliOutput {
+    if wants_help_before_positionals(argv, &[]) || argv.first().is_some_and(|arg| arg == "help") {
+        return plugin_ok(PLUGIN_USAGE);
+    }
     match plugin_parse_kind(argv).and_then(|kind| plugin_dispatch_kind(kind, &argv[1..])) {
         Ok(output) => output,
         Err(message) if message.is_empty() => plugin_ok(PLUGIN_USAGE),
