@@ -420,6 +420,104 @@ fn start_adopts_existing_without_clobber() {
     );
 }
 
+#[test]
+fn start_adopt_preserves_unknown_config_fields() {
+    let Some(h) = Harness::try_new("start-adopt-unknown") else {
+        return;
+    };
+
+    // A maw-js-era team config carrying fields the AS Config/Member structs don't
+    // model: a top-level "description" and a member "isActive": false (mirrors the
+    // field report where both silently vanished through a typed round-trip). Seeded as
+    // raw bytes so survival can be proven byte-wise.
+    create_dir_all(h.team_dir.join("inboxes")).expect("team dir");
+    let seed = concat!(
+        "{\n",
+        "  \"name\": \"athena\",\n",
+        "  \"description\": \"athena squad - field era config\",\n",
+        "  \"members\": [\n",
+        "    {\n",
+        "      \"agentId\": \"digger@athena\",\n",
+        "      \"name\": \"digger\",\n",
+        "      \"color\": \"cyan\",\n",
+        "      \"repo\": \"/seed/repo\",\n",
+        "      \"joinedAt\": 1720000000000,\n",
+        "      \"isActive\": false\n",
+        "    }\n",
+        "  ],\n",
+        "  \"createdAt\": 1720000000000,\n",
+        "  \"leadSessionId\": \"seed-session\",\n",
+        "  \"leadRepo\": \"/seed/lead-repo\"\n",
+        "}\n",
+    );
+    write(h.team_dir.join("config.json"), seed).expect("seed config");
+
+    let out = run_squad(&["start"]);
+    assert_eq!(
+        out.code, 0,
+        "adopt start failed: {}\n{}",
+        out.stderr, out.stdout
+    );
+
+    let raw = read_to_string(h.team_dir.join("config.json")).expect("read config");
+    let config = h.config();
+
+    // (b) leadRepo refreshed to the staged lead repo, replacing the seed value.
+    let lead_repo = config["leadRepo"].as_str().expect("leadRepo string");
+    assert!(
+        lead_repo.ends_with("athena-oracle"),
+        "leadRepo refreshed to the lead repo: {config}"
+    );
+    assert!(
+        !raw.contains("/seed/lead-repo"),
+        "stale leadRepo value must be replaced: {raw}"
+    );
+
+    // (a) unknown fields survive byte-wise.
+    assert!(
+        raw.contains("\"description\": \"athena squad - field era config\""),
+        "top-level unknown field 'description' must survive adopt: {raw}"
+    );
+    assert!(
+        raw.contains("\"isActive\": false"),
+        "member unknown field 'isActive' must survive adopt: {raw}"
+    );
+
+    // (c) modeled fields unchanged: roster, createdAt, and the already-present
+    // leadSessionId are all preserved.
+    let members = config["members"].as_array().expect("members array");
+    assert_eq!(members.len(), 1, "roster preserved on adopt: {config}");
+    assert_eq!(
+        members[0]["name"],
+        json!("digger"),
+        "member name preserved: {config}"
+    );
+    assert_eq!(
+        members[0]["isActive"],
+        json!(false),
+        "member isActive preserved: {config}"
+    );
+    assert_eq!(
+        config["createdAt"],
+        json!(1_720_000_000_000_i64),
+        "createdAt must not be reset: {config}"
+    );
+    assert_eq!(
+        config["leadSessionId"],
+        json!("seed-session"),
+        "existing leadSessionId preserved (present, non-empty): {config}"
+    );
+
+    // Byte-wise proof: the whole file is the seed with ONLY leadRepo's value swapped —
+    // no dropped fields, no key reordering, no reindentation (the typed round-trip did
+    // all three).
+    let expected = seed.replace("/seed/lead-repo", lead_repo);
+    assert_eq!(
+        raw, expected,
+        "adopt must be a surgical in-place edit, not a typed round-trip"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // say
 // ---------------------------------------------------------------------------

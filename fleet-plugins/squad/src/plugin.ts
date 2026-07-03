@@ -66,13 +66,35 @@ function baseName(path: string): string {
 
 // ── start ────────────────────────────────────────────────────────────────────
 // maw squad start — start THIS repo's squad. Adopts an existing folder, never clobbers.
+//
+// Adopt path (config.json exists) is a SURGICAL raw-text update, never a typed
+// round-trip: the reference impl (athena-oracle/.maw/plugins/squad/impl.ts cmdStart)
+// parses config into a plain JS object, fills leadSessionId when missing, sets
+// leadRepo, and re-stringifies — so any field it doesn't model (a top-level
+// "description", a member "isActive", etc.) SURVIVES. A typed round-trip through
+// Config/Member here would silently drop every out-of-schema field and reorder keys
+// (field-verified regression). So on adopt we edit only leadSessionId + leadRepo in
+// place and leave every other byte intact. The create path (no existing config) keeps
+// the typed serialize — there are no unknown fields to preserve.
 function cmdStart(teams: string, team: string, cwd: string): i32 {
   const existing = readFile(cfgOf(teams, team));
   const existed = existing.length > 0;
-  const cfg = existed ? parseConfig(existing) : newConfig(team);
-  if (cfg.leadSessionId == "") cfg.leadSessionId = nowMillis(); // uuid host verb is out-of-sandbox; timestamp id per reference fallback
-  cfg.leadRepo = cwd;
-  const wrote = writeFile(cfgOf(teams, team), serializeConfig(cfg));
+  let content: string;
+  let leadSessionId: string;
+  if (existed) {
+    const priorSid = jsonStringField(existing, "leadSessionId");
+    leadSessionId = priorSid == "" ? nowMillis() : priorSid; // uuid host verb is out-of-sandbox; timestamp id per reference fallback
+    let updated = ensureStringField(existing, "leadSessionId", leadSessionId); // insert/fill only when missing or empty
+    updated = setStringField(updated, "leadRepo", cwd); // replace value in place, or append if absent
+    content = updated;
+  } else {
+    const cfg = newConfig(team);
+    cfg.leadSessionId = nowMillis();
+    cfg.leadRepo = cwd;
+    leadSessionId = cfg.leadSessionId;
+    content = serializeConfig(cfg);
+  }
+  const wrote = writeFile(cfgOf(teams, team), content);
   if (wrote != "") return finish(false, null, wrote);
 
   // teams runtime delivers member→lead replies to team-lead.json, not lead.json
@@ -83,7 +105,7 @@ function cmdStart(teams: string, team: string, cwd: string): i32 {
   }
 
   let out = "⚡ squad '" + team + "' " + (existed ? "adopted (already existed)" : "started") + " → " + dirOf(teams, team) + "\n";
-  out += "   lead: " + baseName(cfg.leadRepo) + " (this repo)   lead session: " + cfg.leadSessionId + "\n";
+  out += "   lead: " + baseName(cwd) + " (this repo)   lead session: " + leadSessionId + "\n";
   out += "   replies arrive in: inboxes/team-lead.json\n";
   out += "   next: maw squad join digger   ·   maw squad say digger \"<text>\"   ·   maw squad ls";
   return finish(true, out, null);
@@ -479,6 +501,102 @@ function matchDelim(s: string, start: i32, open: string, close: string): i32 {
     }
   }
   return -1;
+}
+
+// ── surgical top-level field editing (adopt path) ────────────────────────────────
+// Edit one field of an object's raw JSON text without a lossy typed round-trip, so
+// unknown/out-of-schema fields and key order survive byte-for-byte. All lookups are
+// scoped to the ROOT object's direct members (brace-depth 1): a nested member's
+// "name"/"repo" never shadows the top-level keys we touch.
+class FieldSpan {
+  found: bool; valStart: i32; valEnd: i32;
+  constructor(found: bool, valStart: i32, valEnd: i32) {
+    this.found = found; this.valStart = valStart; this.valEnd = valEnd;
+  }
+}
+
+// End index (exclusive) of the JSON value that begins at `v` (a non-space char).
+function valueEnd(json: string, v: i32): i32 {
+  if (v >= json.length) return json.length;
+  const ch = json.charAt(v);
+  if (ch == "\"") return readJsonString(json, v).next;
+  if (ch == "{") { const e = matchDelim(json, v, "{", "}"); return e < 0 ? json.length : e + 1; }
+  if (ch == "[") { const e = matchDelim(json, v, "[", "]"); return e < 0 ? json.length : e + 1; }
+  // number / true / false / null — run to the next structural delimiter, then rtrim
+  let i = v;
+  while (i < json.length) {
+    const c = json.charAt(i);
+    if (c == "," || c == "}" || c == "]") break;
+    i++;
+  }
+  while (i > v && isSpace(json.charCodeAt(i - 1))) i--;
+  return i;
+}
+
+// Locate a direct member `key` of the root object; return the span of its value.
+function findTopLevelKey(json: string, key: string): FieldSpan {
+  let open = 0;
+  while (open < json.length && json.charAt(open) != "{") open++;
+  if (open >= json.length) return new FieldSpan(false, -1, -1);
+  let i = open + 1;
+  let depth = 1;
+  while (i < json.length) {
+    const ch = json.charAt(i);
+    if (ch == "\"") {
+      const parsed = readJsonString(json, i);
+      if (depth == 1) {
+        let j = parsed.next;
+        while (j < json.length && isSpace(json.charCodeAt(j))) j++;
+        if (j < json.length && json.charAt(j) == ":" && parsed.value == key) {
+          let v = j + 1;
+          while (v < json.length && isSpace(json.charCodeAt(v))) v++;
+          return new FieldSpan(true, v, valueEnd(json, v));
+        }
+      }
+      i = parsed.next;
+      continue;
+    }
+    if (ch == "{" || ch == "[") { depth++; i++; continue; }
+    if (ch == "}" || ch == "]") { depth--; i++; if (depth == 0) break; continue; }
+    i++;
+  }
+  return new FieldSpan(false, -1, -1);
+}
+
+// Append `"key": <rawValue>` as the last member of the root object, matching the
+// 2-space canonical layout the reference's JSON.stringify(_, null, 2) produces.
+function appendTopLevelField(json: string, key: string, rawValue: string): string {
+  let open = 0;
+  while (open < json.length && json.charAt(open) != "{") open++;
+  if (open >= json.length) return json;
+  const close = matchDelim(json, open, "{", "}");
+  if (close < 0) return json;
+  const prop = "\"" + key + "\": " + rawValue;
+  let last = close - 1;
+  while (last > open && isSpace(json.charCodeAt(last))) last--;
+  if (last == open) {
+    // empty object "{}" (only whitespace inside): open a fresh 2-space body
+    return json.slice(0, open + 1) + "\n  " + prop + "\n" + json.slice(close);
+  }
+  return json.slice(0, last + 1) + ",\n  " + prop + json.slice(last + 1);
+}
+
+// Set a top-level string field to `value`: replace its value in place if present,
+// else append it. Preserves every other byte.
+function setStringField(json: string, key: string, value: string): string {
+  const span = findTopLevelKey(json, key);
+  if (span.found) return json.slice(0, span.valStart) + quote(value) + json.slice(span.valEnd);
+  return appendTopLevelField(json, key, quote(value));
+}
+
+// Fill a top-level string field only when it is absent or empty/null (reference:
+// `if (!cfg.leadSessionId) …`). A present, non-empty value is left byte-for-byte.
+function ensureStringField(json: string, key: string, value: string): string {
+  const span = findTopLevelKey(json, key);
+  if (!span.found) return appendTopLevelField(json, key, quote(value));
+  const cur = json.slice(span.valStart, span.valEnd);
+  if (cur == "\"\"" || cur == "null") return json.slice(0, span.valStart) + quote(value) + json.slice(span.valEnd);
+  return json;
 }
 
 function finish(ok: bool, output: string | null, error: string | null): i32 {
