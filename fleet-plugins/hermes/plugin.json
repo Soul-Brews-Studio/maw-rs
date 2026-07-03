@@ -1,0 +1,17 @@
+{
+  "name": "hermes",
+  "version": "0.2.1",
+  "sdk": "^1.0.0",
+  "runtime": "bun-dev",
+  "target": "js",
+  "entry": "src/plugin.ts",
+  "description": "Hermes bridge - Discord REST bot verbs plus API-server user turns. Bun-dev tier: secrets stay in env/pass; no wasm artifact yet.",
+  "author": "Hermes Oracle x Hermes GLM-5",
+  "license": "MIT",
+  "weight": 0,
+  "schemaVersion": 1,
+  "cli": {
+    "command": "hermes",
+    "help": "maw hermes <whoami|send|read|channels|threads|chat|sessions|health|server-api|api|line>"
+  }
+}
