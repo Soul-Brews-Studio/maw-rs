@@ -158,6 +158,7 @@ struct EnvRestore {
     maw_home: Option<OsString>,
     maw_plugins_dir: Option<OsString>,
     pwd: Option<OsString>,
+    cwd: Option<PathBuf>,
 }
 
 impl EnvRestore {
@@ -167,6 +168,7 @@ impl EnvRestore {
             maw_home: std::env::var_os("MAW_HOME"),
             maw_plugins_dir: std::env::var_os("MAW_PLUGINS_DIR"),
             pwd: std::env::var_os("PWD"),
+            cwd: std::env::current_dir().ok(),
         }
     }
 }
@@ -177,6 +179,9 @@ impl Drop for EnvRestore {
         restore("MAW_HOME", self.maw_home.take());
         restore("MAW_PLUGINS_DIR", self.maw_plugins_dir.take());
         restore("PWD", self.pwd.take());
+        if let Some(cwd) = self.cwd.take() {
+            std::env::set_current_dir(cwd).ok();
+        }
     }
 }
 
@@ -207,11 +212,15 @@ impl Drop for Harness {
 
 impl Harness {
     /// Locks env, gates on the port's presence/tier, stages it into an isolated
-    /// tempdir, and points `HOME` + `MAW_PLUGINS_DIR` + `PWD` at it. Returns `None`
-    /// (after printing a skip reason) when a precondition is missing, so callers
-    /// early-return green.
+    /// tempdir, and points `HOME` + `MAW_PLUGINS_DIR` + `PWD` + the process cwd at
+    /// it. Returns `None` (after printing a skip reason) when a precondition is
+    /// missing, so callers early-return green.
     fn try_new(label: &str) -> Option<Self> {
-        let guard = env_lock().lock().expect("env lock");
+        // Poison-tolerant: a panic in one test must not cascade PoisonError into the
+        // rest — the serialized section only mutates env/cwd, which EnvRestore repairs.
+        let guard = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let Some(source) = squad_source_dir() else {
             Skip::NoPort.announce(label);
@@ -262,6 +271,11 @@ impl Harness {
         std::env::set_var("MAW_PLUGINS_DIR", &plugins_dir);
         std::env::set_var("PWD", &lead_repo);
         std::env::remove_var("MAW_HOME");
+        // The wasm tier gets its cwd from the process (InvokeContext), not $PWD —
+        // the harness must actually chdir, or the team derives from the cargo test
+        // cwd (`crates/maw-cli` → team "maw-cli"). Serialized by the env lock;
+        // EnvRestore puts it back.
+        std::env::set_current_dir(&lead_repo).expect("chdir into lead repo");
 
         let team = "athena".to_owned();
         let teams_root = home.join(".claude").join("teams");
