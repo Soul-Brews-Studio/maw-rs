@@ -54,10 +54,7 @@ pub fn new_rest() -> Result<ReqwestDiscordRest> {
 
 async fn get_json(rest: &dyn DiscordRest, path: &str, token: &str) -> Result<DiscordHttpResponse> {
     for _attempt in 0..8 {
-        let res = rest
-            .get_json(path, token)
-            .await
-            .map_err(Error::Api)?;
+        let res = rest.get_json(path, token).await.map_err(Error::Api)?;
         if res.status == 429 {
             let wait = res.retry_after.unwrap_or(1.0) + 0.5;
             sleep(Duration::from_secs_f64(wait)).await;
@@ -80,7 +77,11 @@ pub async fn list_guilds(rest: &dyn DiscordRest, token: &str) -> Result<Vec<Guil
     serde_json::from_value(body).map_err(Error::Json)
 }
 
-pub async fn guild_channels(rest: &dyn DiscordRest, token: &str, guild_id: &str) -> Result<Vec<Channel>> {
+pub async fn guild_channels(
+    rest: &dyn DiscordRest,
+    token: &str,
+    guild_id: &str,
+) -> Result<Vec<Channel>> {
     let path = format!("/guilds/{guild_id}/channels");
     let body = get_json(rest, &path, token).await?.body;
     serde_json::from_value(body).map_err(Error::Json)
@@ -217,8 +218,9 @@ mod tests {
             &'a self,
             path: &'a str,
             _token: &'a str,
-        ) -> Pin<Box<dyn Future<Output = std::result::Result<DiscordHttpResponse, String>> + Send + 'a>>
-        {
+        ) -> Pin<
+            Box<dyn Future<Output = std::result::Result<DiscordHttpResponse, String>> + Send + 'a>,
+        > {
             Box::pin(async move {
                 self.calls.lock().expect("calls").push(path.to_owned());
                 self.responses

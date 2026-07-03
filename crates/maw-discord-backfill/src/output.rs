@@ -1,4 +1,7 @@
-use std::{env, fs, path::{Path, PathBuf}};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -35,7 +38,10 @@ pub fn default_state_dir() -> PathBuf {
 pub fn sanitize(name: &str) -> String {
     name.chars()
         .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '_' || c == '-' || ('\u{0E00}'..='\u{0E7F}').contains(&c)
+            if c.is_ascii_alphanumeric()
+                || c == '_'
+                || c == '-'
+                || ('\u{0E00}'..='\u{0E7F}').contains(&c)
             {
                 c
             } else {
@@ -77,7 +83,12 @@ pub fn load_channel_json(path: &Path) -> Result<Vec<Message>> {
     serde_json::from_str(&raw).map_err(Error::Json)
 }
 
-pub fn write_channel_json(out_root: &Path, guild: &str, channel: &str, messages: &[Message]) -> Result<PathBuf> {
+pub fn write_channel_json(
+    out_root: &Path,
+    guild: &str,
+    channel: &str,
+    messages: &[Message],
+) -> Result<PathBuf> {
     let dir = out_root.join(sanitize(guild));
     fs::create_dir_all(&dir)?;
     let path = channel_json_path(out_root, guild, channel);

@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 use maw_discord_backfill::api::new_rest;
-use maw_discord_backfill::engine::{run_backfill, backfill_channel, BackfillOptions, LogSink};
+use maw_discord_backfill::engine::{backfill_channel, run_backfill, BackfillOptions, LogSink};
 use maw_discord_backfill::output::{default_state_dir, load_cursor};
 use maw_discord_backfill::token::resolve_token;
 
@@ -25,9 +25,7 @@ enum Commands {
         target: ListTarget,
     },
     /// Show incremental watermark
-    Cursor {
-        channel_id: String,
-    },
+    Cursor { channel_id: String },
     /// Backfill one channel
     Channel {
         channel_id: String,
@@ -53,14 +51,10 @@ enum Commands {
     },
     #[cfg(feature = "index")]
     /// Upsert channel messages into sqlite (Phase 2)
-    Index {
-        channel_id: String,
-    },
+    Index { channel_id: String },
     #[cfg(feature = "index")]
     /// FTS search indexed messages (Phase 2)
-    Search {
-        query: String,
-    },
+    Search { query: String },
 }
 
 #[derive(Subcommand)]
@@ -166,11 +160,7 @@ async fn run() -> maw_discord_backfill::Result<()> {
             list,
             no_incremental,
         } => {
-            let limit = if all {
-                10_000
-            } else {
-                limit.unwrap_or(100)
-            };
+            let limit = if all { 10_000 } else { limit.unwrap_or(100) };
             let mut log = |line: &str| println!("{line}");
             let mut sink = LogSink(&mut log);
             let opts = BackfillOptions {

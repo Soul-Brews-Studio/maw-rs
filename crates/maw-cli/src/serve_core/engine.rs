@@ -46,7 +46,10 @@ fn serveengine_child_timeout() -> Duration {
     std::env::var(SERVEENGINE_CHILD_TIMEOUT_ENV)
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
-        .map_or_else(|| Duration::from_secs(SERVEENGINE_CHILD_TIMEOUT_SECS), Duration::from_secs)
+        .map_or_else(
+            || Duration::from_secs(SERVEENGINE_CHILD_TIMEOUT_SECS),
+            Duration::from_secs,
+        )
 }
 
 pub(crate) fn serveengine_self_bin() -> Result<PathBuf, String> {

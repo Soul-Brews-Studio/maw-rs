@@ -65,7 +65,10 @@ pub async fn backfill_channel(
     log: &mut LogSink<'_>,
 ) -> Result<usize> {
     let out_root = opts.out_dir.clone().unwrap_or_else(output::default_out_dir);
-    let state_root = opts.state_dir.clone().unwrap_or_else(output::default_state_dir);
+    let state_root = opts
+        .state_dir
+        .clone()
+        .unwrap_or_else(output::default_state_dir);
     let limit = if opts.limit == 0 { 10_000 } else { opts.limit };
 
     let cur = if opts.incremental {
@@ -119,9 +122,17 @@ pub async fn backfill_channel(
             path.display()
         ));
     } else {
-        log.log(&format!("  ✓ #{channel_name}: {} msgs → {}", msgs.len(), path.display()));
+        log.log(&format!(
+            "  ✓ #{channel_name}: {} msgs → {}",
+            msgs.len(),
+            path.display()
+        ));
     }
-    Ok(if opts.incremental { written } else { msgs.len() })
+    Ok(if opts.incremental {
+        written
+    } else {
+        msgs.len()
+    })
 }
 
 pub async fn run_backfill(
@@ -140,8 +151,12 @@ pub async fn run_backfill(
 
     if let Some(ref channel_id) = opts.channel_id {
         if !opts.list_only {
-            let guild = opts.guild_filter.clone().unwrap_or_else(|| "direct".to_owned());
-            let n = backfill_channel(rest, token, channel_id, channel_id, &guild, opts, log).await?;
+            let guild = opts
+                .guild_filter
+                .clone()
+                .unwrap_or_else(|| "direct".to_owned());
+            let n =
+                backfill_channel(rest, token, channel_id, channel_id, &guild, opts, log).await?;
             return Ok((n, 1));
         }
     }

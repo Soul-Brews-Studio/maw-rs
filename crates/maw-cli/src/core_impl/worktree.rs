@@ -717,6 +717,7 @@ mod worktree_tests {
                 windows: vec![NativeFleetWindow {
                     name: window.to_owned(),
                     repo: repo.to_owned(),
+                    kind: None,
                 }],
                 ..NativeFleetSession::default()
             },
