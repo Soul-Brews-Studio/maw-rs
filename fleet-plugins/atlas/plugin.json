@@ -1,0 +1,25 @@
+{
+  "name": "atlas",
+  "version": "0.1.0",
+  "sdk": "^1.0.0",
+  "runtime": "bun-dev",
+  "target": "js",
+  "entry": "src/plugin.ts",
+  "capabilities": [
+    "fs:read",
+    "fs:write",
+    "net:https:discord.com",
+    "net:https:discordapp.com",
+    "proc:exec:true"
+  ],
+  "description": "Discord fleet infrastructure - manage bots, channels, guilds, permissions, backfill messages. Dev tier: Bun/TypeScript, pre-WASM graduation.",
+  "author": "atlas-oracle",
+  "license": "MIT",
+  "weight": 50,
+  "schemaVersion": 1,
+  "cli": {
+    "command": "atlas",
+    "aliases": ["at"],
+    "help": "maw atlas <ls|read|backfill|serve|transcribe|threads|slash|avatar|app|team-threads|route|watch|spawn-session|inbox|whoami>"
+  }
+}
