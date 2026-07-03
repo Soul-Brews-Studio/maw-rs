@@ -1026,7 +1026,7 @@ fn run_plugin_manifest_invoke_plan(
         return plugin_manifest_ts_refusal(plugin);
     }
 
-    let mut runtime = ExtismWasmInvokeRuntime::default();
+    let mut runtime = ExtismWasmInvokeRuntime::default().with_manifest_fs_roots();
     let result = invoke_plugin(plugin, &ctx, &mut runtime);
     CliOutput {
         code: 0,

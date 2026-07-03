@@ -236,6 +236,42 @@ impl MawWasmHost {
         self
     }
 
+    /// Grant exactly the filesystem roots this plugin's manifest capabilities
+    /// declare, resolved through the fixed host registry ([`known_fs_root`]).
+    ///
+    /// Security model: a manifest may only name a scope (`fs:read:teams` /
+    /// `fs:write:teams`); it can NEVER supply a path. A root is granted only when
+    /// BOTH the cap is declared AND the scope name resolves in the hardcoded
+    /// registry, so read vs write is enforced by which `fs:<verb>:*` caps exist.
+    /// Resolves the base home directory from the host process `HOME`.
+    #[must_use]
+    pub fn with_manifest_fs_roots(self) -> Self {
+        match home_dir() {
+            Some(home) => self.with_manifest_fs_roots_from(&home),
+            None => self,
+        }
+    }
+
+    /// [`Self::with_manifest_fs_roots`] with an explicit home base — used by tests
+    /// so root resolution stays deterministic without mutating process env.
+    #[must_use]
+    pub fn with_manifest_fs_roots_from(mut self, home: &Path) -> Self {
+        for verb in ["read", "write"] {
+            for scope in self.caps.scopes_for("fs", verb) {
+                if self.fs_roots.contains_key(&scope) {
+                    continue;
+                }
+                if let Some(path) = known_fs_root(&scope, home) {
+                    // Fixed-registry path only; ensure it exists so bounded ops
+                    // can canonicalize it (and so mkdirp has an anchor to build on).
+                    let _ = std::fs::create_dir_all(&path);
+                    self.fs_roots.insert(scope, path);
+                }
+            }
+        }
+        self
+    }
+
     #[must_use]
     pub fn with_secret_ref(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         self.secret_store.insert(name.into(), value.into());
@@ -358,6 +394,7 @@ impl MawWasmHost {
             )),
             "maw.fs.read" => to_json(&self.fs_read(input)),
             "maw.fs.write" => to_json(&self.fs_write(input)),
+            "maw.fs.mkdir" => to_json(&self.fs_mkdir(input)),
             "maw.fs.remove" => to_json(&self.fs_remove(input)),
             "maw.fs.list" => to_json(&self.fs_list(input)),
             "maw.fs.stat" => to_json(&self.fs_stat(input)),
@@ -674,20 +711,23 @@ impl MawWasmHost {
             Ok(args) => args,
             Err(err) => return err,
         };
+        if args.mkdirp.unwrap_or(false) {
+            // Create missing ancestors first: `secure_write_path` canonicalizes
+            // the parent, which fails with NotFound until the parent exists.
+            let Some(parent) = Path::new(&args.path).parent() else {
+                return HostResult::err(
+                    HostErrorCode::InvalidArgs,
+                    "write path requires parent",
+                );
+            };
+            if let Err(err) = self.secure_mkdirp(parent) {
+                return err;
+            }
+        }
         let (cap, path) = match self.secure_write_path(&args.path) {
             Ok(value) => value,
             Err(err) => return err,
         };
-        if args.mkdirp.unwrap_or(false) {
-            if let Some(parent) = path.parent() {
-                if let Err(error) = std::fs::create_dir_all(parent) {
-                    return HostResult::err(
-                        HostErrorCode::IoError,
-                        format!("mkdirp failed: {error}"),
-                    );
-                }
-            }
-        }
         let bytes = if args.encoding.as_deref() == Some("base64") {
             match base64::engine::general_purpose::STANDARD.decode(&args.content) {
                 Ok(bytes) => bytes,
@@ -738,6 +778,52 @@ impl MawWasmHost {
             "maw.fs.write",
             &cap,
             &path.display().to_string(),
+            status_of(&result),
+            start,
+        );
+        result
+    }
+
+    fn fs_mkdir(&self, input: &str) -> HostResult<Value> {
+        let start = Instant::now();
+        let args = match parse_args::<FsPathArgs>(input) {
+            Ok(args) => args,
+            Err(err) => return err,
+        };
+        if contains_glob_pattern(&args.path) {
+            return HostResult::err(
+                HostErrorCode::CapabilityDenied,
+                "glob/wildcard filesystem paths are denied",
+            );
+        }
+        let roots = self.roots_for("write");
+        let canonical = match ensure_dir_within_roots(Path::new(&args.path), &roots) {
+            Ok(path) => path,
+            Err(err) => return err,
+        };
+        if let Err(err) = self.deny_protected_security_path(&canonical) {
+            return err;
+        }
+        let Some(scope) = roots
+            .iter()
+            .find(|(_, root)| canonical.starts_with(root))
+            .map(|(scope, _)| scope.clone())
+        else {
+            return HostResult::err(
+                HostErrorCode::CapabilityDenied,
+                "filesystem path outside declared write roots",
+            );
+        };
+        let cap = match self.caps.require("fs", "write", Some(&scope)) {
+            Ok(cap) => cap,
+            Err(err) => return err,
+        };
+        let result =
+            HostResult::ok(json!({"path": canonical.display().to_string(), "created": true}));
+        self.audit(
+            "maw.fs.mkdir",
+            &cap,
+            &canonical.display().to_string(),
             status_of(&result),
             start,
         );
@@ -1529,6 +1615,14 @@ impl MawWasmHost {
             .collect()
     }
 
+    /// Safely create `dir` and any missing ancestors, bounded to the plugin's
+    /// declared write roots. Authorization is inherent: `roots_for("write")`
+    /// only contains scopes for which `fs:write:<scope>` is granted, so a
+    /// directory can only be created under a root the plugin may write.
+    fn secure_mkdirp(&self, dir: &Path) -> Result<PathBuf, HostResult<Value>> {
+        ensure_dir_within_roots(dir, &self.roots_for("write"))
+    }
+
     fn check_cwd(&self, cwd: &str) -> Result<(), HostResult<Value>> {
         let cwd = canonicalize_checked(cwd)?;
         let roots = self
@@ -1658,12 +1752,24 @@ impl MawWasmHost {
 #[derive(Debug, Clone, Default)]
 pub struct ExtismWasmInvokeRuntime {
     host_overrides: BTreeMap<String, MawWasmHost>,
+    grant_manifest_fs_roots: bool,
 }
 
 impl ExtismWasmInvokeRuntime {
     #[must_use]
     pub fn with_host(mut self, plugin_name: impl Into<String>, host: MawWasmHost) -> Self {
         self.host_overrides.insert(plugin_name.into(), host);
+        self
+    }
+
+    /// Config surface for the invoking path (e.g. real `maw <plugin>` CLI
+    /// dispatch): when enabled, each plugin whose host is built by default gets
+    /// exactly the filesystem roots its manifest caps declare, resolved through
+    /// the fixed host registry ([`MawWasmHost::with_manifest_fs_roots`]).
+    /// Explicit `with_host` overrides are left untouched.
+    #[must_use]
+    pub const fn with_manifest_fs_roots(mut self) -> Self {
+        self.grant_manifest_fs_roots = true;
         self
     }
 }
@@ -1682,7 +1788,14 @@ impl PluginInvokeRuntime for ExtismWasmInvokeRuntime {
         let host = self
             .host_overrides
             .remove(&plugin.manifest.name)
-            .unwrap_or_else(|| MawWasmHost::new(plugin));
+            .unwrap_or_else(|| {
+                let host = MawWasmHost::new(plugin);
+                if self.grant_manifest_fs_roots {
+                    host.with_manifest_fs_roots()
+                } else {
+                    host
+                }
+            });
         let manifest = ExtismManifest::new([Wasm::data(wasm_bytes.to_vec())])
             .with_allowed_hosts(host.caps.scopes_for("net", "https").into_iter());
         let mut builder = PluginBuilder::new(manifest).with_wasi(false);
@@ -1723,6 +1836,7 @@ pub const HOST_FN_NAMES: &[&str] = &[
     "maw.consent.read",
     "maw.fs.read",
     "maw.fs.write",
+    "maw.fs.mkdir",
     "maw.fs.remove",
     "maw.fs.list",
     "maw.fs.stat",
@@ -2121,6 +2235,22 @@ fn default_state_root() -> PathBuf {
     )
 }
 
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(PathBuf::from)
+}
+
+/// Fixed registry mapping a manifest capability scope NAME to an absolute host
+/// path, rooted at `home`. This is the ONLY source of filesystem roots for
+/// `maw.fs.*` in production: a manifest may name one of these scopes but can
+/// never inject a path of its own. Extend by adding an arm here — never by
+/// reading a path from a manifest.
+fn known_fs_root(scope: &str, home: &Path) -> Option<PathBuf> {
+    match scope {
+        "teams" => Some(home.join(".claude").join("teams")),
+        _ => None,
+    }
+}
+
 fn contains_glob_pattern(path: &str) -> bool {
     path.chars()
         .any(|ch| matches!(ch, '*' | '?' | '[' | ']' | '{' | '}'))
@@ -2268,6 +2398,121 @@ fn open_nofollow_existing(path: &Path) -> Result<File, HostResult<Value>> {
     }
     Ok(file)
 }
+fn open_dir_nofollow(path: &Path) -> Result<File, HostResult<Value>> {
+    // O_NOFOLLOW on the final component: if `path` was swapped for a symlink,
+    // this open fails (ELOOP) rather than following it out of the sandbox.
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(O_NOFOLLOW_FLAG)
+        .open(path)
+        .map_err(|error| {
+            HostResult::err(
+                HostErrorCode::CapabilityDenied,
+                format!("open dir failed: {error}"),
+            )
+        })?;
+    let meta = file.metadata().map_err(|error| {
+        HostResult::err(HostErrorCode::IoError, format!("metadata failed: {error}"))
+    })?;
+    if !meta.file_type().is_dir() {
+        return Err(HostResult::err(
+            HostErrorCode::CapabilityDenied,
+            "expected directory",
+        ));
+    }
+    Ok(file)
+}
+
+/// Ensure `dir` (and any missing ancestors) exist, creating each level safely
+/// inside the declared write `roots`. Mirrors the existing fs hardening: never
+/// follows a symlink, never escapes a root, and re-verifies every created
+/// component through `O_NOFOLLOW` + fd realpath (the "filesystem race detected"
+/// TOCTOU check). Returns the canonical path of the ensured directory.
+fn ensure_dir_within_roots(
+    dir: &Path,
+    roots: &BTreeMap<String, PathBuf>,
+) -> Result<PathBuf, HostResult<Value>> {
+    if roots.is_empty() {
+        return Err(HostResult::err(
+            HostErrorCode::CapabilityDenied,
+            "filesystem path outside declared write roots",
+        ));
+    }
+    // Walk up to the deepest existing ancestor, collecting the missing tail.
+    // symlink_metadata is lstat: it does not follow symlinks.
+    let mut missing: Vec<std::ffi::OsString> = Vec::new();
+    let mut base = dir.to_path_buf();
+    loop {
+        if std::fs::symlink_metadata(&base).is_ok() {
+            break;
+        }
+        let Some(name) = base.file_name() else {
+            // Terminates in `..`, `/`, or is empty: refuse rather than guess.
+            return Err(HostResult::err(
+                HostErrorCode::CapabilityDenied,
+                "unsafe mkdir path component",
+            ));
+        };
+        missing.push(name.to_owned());
+        let Some(parent) = base.parent() else {
+            return Err(HostResult::err(
+                HostErrorCode::InvalidArgs,
+                "mkdir path requires parent",
+            ));
+        };
+        base = parent.to_path_buf();
+    }
+    // Anchor: the deepest existing ancestor must canonicalize to a real path
+    // that stays under a declared write root (this catches a symlinked ancestor
+    // escaping the sandbox, since canonicalize resolves every symlink).
+    let mut current = canonicalize_checked_path(&base)?;
+    if deny_special_path(&current) {
+        return Err(HostResult::err(
+            HostErrorCode::CapabilityDenied,
+            "special filesystem path denied",
+        ));
+    }
+    if !roots.values().any(|root| current.starts_with(root)) {
+        return Err(HostResult::err(
+            HostErrorCode::CapabilityDenied,
+            "filesystem path outside declared write roots",
+        ));
+    }
+    // Create each missing level one component at a time. `current` is always a
+    // canonical (symlink-free) directory under a root, so only the single new
+    // leaf is untrusted — and O_NOFOLLOW + realpath re-check guards it.
+    for name in missing.iter().rev() {
+        let comp = name.to_string_lossy();
+        if comp.is_empty() || comp == "." || comp == ".." || comp.contains('/') {
+            return Err(HostResult::err(
+                HostErrorCode::CapabilityDenied,
+                "unsafe mkdir path component",
+            ));
+        }
+        let next = current.join(name);
+        match std::fs::create_dir(&next) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                return Err(HostResult::err(
+                    HostErrorCode::IoError,
+                    format!("mkdir failed: {error}"),
+                ))
+            }
+        }
+        let opened = open_dir_nofollow(&next)?;
+        let real = fd_real_path(&opened)?;
+        if deny_special_path(&real) || !roots.values().any(|root| real.starts_with(root)) {
+            return Err(HostResult::err(
+                HostErrorCode::CapabilityDenied,
+                "filesystem race detected",
+            ));
+        }
+        current = real;
+    }
+    Ok(current)
+}
+
 fn verify_fd_path(file: &File, expected: &Path) -> Result<(), HostResult<Value>> {
     let actual = fd_real_path(file)?;
     if actual == expected {
