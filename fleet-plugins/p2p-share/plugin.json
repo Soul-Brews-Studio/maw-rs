@@ -1,0 +1,32 @@
+{
+  "name": "p2p-share",
+  "version": "0.1.0",
+  "sdk": "^1.0.0",
+  "runtime": "bun-dev",
+  "target": "js",
+  "entry": "src/plugin.ts",
+  "description": "Share tmux panes via WebRTC P2P - no server, no tunnel, no port forwarding. Bun-dev tier: werift + tmux subprocesses; no wasm artifact yet.",
+  "author": "PhD Oracle + Nat",
+  "license": "MIT",
+  "weight": 50,
+  "schemaVersion": 1,
+  "capabilities": [
+    "net:listen:localhost",
+    "net:wss:signaling",
+    "net:udp:webrtc",
+    "proc:exec:tmux",
+    "proc:exec:mkfifo",
+    "proc:exec:cat",
+    "fs:read:plugin",
+    "fs:write:tmp"
+  ],
+  "cli": {
+    "command": "p2p-share",
+    "help": "maw p2p-share share <pane> [--signal <url>] [--name <name>] [--port <port>]",
+    "flags": {
+      "--signal": "string",
+      "--name": "string",
+      "--port": "number"
+    }
+  }
+}

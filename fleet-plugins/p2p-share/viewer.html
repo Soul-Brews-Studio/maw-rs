@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>maw p2p-share — WebRTC Terminal Viewer</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #1a1a2e; color: #e0e0e0; font-family: monospace; }
+  #header {
+    padding: 6px 12px;
+    background: #16213e;
+    border-bottom: 1px solid #0f3460;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 13px;
+  }
+  #header .title { color: #e94560; font-weight: bold; }
+  .status { padding: 2px 8px; border-radius: 4px; font-size: 12px; }
+  .status-connecting { background: #f59e0b; color: #000; }
+  .status-connected { background: #10b981; color: #000; }
+  .status-disconnected { background: #ef4444; color: #fff; }
+  #terminal-wrap {
+    width: fit-content;
+    min-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  #terminal-wrap .xterm { display: block; }
+  #info {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    padding: 4px 12px;
+    background: #16213e;
+    border-top: 1px solid #0f3460;
+    font-size: 11px;
+    color: #666;
+    display: flex;
+    justify-content: space-between;
+  }
+</style>
+</head>
+<body>
+<div id="header">
+  <span class="title">🔗 maw p2p-share</span>
+  <span id="peer-info">—</span>
+  <span id="status" class="status status-connecting">connecting...</span>
+</div>
+<div id="terminal-wrap"></div>
+<div id="info">
+  <span id="bytes">0 bytes received</span>
+  <span>WebRTC P2P — no server relay</span>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+<script>
+const statusEl = document.getElementById('status');
+const peerEl = document.getElementById('peer-info');
+const bytesEl = document.getElementById('bytes');
+let totalBytes = 0;
+let term = null;
+let dc = null;
+
+function setStatus(text, cls) {
+  statusEl.textContent = text;
+  statusEl.className = 'status ' + cls;
+}
+
+function initTerminal(cols, rows) {
+  const wrap = document.getElementById('terminal-wrap');
+  wrap.innerHTML = '';
+  term = new Terminal({
+    cols: cols,
+    rows: rows,
+    theme: {
+      background: '#1a1a2e',
+      foreground: '#e0e0e0',
+      cursor: '#e94560',
+      selectionBackground: '#0f3460',
+    },
+    fontFamily: "monospace",
+    fontSize: 14,
+    cursorBlink: false,
+    scrollback: 0,
+    disableStdin: true,
+    convertEol: false,
+  });
+  term.open(wrap);
+
+  requestAnimationFrame(() => {
+    try {
+      const cellWidth = term._core._renderService.dimensions.css.cell.width;
+      const totalWidth = cols * cellWidth;
+      const containerWidth = wrap.parentElement.clientWidth;
+      if (totalWidth > containerWidth) {
+        const scale = containerWidth / totalWidth;
+        wrap.style.transformOrigin = 'top left';
+        wrap.style.transform = 'scale(' + scale + ')';
+      }
+    } catch {}
+  });
+}
+
+function toBytes(data) {
+  if (data instanceof ArrayBuffer) return new Uint8Array(data);
+  if (data instanceof Uint8Array) return data;
+  if (typeof data === 'string') return new TextEncoder().encode(data);
+  return null;
+}
+
+function tryParseJson(data) {
+  try {
+    const str = typeof data === 'string' ? data : new TextDecoder().decode(toBytes(data));
+    if (str.charAt(0) === '{') return JSON.parse(str);
+  } catch {}
+  return null;
+}
+
+let initialized = false;
+
+function handleMessage(event) {
+  const data = event.data;
+
+  if (!initialized) {
+    const msg = tryParseJson(data);
+    if (msg && msg.type === 'dims') {
+      initTerminal(msg.cols, msg.rows);
+      peerEl.textContent += ` (${msg.cols}x${msg.rows})`;
+      initialized = true;
+      return;
+    }
+  }
+
+  if (!term) return;
+
+  const bytes = toBytes(data);
+  if (bytes) {
+    term.write(bytes);
+    totalBytes += bytes.byteLength;
+  } else if (data instanceof Blob) {
+    data.arrayBuffer().then(buf => {
+      const arr = new Uint8Array(buf);
+      term.write(arr);
+      totalBytes += arr.byteLength;
+    });
+  }
+  bytesEl.textContent = formatBytes(totalBytes) + ' received';
+}
+
+function formatBytes(b) {
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+  return (b / 1048576).toFixed(1) + ' MB';
+}
+
+async function start() {
+  const configRes = await fetch('/config');
+  const config = await configRes.json();
+  const { signalUrl, peerName, target, authKey } = config;
+
+  peerEl.textContent = `${target} via ${peerName}`;
+
+  const wsUrl = authKey ? `${signalUrl}?key=${authKey}` : signalUrl;
+  const ws = new WebSocket(wsUrl);
+  let myId = '';
+  let pc = null;
+  // FIX: buffer ICE candidates until the remote description (answer) is set
+  let pendingIce = [];
+  let remoteSet = false;
+  async function flushIce() {
+    remoteSet = true;
+    for (const c of pendingIce) { try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch (e) { console.error('flushIce', e); } }
+    pendingIce = [];
+  }
+
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ type: 'identify', name: 'viewer-' + Math.random().toString(36).slice(2, 6) }));
+  };
+
+  ws.onmessage = async (event) => {
+    const msg = JSON.parse(event.data);
+
+    switch (msg.type) {
+      case 'ping':
+        ws.send(JSON.stringify({ type: 'pong' }));
+        break;
+
+      case 'welcome':
+        myId = msg.id;
+        ws.send(JSON.stringify({ type: 'list-peers' }));
+        break;
+
+      case 'peer-list': {
+        const sharePeer = msg.peers.find(p => p.name === peerName);
+        if (sharePeer) {
+          await createConnection(sharePeer.id);
+        } else {
+          setStatus('waiting...', 'status-connecting');
+        }
+        break;
+      }
+
+      case 'peer-identified':
+        if (msg.name === peerName && !pc) {
+          await createConnection(msg.id);
+        }
+        break;
+
+      case 'answer':
+        if (pc) {
+          await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+          await flushIce();
+        }
+        break;
+
+      case 'ice-candidate':
+        if (pc && msg.candidate) {
+          if (remoteSet) {
+            try { await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)); } catch (e) { console.error('addIce', e); }
+          } else {
+            pendingIce.push(msg.candidate);
+          }
+        }
+        break;
+    }
+  };
+
+  ws.onclose = () => {
+    setStatus('disconnected', 'status-disconnected');
+  };
+
+  async function createConnection(targetId) {
+    pc = new RTCPeerConnection({
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        // FIX: TURN relay for symmetric/double-NAT (LXC, mobile) — STUN-only is not enough
+        { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+        { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+        { urls: 'turns:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+      ],
+    });
+
+    pc.onicecandidate = (e) => {
+      if (e.candidate) {
+        ws.send(JSON.stringify({
+          type: 'ice-candidate',
+          target: targetId,
+          candidate: e.candidate.toJSON(),
+        }));
+      }
+    };
+
+    const dummyDc = pc.createDataChannel('init');
+    dummyDc.onopen = () => dummyDc.close();
+
+    pc.ondatachannel = (event) => {
+      dc = event.channel;
+      setStatus('connected', 'status-connected');
+      dc.binaryType = 'arraybuffer';
+      dc.onmessage = handleMessage;
+      dc.onclose = () => setStatus('disconnected', 'status-disconnected');
+    };
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+
+    ws.send(JSON.stringify({
+      type: 'offer',
+      target: targetId,
+      sdp: { type: offer.type, sdp: offer.sdp },
+    }));
+  }
+}
+
+start().catch(err => console.error('P2P error:', err));
+</script>
+</body>
+</html>
