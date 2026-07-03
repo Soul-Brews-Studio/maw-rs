@@ -6,7 +6,8 @@ use std::{
 
 use super::ServecoreEngine;
 
-const SERVEENGINE_CHILD_TIMEOUT: Duration = Duration::from_secs(15);
+const SERVEENGINE_CHILD_TIMEOUT_SECS: u64 = 30;
+const SERVEENGINE_CHILD_TIMEOUT_ENV: &str = "MAW_RS_SERVE_CHILD_TIMEOUT_SECS";
 
 #[derive(Debug)]
 pub struct ServecoreNativeEngine;
@@ -36,9 +37,17 @@ impl ServecoreExecRunner for ServecoreProcessRunner {
             &serveengine_self_bin()?,
             argv,
             cwd,
-            SERVEENGINE_CHILD_TIMEOUT,
+            serveengine_child_timeout(),
         )
     }
+}
+
+fn serveengine_child_timeout() -> Duration {
+    std::env::var(SERVEENGINE_CHILD_TIMEOUT_ENV)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or_else(|| Duration::from_secs(SERVEENGINE_CHILD_TIMEOUT_SECS))
 }
 
 pub(crate) fn serveengine_self_bin() -> Result<PathBuf, String> {
@@ -103,10 +112,18 @@ mod tests {
     }
 
     impl EnvGuard {
-        fn set(key: &'static str, value: &Path) -> Self {
+        fn set_os(key: &'static str, value: &std::ffi::OsStr) -> Self {
             let old = std::env::var_os(key);
             std::env::set_var(key, value);
             Self { key, old }
+        }
+
+        fn set_path(key: &'static str, value: &Path) -> Self {
+            Self::set_os(key, value.as_os_str())
+        }
+
+        fn set_str(key: &'static str, value: &str) -> Self {
+            Self::set_os(key, std::ffi::OsStr::new(value))
         }
     }
 
@@ -140,8 +157,23 @@ mod tests {
         let root = temp_dir("self-bin");
         let fake = root.join("maw-self");
         fs::write(&fake, "#!/bin/sh\nexit 0\n").expect("fake");
-        let _guard = EnvGuard::set("MAW_RS_SELF_BIN", &fake);
+        let _guard = EnvGuard::set_path("MAW_RS_SELF_BIN", &fake);
         assert_eq!(serveengine_self_bin().expect("self bin"), fake);
+    }
+
+    #[test]
+    fn serveengine_child_timeout_uses_env_override_and_garbage_falls_back() {
+        {
+            let _guard = EnvGuard::set_str(SERVEENGINE_CHILD_TIMEOUT_ENV, "42");
+            assert_eq!(serveengine_child_timeout(), Duration::from_secs(42));
+        }
+        {
+            let _guard = EnvGuard::set_str(SERVEENGINE_CHILD_TIMEOUT_ENV, "nope");
+            assert_eq!(
+                serveengine_child_timeout(),
+                Duration::from_secs(SERVEENGINE_CHILD_TIMEOUT_SECS)
+            );
+        }
     }
 
     #[test]
@@ -169,7 +201,7 @@ printf '{{"cwd":"%s","argv":["%s","%s","%s","%s"]}}' "$(pwd)" "$1" "$2" "$3" "$4
                 "nested".to_owned(),
             ],
             &root,
-            SERVEENGINE_CHILD_TIMEOUT,
+            serveengine_child_timeout(),
         )
         .expect("run");
         let body = fs::read_to_string(marker).expect("marker");
