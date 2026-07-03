@@ -40,11 +40,27 @@ maw hey <session>:<FULL-window-name> "<task + done-criteria>"  # 4. dispatch (v2
 | new | codex **trust** prompt | handled by the bypass engine (`--dangerously-bypass-approvals-and-sandbox`); no pre-trust needed |
 | new | safety hook blocks raw `tmux send-keys` | use `maw send-text` / `maw send-enter` |
 | #48 | fleet-dir divergence (fixed) | loader reads both `~/.maw/fleet` + state dir |
+| new | **`Error: turn/start failed in TUI`** — codex TUI dies to shell (seen after a hey lands on an errored session); the branch work survives, but the new mission is LOST | `maw peek` first; recover via **Respawn** below. Any hey sent into the dead TUI must be re-sent after respawn |
+| new | worker relaunched with **bare `codex`** (no bypass flags) → sandbox pins writable-root to spawn cwd → every cross-worktree op = `[ ! ] Action Required` approval hell ("not YOLO", Nat 2026-07-03) | NEVER relaunch bare. Always the full engine string (below) or `maw wake -e codex`. Verify: footer must show `danger…` |
+
+## Respawn a dead/non-YOLO worker (window already exists, pane at shell)
+```bash
+maw run <session>:<FULL-window-name> \
+  'cd <ABSOLUTE-worktree> && OMX_AUTO_UPDATE=0 codex --search --dangerously-bypass-approvals-and-sandbox \
+   "Read MISSION.md in this directory and execute the mission."'
+maw peek <session>:<FULL-window-name>   # footer: engine idle + `danger…` = YOLO active
+```
+Same engine string as `commands.codex` in `~/.config/maw/maw.config.50.json` — keep them in sync.
+Spawn IN the mission worktree (`cd` first); kickoff prompt as the positional arg.
 
 ## Preflight
-`maw team preflight` **verb exists**, but the full crew-up 33-gotcha checklist (charter-schema reject,
-trust/pool-auth check, worktree-exists-before-window, `.maw-engine` wake) is **not fully ported yet**
-(tracked: maw-rs#43). Not yet a full canary gate.
+`maw team preflight <team.yaml|team.json>` now runs the issue #43 crew-up gate offline: charter schema,
+session/worktree ordering, `.maw-engine` command resolution, pool `access_token` expiry, actual
+`CODEX_HOME` trust, CODEX_HOME isolation, and nested worktree collision checks.
+
+The post-spawn boot verification remains a manual helper in the preflight output: run
+`maw peek <session>:<window>` for each member and confirm the pane shows the engine idle prompt,
+not a shell, trust prompt, or update prompt.
 
 ## Charter
 `ψ/teams/<team>.yaml` (or `.maw/teams/`): `name`, `session`, `members[]` each with `role`, `name`,

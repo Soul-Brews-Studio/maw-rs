@@ -251,15 +251,15 @@ fn oracle_scan_registry() -> OracleRegistry {
 
 fn oracle_entry_from_repo(org: &str, path: &std::path::Path) -> Option<OracleEntry> {
     let repo = path.file_name()?.to_string_lossy().to_string();
+    if !native_repo_path_is_oracle(path, &repo) { return None; }
     let name = repo.strip_suffix("-oracle").unwrap_or(&repo).to_owned();
-    if !repo.ends_with("-oracle") { return None; }
     Some(OracleEntry { org: org.to_owned(), repo, name, local_path: path.display().to_string(), has_psi: path.join("ψ").exists(), has_fleet_config: oracle_repo_has_fleet_config(path), detected_at: oracle_now_string(), ..OracleEntry::default() })
 }
 
 fn oracle_entries_from_fleet(fleet: &OracleFleetEntry) -> Vec<OracleEntry> {
     let mut out = Vec::new();
     for window in &fleet.session.windows {
-        let Some(name) = oracle_name_from_window(&window.name) else { continue; };
+        let Some(name) = native_fleet_window_oracle_name(window) else { continue; };
         let (org, repo) = oracle_split_repo(&window.repo, &name);
         out.push(OracleEntry { org, repo, name, has_fleet_config: true, detected_at: oracle_now_string(), ..OracleEntry::default() });
     }
@@ -355,7 +355,6 @@ fn oracle_parse_json_flag(argv: &[String], start: usize) -> Result<bool, String>
 fn oracle_required_value<'a>(argv: &'a [String], index: usize, flag: &str) -> Result<&'a String, String> { argv.get(index).filter(|value| !value.starts_with('-')).ok_or_else(|| format!("oracle: {flag} requires a value")) }
 fn oracle_validate_name(value: &str, label: &str) -> Result<(), String> { if value.is_empty() || value.trim() != value || value.starts_with('-') || value.contains('/') { Err(format!("oracle: invalid {label} '{value}'")) } else { Ok(()) } }
 fn oracle_validate_nickname(value: &str) -> Result<(), String> { if value.chars().any(|ch| ch == '\n' || ch == '\r') { Err("oracle: nickname must be one line".to_owned()) } else { Ok(()) } }
-fn oracle_name_from_window(window: &str) -> Option<String> { window.strip_suffix("-oracle").map(str::to_owned) }
 fn oracle_split_repo(repo: &str, name: &str) -> (String, String) { repo.split_once('/').map_or(("(unknown)".to_owned(), format!("{name}-oracle")), |(org, repo)| (org.to_owned(), repo.to_owned())) }
 fn oracle_entry_haystack(entry: &OracleEntry) -> String { format!("{} {} {} {} {}", entry.name, entry.org, entry.repo, entry.budded_from.clone().unwrap_or_default(), entry.nickname.clone().unwrap_or_default()).to_lowercase() }
 fn oracle_repo_has_fleet_config(path: &std::path::Path) -> bool { let repo = path.file_name().and_then(std::ffi::OsStr::to_str).unwrap_or_default(); oracle_fleet_entries().iter().any(|fleet| fleet.session.windows.iter().any(|window| window.repo.ends_with(repo))) }
@@ -368,10 +367,63 @@ fn oracle_schema_one() -> u8 { 1 }
 mod oracle_tests {
     use super::*;
     fn oracle_strings(values: &[&str]) -> Vec<String> { values.iter().map(|value| (*value).to_owned()).collect() }
+    fn oracle_temp_root(name: &str) -> std::path::PathBuf {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let seq = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("maw-rs-oracle-{name}-{}-{seq}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("temp root");
+        root
+    }
     #[test]
     fn oracle_parser_blocks_leading_dash_values() { assert!(oracle_parse_list_options(&oracle_strings(&["ls", "--org", "-bad"]), 1).is_err()); assert!(oracle_parse_scan_options(&oracle_strings(&["scan", "--remote"]), 1).is_err()); }
     #[test]
     fn oracle_registry_roundtrip_defaults() { let value = serde_json::from_str::<OracleRegistry>(r#"{"oracles":[{"org":"o","repo":"neo-oracle","name":"neo"}]}"#).unwrap(); assert_eq!(value.schema, 1); assert_eq!(value.oracles[0].name, "neo"); }
     #[test]
     fn oracle_format_row_marks_fleet_and_psi() { let entry = OracleEntry { org: "org".to_owned(), repo: "neo-oracle".to_owned(), name: "neo".to_owned(), has_psi: true, has_fleet_config: true, ..OracleEntry::default() }; assert!(oracle_format_row(&entry, true, false).contains("fleet+awake")); }
+
+    #[test]
+    fn oracle_repo_scan_uses_declared_kind_before_suffix() {
+        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _home = EnvVarRestore::capture("HOME");
+        let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
+        let _state = EnvVarRestore::capture("MAW_STATE_DIR");
+        let _ghq = EnvVarRestore::capture("GHQ_ROOT");
+        let root = oracle_temp_root("kind");
+        let foo = root.join("ghq/github.com/acme/foo");
+        let bar = root.join("ghq/github.com/acme/bar-oracle");
+        std::fs::create_dir_all(&foo).expect("foo");
+        std::fs::create_dir_all(&bar).expect("bar");
+        std::fs::create_dir_all(root.join("config/fleet")).expect("fleet");
+        std::fs::write(
+            root.join("config/fleet/99-kind.json"),
+            r#"{"name":"99-kind","windows":[{"name":"foo","repo":"acme/foo","kind":"oracle"},{"name":"bar-oracle","repo":"acme/bar-oracle","kind":"project"}]}"#,
+        )
+        .expect("fleet");
+        std::env::set_var("HOME", root.join("home"));
+        std::env::set_var("MAW_CONFIG_DIR", root.join("config"));
+        std::env::set_var("MAW_STATE_DIR", root.join("state"));
+        std::env::set_var("GHQ_ROOT", root.join("ghq/github.com"));
+
+        assert_eq!(oracle_entry_from_repo("acme", &foo).expect("foo oracle").name, "foo");
+        assert!(oracle_entry_from_repo("acme", &bar).is_none());
+    }
+
+    #[test]
+    fn oracle_fleet_entries_use_declared_kind_before_window_suffix() {
+        let fleet = OracleFleetEntry {
+            session: NativeFleetSession {
+                name: "99-kind".to_owned(),
+                windows: vec![
+                    NativeFleetWindow { name: "foo".to_owned(), repo: "acme/foo".to_owned(), kind: Some(NativeRepoKind::Oracle) },
+                    NativeFleetWindow { name: "bar-oracle".to_owned(), repo: "acme/bar-oracle".to_owned(), kind: Some(NativeRepoKind::Project) },
+                ],
+                ..NativeFleetSession::default()
+            },
+        };
+
+        let entries = oracle_entries_from_fleet(&fleet);
+
+        assert_eq!(entries.iter().map(|entry| entry.name.as_str()).collect::<Vec<_>>(), vec!["foo"]);
+    }
 }

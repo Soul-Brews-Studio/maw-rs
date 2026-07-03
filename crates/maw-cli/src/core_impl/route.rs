@@ -400,6 +400,6 @@ fn parse_route_window(value: &str) -> Result<RouteWindow, String> {
         index,
         name: name.to_owned(),
         active,
+        kind: None,
     })
 }
-

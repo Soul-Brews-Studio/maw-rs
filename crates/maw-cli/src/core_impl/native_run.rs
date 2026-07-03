@@ -376,6 +376,7 @@ fn run_route_session_from_tmux(session: TmuxSession) -> RouteSession {
                 index: window.index,
                 name: window.name,
                 active: window.active,
+                kind: None,
             })
             .collect(),
     }
@@ -462,12 +463,12 @@ mod run_tests {
     }
 
     fn run_window(index: u32, name: &str) -> RouteWindow {
-        RouteWindow { index, name: name.to_owned(), active: index == 0 }
+        RouteWindow { index, name: name.to_owned(), active: index == 0, kind: None }
     }
 
-    fn run_session(name: &str, windows: Vec<RouteWindow>) -> RouteSession {
-        RouteSession { name: name.to_owned(), windows, source: None }
-    }
+fn run_session(name: &str, windows: Vec<RouteWindow>) -> RouteSession {
+    RouteSession { name: name.to_owned(), windows, source: None }
+}
 
     fn run_config() -> HeyConfig {
         HeyConfig {

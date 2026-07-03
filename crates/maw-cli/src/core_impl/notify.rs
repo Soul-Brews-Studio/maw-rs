@@ -99,6 +99,7 @@ async fn notify_peer(peer_url: &str, target: &str, args: &NotifyArgs, config: &H
         from: args.from.clone(),
         approve: args.approve,
         trust: args.trust,
+        dry_run: false,
     };
     let mut output = gated_send_peer_message("notify", peer_url, target, &send_args, config, false).await;
     if output.code == 0 && args.force { output.stderr.push_str("\x1b[90mnote: --force is not meaningful for notify (delivery is always inbox-only).\x1b[0m\n"); }

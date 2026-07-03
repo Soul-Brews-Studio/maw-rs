@@ -327,7 +327,7 @@ mod archive_tests {
     fn archive_session(name: &str, repo: &str, peers: &[&str]) -> NativeFleetSession {
         NativeFleetSession {
             name: name.to_owned(),
-            windows: vec![NativeFleetWindow { name: name.to_owned(), repo: repo.to_owned() }],
+            windows: vec![NativeFleetWindow { name: name.to_owned(), repo: repo.to_owned(), kind: None }],
             sync_peers: peers.iter().map(|value| (*value).to_owned()).collect(),
             project_repos: Vec::new(),
             ..NativeFleetSession::default()

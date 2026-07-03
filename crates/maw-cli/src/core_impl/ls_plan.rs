@@ -120,7 +120,52 @@ fn ls_watch_wait_next(seconds: u64) -> Pin<Box<dyn Future<Output = bool> + Send>
 }
 
 fn ls_watch_current_hms() -> String {
+    ls_watch_current_hms_with_date(ls_watch_run_date_command)
+}
+
+fn ls_watch_current_hms_with_date(mut run_date: impl FnMut(&str) -> Option<Vec<u8>>) -> String {
+    ["/bin/date", "date"]
+        .into_iter()
+        .find_map(|program| run_date(program).and_then(|output| ls_watch_hms_from_date_output(&output)))
+        .unwrap_or_else(ls_watch_current_utc_hms)
+}
+
+fn ls_watch_run_date_command(program: &str) -> Option<Vec<u8>> {
+    let output = std::process::Command::new(program)
+        .arg("+%H:%M:%S")
+        .output()
+        .ok()?;
+    output.status.success().then_some(output.stdout)
+}
+
+fn ls_watch_hms_from_date_output(output: &[u8]) -> Option<String> {
+    let hms = std::str::from_utf8(output).ok()?;
+    let hms = hms.trim();
+    ls_watch_is_hms(hms).then(|| hms.to_owned())
+}
+
+fn ls_watch_is_hms(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 8
+        || bytes[2] != b':'
+        || bytes[5] != b':'
+        || !bytes
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| matches!(index, 2 | 5) || byte.is_ascii_digit())
+    {
+        return false;
+    }
+    let part = |start: usize| (bytes[start] - b'0') * 10 + (bytes[start + 1] - b'0');
+    part(0) < 24 && part(3) < 60 && part(6) < 60
+}
+
+fn ls_watch_current_utc_hms() -> String {
     let seconds = current_epoch_seconds() % 86_400;
+    ls_watch_format_hms(seconds)
+}
+
+fn ls_watch_format_hms(seconds: u64) -> String {
     format!(
         "{:02}:{:02}:{:02}",
         seconds / 3600,
@@ -250,13 +295,11 @@ fn project_ls_panes(options: &LsPlanOptions) -> Vec<LsPanePlan> {
                     return None;
                 }
             }
-            let age_sec = pane
-                .last_activity
-                .map_or(0, |last| now.saturating_sub(last));
+            let age_sec = pane.last_activity.map(|last| now.saturating_sub(last));
             if options.active
                 && pane
                     .last_activity
-                    .is_none_or(|_| age_sec > options.active_threshold_sec.unwrap_or(30 * 60))
+                    .is_none_or(|_| age_sec.is_none_or(|age| age > options.active_threshold_sec.unwrap_or(30 * 60)))
             {
                 return None;
             }
@@ -316,13 +359,12 @@ fn is_ls_agent_command(command: &str) -> bool {
     command.contains("claude") || command.contains("codex") || command.contains("node")
 }
 
-fn ls_pane_status(age_sec: u64) -> &'static str {
-    if age_sec < 30 {
-        "active"
-    } else if age_sec < 300 {
-        "idle"
-    } else {
-        "stale"
+fn ls_pane_status(age_sec: Option<u64>) -> &'static str {
+    match age_sec {
+        Some(age) if age < 30 => "active",
+        Some(age) if age < 300 => "idle",
+        Some(_) => "stale",
+        None => "unknown",
     }
 }
 
@@ -392,7 +434,7 @@ fn render_ls_panes_json(panes: &[LsPanePlan], annotations: &LsAnnotationContext)
                 json_string(&pane.command),
                 json_string(&pane.title),
                 json_string(pane.status),
-                pane.age_sec,
+                json_opt_u64(pane.age_sec),
                 pane.agent,
                 json_string(&annotation)
             )
@@ -444,7 +486,7 @@ fn render_ls_sessions_json(panes: &[LsPanePlan], include_recent: bool) -> String
             }
             let youngest_active_age = panes
                 .iter()
-                .filter_map(|pane| pane.last_activity.map(|_| pane.age_sec))
+                .filter_map(|pane| pane.age_sec)
                 .min();
             if let (Some(age), Some(_created)) = (
                 youngest_active_age,
@@ -482,90 +524,129 @@ fn render_ls_text(options: &LsPlanOptions, panes: &[LsPanePlan]) -> String {
         };
     }
     if options.mode == LsMode::Verbose {
-        let mut out = String::new();
-        let annotations = ls_annotation_context();
-        let target_width = panes
-            .iter()
-            .map(|pane| ls_visible_len(ls_pane_target(&pane.target)))
-            .max()
-            .unwrap_or(0)
-            .max(28);
-        let header = format!(
-            "  {} {} {} {} TITLE",
-            ls_pad("TARGET", target_width),
-            ls_pad("CMD", 10),
-            ls_pad("AGE", 6),
-            ls_pad("ANNOTATION", 30)
-        );
-        let _ = writeln!(out, "{}", ls_color("36;1", &header));
-        for (session, panes) in group_ls_sessions(panes) {
-            let status = ls_best_status(&panes);
-            let dot = ls_status_dot(status);
-            let oracle = ls_oracle_window_name(&panes);
-            let oracle_label = oracle
-                .map(|window| format!(" · {}", ls_color("2", window)))
-                .unwrap_or_default();
-            let session = ls_color("36", &session);
-            let _ = writeln!(out, "{dot} {session}{oracle_label}");
-
-            let ordered = ls_oracle_first_panes(&panes, oracle);
-            for pane in ordered {
-                let target = ls_pad(ls_pane_target(&pane.target), target_width);
-                let command = ls_pad(&pane.command, 10);
-                let age = ls_pad(&format_ls_duration(pane.age_sec), 6);
-                let annotation = ls_pane_annotation(pane, &annotations);
-                let annotation = ls_render_annotation(&annotation);
-                let title = if pane.title.is_empty() {
-                    String::new()
-                } else {
-                    ls_color("2", &pane.title)
-                };
-                let _ = writeln!(
-                    out,
-                    "  {} {} {} {} {}",
-                    ls_color("36", &target),
-                    ls_color("2", &command),
-                    ls_color("2", &age),
-                    annotation,
-                    title
-                );
-            }
-        }
-        out
+        render_ls_verbose_text(panes)
     } else {
-        let mut out = String::new();
-        for (session, panes) in group_ls_sessions(panes) {
-            let agents = panes.iter().filter(|pane| pane.agent).count();
-            let status = ls_best_status(&panes);
-            let dot = ls_status_dot(status);
-            let oracle = ls_oracle_window_name(&panes)
-                .map(|window| format!(" · {}", ls_color("2", window)))
-                .unwrap_or_default();
-            let session = ls_color("36", &session);
-            let pane_count = ls_color(
-                "2",
-                &format!(
-                    "{} pane{}",
-                    panes.len(),
-                    if panes.len() == 1 { "" } else { "s" }
-                ),
-            );
-            let agent_count = if agents > 0 {
-                format!(
-                    "  {}",
-                    ls_color(
-                        "94",
-                        &format!("{agents} agent{}", if agents == 1 { "" } else { "s" })
-                    )
-                )
-            } else {
-                String::new()
-            };
-            let _ = writeln!(out, "  {dot} {session}{oracle}  {pane_count}{agent_count}");
-        }
-        let _ = writeln!(out, "\n  {}", ls_color("2", "→ maw ls -v    full detail"));
-        out
+        render_ls_compact_text(panes)
     }
+}
+
+fn render_ls_verbose_text(panes: &[LsPanePlan]) -> String {
+    let mut out = String::new();
+    let annotations = ls_annotation_context();
+    let target_width = panes
+        .iter()
+        .map(|pane| ls_visible_len(ls_pane_target(&pane.target)))
+        .max()
+        .unwrap_or(0)
+        .max(28);
+    let header = format!(
+        "    {} {} {} {} TITLE",
+        ls_pad("TARGET", target_width),
+        ls_pad("CMD", 10),
+        ls_pad("AGE", 6),
+        ls_pad("ANNOTATION", 30)
+    );
+    let _ = writeln!(out, "{}", ls_color("36;1", &header));
+    let groups = group_ls_sessions(panes);
+    let session_width = ls_group_session_width(&groups);
+    for (session, panes) in groups {
+        render_ls_verbose_group(&mut out, &session, &panes, session_width, target_width, &annotations);
+    }
+    out
+}
+
+fn ls_group_session_width(groups: &[(String, Vec<&LsPanePlan>)]) -> usize {
+    groups
+        .iter()
+        .map(|(session, _panes)| ls_visible_len(session))
+        .max()
+        .unwrap_or(0)
+}
+
+fn render_ls_verbose_group(
+    out: &mut String,
+    session: &str,
+    panes: &[&LsPanePlan],
+    session_width: usize,
+    target_width: usize,
+    annotations: &LsAnnotationContext,
+) {
+    let status = ls_best_status(panes);
+    let dot = ls_status_dot(status);
+    let oracle = ls_oracle_window_name(panes);
+    let oracle_label = oracle
+        .map(|window| format!(" · {}", ls_color("2", window)))
+        .unwrap_or_default();
+    let session = ls_color("36", &ls_pad(session, session_width));
+    let _ = writeln!(out, "{dot} {session}{oracle_label}");
+
+    let ordered = ls_oracle_first_panes(panes, oracle);
+    for pane in ordered {
+        render_ls_verbose_pane(out, pane, target_width, annotations);
+    }
+}
+
+fn render_ls_verbose_pane(
+    out: &mut String,
+    pane: &LsPanePlan,
+    target_width: usize,
+    annotations: &LsAnnotationContext,
+) {
+    let dot = ls_status_dot(pane.status);
+    let target = ls_pad(ls_pane_target(&pane.target), target_width);
+    let command = ls_pad(&pane.command, 10);
+    let age = ls_pad(&format_ls_age(pane.age_sec), 6);
+    let annotation = ls_pane_annotation(pane, annotations);
+    let annotation = ls_render_annotation(&annotation);
+    let title = if pane.title.is_empty() {
+        String::new()
+    } else {
+        ls_color("2", &ls_truncate(&pane.title, 50))
+    };
+    let _ = writeln!(
+        out,
+        "  {dot} {} {} {} {} {}",
+        ls_color("36", &target),
+        ls_color("2", &command),
+        ls_color("2", &age),
+        annotation,
+        title
+    );
+}
+
+fn render_ls_compact_text(panes: &[LsPanePlan]) -> String {
+    let mut out = String::new();
+    for (session, panes) in group_ls_sessions(panes) {
+        let agents = panes.iter().filter(|pane| pane.agent).count();
+        let status = ls_best_status(&panes);
+        let dot = ls_status_dot(status);
+        let oracle = ls_oracle_window_name(&panes)
+            .map(|window| format!(" · {}", ls_color("2", window)))
+            .unwrap_or_default();
+        let session = ls_color("36", &session);
+        let pane_count = ls_color(
+            "2",
+            &format!(
+                "{} pane{}",
+                panes.len(),
+                if panes.len() == 1 { "" } else { "s" }
+            ),
+        );
+        let agent_count = if agents > 0 {
+            format!(
+                "  {}",
+                ls_color(
+                    "94",
+                    &format!("{agents} agent{}", if agents == 1 { "" } else { "s" })
+                )
+            )
+        } else {
+            String::new()
+        };
+        let _ = writeln!(out, "  {dot} {session}{oracle}  {pane_count}{agent_count}");
+    }
+    let _ = writeln!(out, "\n  {}", ls_color("2", "→ maw ls -v    full detail"));
+    out
 }
 
 fn ls_oracle_window_name<'a>(panes: &[&'a LsPanePlan]) -> Option<&'a str> {
@@ -722,7 +803,7 @@ fn ls_visible_len(value: &str) -> usize {
 }
 
 fn ls_pad(value: &str, width: usize) -> String {
-    let mut out = value.chars().take(width).collect::<String>();
+    let mut out = ls_truncate(value, width);
     let len = ls_visible_len(&out);
     if len < width {
         out.push_str(&" ".repeat(width - len));
@@ -731,11 +812,17 @@ fn ls_pad(value: &str, width: usize) -> String {
 }
 
 fn ls_status_dot(status: &str) -> String {
+    let (code, glyph) = ls_status_dot_parts(status);
+    ls_color(code, glyph)
+}
+
+fn ls_status_dot_parts(status: &str) -> (&'static str, &'static str) {
     match status {
-        "active" => ls_color("92", "●"),
-        "idle" => ls_color("93", "◌"),
-        "stale" => ls_color("31", "◌"),
-        _ => ls_color("2", "◌"),
+        "frozen" => ("33", "⚠"),
+        "active" => ("32", "●"),
+        "idle" => ("33", "◐"),
+        "stale" => ("31", "◌"),
+        _ => ("90", "·"),
     }
 }
 
@@ -768,6 +855,33 @@ fn format_ls_duration(sec: u64) -> String {
     } else {
         format!("{}d", sec / 86_400)
     }
+}
+
+fn format_ls_age(age_sec: Option<u64>) -> String {
+    let Some(sec) = age_sec else {
+        return String::new();
+    };
+    if sec == 0 {
+        String::new()
+    } else if sec < 60 {
+        format!("{sec}s")
+    } else if sec < 3600 {
+        format!("{}m", sec / 60)
+    } else if sec < 86_400 {
+        format!("{}h{}m", sec / 3600, (sec % 3600) / 60)
+    } else {
+        let days = sec / 86_400;
+        let hours = (sec % 86_400) / 3600;
+        if hours == 0 {
+            format!("{days}d")
+        } else {
+            format!("{days}d{hours}h")
+        }
+    }
+}
+
+fn ls_truncate(value: &str, width: usize) -> String {
+    value.chars().take(width).collect::<String>()
 }
 
 fn ls_help_ok() -> CliOutput {
@@ -875,6 +989,10 @@ fn push_json_opt(fields: &mut Vec<String>, key: &str, value: Option<&str>) {
     }
 }
 
+fn json_opt_u64(value: Option<u64>) -> String {
+    value.map_or_else(|| "null".to_owned(), |value| value.to_string())
+}
+
 fn json_string(value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 2);
     out.push('"');
@@ -943,7 +1061,7 @@ mod remaining_cli_private_coverage_tests {
             last_activity: None,
             session_created: None,
             status: "active",
-            age_sec: 0,
+            age_sec: Some(0),
             agent,
         }
     }
@@ -1040,6 +1158,24 @@ mod remaining_cli_private_coverage_tests {
     }
 
     #[test]
+    fn private_ls_watch_footer_clock_uses_local_date_output() {
+        let mut programs = Vec::<String>::new();
+        let hms = ls_watch_current_hms_with_date(|program| {
+            programs.push(program.to_owned());
+            Some(b"11:30:17\n".to_vec())
+        });
+
+        assert_eq!(hms, "11:30:17");
+        assert_eq!(programs, vec!["/bin/date"]);
+        assert_eq!(
+            ls_watch_hms_from_date_output(b"04:30:17\n"),
+            Some("04:30:17".to_owned())
+        );
+        assert_eq!(ls_watch_hms_from_date_output(b"4:30:17\n"), None);
+        assert_eq!(ls_watch_hms_from_date_output(b"24:00:00\n"), None);
+    }
+
+    #[test]
     fn private_ls_unknown_status_and_json_age_without_created_are_reachable() {
         let pane = LsPanePlan {
             id: "%1".to_owned(),
@@ -1048,14 +1184,14 @@ mod remaining_cli_private_coverage_tests {
             command: "zsh".to_owned(),
             title: String::new(),
             source: None,
-            last_activity: Some(10),
+            last_activity: None,
             session_created: None,
             status: "mystery",
-            age_sec: 5,
+            age_sec: None,
             agent: false,
         };
         assert_eq!(ls_best_status(&[&pane]), "unknown");
-        assert!(ls_status_dot("mystery").contains('◌'));
+        assert_eq!(ls_status_dot_parts("mystery"), ("90", "·"));
         let rendered = render_ls_sessions_json(&[pane], true);
         assert!(rendered.contains("\"status\":\"unknown\""));
         assert!(!rendered.contains("lastActivityAgeSec"));
@@ -1133,7 +1269,8 @@ mod remaining_cli_private_coverage_tests {
             true,
         );
         worker.title = "worker".to_owned();
-        worker.age_sec = 120;
+        worker.age_sec = Some(120);
+        worker.status = "idle";
         let mut oracle = ls_test_pane(
             "%1",
             "188-maw-rs:maw-rs-oracle.0",
@@ -1144,7 +1281,7 @@ mod remaining_cli_private_coverage_tests {
         oracle.title = "main".to_owned();
         let mut other = ls_test_pane("%3", "200-other:main.0", "200-other", "zsh", false);
         other.title = "shell".to_owned();
-        other.age_sec = 5;
+        other.age_sec = Some(5);
         let panes = vec![worker, oracle, other];
 
         let text = render_ls_text(&options, &panes);
@@ -1158,7 +1295,7 @@ mod remaining_cli_private_coverage_tests {
             line.starts_with("  ") && line.contains("maw-rs-oracle.0") && line.contains("main")
         }));
         assert!(text.lines().any(|line| {
-            line.starts_with("  ") && line.contains("maw-rs-codex-1.0") && line.contains("2m")
+            line.contains("◐") && line.contains("maw-rs-codex-1.0") && line.contains("2m")
         }));
         assert!(
             text.find("maw-rs-oracle.0").expect("oracle member")
@@ -1189,6 +1326,11 @@ mod remaining_cli_private_coverage_tests {
         out
     }
 
+    fn char_find(haystack: &str, needle: &str) -> Option<usize> {
+        let byte_index = haystack.find(needle)?;
+        Some(haystack[..byte_index].chars().count())
+    }
+
     #[test]
     fn private_ls_verbose_uses_one_global_target_width_and_single_header() {
         let mut options = ls_test_options();
@@ -1206,6 +1348,10 @@ mod remaining_cli_private_coverage_tests {
 
         assert_eq!(text.matches("TARGET").count(), 1);
         assert_eq!(text.matches("ANNOTATION").count(), 1);
+        let header = text
+            .lines()
+            .find(|line| line.contains("TARGET"))
+            .expect("header");
         let short = text
             .lines()
             .find(|line| line.contains("main.0"))
@@ -1214,7 +1360,135 @@ mod remaining_cli_private_coverage_tests {
             .lines()
             .find(|line| line.contains("a-very-very-long-window-name.0"))
             .expect("long row");
+        assert_eq!(char_find(header, "TARGET"), char_find(short, "main.0"));
         assert_eq!(short.find("zsh"), long.find("bash"));
+    }
+
+    #[test]
+    fn private_ls_status_dots_match_maw_js_glyphs_and_colors() {
+        assert_eq!(ls_status_dot_parts("frozen"), ("33", "⚠"));
+        assert_eq!(ls_status_dot_parts("active"), ("32", "●"));
+        assert_eq!(ls_status_dot_parts("idle"), ("33", "◐"));
+        assert_eq!(ls_status_dot_parts("stale"), ("31", "◌"));
+        assert_eq!(ls_status_dot_parts("unknown"), ("90", "·"));
+    }
+
+    #[test]
+    fn private_ls_verbose_member_rows_have_per_pane_dots_and_aligned_header() {
+        let mut options = ls_test_options();
+        options.mode = LsMode::Verbose;
+
+        let mut active = ls_test_pane("%1", "900-mixed:main.0", "900-mixed", "zsh", false);
+        active.status = "active";
+        active.age_sec = Some(5);
+        let mut idle = ls_test_pane("%2", "900-mixed:worker.0", "900-mixed", "bash", false);
+        idle.status = "idle";
+        idle.age_sec = Some(120);
+
+        let text = strip_ansi(&render_ls_text(&options, &[active, idle]));
+        let header = text
+            .lines()
+            .find(|line| line.contains("TARGET"))
+            .expect("header");
+        let active_row = text
+            .lines()
+            .find(|line| line.contains("main.0"))
+            .expect("active row");
+        let idle_row = text
+            .lines()
+            .find(|line| line.contains("worker.0"))
+            .expect("idle row");
+
+        assert!(active_row.starts_with("  ● "), "{active_row:?}");
+        assert!(idle_row.starts_with("  ◐ "), "{idle_row:?}");
+        assert_eq!(char_find(header, "TARGET"), char_find(active_row, "main.0"));
+        assert_eq!(char_find(header, "TARGET"), char_find(idle_row, "worker.0"));
+    }
+
+    #[test]
+    fn private_ls_verbose_group_headers_use_global_session_column() {
+        let mut options = ls_test_options();
+        options.mode = LsMode::Verbose;
+
+        let crew = ls_test_pane(
+            "%1",
+            "183-crew-master:crew-master-oracle.0",
+            "183-crew-master",
+            "zsh",
+            false,
+        );
+        let hermes = ls_test_pane(
+            "%2",
+            "168-hermes:hermes-oracle.0",
+            "168-hermes",
+            "zsh",
+            false,
+        );
+        let world = ls_test_pane(
+            "%3",
+            "58-world-guardian:main.0",
+            "58-world-guardian",
+            "zsh",
+            false,
+        );
+
+        let text = strip_ansi(&render_ls_text(&options, &[crew, hermes, world]));
+        let crew_header = text
+            .lines()
+            .find(|line| line.contains("183-crew-master"))
+            .expect("crew header");
+        let hermes_header = text
+            .lines()
+            .find(|line| line.contains("168-hermes"))
+            .expect("hermes header");
+        let world_header = text
+            .lines()
+            .find(|line| line.contains("58-world-guardian"))
+            .expect("world header");
+
+        assert_eq!(char_find(crew_header, " · "), char_find(hermes_header, " · "));
+        assert!(world_header.ends_with("58-world-guardian"));
+    }
+
+    #[test]
+    fn private_ls_age_blank_unknown_combined_hours_and_title_cap() {
+        let mut options = ls_test_options();
+        options.mode = LsMode::Verbose;
+
+        let mut unknown = ls_test_pane("%1", "901-age:unknown.0", "901-age", "zsh", false);
+        unknown.status = "unknown";
+        unknown.age_sec = None;
+        let mut old = ls_test_pane("%2", "901-age:old.0", "901-age", "bash", false);
+        old.status = "stale";
+        old.age_sec = Some(3900);
+        old.title = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".to_owned();
+
+        assert_eq!(format_ls_age(None), "");
+        assert_eq!(format_ls_age(Some(0)), "");
+        assert_eq!(format_ls_age(Some(3900)), "1h5m");
+
+        let rendered_json = render_ls_panes_json(
+            std::slice::from_ref(&unknown),
+            &LsAnnotationContext::default(),
+        );
+        assert!(rendered_json.contains("\"ageSec\":null"));
+
+        let text = strip_ansi(&render_ls_text(&options, &[unknown, old]));
+        let unknown_row = text
+            .lines()
+            .find(|line| line.contains("unknown.0"))
+            .expect("unknown row");
+        let command_start = unknown_row.find("zsh").expect("command");
+        assert_eq!(&unknown_row[command_start + 10..command_start + 18], "        ");
+        assert!(unknown_row.starts_with("  · "), "{unknown_row:?}");
+
+        let old_row = text
+            .lines()
+            .find(|line| line.contains("old.0"))
+            .expect("old row");
+        assert!(old_row.contains("1h5m"), "{old_row:?}");
+        assert!(old_row.ends_with("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWX"));
+        assert!(!old_row.contains("YZ0123456789"));
     }
 
     #[test]

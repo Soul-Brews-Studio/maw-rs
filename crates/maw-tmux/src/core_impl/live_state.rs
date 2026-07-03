@@ -1,10 +1,10 @@
 #[cfg(test)]
 mod tests {
-include!("tests_impl/part01.rs");
-include!("tests_impl/part02.rs");
-include!("tests_impl/part03.rs");
-include!("tests_impl/part04.rs");
-include!("tests_impl/part05.rs");
+include!("tests_impl/runner_parser_attach.rs");
+include!("tests_impl/send_kill_resolver.rs");
+include!("tests_impl/send_text_pending.rs");
+include!("tests_impl/client_runner_edges.rs");
+include!("tests_impl/tag_recovery_edges.rs");
 }
 
 /// Parsed `session:window.pane` tmux target parts.
@@ -250,5 +250,5 @@ fn unique_preserve_order(values: Vec<String>) -> Vec<String> {
 
 #[cfg(test)]
 mod coverage_gap_tests {
-include!("coverage_gap_tests_impl/part01.rs");
+include!("coverage_gap_tests_impl/helper_live_state_edges.rs");
 }

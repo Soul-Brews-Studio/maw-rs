@@ -217,7 +217,7 @@ mod absorb_tests {
             session: NativeFleetSession {
                 name: "01-neo-oracle".to_owned(),
                 group_name: "team-neo".to_owned(),
-                windows: vec![NativeFleetWindow { name: "neo-oracle".to_owned(), repo: "org/neo-oracle".to_owned() }],
+                windows: vec![NativeFleetWindow { name: "neo-oracle".to_owned(), repo: "org/neo-oracle".to_owned(), kind: None }],
                 ..NativeFleetSession::default()
             },
         };

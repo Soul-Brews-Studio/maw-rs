@@ -528,6 +528,11 @@ fn attach_session_match_tier(session: &str, normalized_query: &str) -> Option<u8
     if name == normalized_query {
         return Some(0);
     }
+    if normalized_query.bytes().all(|byte| byte.is_ascii_digit())
+        && attach_numeric_fleet_prefix(&name) == Some(normalized_query)
+    {
+        return Some(1);
+    }
     if name.ends_with(&format!("-{normalized_query}"))
         || name == format!("{normalized_query}-oracle")
         || name.ends_with(&format!("-{normalized_query}-oracle"))
@@ -539,7 +544,9 @@ fn attach_session_match_tier(session: &str, normalized_query: &str) -> Option<u8
 
     let stem = attach_strip_oracle_suffix(attach_strip_numeric_fleet_prefix(&name));
     (!normalized_query.is_empty()
-        && (stem.starts_with(normalized_query) || stem.contains(normalized_query)))
+        && (name.starts_with(normalized_query)
+            || stem.starts_with(normalized_query)
+            || stem.contains(normalized_query)))
     .then_some(2)
 }
 
@@ -557,6 +564,11 @@ fn attach_strip_numeric_fleet_prefix(value: &str) -> &str {
     } else {
         value
     }
+}
+
+fn attach_numeric_fleet_prefix(value: &str) -> Option<&str> {
+    let (prefix, _) = value.split_once('-')?;
+    (!prefix.is_empty() && prefix.bytes().all(|byte| byte.is_ascii_digit())).then_some(prefix)
 }
 
 fn attach_strip_oracle_suffix(value: &str) -> &str {

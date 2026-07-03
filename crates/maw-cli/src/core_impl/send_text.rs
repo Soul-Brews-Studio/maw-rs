@@ -457,6 +457,50 @@ mod sendtext_tests {
     }
 
     #[test]
+    fn sendtext_grace_recheck_catches_false_negative_before_success() {
+        let _lock = super::env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _env = SendtextEnvGuard::sendtext_new();
+        let mut tmux = SendtextMockTmux::sendtext_with_responses(vec![
+            Ok("0"),
+            Ok(""),
+            Ok(""),
+            Ok("$ "),
+            Ok("$ deploy"),
+            Ok(""),
+            Ok("$ "),
+            Ok("$ "),
+        ]);
+        let mut sleeps = Vec::new();
+
+        let output = sendtext_with_runner_and_sleeper(
+            &sendtext_strings(&["sess:1", "deploy"]),
+            &mut tmux,
+            |duration| sleeps.push(duration),
+        )
+        .expect("send");
+
+        assert!(!output.stdout.contains("pending input after Enter retries"));
+        assert_eq!(
+            tmux.calls
+                .iter()
+                .filter(|(command, args)| command == "send-keys"
+                    && args.last().is_some_and(|arg| arg == "Enter"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            sleeps,
+            vec![
+                std::time::Duration::from_millis(maw_tmux::SEND_SETTLE_MS),
+                std::time::Duration::from_millis(maw_tmux::SUBMIT_CONFIRM_MS),
+                std::time::Duration::from_millis(maw_tmux::SUBMIT_GRACE_MS),
+                std::time::Duration::from_millis(maw_tmux::SUBMIT_CONFIRM_MS),
+                std::time::Duration::from_millis(maw_tmux::SUBMIT_GRACE_MS),
+            ]
+        );
+    }
+
+    #[test]
     fn sendtext_reports_tmux_failure() {
         let _lock = super::env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let _env = SendtextEnvGuard::sendtext_new();

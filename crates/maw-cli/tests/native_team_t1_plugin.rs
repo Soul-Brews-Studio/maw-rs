@@ -20,10 +20,33 @@ fn temp_dir(name: &str) -> PathBuf {
 }
 
 fn write_charter(root: &Path) -> PathBuf {
+    let builder = root.join("agents/builder");
+    let reviewer = root.join("agents/reviewer");
+    for worktree in [&builder, &reviewer] {
+        fs::create_dir_all(worktree.join(".codex")).expect("worktree codex");
+        fs::write(
+            worktree.join(".codex/config.toml"),
+            format!(
+                "[projects.\"{}\"]\ntrust_level = \"trusted\"\n",
+                worktree.display()
+            ),
+        )
+        .expect("trust config");
+    }
+    fs::create_dir_all(root.join("maw-home/config")).expect("maw config");
+    fs::write(
+        root.join("maw-home/config/maw.config.50.json"),
+        r#"{"commands":{"local-builder":"CODEX_HOME=$PWD/.codex codex --model gpt-5.5","local-reviewer":"CODEX_HOME=$PWD/.codex codex --model gpt-5.5"}}"#,
+    )
+    .expect("maw commands");
     let path = root.join("team.json");
     fs::write(
         &path,
-        r#"{"name":"beta","description":"Beta team","goal":"Ship T1","members":[{"role":"builder","model":"gpt-5.5","target":"auto"},{"role":"reviewer","cwd":"/tmp/review"}]}"#,
+        format!(
+            r#"{{"name":"beta","project":"acme/repo","description":"Beta team","goal":"Ship T1","session":"beta-session","members":[{{"role":"builder","model":"gpt-5.5","target":"auto","engine":"local-builder","worktree":"{}","branch":"agents/builder"}},{{"role":"reviewer","target":"auto","engine":"local-reviewer","worktree":"{}","branch":"agents/reviewer"}}]}}"#,
+            builder.display(),
+            reviewer.display()
+        ),
     )
     .expect("charter");
     path
@@ -41,6 +64,10 @@ fn run(args: &[&str], root: &Path) -> std::process::Output {
         .env("HOME", &home)
         .env("MAW_HOME", &maw_home)
         .env("MAW_RS_TEAM_PSI", &psi)
+        .env(
+            "MAW_RS_TEAM_TMUX_PANES",
+            "beta-session|lead|codex|/tmp|%1\n",
+        )
         .env("MAW_JS_REF_DIR", "/nonexistent")
         .output()
         .expect("run maw-rs")

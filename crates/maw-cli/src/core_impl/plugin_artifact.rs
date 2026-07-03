@@ -3,7 +3,7 @@ const DISPATCH_288: &[DispatcherEntry] = &[DispatcherEntry {
     handler: Handler::Sync(pluginartifact_run_command),
 }];
 
-const PLUGINARTIFACT_USAGE: &str = "usage: maw plugin-artifact <contract|plan> [dir]\n  contract        print the ZERO-BUN plugin artifact contract\n  plan [dir]      classify one plugin project without spawning bun/maw\n";
+const PLUGINARTIFACT_USAGE: &str = "usage: maw plugin-artifact <contract|plan> [dir]\n  contract        print the plugin runtime ladder and artifact contract\n  plan [dir]      classify one plugin project without spawning bun/maw\n";
 
 fn pluginartifact_run_command(argv: &[String]) -> CliOutput {
     match pluginartifact_parse_args(argv).and_then(pluginartifact_dispatch) {
@@ -111,13 +111,13 @@ fn pluginartifact_plan_project(dir: &std::path::Path) -> Result<String, String> 
     }
 
     Ok(format!(
-        "plugin artifact plan: js-bun\n  status: refused\n  project: {}\n  reason: JS/TS Bun plugins are refused at ZERO-BUN cutover unless they provide a prebuilt WASM artifact\n  action: rewrite as Rust WASM or install a prebuilt WASM artifact with sha256; no Bun subprocess fallback is available\n  no-bun: true\n",
+        "plugin artifact plan: js-bun\n  status: refused\n  project: {}\n  reason: JS/TS Bun plugins are dev-tier only unless they provide a sha256-verified WASM artifact\n  action: rewrite as Rust WASM, install a sha256-verified WASM artifact, or opt into unsandboxed dev tier with runtime=\"bun-dev\"\n  no-bun: true\n",
         manifest.name
     ))
 }
 
 fn pluginartifact_contract_text() -> &'static str {
-    "plugin artifact contract v1\n  manifest: plugin.json\n  wasm: target=wasm plus wasm=<relative .wasm> or entry={kind:wasm,path,export}\n  artifact: artifact.path=<relative .wasm> and artifact.sha256=sha256:<hex> before install/load\n  capabilities: plugin.json capabilities array is preserved and consumed by runtime/registry gates\n  runtime: extism-wasm, export defaults to handle when entry.export is absent\n  supported: Rust-WASM first-class via cargo wasm32-unknown-unknown\n  supported: prebuilt WASM artifact with sha256 and declared capabilities/export\n  refused: AssemblyScript/TS unless a pinned compiler/prebuilt WASM artifact is supplied\n  refused: JS/TS Bun plugins; no bun subprocess or maw-js fallback is allowed\n  seam: part287 plugin-manifest consumes the same plugin.json + wasm/artifact + sha256 + capabilities + export contract\n"
+    "plugin artifact contract v1\n  manifest: plugin.json\n  wasm: target=wasm plus wasm=<relative .wasm> or entry={kind:wasm,path,export}\n  artifact: artifact.path=<relative .wasm> and artifact.sha256=sha256:<hex> before install/load\n  capabilities: plugin.json capabilities array is preserved and consumed by runtime/registry gates\n  runtime ladder: WASM is ship tier via extism-wasm with sha256-verified artifacts\n  runtime ladder: Bun is explicit dev tier only via runtime=\"bun-dev\"; it prints a loud banner and runs unsandboxed\n  runtime ladder: maw-js subprocess fallback is not part of plugin dispatch\n  supported: Rust-WASM first-class via cargo wasm32-unknown-unknown\n  supported: prebuilt WASM artifact with sha256 and declared capabilities/export\n  refused: AssemblyScript/TS unless a pinned compiler/prebuilt WASM artifact is supplied\n  seam: part287 plugin-manifest consumes the same plugin.json + wasm/artifact + sha256 + capabilities + export contract\n"
 }
 
 fn pluginartifact_validate_dir(value: &str) -> Result<std::path::PathBuf, String> {
@@ -295,7 +295,8 @@ mod pluginartifact_tests {
         assert_eq!(out.code, 0, "{}", out.stderr);
         assert!(out.stdout.contains("plugin artifact contract v1"));
         assert!(out.stdout.contains("part287 plugin-manifest consumes"));
-        assert!(out.stdout.contains("no bun subprocess"));
+        assert!(out.stdout.contains("runtime=\"bun-dev\""));
+        assert!(out.stdout.contains("runs unsandboxed"));
     }
 
     #[test]

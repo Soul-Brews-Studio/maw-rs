@@ -1,2 +1,2 @@
 hey: --trust requires --approve
-usage: maw-rs hey <target> <message> [--inbox|--no-inbox] [--from <oracle:node>] [--approve] [--trust]
+usage: maw-rs hey <target> <message> [--inbox|--no-inbox] [--from <oracle:node>] [--approve] [--trust] [--dry-run]

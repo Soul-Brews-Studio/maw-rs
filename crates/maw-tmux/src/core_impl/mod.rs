@@ -1,7 +1,7 @@
-include!("part01.rs");
-include!("part02_1.rs");
-include!("part02_2.rs");
-include!("part02_3.rs");
-include!("part03.rs");
-include!("part04.rs");
-include!("part05.rs");
+include!("types_runner.rs");
+include!("client_session_window.rs");
+include!("client_pane_send.rs");
+include!("client_mode_env.rs");
+include!("action_resolution.rs");
+include!("parsers_resolution.rs");
+include!("live_state.rs");

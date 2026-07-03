@@ -185,6 +185,37 @@ where
     }
 }
 
+/// Resolve an exact canonical stem in numbered fleet sessions.
+#[must_use]
+pub fn resolve_numeric_fleet_stem_exact<T>(target: &str, items: &[T]) -> ResolveResult<T>
+where
+    T: Named + Clone,
+{
+    let lc = target.trim().to_lowercase();
+    if lc.is_empty() {
+        return ResolveResult::None { hints: None };
+    }
+
+    let matches: Vec<T> = items
+        .iter()
+        .filter(|item| {
+            let name = item.name().to_lowercase();
+            strip_numeric_fleet_prefix(&name).is_some_and(|stem| stem == lc)
+        })
+        .cloned()
+        .collect();
+
+    match matches.len() {
+        0 => ResolveResult::None { hints: None },
+        1 => ResolveResult::Exact {
+            matched: matches[0].clone(),
+        },
+        _ => ResolveResult::Ambiguous {
+            candidates: matches,
+        },
+    }
+}
+
 /// Window metadata used by [`resolve_fleet_window_session_target`].
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct FleetWindow {
@@ -358,6 +389,25 @@ mod tests {
             ResolveResult::Ambiguous {
                 candidates: vec![session("20-homekeeper"), session("21-homekey")]
             }
+        );
+        assert_eq!(
+            resolve_numeric_fleet_stem_exact("homekeeper", &[session("20-homekeeper")]),
+            ResolveResult::Exact {
+                matched: session("20-homekeeper")
+            }
+        );
+        assert_eq!(
+            resolve_numeric_fleet_stem_exact(
+                "homekeeper",
+                &[session("20-homekeeper"), session("21-homekeeper")]
+            ),
+            ResolveResult::Ambiguous {
+                candidates: vec![session("20-homekeeper"), session("21-homekeeper")]
+            }
+        );
+        assert_eq!(
+            resolve_numeric_fleet_stem_exact("homekeeper", &[session("not-homekeeper")]),
+            ResolveResult::None { hints: None }
         );
     }
 

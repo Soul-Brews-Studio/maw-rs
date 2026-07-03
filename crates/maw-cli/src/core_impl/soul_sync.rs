@@ -170,7 +170,7 @@ fn soulsync_run_project(host: &mut impl SoulsyncHost, fleet: &[NativeFleetSessio
     let github_root = soulsync_repos_root_from_repo(&current_repo);
     let repo_slug = soulsync_project_slug(&current_repo, &github_root);
     let repo_base = soulsync_repo_base(&current_repo);
-    let is_oracle = repo_base.ends_with("-oracle");
+    let is_oracle = soulsync_repo_is_oracle(&current_repo, &repo_base, fleet);
     let mut out = format!("\n  \x1b[36m⚡ Soul Sync (project)\x1b[0m — {} {repo_base}\n\n", if is_oracle { "absorbing into" } else { "exporting from" });
     let mut totals = Vec::<usize>::new();
     if is_oracle { soulsync_project_from_oracle(&mut out, &current_repo, &repo_base, fleet, host, &mut totals); }
@@ -246,17 +246,66 @@ fn soulsync_oracle_for_project(project_repo: &str, fleet: &[NativeFleetSession])
 
 fn soulsync_resolve_oracle_path(name: &str, fleet: &[NativeFleetSession], repos_root: &std::path::Path) -> Option<std::path::PathBuf> {
     let stem = name.trim_end_matches("-oracle");
-    if let Some(path) = soulsync_find_oracle_repo(repos_root, stem) { return Some(path); }
-    fleet.iter().find(|session| soulsync_session_name(&session.name) == stem).and_then(|session| session.windows.first()).map(|window| repos_root.join(&window.repo)).filter(|path| path.exists())
+    if let Some(path) = soulsync_declared_oracle_path(stem, fleet, repos_root) { return Some(path); }
+    if let Some(path) = soulsync_find_oracle_repo(repos_root, stem, fleet) { return Some(path); }
+    fleet
+        .iter()
+        .find(|session| soulsync_session_name(&session.name) == stem)
+        .and_then(|session| session.windows.iter().find(|window| window.kind != Some(NativeRepoKind::Project)))
+        .map(|window| repos_root.join(window.repo.trim().strip_prefix("github.com/").unwrap_or(window.repo.trim())))
+        .filter(|path| path.exists())
 }
 
-fn soulsync_find_oracle_repo(repos_root: &std::path::Path, stem: &str) -> Option<std::path::PathBuf> {
+fn soulsync_repo_is_oracle(repo: &std::path::Path, fallback_name: &str, fleet: &[NativeFleetSession]) -> bool {
+    match soulsync_repo_kind_for_path(repo, fleet) {
+        Some(NativeRepoKind::Oracle) => true,
+        Some(NativeRepoKind::Project) => false,
+        None => fallback_name.ends_with("-oracle"),
+    }
+}
+
+fn soulsync_repo_kind_for_path(repo: &std::path::Path, fleet: &[NativeFleetSession]) -> Option<NativeRepoKind> {
+    let slugs = native_repo_slugs_for_path(repo);
+    for session in fleet {
+        for window in &session.windows {
+            if window.kind.is_some() && native_fleet_window_matches_slugs(window, &slugs) {
+                return window.kind;
+            }
+        }
+    }
+    native_repo_marker_kind(repo)
+}
+
+fn soulsync_declared_oracle_path(name: &str, fleet: &[NativeFleetSession], repos_root: &std::path::Path) -> Option<std::path::PathBuf> {
+    for session in fleet {
+        let session_name = soulsync_session_name(&session.name);
+        for window in &session.windows {
+            if window.kind != Some(NativeRepoKind::Oracle) {
+                continue;
+            }
+            let Some(oracle_name) = native_fleet_window_oracle_name(window) else { continue; };
+            if oracle_name == name || session_name == name {
+                let path = repos_root.join(window.repo.trim().strip_prefix("github.com/").unwrap_or(window.repo.trim()));
+                if path.exists() {
+                    return Some(path);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn soulsync_find_oracle_repo(repos_root: &std::path::Path, stem: &str, fleet: &[NativeFleetSession]) -> Option<std::path::PathBuf> {
     let wanted = format!("{stem}-oracle").to_lowercase();
     let Ok(orgs) = std::fs::read_dir(repos_root) else { return None; };
     for org in orgs.flatten().filter(|entry| entry.path().is_dir()) {
         let Ok(repos) = std::fs::read_dir(org.path()) else { continue; };
         for repo in repos.flatten().filter(|entry| entry.path().is_dir()) {
-            if repo.file_name().to_string_lossy().eq_ignore_ascii_case(&wanted) { return Some(repo.path()); }
+            if repo.file_name().to_string_lossy().eq_ignore_ascii_case(&wanted)
+                && soulsync_repo_is_oracle(&repo.path(), &repo.file_name().to_string_lossy(), fleet)
+            {
+                return Some(repo.path());
+            }
         }
     }
     None
@@ -436,7 +485,7 @@ mod soulsync_tests {
     }
 
     fn soulsync_session(name: &str, repo: &str, peers: &[&str], projects: &[&str]) -> NativeFleetSession {
-        NativeFleetSession { name: name.to_owned(), windows: vec![NativeFleetWindow { name: name.to_owned(), repo: repo.to_owned() }], sync_peers: peers.iter().map(|value| (*value).to_owned()).collect(), project_repos: projects.iter().map(|value| (*value).to_owned()).collect(), ..NativeFleetSession::default() }
+        NativeFleetSession { name: name.to_owned(), windows: vec![NativeFleetWindow { name: name.to_owned(), repo: repo.to_owned(), kind: None }], sync_peers: peers.iter().map(|value| (*value).to_owned()).collect(), project_repos: projects.iter().map(|value| (*value).to_owned()).collect(), ..NativeFleetSession::default() }
     }
 
     fn soulsync_empty_fleet() -> Vec<NativeFleetSession> { Vec::new() }
@@ -521,6 +570,48 @@ mod soulsync_tests {
         let out = soulsync_run(&soulsync_strings(&["--project"]), &mut host, || fleet.clone()).expect("run");
         assert!(out.contains("exporting from app"));
         assert_eq!(std::fs::read_to_string(oracle.join("ψ/memory/learnings/p.md")).expect("copied"), "project");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn soulsync_project_mode_declared_oracle_without_suffix_absorbs() {
+        let root = soulsync_root("declared-oracle");
+        let ghq = root.join("github.com");
+        let oracle = ghq.join("org/foo");
+        let project = ghq.join("org/app");
+        soulsync_write(&project.join("ψ/memory/learnings/p.md"), "project");
+        let mut host = soulsync_host(oracle.clone());
+        host.top = Some(oracle.clone());
+        let mut session = soulsync_session("01-foo", "org/foo", &[], &["org/app"]);
+        session.windows[0].kind = Some(NativeRepoKind::Oracle);
+        let fleet = vec![session];
+
+        let out = soulsync_run(&soulsync_strings(&["--project"]), &mut host, || fleet.clone()).expect("run");
+
+        assert!(out.contains("absorbing into foo"), "{out}");
+        assert_eq!(std::fs::read_to_string(oracle.join("ψ/memory/learnings/p.md")).expect("copied"), "project");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn soulsync_project_mode_declared_project_with_oracle_suffix_exports() {
+        let root = soulsync_root("declared-project");
+        let ghq = root.join("github.com");
+        let oracle = ghq.join("org/neo-oracle");
+        let project = ghq.join("org/bar-oracle");
+        soulsync_write(&project.join("ψ/memory/traces/p.md"), "project");
+        std::fs::create_dir_all(&oracle).expect("oracle");
+        let mut host = soulsync_host(project.clone());
+        host.top = Some(project.clone());
+        let owner = soulsync_session("01-neo", "org/neo-oracle", &[], &["org/bar-oracle"]);
+        let mut project_session = soulsync_session("02-bar", "org/bar-oracle", &[], &[]);
+        project_session.windows[0].kind = Some(NativeRepoKind::Project);
+        let fleet = vec![owner, project_session];
+
+        let out = soulsync_run(&soulsync_strings(&["--project"]), &mut host, || fleet.clone()).expect("run");
+
+        assert!(out.contains("exporting from bar-oracle"), "{out}");
+        assert_eq!(std::fs::read_to_string(oracle.join("ψ/memory/traces/p.md")).expect("copied"), "project");
         let _ = std::fs::remove_dir_all(root);
     }
 

@@ -11,7 +11,7 @@ const DISPATCH_93: &[DispatcherEntry] = &[
 const WORK_USAGE: &str = "usage: maw work <repo> [task] [--layout nested|legacy]";
 const AWAKE_USAGE: &str = "usage: maw awake <name> [wake flags...]";
 const SCAFFOLD_USAGE: &str = "usage: maw scaffold <name> [--rust|--as] [--dest <path>] [--dry-run]";
-const NEW_USAGE: &str = "usage: maw new <name> [--rust|--as] [--dest <path>] [--dry-run]";
+const NEW_USAGE: &str = "usage: maw new [session-name] [--path|-p <dir>] [--window <name>] [--cmd|-c <cmd>|--claude] [--shell] [--split [--right|--horizontal|--bottom|--vertical]] [--print|--json] [--attach|-a] [--no-attach] [--dry-run] [--no-fleet]";
 const PROMOTE_USAGE: &str = "usage: maw promote <window> [--as <name>] [--attach] [--force]";
 const PROMOTE_PLACEHOLDER: &str = "__promote_placeholder__";
 const PREFLIGHT_USAGE: &str = "usage: maw preflight [path] [--json]";
@@ -29,6 +29,208 @@ struct ScaffoldOptionsNative {
     dest: std::path::PathBuf,
     language: ScaffoldLanguageNative,
     dry_run: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NewSplitDirectionNative {
+    Horizontal,
+    Vertical,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
+struct NewOptionsNative {
+    name: String,
+    explicit_name: bool,
+    cwd: std::path::PathBuf,
+    window: String,
+    window_provided: bool,
+    startup_command: Option<String>,
+    tmux_command: Option<String>,
+    machine_readable: bool,
+    dry_run: bool,
+    split: bool,
+    split_direction: NewSplitDirectionNative,
+    no_fleet: bool,
+    attach: bool,
+    no_attach: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NewWorkspaceLaunchNative {
+    cwd: String,
+    command: String,
+    window: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NewSessionCreateNative {
+    name: String,
+    window: String,
+    cwd: String,
+    command: Option<String>,
+    print_format: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NewSplitCreateNative {
+    cwd: String,
+    direction: NewSplitDirectionNative,
+    command: Option<String>,
+    print_format: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NewAttachDecisionNative {
+    Attach,
+    Skip,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NewFleetStatusNative {
+    Created,
+    Exists,
+    Skipped,
+}
+
+trait NewWorkspaceTmuxNative {
+    fn new_has_session(&mut self, name: &str) -> bool;
+    fn new_session_create(&mut self, request: &NewSessionCreateNative) -> Result<String, String>;
+    fn new_first_pane_id(&mut self, target: &str) -> Option<String>;
+    fn new_current_session_window(&mut self) -> Result<(String, String), String>;
+    fn new_split_window(&mut self, request: &NewSplitCreateNative) -> Result<String, String>;
+    fn new_select_pane_title(&mut self, pane: &str, title: &str) -> Result<(), String>;
+    fn new_read_session_option(&mut self, session: &str, option: &str) -> Result<Option<String>, String>;
+    fn new_set_session_option(&mut self, session: &str, option: &str, value: &str) -> Result<(), String>;
+    fn new_attach_session(&mut self, session: &str) -> Result<(), String>;
+    fn new_stdin_is_terminal(&self) -> bool;
+    fn new_stdout_is_terminal(&self) -> bool;
+    fn new_env_no_prompt(&self) -> bool;
+}
+
+struct NewSystemTmuxNative {
+    runner: maw_tmux::CommandTmuxRunner,
+}
+
+impl NewSystemTmuxNative {
+    fn new() -> Self { Self { runner: maw_tmux::CommandTmuxRunner::new() } }
+
+    fn run(&mut self, subcommand: &str, args: &[String]) -> Result<String, String> {
+        maw_tmux::TmuxRunner::run(&mut self.runner, subcommand, args).map_err(|error| error.message)
+    }
+}
+
+impl NewWorkspaceTmuxNative for NewSystemTmuxNative {
+    fn new_has_session(&mut self, name: &str) -> bool {
+        self.run("has-session", &["-t".to_owned(), name.to_owned()]).is_ok()
+    }
+
+    fn new_session_create(&mut self, request: &NewSessionCreateNative) -> Result<String, String> {
+        let mut args = vec!["-d".to_owned()];
+        if let Some(format) = &request.print_format {
+            args.extend(["-P".to_owned(), "-F".to_owned(), format.clone()]);
+        }
+        args.extend([
+            "-s".to_owned(),
+            request.name.clone(),
+            "-n".to_owned(),
+            request.window.clone(),
+            "-c".to_owned(),
+            request.cwd.clone(),
+        ]);
+        if let Some(command) = &request.command {
+            args.push(command.clone());
+        }
+        let out = self.run("new-session", &args)?;
+        let _ = self.new_set_session_option(&request.name, "renumber-windows", "on");
+        Ok(out)
+    }
+
+    fn new_first_pane_id(&mut self, target: &str) -> Option<String> {
+        self.run(
+            "list-panes",
+            &["-t".to_owned(), target.to_owned(), "-F".to_owned(), "#{pane_id}".to_owned()],
+        )
+        .ok()
+        .and_then(|raw| raw.lines().map(str::trim).find(|line| !line.is_empty()).map(str::to_owned))
+    }
+
+    fn new_current_session_window(&mut self) -> Result<(String, String), String> {
+        let raw = self
+            .run("display-message", &["-p".to_owned(), "#{session_name}\t#{window_name}".to_owned()])
+            .map_err(|_| "new: --split requires a current tmux client".to_owned())?;
+        let mut parts = raw.trim().split('\t');
+        let session = parts.next().unwrap_or_default();
+        let window = parts.next().unwrap_or_default();
+        if session.is_empty() || window.is_empty() {
+            return Err("new: --split could not resolve the current tmux window".to_owned());
+        }
+        Ok((session.to_owned(), window.to_owned()))
+    }
+
+    fn new_split_window(&mut self, request: &NewSplitCreateNative) -> Result<String, String> {
+        let mut args = Vec::new();
+        if let Some(format) = &request.print_format {
+            args.extend(["-P".to_owned(), "-F".to_owned(), format.clone()]);
+        }
+        args.push("-f".to_owned());
+        args.push(match request.direction {
+            NewSplitDirectionNative::Horizontal => "-h".to_owned(),
+            NewSplitDirectionNative::Vertical => "-v".to_owned(),
+        });
+        args.extend(["-c".to_owned(), request.cwd.clone()]);
+        if let Some(command) = &request.command {
+            args.push(command.clone());
+        }
+        self.run("split-window", &args)
+    }
+
+    fn new_select_pane_title(&mut self, pane: &str, title: &str) -> Result<(), String> {
+        self.run(
+            "select-pane",
+            &["-t".to_owned(), pane.to_owned(), "-T".to_owned(), title.to_owned()],
+        )
+        .map(|_| ())
+    }
+
+    fn new_read_session_option(&mut self, session: &str, option: &str) -> Result<Option<String>, String> {
+        Ok(self
+            .run("show-options", &["-qv".to_owned(), "-t".to_owned(), session.to_owned(), option.to_owned()])
+            .ok()
+            .map(|raw| raw.trim().to_owned()))
+    }
+
+    fn new_set_session_option(&mut self, session: &str, option: &str, value: &str) -> Result<(), String> {
+        self.run(
+            "set-option",
+            &["-t".to_owned(), session.to_owned(), option.to_owned(), value.to_owned()],
+        )
+        .map(|_| ())
+    }
+
+    fn new_attach_session(&mut self, session: &str) -> Result<(), String> {
+        let args = if std::env::var_os("TMUX").is_some() {
+            vec!["switch-client", "-t", session]
+        } else {
+            vec!["attach-session", "-t", session]
+        };
+        let status = std::process::Command::new("tmux")
+            .args(args)
+            .stdin(std::process::Stdio::inherit())
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit())
+            .status()
+            .map_err(|error| format!("new: failed to execute tmux attach: {error}"))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("new: tmux attach failed with status {}", status.code().unwrap_or(1)))
+        }
+    }
+
+    fn new_stdin_is_terminal(&self) -> bool { std::io::IsTerminal::is_terminal(&std::io::stdin()) }
+    fn new_stdout_is_terminal(&self) -> bool { std::io::IsTerminal::is_terminal(&std::io::stdout()) }
+    fn new_env_no_prompt(&self) -> bool { new_truthy_env(std::env::var("MAW_NO_PROMPT").ok().as_deref()) }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -353,11 +555,13 @@ fn scaffold_readme(name: &str, language: &str) -> String {
 }
 
 fn new_run_command(argv: &[String]) -> CliOutput {
-    match new_parse_args(argv) {
-        Ok(options) => match scaffold_apply(&options) {
-            Ok(stdout) => CliOutput { code: 0, stdout: new_relabel_stdout(&stdout), stderr: String::new() },
-            Err(message) => new_error(&message),
-        },
+    let mut tmux = NewSystemTmuxNative::new();
+    new_run_command_with(argv, &mut tmux)
+}
+
+fn new_run_command_with(argv: &[String], tmux: &mut impl NewWorkspaceTmuxNative) -> CliOutput {
+    match new_parse_args(argv).and_then(|options| new_execute(&options, tmux)) {
+        Ok(stdout) => CliOutput { code: 0, stdout, stderr: String::new() },
         Err(message) => new_error(&message),
     }
 }
@@ -366,12 +570,586 @@ fn new_error(message: &str) -> CliOutput {
     CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") }
 }
 
-fn new_parse_args(argv: &[String]) -> Result<ScaffoldOptionsNative, String> {
-    scaffold_parse_args(argv, NEW_USAGE).map_err(|message| message.replace("scaffold", "new"))
+#[allow(clippy::too_many_lines)]
+fn new_parse_args(argv: &[String]) -> Result<NewOptionsNative, String> {
+    let mut explicit_name = None::<String>;
+    let mut raw_path = None::<String>;
+    let mut raw_window = None::<String>;
+    let mut raw_cmd = None::<String>;
+    let mut claude = false;
+    let mut split = false;
+    let mut split_direction = None::<NewSplitDirectionNative>;
+    let mut machine_readable = false;
+    let mut dry_run = false;
+    let mut no_fleet = false;
+    let mut attach = false;
+    let mut no_attach = false;
+    let mut parent = None::<String>;
+    let mut session_id = None::<String>;
+    let mut index = 0_usize;
+
+    while index < argv.len() {
+        match argv[index].as_str() {
+            "--help" | "-h" | "help" => return Err(NEW_USAGE.to_owned()),
+            "--" => return Err("new: -- separator is not allowed".to_owned()),
+            "--attach" | "-a" => attach = true,
+            "--no-attach" => no_attach = true,
+            "--path" | "-p" => {
+                let flag = argv[index].clone();
+                raw_path = Some(new_take_value(argv, &mut index, &flag)?);
+            }
+            value if value.starts_with("--path=") => raw_path = Some(value["--path=".len()..].to_owned()),
+            "--window" => {
+                raw_window = Some(new_take_value(argv, &mut index, "--window")?);
+            }
+            value if value.starts_with("--window=") => raw_window = Some(value["--window=".len()..].to_owned()),
+            "--cmd" | "-c" => {
+                let flag = argv[index].clone();
+                raw_cmd = Some(new_take_value(argv, &mut index, &flag)?);
+            }
+            value if value.starts_with("--cmd=") => raw_cmd = Some(value["--cmd=".len()..].to_owned()),
+            "--claude" => claude = true,
+            "--shell" => {}
+            "--split" => split = true,
+            "--right" | "--horizontal" => new_set_split_direction(&mut split_direction, NewSplitDirectionNative::Horizontal)?,
+            "--bottom" | "--vertical" => new_set_split_direction(&mut split_direction, NewSplitDirectionNative::Vertical)?,
+            "--print" | "--json" => machine_readable = true,
+            "--dry-run" => dry_run = true,
+            "--no-fleet" => no_fleet = true,
+            "--parent" | "--parent-session-id" => {
+                let flag = argv[index].clone();
+                parent = Some(new_take_value(argv, &mut index, &flag)?);
+            }
+            value if value.starts_with("--parent-session-id=") => parent = Some(value["--parent-session-id=".len()..].to_owned()),
+            value if value.starts_with("--parent=") => parent = Some(value["--parent=".len()..].to_owned()),
+            "--session-id" => {
+                session_id = Some(new_take_value(argv, &mut index, "--session-id")?);
+            }
+            value if value.starts_with("--session-id=") => session_id = Some(value["--session-id=".len()..].to_owned()),
+            "--rust" | "--as" | "--assemblyscript" | "--dest" => return Err(new_plugin_scaffold_redirect(argv[index].as_str())),
+            value if value.starts_with("--dest=") => return Err(new_plugin_scaffold_redirect("--dest")),
+            value if value.starts_with('-') => {
+                return Err(format!(
+                    "new: invalid session name '{value}' — use letters, numbers, dot, underscore, or dash"
+                ));
+            }
+            value => {
+                if explicit_name.is_some() {
+                    return Err(NEW_USAGE.to_owned());
+                }
+                explicit_name = Some(value.to_owned());
+            }
+        }
+        index += 1;
+    }
+
+    if claude && raw_cmd.is_some() {
+        return Err("new: use either --claude or --cmd, not both".to_owned());
+    }
+    if !split && split_direction.is_some() {
+        return Err("new: split direction flags require --split".to_owned());
+    }
+    if split && raw_window.is_some() {
+        return Err("new: --window only applies when creating or reusing a workspace session, not --split".to_owned());
+    }
+
+    let cwd = new_resolve_workspace_path(raw_path.as_deref())?;
+    let command_name_hint = explicit_name.clone().unwrap_or_else(|| {
+        cwd.file_name()
+            .and_then(std::ffi::OsStr::to_str)
+            .map(new_slug_segment)
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "workspace".to_owned())
+    });
+    let startup_command = if claude {
+        Some(new_claude_startup_command(&command_name_hint, &cwd, parent.as_deref(), session_id.as_deref()))
+    } else {
+        new_normalize_startup_command(raw_cmd.as_deref())?
+    };
+    let auto_name_command = if claude { Some("claude") } else { startup_command.as_deref() };
+    let name = explicit_name
+        .clone()
+        .or_else(|| new_auto_workspace_session_name(&cwd, auto_name_command, raw_path.is_some()))
+        .ok_or_else(|| NEW_USAGE.to_owned())?;
+    new_validate_workspace_session_name(&name)?;
+
+    let window_provided = raw_window.is_some();
+    let window = raw_window.unwrap_or_else(|| "lead".to_owned());
+    new_validate_workspace_window_name(&window)?;
+    let tmux_command = startup_command.as_ref().map(|command| {
+        format!(
+            "{command}; exec {}",
+            std::env::var("SHELL").unwrap_or_else(|_| "zsh".to_owned())
+        )
+    });
+
+    Ok(NewOptionsNative {
+        name,
+        explicit_name: explicit_name.is_some(),
+        cwd,
+        window,
+        window_provided,
+        startup_command,
+        tmux_command,
+        machine_readable,
+        dry_run,
+        split,
+        split_direction: split_direction.unwrap_or(NewSplitDirectionNative::Vertical),
+        no_fleet,
+        attach,
+        no_attach,
+    })
 }
 
-fn new_relabel_stdout(stdout: &str) -> String {
-    stdout.replace("scaffold plan:", "new plan:").replace("created", "created new")
+fn new_take_value(argv: &[String], index: &mut usize, flag: &str) -> Result<String, String> {
+    let Some(value) = argv.get(*index + 1) else { return Err(format!("new: {flag} requires a value")); };
+    *index += 1;
+    if value.is_empty() {
+        return Err(format!("new: {flag} requires a non-empty value"));
+    }
+    Ok(value.clone())
+}
+
+fn new_set_split_direction(slot: &mut Option<NewSplitDirectionNative>, value: NewSplitDirectionNative) -> Result<(), String> {
+    if matches!(*slot, Some(existing) if existing != value) {
+        return Err("new: choose only one split direction (--right/--horizontal or --bottom/--vertical)".to_owned());
+    }
+    *slot = Some(value);
+    Ok(())
+}
+
+fn new_plugin_scaffold_redirect(flag: &str) -> String {
+    format!(
+        "new: '{flag}' is a plugin-scaffold option, but maw new creates tmux workspace sessions (maw-js parity). Use 'maw plugin create ...' or 'maw scaffold ...' for plugin scaffolds."
+    )
+}
+
+fn new_resolve_workspace_path(raw_path: Option<&str>) -> Result<std::path::PathBuf, String> {
+    let path = match raw_path {
+        None => std::env::current_dir().map_err(|error| format!("new: cwd: {error}"))?,
+        Some(value) if value.trim().is_empty() => return Err("new: --path requires a non-empty directory".to_owned()),
+        Some(value) => {
+            let expanded = new_expand_home_path(value);
+            let candidate = std::path::PathBuf::from(expanded);
+            if candidate.is_absolute() {
+                candidate
+            } else {
+                std::env::current_dir().map_err(|error| format!("new: cwd: {error}"))?.join(candidate)
+            }
+        }
+    };
+    let info = std::fs::metadata(&path).map_err(|_| format!("new: path does not exist: {}", raw_path.unwrap_or_else(|| path.to_str().unwrap_or("."))))?;
+    if !info.is_dir() {
+        return Err(format!("new: path is not a directory: {}", path.display()));
+    }
+    Ok(path)
+}
+
+fn new_expand_home_path(input: &str) -> String {
+    if input == "~" {
+        return std::env::var("HOME").unwrap_or_else(|_| "~".to_owned());
+    }
+    if let Some(rest) = input.strip_prefix("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            return std::path::Path::new(&home).join(rest).display().to_string();
+        }
+    }
+    input.to_owned()
+}
+
+fn new_normalize_startup_command(raw: Option<&str>) -> Result<Option<String>, String> {
+    match raw {
+        None => Ok(None),
+        Some(value) if value.trim().is_empty() => Err("new: --cmd cannot be empty".to_owned()),
+        Some(value) => Ok(Some(value.to_owned())),
+    }
+}
+
+fn new_claude_startup_command(name: &str, cwd: &std::path::Path, parent: Option<&str>, session_id: Option<&str>) -> String {
+    let configured = workon_build_command_in_dir(name, cwd);
+    let command = if new_looks_like_claude_command(&configured) { configured } else { "claude".to_owned() };
+    let command = format!("env CLAUDECODE=1 CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 {command}");
+    new_prefix_spawn_session_env(&command, parent, session_id, cwd)
+}
+
+fn new_looks_like_claude_command(command: &str) -> bool {
+    command.split_whitespace().any(|word| {
+        let executable = word.rsplit('/').next().unwrap_or(word).to_ascii_lowercase();
+        executable == "claude" || executable == "claude.exe"
+    })
+}
+
+fn new_prefix_spawn_session_env(command: &str, parent: Option<&str>, session_id: Option<&str>, cwd: &std::path::Path) -> String {
+    let mut assigns = Vec::<String>::new();
+    if let Some(value) = new_resolve_parent_session_id(parent, cwd) {
+        assigns.push(format!("MAW_PARENT_SESSION_ID={}", new_shell_quote(&value)));
+    }
+    if let Some(value) = new_clean_session_id(session_id) {
+        assigns.push(format!("MAW_SESSION_ID={}", new_shell_quote(value)));
+    }
+    if assigns.is_empty() { command.to_owned() } else { format!("{} {command}", assigns.join(" ")) }
+}
+
+fn new_resolve_parent_session_id(explicit: Option<&str>, cwd: &std::path::Path) -> Option<String> {
+    new_clean_session_id(explicit)
+        .map(str::to_owned)
+        .or_else(|| new_clean_session_id(std::env::var("MAW_PARENT_SESSION_ID").ok().as_deref()).map(str::to_owned))
+        .or_else(|| new_clean_session_id(std::env::var("CLAUDE_SESSION_ID").ok().as_deref()).map(str::to_owned))
+        .or_else(|| new_newest_claude_jsonl_session_id(cwd))
+}
+
+fn new_clean_session_id(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|trimmed| !trimmed.is_empty())
+}
+
+fn new_newest_claude_jsonl_session_id(cwd: &std::path::Path) -> Option<String> {
+    let projects_root = std::env::var_os("MAW_CLAUDE_PROJECTS_DIR")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".claude").join("projects")))?;
+    let mut encoded = cwd.display().to_string();
+    if encoded.starts_with('/') {
+        encoded.replace_range(0..1, "-");
+    }
+    encoded = encoded.replace('/', "-");
+    let dir = projects_root.join(encoded);
+    let mut newest = None::<(String, std::time::SystemTime)>;
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.ends_with(".jsonl") || name.contains("subagents") {
+            continue;
+        }
+        let modified = entry.metadata().and_then(|metadata| metadata.modified()).ok()?;
+        if newest.as_ref().is_none_or(|(_, time)| modified > *time) {
+            newest = Some((name.trim_end_matches(".jsonl").to_owned(), modified));
+        }
+    }
+    newest.map(|(id, _)| id)
+}
+
+fn new_shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn new_slug_segment(input: &str) -> String {
+    let mut out = String::new();
+    let mut last_dash = false;
+    for ch in input.chars().flat_map(char::to_lowercase) {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+            last_dash = false;
+        } else if !last_dash && !out.is_empty() {
+            out.push('-');
+            last_dash = true;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    out
+}
+
+fn new_truncate_workspace_name(input: &str) -> String {
+    let mut out = input.chars().take(80).collect::<String>();
+    while out.ends_with('-') || out.ends_with('_') || out.ends_with('.') {
+        out.pop();
+    }
+    if out.is_empty() { "workspace".to_owned() } else { out }
+}
+
+fn new_auto_workspace_session_name(cwd: &std::path::Path, startup_command: Option<&str>, used_path_flag: bool) -> Option<String> {
+    let mut parts = Vec::<String>::new();
+    if used_path_flag {
+        if let Some(name) = cwd.file_name().and_then(std::ffi::OsStr::to_str).map(new_slug_segment).filter(|name| !name.is_empty()) {
+            parts.push(name);
+        }
+    }
+    if let Some(command) = startup_command.map(new_slug_segment).filter(|name| !name.is_empty()) {
+        parts.push(command);
+    }
+    let raw = parts.join("-");
+    (!raw.is_empty()).then(|| new_truncate_workspace_name(&raw))
+}
+
+fn new_validate_workspace_session_name(name: &str) -> Result<(), String> {
+    new_validate_workspace_name(name, "session")?;
+    if name.ends_with("-view") {
+        return Err("new: session names ending in '-view' are reserved for maw view".to_owned());
+    }
+    Ok(())
+}
+
+fn new_validate_workspace_window_name(name: &str) -> Result<(), String> {
+    new_validate_workspace_name(name, "window")
+}
+
+fn new_validate_workspace_name(name: &str, kind: &str) -> Result<(), String> {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return Err(format!("new: invalid {kind} name '{name}' — use letters, numbers, dot, underscore, or dash"));
+    };
+    if !first.is_ascii_alphanumeric()
+        || name.len() > 80
+        || !chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+    {
+        return Err(format!("new: invalid {kind} name '{name}' — use letters, numbers, dot, underscore, or dash"));
+    }
+    Ok(())
+}
+
+fn new_execute(options: &NewOptionsNative, tmux: &mut impl NewWorkspaceTmuxNative) -> Result<String, String> {
+    let mut out = String::new();
+    let mut resolved = options.clone();
+
+    if !resolved.explicit_name {
+        let base = resolved.name.clone();
+        for suffix in 1..=99 {
+            let candidate = if suffix == 1 { base.clone() } else { format!("{base}-{suffix}") };
+            if !tmux.new_has_session(&candidate) {
+                resolved.name = candidate;
+                break;
+            }
+            let context_matches = new_read_workspace_launch(tmux, &candidate)?
+                .is_some_and(|launch| new_launch_context_matches(&launch, &resolved));
+            if context_matches {
+                resolved.name = candidate;
+                break;
+            }
+            if suffix == 99 {
+                return Err(format!("new: 99 collisions for '{base}-N' — pass explicit session name"));
+            }
+        }
+        if resolved.name != base && !resolved.machine_readable {
+            let _ = writeln!(out, "  \u{1b}[33m⚠\u{1b}[0m '{base}' exists with different context; using '{}'", resolved.name);
+        }
+    }
+
+    if resolved.split {
+        return new_execute_split(&resolved, tmux, out);
+    }
+
+    new_execute_session(&resolved, tmux, out)
+}
+
+fn new_execute_split(options: &NewOptionsNative, tmux: &mut impl NewWorkspaceTmuxNative, mut out: String) -> Result<String, String> {
+    let (session, window) = tmux.new_current_session_window()?;
+    let mut pane_id = None::<String>;
+    if !options.dry_run {
+        let raw = tmux.new_split_window(&NewSplitCreateNative {
+            cwd: options.cwd.display().to_string(),
+            direction: options.split_direction,
+            command: options.tmux_command.clone(),
+            print_format: Some("#{pane_id}".to_owned()),
+        })?;
+        pane_id = new_nonempty_trimmed(&raw);
+        if let Some(pane) = &pane_id {
+            tmux.new_select_pane_title(pane, &options.name)?;
+        }
+    }
+
+    if options.machine_readable {
+        out.push_str(&new_machine_payload(options, &session, &window, pane_id.as_deref(), false));
+    } else {
+        let mode = if options.startup_command.is_some() { "split shell + command" } else { "split shell" };
+        let verb = if options.dry_run { "\u{1b}[36m·\u{1b}[0m [dry-run] would create" } else { "\u{1b}[32m✓\u{1b}[0m created" };
+        let edge = match options.split_direction {
+            NewSplitDirectionNative::Horizontal => "right edge",
+            NewSplitDirectionNative::Vertical => "bottom edge",
+        };
+        let _ = writeln!(out, "{verb} {mode} '{}' at {edge} in {session}:{window}", options.name);
+        if options.dry_run {
+            new_write_dry_run_hint(&mut out);
+        }
+    }
+    Ok(out)
+}
+
+fn new_execute_session(options: &NewOptionsNative, tmux: &mut impl NewWorkspaceTmuxNative, mut out: String) -> Result<String, String> {
+    let existed = tmux.new_has_session(&options.name);
+    let mut pane_id = None::<String>;
+    let mut payload_window = options.window.clone();
+    if existed {
+        if let Some(launch) = new_read_workspace_launch(tmux, &options.name)? {
+            payload_window.clone_from(&launch.window);
+            if !new_launch_context_matches(&launch, options) {
+                return Err(format!(
+                    "new: session '{}' already exists with different launch context; choose a new name or match the original --path/--cmd/--window",
+                    options.name
+                ));
+            }
+        }
+        if options.machine_readable {
+            pane_id = tmux.new_first_pane_id(&format!("{}:{payload_window}", options.name));
+        }
+        if !options.machine_readable {
+            let prefix = if options.dry_run {
+                "\u{1b}[36m·\u{1b}[0m [dry-run] would reuse"
+            } else {
+                "\u{1b}[36m→\u{1b}[0m session exists:"
+            };
+            let _ = writeln!(out, "{prefix} {}", options.name);
+        }
+    } else {
+        if !options.dry_run {
+            let raw = tmux.new_session_create(&NewSessionCreateNative {
+                name: options.name.clone(),
+                window: options.window.clone(),
+                cwd: options.cwd.display().to_string(),
+                command: options.tmux_command.clone(),
+                print_format: options.machine_readable.then(|| "#{pane_id}".to_owned()),
+            })?;
+            pane_id = new_nonempty_trimmed(&raw);
+            new_remember_workspace_launch(tmux, &options.name, &options.cwd.display().to_string(), options.startup_command.as_deref(), &options.window)?;
+            if !options.no_fleet && new_ensure_fleet_session_entry(&options.name, &options.window, &options.cwd)? == NewFleetStatusNative::Created && !options.machine_readable {
+                let _ = writeln!(out, "\u{1b}[32m+\u{1b}[0m fleet auto-registered {}", options.name);
+            }
+        }
+        if !options.machine_readable {
+            let mode = if options.startup_command.is_some() {
+                format!("{} shell + command", options.window)
+            } else {
+                format!("{} shell", options.window)
+            };
+            let verb = if options.dry_run { "\u{1b}[36m·\u{1b}[0m [dry-run] would create" } else { "\u{1b}[32m✓\u{1b}[0m created" };
+            let _ = writeln!(out, "{verb} workspace session '{}' ({mode})", options.name);
+        }
+    }
+
+    if options.machine_readable {
+        out.push_str(&new_machine_payload(options, &options.name, &payload_window, pane_id.as_deref(), existed));
+    }
+    if options.dry_run {
+        if !options.machine_readable {
+            new_write_dry_run_hint(&mut out);
+        }
+        return Ok(out);
+    }
+
+    match new_attach_decision(options, tmux) {
+        NewAttachDecisionNative::Attach => {
+            tmux.new_attach_session(&options.name)?;
+        }
+        NewAttachDecisionNative::Skip if !options.machine_readable => {
+            let _ = writeln!(out, "\u{1b}[36mRun:\u{1b}[0m maw a {}", options.name);
+            let _ = writeln!(out, "\u{1b}[90m  next: maw team bring {}\u{1b}[0m", options.name);
+        }
+        NewAttachDecisionNative::Skip => {}
+    }
+    Ok(out)
+}
+
+fn new_read_workspace_launch(
+    tmux: &mut impl NewWorkspaceTmuxNative,
+    session: &str,
+) -> Result<Option<NewWorkspaceLaunchNative>, String> {
+    let Some(cwd) = tmux.new_read_session_option(session, NEW_WORKSPACE_CWD_OPTION)? else {
+        return Ok(None);
+    };
+    let command = tmux.new_read_session_option(session, NEW_WORKSPACE_COMMAND_OPTION)?.unwrap_or_default();
+    let window = tmux
+        .new_read_session_option(session, NEW_WORKSPACE_WINDOW_OPTION)?
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "lead".to_owned());
+    Ok(Some(NewWorkspaceLaunchNative { cwd, command, window }))
+}
+
+fn new_remember_workspace_launch(
+    tmux: &mut impl NewWorkspaceTmuxNative,
+    session: &str,
+    cwd: &str,
+    command: Option<&str>,
+    window: &str,
+) -> Result<(), String> {
+    tmux.new_set_session_option(session, NEW_WORKSPACE_CWD_OPTION, cwd)?;
+    tmux.new_set_session_option(session, NEW_WORKSPACE_COMMAND_OPTION, command.unwrap_or_default())?;
+    tmux.new_set_session_option(session, NEW_WORKSPACE_WINDOW_OPTION, window)
+}
+
+const NEW_WORKSPACE_CWD_OPTION: &str = "@maw_new_cwd";
+const NEW_WORKSPACE_COMMAND_OPTION: &str = "@maw_new_command";
+const NEW_WORKSPACE_WINDOW_OPTION: &str = "@maw_new_window";
+
+fn new_launch_context_matches(launch: &NewWorkspaceLaunchNative, options: &NewOptionsNative) -> bool {
+    launch.cwd == options.cwd.display().to_string()
+        && launch.command == options.startup_command.as_deref().unwrap_or_default()
+        && (!options.window_provided || launch.window == options.window)
+}
+
+fn new_machine_payload(
+    options: &NewOptionsNative,
+    session: &str,
+    window: &str,
+    pane_id: Option<&str>,
+    reused: bool,
+) -> String {
+    let mut fields = vec![
+        format!("\"session\":{}", json_string(session)),
+        format!("\"window\":{}", json_string(window)),
+    ];
+    if let Some(pane_id) = pane_id {
+        fields.push(format!("\"pane_id\":{}", json_string(pane_id)));
+    }
+    fields.push(format!("\"cwd\":{}", json_string(&options.cwd.display().to_string())));
+    if let Some(command) = &options.startup_command {
+        fields.push(format!("\"command\":{}", json_string(command)));
+    }
+    fields.push(format!("\"reused\":{reused}"));
+    if options.dry_run {
+        fields.push("\"dry_run\":true".to_owned());
+    }
+    format!("{{{}}}\n", fields.join(","))
+}
+
+fn new_attach_decision(options: &NewOptionsNative, tmux: &impl NewWorkspaceTmuxNative) -> NewAttachDecisionNative {
+    if options.no_attach || tmux.new_env_no_prompt() {
+        return NewAttachDecisionNative::Skip;
+    }
+    if options.attach || (tmux.new_stdin_is_terminal() && tmux.new_stdout_is_terminal()) {
+        NewAttachDecisionNative::Attach
+    } else {
+        NewAttachDecisionNative::Skip
+    }
+}
+
+fn new_truthy_env(value: Option<&str>) -> bool {
+    value.is_some_and(|raw| matches!(raw.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+}
+
+fn new_nonempty_trimmed(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
+fn new_write_dry_run_hint(out: &mut String) {
+    let _ = writeln!(out, "  \u{1b}[90mno tmux state changed (dry-run). Drop --dry-run to actually create.\u{1b}[0m");
+}
+
+fn new_ensure_fleet_session_entry(session: &str, window: &str, cwd: &std::path::Path) -> Result<NewFleetStatusNative, String> {
+    if !workon_safe_fleet_session_name(session) || window.trim().is_empty() {
+        return Ok(NewFleetStatusNative::Skipped);
+    }
+    let Some(repo) = workon_repo_from_cwd(cwd) else {
+        return Ok(NewFleetStatusNative::Skipped);
+    };
+    let env = current_xdg_env();
+    if fleet_load_entries_for_env(&env).iter().any(|entry| entry.session.name == session) {
+        return Ok(NewFleetStatusNative::Exists);
+    }
+    let fleet_dir = maw_state_path(&env, &["fleet"]);
+    std::fs::create_dir_all(&fleet_dir).map_err(|error| format!("new: create fleet dir: {error}"))?;
+    let path = fleet_dir.join(format!("{session}.json"));
+    if path.exists() {
+        return Ok(NewFleetStatusNative::Exists);
+    }
+    let json = serde_json::json!({
+        "name": session,
+        "created_by": "maw new",
+        "auto_registered": true,
+        "windows": [{"name": window, "repo": repo}],
+    });
+    std::fs::write(&path, serde_json::to_string_pretty(&json).map_err(|error| format!("new: render fleet json: {error}"))? + "\n")
+        .map_err(|error| format!("new: write {}: {error}", path.display()))?;
+    Ok(NewFleetStatusNative::Created)
 }
 
 fn promote_run_command(argv: &[String]) -> CliOutput {
@@ -958,6 +1736,91 @@ mod work_bundle_tests {
     }
 
     #[derive(Default)]
+    struct NewFakeTmux {
+        existing: std::collections::BTreeSet<String>,
+        options: std::collections::BTreeMap<(String, String), String>,
+        calls: Vec<String>,
+        current_session: String,
+        current_window: String,
+        next_pane: Option<String>,
+        stdin_tty: bool,
+        stdout_tty: bool,
+        env_no_prompt: bool,
+    }
+
+    impl NewFakeTmux {
+        fn with_skip_attach() -> Self {
+            Self { env_no_prompt: true, current_session: "parent".to_owned(), current_window: "main".to_owned(), ..Self::default() }
+        }
+
+        fn seed_launch(&mut self, session: &str, cwd: &std::path::Path, command: &str, window: &str) {
+            self.existing.insert(session.to_owned());
+            self.options.insert((session.to_owned(), NEW_WORKSPACE_CWD_OPTION.to_owned()), cwd.display().to_string());
+            self.options.insert((session.to_owned(), NEW_WORKSPACE_COMMAND_OPTION.to_owned()), command.to_owned());
+            self.options.insert((session.to_owned(), NEW_WORKSPACE_WINDOW_OPTION.to_owned()), window.to_owned());
+        }
+    }
+
+    impl NewWorkspaceTmuxNative for NewFakeTmux {
+        fn new_has_session(&mut self, name: &str) -> bool {
+            self.calls.push(format!("has-session {name}"));
+            self.existing.contains(name)
+        }
+
+        fn new_session_create(&mut self, request: &NewSessionCreateNative) -> Result<String, String> {
+            self.calls.push(format!(
+                "new-session {} {} {} {:?} {:?}",
+                request.name, request.window, request.cwd, request.command, request.print_format
+            ));
+            self.existing.insert(request.name.clone());
+            Ok(self.next_pane.clone().unwrap_or_default())
+        }
+
+        fn new_first_pane_id(&mut self, target: &str) -> Option<String> {
+            self.calls.push(format!("first-pane {target}"));
+            self.next_pane.clone()
+        }
+
+        fn new_current_session_window(&mut self) -> Result<(String, String), String> {
+            self.calls.push("display-current".to_owned());
+            Ok((self.current_session.clone(), self.current_window.clone()))
+        }
+
+        fn new_split_window(&mut self, request: &NewSplitCreateNative) -> Result<String, String> {
+            self.calls.push(format!(
+                "split {:?} {} {:?} {:?}",
+                request.direction, request.cwd, request.command, request.print_format
+            ));
+            Ok(self.next_pane.clone().unwrap_or_default())
+        }
+
+        fn new_select_pane_title(&mut self, pane: &str, title: &str) -> Result<(), String> {
+            self.calls.push(format!("select-pane {pane} {title}"));
+            Ok(())
+        }
+
+        fn new_read_session_option(&mut self, session: &str, option: &str) -> Result<Option<String>, String> {
+            self.calls.push(format!("read-option {session} {option}"));
+            Ok(self.options.get(&(session.to_owned(), option.to_owned())).cloned())
+        }
+
+        fn new_set_session_option(&mut self, session: &str, option: &str, value: &str) -> Result<(), String> {
+            self.calls.push(format!("set-option {session} {option} {value}"));
+            self.options.insert((session.to_owned(), option.to_owned()), value.to_owned());
+            Ok(())
+        }
+
+        fn new_attach_session(&mut self, session: &str) -> Result<(), String> {
+            self.calls.push(format!("attach {session}"));
+            Ok(())
+        }
+
+        fn new_stdin_is_terminal(&self) -> bool { self.stdin_tty }
+        fn new_stdout_is_terminal(&self) -> bool { self.stdout_tty }
+        fn new_env_no_prompt(&self) -> bool { self.env_no_prompt }
+    }
+
+    #[derive(Default)]
     #[allow(clippy::struct_excessive_bools)]
     struct PromoteFakeTmux {
         sessions: Vec<TmuxSession>,
@@ -1080,7 +1943,7 @@ mod work_bundle_tests {
     }
 
     #[test]
-    fn scaffold_and_new_create_hermetic_plugins() {
+    fn scaffold_creates_hermetic_plugin_and_new_creates_workspace_session() {
         let _lock = super::env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let env = WorkBundleEnvGuard::work_new();
         let rust_dest = env.root.join("hello-rust");
@@ -1088,11 +1951,77 @@ mod work_bundle_tests {
         let out = scaffold_run_command(&args);
         assert_eq!(out.code, 0, "{}", out.stderr);
         assert!(rust_dest.join("plugin.json").exists());
-        let as_dest = env.root.join("hello-as");
-        let args = work_args(&["hello-as", "--as", "--dest", as_dest.to_str().expect("utf8")]);
-        let out = new_run_command(&args);
+
+        let workspace = env.root.join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let mut tmux = NewFakeTmux::with_skip_attach();
+        tmux.next_pane = Some("%9".to_owned());
+        let args = work_args(&[
+            "team-room",
+            "--path",
+            workspace.to_str().expect("utf8"),
+            "--window",
+            "lead",
+            "--cmd",
+            "echo hi",
+            "--print",
+            "--no-fleet",
+        ]);
+        let out = new_run_command_with(&args, &mut tmux);
         assert_eq!(out.code, 0, "{}", out.stderr);
-        assert!(as_dest.join("assembly/index.ts").exists());
+        let value: serde_json::Value = serde_json::from_str(&out.stdout).expect("json");
+        assert_eq!(value["session"], "team-room");
+        assert_eq!(value["window"], "lead");
+        assert_eq!(value["pane_id"], "%9");
+        assert_eq!(value["cwd"], workspace.display().to_string());
+        assert_eq!(value["command"], "echo hi");
+        assert_eq!(value["reused"], false);
+        assert!(tmux.calls.iter().any(|call| call.starts_with("new-session team-room lead")));
+        assert!(tmux.calls.iter().any(|call| call == &format!("set-option team-room {NEW_WORKSPACE_CWD_OPTION} {}", workspace.display())));
+        assert!(!workspace.join("plugin.json").exists());
+    }
+
+    #[test]
+    fn new_rejects_plugin_scaffold_flags_with_explicit_redirect() {
+        let mut tmux = NewFakeTmux::with_skip_attach();
+        let out = new_run_command_with(&work_args(&["hello-rust", "--rust"]), &mut tmux);
+        assert_eq!(out.code, 1);
+        assert!(out.stderr.contains("plugin-scaffold option"), "{}", out.stderr);
+        assert!(out.stderr.contains("maw plugin create"), "{}", out.stderr);
+        assert!(tmux.calls.is_empty());
+    }
+
+    #[test]
+    fn new_dry_run_is_session_create_not_plugin_scaffold() {
+        let _lock = super::env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let env = WorkBundleEnvGuard::work_new();
+        let workspace = env.root.join("workspace-dry");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let mut tmux = NewFakeTmux::with_skip_attach();
+        let out = new_run_command_with(
+            &work_args(&["dry-room", "--path", workspace.to_str().expect("utf8"), "--dry-run"]),
+            &mut tmux,
+        );
+        assert_eq!(out.code, 0, "{}", out.stderr);
+        assert!(out.stdout.contains("[dry-run] would create workspace session 'dry-room'"), "{}", out.stdout);
+        assert!(!out.stdout.contains("plugin"), "{}", out.stdout);
+        assert!(!tmux.calls.iter().any(|call| call.starts_with("new-session")));
+    }
+
+    #[test]
+    fn new_auto_suffixes_colliding_auto_names_by_launch_context() {
+        let _lock = super::env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let env = WorkBundleEnvGuard::work_new();
+        let workspace = env.root.join("auto-room");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let mut tmux = NewFakeTmux::with_skip_attach();
+        tmux.seed_launch("auto-room-echo-hi", &workspace, "different", "lead");
+        let out = new_run_command_with(
+            &work_args(&["--path", workspace.to_str().expect("utf8"), "--cmd", "echo hi", "--dry-run"]),
+            &mut tmux,
+        );
+        assert_eq!(out.code, 0, "{}", out.stderr);
+        assert!(out.stdout.contains("using 'auto-room-echo-hi-2'"), "{}", out.stdout);
     }
 
     #[test]
@@ -1100,7 +2029,7 @@ mod work_bundle_tests {
         assert!(work_run_command(&work_args(&["--"])).stderr.contains("separator"));
         assert!(awake_run_command(&work_args(&["--"])).stderr.contains("separator"));
         assert!(scaffold_run_command(&work_args(&["-bad"])).stderr.contains("looks like a flag"));
-        assert!(new_run_command(&work_args(&["-bad"])).stderr.contains("looks like a flag"));
+        assert!(new_run_command(&work_args(&["-bad"])).stderr.contains("invalid session name"));
         assert!(promote_run_command(&work_args(&["-bad"])).stderr.contains("looks like a flag"));
         assert!(preflight_run_command(&work_args(&["-bad"])).stderr.contains("looks like a flag"));
         assert!(snapshots_run_command(&work_args(&["-bad"])).stderr.contains("looks like a flag"));

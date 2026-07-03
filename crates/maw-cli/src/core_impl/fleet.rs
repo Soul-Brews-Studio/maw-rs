@@ -56,6 +56,7 @@ struct FleetSessionSummary {
 struct FleetWindowSummary {
     name: String,
     repo: String,
+    kind: Option<NativeRepoKind>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -321,6 +322,7 @@ fn fleet_entries_to_summaries(entries: &[NativeFleetEntry]) -> Vec<FleetSessionS
                 .map(|window| FleetWindowSummary {
                     name: if window.name.is_empty() { "main".to_owned() } else { window.name.clone() },
                     repo: window.repo.clone(),
+                    kind: window.kind,
                 })
                 .collect(),
             disabled: false,
@@ -364,7 +366,11 @@ fn fleet_json_session(session: &FleetSessionSummary) -> serde_json::Value {
 }
 
 fn fleet_json_window(window: &FleetWindowSummary) -> serde_json::Value {
-    serde_json::json!({ "name": window.name, "repo": window.repo })
+    let mut value = serde_json::json!({ "name": window.name, "repo": window.repo });
+    if let Some(kind) = window.kind {
+        value["kind"] = serde_json::json!(native_repo_kind_label(kind));
+    }
+    value
 }
 
 fn fleet_window_count(state: &FleetState) -> usize {
@@ -838,19 +844,23 @@ fn fleet_registry_merge_windows(
                 continue;
             };
             let repo = item.get("repo").and_then(serde_json::Value::as_str).unwrap_or_default();
-            windows.push(FleetWindowSummary { name: name.to_owned(), repo: repo.to_owned() });
+            let kind = item.get("kind").and_then(serde_json::Value::as_str).and_then(native_repo_kind_from_role);
+            windows.push(FleetWindowSummary { name: name.to_owned(), repo: repo.to_owned(), kind });
         }
     }
     for update in updates.iter().filter(|window| !window.name.trim().is_empty()) {
         if let Some(existing) = windows.iter_mut().find(|window| window.name == update.name) {
             existing.repo.clone_from(&update.repo);
+            if update.kind.is_some() {
+                existing.kind = update.kind;
+            }
         } else {
             windows.push(update.clone());
         }
     }
     windows
         .into_iter()
-        .map(|window| serde_json::json!({"name": window.name, "repo": window.repo}))
+        .map(|window| fleet_json_window(&window))
         .collect()
 }
 
@@ -866,10 +876,22 @@ fn fleet_registry_windows_from_tmux(
         };
         let name = if window.name.is_empty() { "main".to_owned() } else { window.name.clone() };
         if seen.insert(name.clone()) {
-            result.push(FleetWindowSummary { name, repo: cwd });
+            let kind = Some(fleet_kind_from_window_name(&name));
+            result.push(FleetWindowSummary { name, repo: cwd, kind });
         }
     }
     result
+}
+
+fn fleet_kind_from_window_name(name: &str) -> NativeRepoKind {
+    if name.trim().ends_with("-oracle") { NativeRepoKind::Oracle } else { NativeRepoKind::Project }
+}
+
+fn native_repo_kind_label(kind: NativeRepoKind) -> &'static str {
+    match kind {
+        NativeRepoKind::Oracle => "oracle",
+        NativeRepoKind::Project => "project",
+    }
 }
 
 fn fleet_repo_slug_from_path(path: &std::path::Path, repos_root: Option<&std::path::Path>) -> Option<String> {
@@ -1126,6 +1148,7 @@ mod fleet_tests {
         assert_eq!(json["windows"].as_array().expect("windows").len(), 1);
         assert_eq!(json["windows"][0]["name"], "maw-rs-oracle");
         assert_eq!(json["windows"][0]["repo"], "github.com/Soul-Brews-Studio/maw-rs");
+        assert_eq!(json["windows"][0]["kind"], "oracle");
     }
 
     #[test]

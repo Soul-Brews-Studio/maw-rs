@@ -1,0 +1,38 @@
+[package]
+name = "maw-discord-backfill"
+version = "0.1.0-alpha.1"
+description = "Discord channel backfill CLI — atlas + workshop-05 snowflake cursor (Plan B)"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "discord-backfill"
+path = "src/main.rs"
+
+[dependencies]
+maw-discord = { path = "../maw-discord" }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "fs"] }
+time = { version = "0.3", features = ["formatting"] }
+
+[dependencies.sqlx]
+version = "0.8"
+features = ["sqlite", "runtime-tokio-rustls", "macros"]
+optional = true
+
+[features]
+default = ["json-out"]
+json-out = []
+index = ["dep:sqlx"]
+
+[dev-dependencies]
+serde_json = "1"
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true

@@ -354,7 +354,7 @@ mod resume_tests {
     fn resume_session(name: &str, windows: &[(&str, &str)]) -> NativeFleetSession {
         NativeFleetSession {
             name: name.to_owned(),
-            windows: windows.iter().map(|(name, repo)| NativeFleetWindow { name: (*name).to_owned(), repo: (*repo).to_owned() }).collect(),
+            windows: windows.iter().map(|(name, repo)| NativeFleetWindow { name: (*name).to_owned(), repo: (*repo).to_owned(), kind: None }).collect(),
             ..NativeFleetSession::default()
         }
     }

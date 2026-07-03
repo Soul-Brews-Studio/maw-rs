@@ -35,21 +35,23 @@ fn done_seed(name: &str) -> (PathBuf, PathBuf, PathBuf) {
         &config.join("fleet/13-nova.json"),
         r#"{"name":"13-nova","windows":[{"name":"task-done","repo":"org/repo/agents/task-done"}]}"#,
     );
-    std::fs::create_dir_all(root.join("ghq/github.com/org/repo/agents/task-done"))
-        .expect("worktree dir");
+    let main = root.join("ghq/github.com/org/repo");
+    let worktree = main.join("agents/task-done");
+    std::fs::create_dir_all(&worktree).expect("worktree dir");
     done_write(
         &bin.join("tmux"),
-        r#"#!/bin/sh
+        &format!(
+            r#"#!/bin/sh
 printf '%s\n' "$*" >> "$DONE_TMUX_LOG"
 case "$1" in
   list-windows)
     if [ "$DONE_TMUX_MODE" = "empty" ]; then exit 0; fi
-    printf '13-nova|||0|||nova-oracle|||1|||/work/repo\n13-nova|||1|||task-done|||0|||/work/repo/agents/task-done\n'
+    printf '13-nova|||0|||nova-oracle|||1|||{main}\n13-nova|||1|||task-done|||0|||{worktree}\n'
     ;;
   display-message)
     if [ "$2" = "-p" ]; then printf '13-nova\t0\n'; exit 0; fi
     case "$3" in
-      13-nova:task-done) printf 'codex\t/work/repo/agents/task-done\n' ;;
+      13-nova:task-done) printf 'codex\t{worktree}\n' ;;
       *) exit 7 ;;
     esac
     ;;
@@ -59,8 +61,30 @@ case "$1" in
   *) exit 64 ;;
 esac
 "#,
+            main = main.display(),
+            worktree = worktree.display()
+        ),
     );
     done_chmod(&bin.join("tmux"));
+    done_write(
+        &bin.join("git"),
+        &format!(
+            r#"#!/bin/sh
+if [ "$1" = "-C" ] && [ "$3" = "rev-parse" ] && [ "$4" = "--show-toplevel" ]; then
+  if [ "$2" = "{worktree}" ]; then printf '{worktree}\n'; exit 0; fi
+  exit 128
+fi
+if [ "$1" = "-C" ] && [ "$2" = "{main}" ] && [ "$3" = "worktree" ] && [ "$4" = "list" ] && [ "$5" = "--porcelain" ]; then
+  printf 'worktree {main}\n\nworktree {worktree}\n\n'
+  exit 0
+fi
+exit 64
+"#,
+            main = main.display(),
+            worktree = worktree.display()
+        ),
+    );
+    done_chmod(&bin.join("git"));
     (root, home, config)
 }
 
@@ -97,8 +121,8 @@ fn done_native_matched_dry_run_is_hermetic_without_js_ref() {
     assert_eq!(
         String::from_utf8(output.stdout).expect("stdout"),
         format!(
-            "{}\n",
-            include_str!("fixtures/native-done/matched-dry-run.stdout")
+            "  \x1b[36m\u{2b21}\x1b[0m [dry-run] would skip retro (no retrospective command for this engine)\n  \x1b[36m\u{2b21}\x1b[0m [dry-run] would git add + commit + push in {}\n  \x1b[36m\u{2b21}\x1b[0m [dry-run] would kill window 13-nova:task-done\n  \x1b[36m\u{2b21}\x1b[0m [dry-run] would remove worktree org/repo/agents/task-done\n  \x1b[36m\u{2b21}\x1b[0m [dry-run] would remove 'task-done' from fleet config if present\n\n",
+            root.join("ghq/github.com/org/repo/agents/task-done").display()
         )
     );
     assert_eq!(String::from_utf8(output.stderr).expect("stderr"), "");

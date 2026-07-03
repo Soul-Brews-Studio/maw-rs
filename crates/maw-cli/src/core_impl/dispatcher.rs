@@ -55,7 +55,9 @@ use maw_plugin_scaffold::{
 };
 use maw_policy::{default_active_group, weight_to_tier, DEFAULT_TIER, KNOWN_TIERS};
 use maw_routing::{
-    apply_sync_diff, compute_sync_diff, hosted_agents, resolve_target as resolve_route_target,
+    apply_sync_diff, compute_sync_diff, hosted_agents, is_self_target_alias,
+    resolve_target as resolve_route_target,
+    resolve_target_with_current_session as resolve_route_target_with_current_session,
     MawConfig as RouteConfig, NamedPeer as RouteNamedPeer, PeerIdentity as SyncPeerIdentity,
     ResolveResult as RouteResult, Session as RouteSession, SyncApplyOptions, SyncApplyResult,
     SyncDiff, Window as RouteWindow,
@@ -474,16 +476,88 @@ fn dispatch_cli_plugin(argv: &[String]) -> Option<CliOutput> {
     };
 
     if plugin.entry_path.is_some() {
-        return Some(CliOutput {
-            code: 2,
-            stdout: String::new(),
-            stderr: "TS/JS plugin requires prebuilt WASM artifact; no maw-js/Bun fallback\n"
-                .to_owned(),
-        });
+        return Some(dispatch_ts_cli_plugin(plugin, &ctx));
     }
 
     let mut runtime = MvpWasmInvokeRuntime;
     Some(render_cli_plugin_result(invoke_plugin(plugin, &ctx, &mut runtime)))
+}
+
+fn dispatch_ts_cli_plugin(plugin: &LoadedPlugin, ctx: &InvokeContext) -> CliOutput {
+    if !plugin_manifest_opts_into_bun_dev(plugin) {
+        return CliOutput {
+            code: 2,
+            stdout: String::new(),
+            stderr: "TS/JS plugin requires prebuilt WASM artifact; no maw-js/Bun fallback\n"
+                .to_owned(),
+        };
+    }
+
+    dispatch_bun_dev_plugin(plugin, ctx)
+}
+
+fn plugin_manifest_opts_into_bun_dev(plugin: &LoadedPlugin) -> bool {
+    let manifest_path = plugin.dir.join("plugin.json");
+    let Ok(text) = std::fs::read_to_string(manifest_path) else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return false;
+    };
+    value
+        .get("runtime")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|runtime| runtime == "bun-dev")
+}
+
+fn dispatch_bun_dev_plugin(plugin: &LoadedPlugin, ctx: &InvokeContext) -> CliOutput {
+    let banner = bun_dev_banner(&plugin.manifest.name);
+    let Some(entry_path) = &plugin.entry_path else {
+        return CliOutput {
+            code: 2,
+            stdout: String::new(),
+            stderr: format!("{banner}dev-tier plugin {} has no TS/JS entry\n", plugin.manifest.name),
+        };
+    };
+
+    let output = std::process::Command::new("bun")
+        .arg(entry_path)
+        .args(&ctx.args)
+        .current_dir(&plugin.dir)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output();
+
+    match output {
+        Ok(output) => CliOutput {
+            code: output.status.code().unwrap_or(1),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: format!("{banner}{}", String::from_utf8_lossy(&output.stderr)),
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => CliOutput {
+            code: 2,
+            stdout: String::new(),
+            stderr: format!(
+                "{banner}dev-tier plugin {} needs bun; install bun or build wasm\n",
+                plugin.manifest.name
+            ),
+        },
+        Err(error) => CliOutput {
+            code: 1,
+            stdout: String::new(),
+            stderr: format!(
+                "{banner}dev-tier plugin {} failed to run bun: {error}\n",
+                plugin.manifest.name
+            ),
+        },
+    }
+}
+
+fn bun_dev_banner(plugin_name: &str) -> String {
+    format!(
+        "⚠ [dev-tier: bun] {plugin_name} — TS runs unsandboxed; ship tier = WASM (maw plugin build)\n"
+    )
 }
 
 fn plugin_cli_args<'a>(plugin: &LoadedPlugin, argv: &'a [String]) -> Option<&'a [String]> {

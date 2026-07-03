@@ -108,6 +108,7 @@ impl From<FixtureWindow> for Window {
             index: window.index,
             name: window.name,
             active: window.active,
+            kind: None,
         }
     }
 }

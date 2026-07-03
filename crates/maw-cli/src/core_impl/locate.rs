@@ -188,8 +188,7 @@ fn locate_gather_info(
     sessions: &[TmuxSession],
 ) -> Result<LocateResult, String> {
     locate_validate_name(oracle)?;
-    let repo_path = locate_ghq_find(&format!("/{oracle}-oracle"))
-        .or_else(|| locate_ghq_find(&format!("/{oracle}")));
+    let repo_path = locate_find_oracle_repo_path(oracle);
     let has_psi = repo_path
         .as_deref()
         .is_some_and(|path| std::path::Path::new(path).join("ψ").exists());
@@ -272,6 +271,36 @@ fn locate_ghq_find(suffix: &str) -> Option<String> {
         .map(path_string)
 }
 
+fn locate_find_oracle_repo_path(oracle: &str) -> Option<String> {
+    locate_declared_oracle_repo_path(oracle)
+        .or_else(|| locate_ghq_find_oracle_suffix(oracle))
+        .or_else(|| locate_ghq_find(&format!("/{oracle}")).filter(|path| native_repo_path_is_oracle(std::path::Path::new(path), oracle)))
+}
+
+fn locate_declared_oracle_repo_path(oracle: &str) -> Option<String> {
+    for entry in fleet_load_entries() {
+        for window in &entry.session.windows {
+            if window.kind != Some(NativeRepoKind::Oracle) {
+                continue;
+            }
+            let Some(name) = native_fleet_window_oracle_name(window) else { continue; };
+            if name != oracle {
+                continue;
+            }
+            let Some(path) = native_fleet_repo_path(&window.repo) else { continue; };
+            if path.exists() {
+                return Some(path_string(path));
+            }
+        }
+    }
+    None
+}
+
+fn locate_ghq_find_oracle_suffix(oracle: &str) -> Option<String> {
+    let path = locate_ghq_find(&format!("/{oracle}-oracle"))?;
+    native_repo_path_is_oracle(std::path::Path::new(&path), &format!("{oracle}-oracle")).then_some(path)
+}
+
 fn locate_resolve_session<'a>(oracle: &str, sessions: &'a [TmuxSession]) -> Option<&'a TmuxSession> {
     let wanted = locate_normalized_names(oracle);
     sessions.iter().find(|session| locate_session_matches(session, &wanted))
@@ -325,7 +354,7 @@ fn locate_fleet_entry_matches(entry: &LocateFleetEntry, names: &BTreeSet<String>
             .session
             .windows
             .iter()
-            .any(|locate_window| names.contains(locate_window.name.as_str()))
+            .any(|locate_window| native_fleet_window_is_oracle(locate_window) && names.contains(locate_window.name.as_str()))
 }
 
 fn locate_load_fleet_entries() -> Vec<LocateFleetEntry> {
@@ -358,7 +387,7 @@ fn locate_load_manifest() -> Vec<LocateManifestEntry> {
     let mut by_name = BTreeMap::<String, LocateManifestEntry>::new();
     for fleet in locate_load_fleet_entries() {
         for locate_window in &fleet.session.windows {
-            let Some(name) = locate_name_from_window(&locate_window.name) else {
+            let Some(name) = locate_name_from_window(locate_window) else {
                 continue;
             };
             let entry = locate_ensure_manifest_entry(&mut by_name, &name);
@@ -432,10 +461,7 @@ fn locate_add_manifest_source(entry: &mut LocateManifestEntry, source: &str) {
     }
 }
 
-fn locate_name_from_window(window_name: &str) -> Option<String> {
-    let name = window_name.strip_suffix("-oracle").unwrap_or(window_name).trim();
-    (!name.is_empty()).then(|| name.to_owned())
-}
+fn locate_name_from_window(window: &NativeFleetWindow) -> Option<String> { native_fleet_window_oracle_name(window) }
 
 fn locate_load_registry_cache() -> Option<LocateRegistryCache> {
     let env = current_xdg_env();
@@ -712,6 +738,27 @@ mod locate_tests {
             locate_cmd_with_sessions("pathfinder", &opts, &[]).expect("path"),
             format!("{}\n", repo.display())
         );
+    }
+
+    #[test]
+    fn locate_repo_resolution_uses_declared_kind_before_suffix() {
+        let _guard = env_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let env = LocateHermeticEnv::new("kind");
+        let foo = env.ghq.join("github.com/acme/foo");
+        let bar = env.ghq.join("github.com/acme/bar-oracle");
+        std::fs::create_dir_all(&foo).expect("foo");
+        std::fs::create_dir_all(&bar).expect("bar");
+        locate_write(
+            &env.maw_config_path(&["fleet", "kind.json"]),
+            r#"{"name":"kind","windows":[{"name":"foo","repo":"acme/foo","kind":"oracle"},{"name":"bar-oracle","repo":"acme/bar-oracle","kind":"project"}]}"#,
+        );
+        let opts = LocateOptions { path: true, json: false };
+
+        assert_eq!(
+            locate_cmd_with_sessions("foo", &opts, &[]).expect("foo path"),
+            format!("{}\n", foo.display())
+        );
+        assert!(locate_cmd_with_sessions("bar", &opts, &[]).expect_err("bar project").contains("no oracle"));
     }
 
     #[test]

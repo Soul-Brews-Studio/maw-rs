@@ -361,7 +361,7 @@ struct LsPanePlan {
     last_activity: Option<u64>,
     session_created: Option<u64>,
     status: &'static str,
-    age_sec: u64,
+    age_sec: Option<u64>,
     agent: bool,
 }
 

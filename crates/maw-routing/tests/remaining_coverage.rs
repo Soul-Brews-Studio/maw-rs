@@ -5,6 +5,7 @@ fn window(index: u32, name: &str) -> Window {
         index,
         name: name.to_owned(),
         active: index == 0,
+        kind: None,
     }
 }
 

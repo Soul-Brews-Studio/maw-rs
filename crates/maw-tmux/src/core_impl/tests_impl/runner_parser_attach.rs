@@ -547,6 +547,47 @@
     }
 
     #[test]
+    fn tmux_attach_session_resolution_matches_numeric_fleet_prefix() {
+        let alive = BTreeSet::from([
+            "187-sentinel".to_owned(),
+            "188-maw-rs".to_owned(),
+            "189-crew-master".to_owned(),
+        ]);
+        assert_eq!(
+            resolve_tmux_attach_session("188", &alive),
+            TmuxAttachSessionResolution::Match {
+                session: "188-maw-rs".to_owned()
+            }
+        );
+        assert_eq!(
+            resolve_tmux_attach_session("188-maw", &alive),
+            TmuxAttachSessionResolution::Match {
+                session: "188-maw-rs".to_owned()
+            }
+        );
+        assert_eq!(
+            resolve_tmux_attach_session("18", &alive),
+            TmuxAttachSessionResolution::Ambiguous {
+                query: "18".to_owned(),
+                candidates: vec![
+                    "187-sentinel".to_owned(),
+                    "188-maw-rs".to_owned(),
+                    "189-crew-master".to_owned()
+                ]
+            }
+        );
+
+        let duplicate_prefix = BTreeSet::from(["188-alpha".to_owned(), "188-beta".to_owned()]);
+        assert_eq!(
+            resolve_tmux_attach_session("188", &duplicate_prefix),
+            TmuxAttachSessionResolution::Ambiguous {
+                query: "188".to_owned(),
+                candidates: vec!["188-alpha".to_owned(), "188-beta".to_owned()]
+            }
+        );
+    }
+
+    #[test]
     fn tmux_attach_session_resolution_refuses_loose_ambiguity() {
         let alive = BTreeSet::from(["05-calliope".to_owned(), "06-caller".to_owned()]);
         assert_eq!(

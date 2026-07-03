@@ -367,11 +367,24 @@ fn wake_oracle(options: &WakeOptionsNative) -> Result<String, String> {
 fn wake_repo_path(options: &WakeOptionsNative, oracle: &str) -> Result<std::path::PathBuf, String> {
     // `--repo-path <dir>` is an explicit filesystem override (used by `team up`
     // to point at the bound worktree) — it bypasses ghq/fleet resolution.
-    if let Some(repo_path) = &options.repo_path { return Ok(repo_path.clone()); }
+    if let Some(repo_path) = &options.repo_path {
+        return wake_normalize_repo_path(repo_path);
+    }
     if let Some(repo) = &options.repo { return Ok(wake_ghq_root().join("github.com").join(repo)); }
     if let Some(repo) = &options.incubate { return Ok(wake_ghq_root().join("github.com").join(repo)); }
     if options.target.contains('/') { return Ok(wake_ghq_root().join("github.com").join(&options.target)); }
     wake_find_repo(oracle).ok_or_else(|| format!("wake: repo not found for {oracle}"))
+}
+
+fn wake_normalize_repo_path(path: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| format!("wake: cannot resolve repo path: {error}"))?
+            .join(path)
+    };
+    Ok(absolute.canonicalize().unwrap_or(absolute))
 }
 
 fn wake_ghq_root() -> std::path::PathBuf { ghq_root() }
@@ -457,11 +470,15 @@ fn wake_default_engine(options: &WakeOptionsNative) -> String {
 
 fn wake_command(window: &str, cwd: &std::path::Path, options: &WakeOptionsNative) -> String {
     let engine = wake_default_engine(options);
-    let resolved = wake_resolve_engine_command(&engine);
-    let mut command = format!("cd {} && {resolved}", wake_shell_quote(&cwd.display().to_string()));
-    if options.resume { command.push_str(" resume"); }
-    if options.channels { command.push_str(" --channels plugin:discord@claude-plugins-official"); }
-    if let Some(prompt) = &options.prompt { let _ = write!(command, " {}", wake_shell_quote(prompt)); }
+    let mut engine_command = wake_resolve_engine_command(&engine);
+    if options.resume { engine_command.push_str(" resume"); }
+    if options.channels { engine_command.push_str(" --channels plugin:discord@claude-plugins-official"); }
+    if let Some(prompt) = &options.prompt { let _ = write!(engine_command, " {}", wake_shell_quote(prompt)); }
+    let cwd_arg = wake_shell_quote(&cwd.display().to_string());
+    let cwd_label = wake_shell_quote(&cwd.display().to_string());
+    let command = format!(
+        "cd {cwd_arg} && {{ {engine_command}; _maw_wake_status=$?; if [ $_maw_wake_status -ne 0 ]; then printf '\\nmaw wake: engine exited with status %s\\n' \"$_maw_wake_status\" >&2; fi; }} || {{ printf '\\nmaw wake: failed to cd %s; engine not started\\n' {cwd_label} >&2; }}"
+    );
     format!("MAW_SESSION_WINDOW={} {}", wake_shell_quote(window), command)
 }
 
@@ -543,7 +560,11 @@ fn wake_registry_windows(
         .map_or_else(Vec::new, |session| fleet_registry_windows_from_tmux(&session.windows, None));
     if !windows.iter().any(|window| window.name == resolved.window) {
         if let Some(repo) = fleet_repo_slug_from_path(&resolved.repo_path, None) {
-            windows.push(FleetWindowSummary { name: resolved.window.clone(), repo });
+            windows.push(FleetWindowSummary {
+                name: resolved.window.clone(),
+                repo,
+                kind: Some(fleet_kind_from_window_name(&resolved.window)),
+            });
         }
     }
     windows
@@ -598,6 +619,24 @@ mod wake_tests {
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("temp root");
         path
+    }
+
+    struct CwdRestore {
+        previous: std::path::PathBuf,
+    }
+
+    impl CwdRestore {
+        fn enter(path: &std::path::Path) -> Self {
+            let previous = std::env::current_dir().expect("current dir before test");
+            std::env::set_current_dir(path).expect("set test cwd");
+            Self { previous }
+        }
+    }
+
+    impl Drop for CwdRestore {
+        fn drop(&mut self) {
+            std::env::set_current_dir(&self.previous).expect("restore test cwd");
+        }
     }
 
     fn wake_with_fixture<F>(test: F)
@@ -667,18 +706,18 @@ mod wake_tests {
             let mut tmux = WakeMockTmux::default();
             let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("fresh");
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
-            assert!(send.contains("&& claude"), "{send}");
-            assert!(!send.contains("&& codex"), "{send}");
+            assert!(send.contains("{ claude;"), "{send}");
+            assert!(!send.contains("{ codex;"), "{send}");
 
             let mut tmux = WakeMockTmux::default();
             let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach", "-e", "codex"]), &mut tmux).expect("explicit");
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
-            assert!(send.contains("&& codex"), "{send}");
+            assert!(send.contains("{ codex;"), "{send}");
 
             let mut tmux = WakeMockTmux::default();
             let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach", "--resume"]), &mut tmux).expect("resume");
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
-            assert!(send.contains("&& codex resume"), "{send}");
+            assert!(send.contains("{ codex resume;"), "{send}");
         });
     }
 
@@ -695,6 +734,43 @@ mod wake_tests {
             wake_repo_path(&options, "coder-1").expect("resolve"),
             std::path::PathBuf::from("/tmp/wt/coder-1")
         );
+    }
+
+    #[test]
+    fn wake_relative_repo_path_is_absolute_before_send() {
+        wake_with_fixture(|root| {
+            let cwd = root.join("workspace");
+            let repo = cwd.join("agents/1-codex-1");
+            std::fs::create_dir_all(&repo).expect("worktree");
+            let _cwd = CwdRestore::enter(&cwd);
+
+            let mut tmux = WakeMockTmux::default();
+            let (code, stdout) = wake_run(
+                &wake_strings(&[
+                    "coder-1",
+                    "--repo-path",
+                    "agents/1-codex-1",
+                    "-e",
+                    "codex",
+                    "--no-attach",
+                ]),
+                &mut tmux,
+            )
+            .expect("wake");
+            assert_eq!(code, 0);
+            assert!(stdout.contains("created session"));
+
+            let expected = repo.canonicalize().expect("canonical worktree");
+            let new_session = tmux.actions.iter().find(|action| action.starts_with("new-session")).expect("new-session action");
+            assert!(new_session.contains(&expected.display().to_string()), "{new_session}");
+
+            let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
+            assert!(send.contains(&format!("cd {}", expected.display())), "{send}");
+            assert!(!send.contains("cd agents/1-codex-1"), "{send}");
+            assert!(send.contains("maw wake: failed to cd"), "{send}");
+            assert!(send.contains("engine not started"), "{send}");
+            assert!(send.contains("maw wake: engine exited with status"), "{send}");
+        });
     }
 
     #[test]
@@ -741,6 +817,7 @@ mod wake_tests {
             assert_eq!(first["windows"].as_array().expect("windows").len(), 1);
             assert_eq!(first["windows"][0]["name"], "neo");
             assert_eq!(first["windows"][0]["repo"], "github.com/acme/neo-oracle");
+            assert_eq!(first["windows"][0]["kind"], "project");
 
             let (code, stdout) = wake_run(&wake_strings(&["neo", "--task", "issue-90", "--no-attach"]), &mut tmux).expect("task wake");
             assert_eq!(code, 0, "{stdout}");
@@ -749,6 +826,7 @@ mod wake_tests {
             assert_eq!(windows.len(), 2);
             assert!(windows.iter().any(|window| window["name"] == "neo"));
             assert!(windows.iter().any(|window| window["name"] == "neo-issue-90"));
+            assert!(windows.iter().all(|window| window["kind"] == "project"));
             assert_eq!(updated["created_at"], "2026-07-03T02:03:04.000Z");
         });
     }

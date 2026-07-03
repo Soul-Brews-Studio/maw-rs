@@ -147,6 +147,48 @@ fn route_plan_json_includes_error_hint() {
 }
 
 #[test]
+fn route_plan_colon_numeric_prefers_window_index_over_name_suffix() {
+    let output = run_cli(&[
+        "route".to_owned(),
+        "--plan-json".to_owned(),
+        "--query".to_owned(),
+        "188-maw-rs:1".to_owned(),
+        "--session".to_owned(),
+        "188-maw-rs".to_owned(),
+        "--window".to_owned(),
+        "1:maw-rs-oracle:true".to_owned(),
+        "--window".to_owned(),
+        "2:maw-rs-codex-1:false".to_owned(),
+    ]);
+
+    assert_eq!(output.code, 0, "{}", output.stderr);
+    let actual: Value = serde_json::from_str(&output.stdout).expect("route json");
+    assert_eq!(actual["type"], "local");
+    assert_eq!(actual["target"], "188-maw-rs:1");
+}
+
+#[test]
+fn route_plan_colon_full_window_name_stays_exact() {
+    let output = run_cli(&[
+        "route".to_owned(),
+        "--plan-json".to_owned(),
+        "--query".to_owned(),
+        "188-maw-rs:maw-rs-codex-1".to_owned(),
+        "--session".to_owned(),
+        "188-maw-rs".to_owned(),
+        "--window".to_owned(),
+        "2:maw-rs-codex-10:false".to_owned(),
+        "--window".to_owned(),
+        "1:maw-rs-codex-1:true".to_owned(),
+    ]);
+
+    assert_eq!(output.code, 0, "{}", output.stderr);
+    let actual: Value = serde_json::from_str(&output.stdout).expect("route json");
+    assert_eq!(actual["type"], "local");
+    assert_eq!(actual["target"], "188-maw-rs:1");
+}
+
+#[test]
 fn route_plan_rejects_window_without_session() {
     let argv = vec![
         "route".to_owned(),

@@ -207,7 +207,7 @@ fn forwarderror_local(
 
 async fn forwarderror_peer(peer_url: &str, peer_target: &str, node: Option<&str>, original_target: &str, message: &str, last: u32, config: &HeyConfig) -> CliOutput {
     if let Err(message) = forwarderror_validate_transport_target(peer_target) { return forwarderror_error(2, &message); }
-    let send_args = SendArgs { target: peer_target.to_owned(), text: message.to_owned(), inbox: None, from: None, approve: false, trust: false };
+    let send_args = SendArgs { target: peer_target.to_owned(), text: message.to_owned(), inbox: None, from: None, approve: false, trust: false, dry_run: false };
     let output = match send_acl_gate_peer("forward-error", peer_target, &send_args, config, false) {
         SendAclGateResult::Proceed { stderr_prefix } => {
             if let Some(output) = forwarderror_fake_peer(peer_url, peer_target, node, original_target, message, last) {

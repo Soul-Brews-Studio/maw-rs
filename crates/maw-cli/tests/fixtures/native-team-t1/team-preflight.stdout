@@ -5,6 +5,14 @@ checks:
   ✓ team name: 'beta' is accepted
   ✓ member roles: 2 unique role(s)
   ✓ existing artifacts: no config/inbox/manifest collisions found
+  ✓ charter schema: project is owner/repo; each member declares worktree and branch; defaults.worktree absent
+  ✓ spawn ordering: session 'beta-session' exists; 2 worktree dir(s) exist before window create
+  ✓ .maw-engine respected: no .maw-engine files present
+  ✓ pool auth health: no CODEX_HOME=~/.codex-team/N engines declared
+  ✓ codex trust: trust present for builder in <ROOT>/agents/builder/.codex, reviewer in <ROOT>/agents/reviewer/.codex
+  ✓ CODEX_HOME isolation: each Codex member uses a distinct CODEX_HOME
+  ✓ dispatch worktree collision: member worktree paths are distinct and non-nesting
+  ✓ post-spawn boot verification: skipped offline; after spawn run 'maw peek beta-session:builder' for each member and expect an engine idle prompt, not shell/trust/update prompt
 
 preflight safety:
   - read-only preflight only

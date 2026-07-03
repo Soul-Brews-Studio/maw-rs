@@ -420,7 +420,7 @@ esac
             project_repos: repos.iter().map(|repo| (*repo).to_owned()).collect(),
             windows: repos
                 .iter()
-                .map(|repo| NativeFleetWindow { name: repo.rsplit('/').next().unwrap_or(repo).to_owned(), repo: (*repo).to_owned() })
+                .map(|repo| NativeFleetWindow { name: repo.rsplit('/').next().unwrap_or(repo).to_owned(), repo: (*repo).to_owned(), kind: None })
                 .collect(),
             ..NativeFleetSession::default()
         }

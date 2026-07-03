@@ -586,7 +586,7 @@ mod sleep_tests {
 
     fn sleep_args(values: &[&str]) -> Vec<String> { values.iter().map(|value| (*value).to_owned()).collect() }
 
-    fn sleep_fleet() -> Vec<NativeFleetSession> { vec![NativeFleetSession { name: "01-nova".to_owned(), windows: vec![NativeFleetWindow { name: "nova-oracle".to_owned(), repo: String::new() }], ..NativeFleetSession::default() }] }
+    fn sleep_fleet() -> Vec<NativeFleetSession> { vec![NativeFleetSession { name: "01-nova".to_owned(), windows: vec![NativeFleetWindow { name: "nova-oracle".to_owned(), repo: String::new(), kind: None }], ..NativeFleetSession::default() }] }
 
     #[test]
     fn sleep_dispatch_registers_native() {

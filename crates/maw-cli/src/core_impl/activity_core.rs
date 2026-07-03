@@ -895,7 +895,7 @@ mod activity_tests {
     fn activity_all_resolves_fleet_window_names_to_numeric_tmux_targets() {
         let fleet = vec![NativeFleetSession {
             name: "s".to_owned(),
-            windows: vec![NativeFleetWindow { name: "main".to_owned(), repo: String::new() }],
+            windows: vec![NativeFleetWindow { name: "main".to_owned(), repo: String::new(), kind: None }],
             ..NativeFleetSession::default()
         }];
         assert_eq!(all_activity_targets(&fleet), vec!["s:main".to_owned()]);

@@ -336,6 +336,7 @@ fn resolve_local_tmux_command_target(
                     index: window.index,
                     name: window.name,
                     active: window.active,
+                    kind: None,
                 })
                 .collect(),
             source: None,
@@ -371,4 +372,3 @@ fn send_enter_usage_error(message: &str) -> CliOutput {
         stderr: format!("{message}\nusage: maw-rs send-enter <target> [--N <count>]\n"),
     }
 }
-
