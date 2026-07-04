@@ -213,11 +213,15 @@ fn plugin_manifest_load_plan_reports_entry_and_artifact_precedence() {
         "--plan-json".to_owned(),
     ]));
 
-    assert_eq!(output["plugin"]["kind"], "ts");
+    // A declared WASM surface is the executable artifact even when legacy
+    // source metadata (`target=js`, TS entry, JS artifact path) remains for
+    // rebuild/dev context. This keeps installed ship artifacts off Bun.
+    assert_eq!(output["plugin"]["kind"], "wasm");
     assert_eq!(
-        output["plugin"]["entryPath"],
-        dir.join("index.ts").to_string_lossy().as_ref()
+        output["plugin"]["wasmPath"],
+        dir.join("plugin.wasm").to_string_lossy().as_ref()
     );
+    assert!(output["plugin"]["entryPath"].is_null());
     assert_eq!(output["plugin"]["manifest"]["target"], "js");
     assert_eq!(
         output["plugin"]["manifest"]["artifact"]["path"],

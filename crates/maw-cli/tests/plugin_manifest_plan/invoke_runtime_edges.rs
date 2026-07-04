@@ -55,6 +55,13 @@ fn plugin_manifest_invoke_uses_real_extism_wasm_and_refuses_unbuilt_ts() {
     .expect("golden json");
     assert_eq!(wasm, golden);
     assert_eq!(wasm["runtime"]["mode"], "extism-wasm");
+    // The runtime registers the complete Extism host surface. The v26.7.5
+    // unblock wave added `maw.exec.spawn` and `maw.paths.get`, so this guards
+    // against stale plan goldens and accidental double-registration.
+    assert_eq!(
+        wasm["runtime"]["hostFnCount"],
+        json!(maw_plugin_manifest::HOST_FN_NAMES.len())
+    );
     assert_eq!(wasm["runtime"]["noBunFallback"], true);
 
     remove_dir_all(root).expect("cleanup invoke runtime");
