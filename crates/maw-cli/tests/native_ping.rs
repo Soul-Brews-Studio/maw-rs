@@ -6,13 +6,7 @@ use std::{
 };
 
 fn bin() -> PathBuf {
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let release = manifest.join("../..").join("target/release/maw-rs");
-    if release.exists() {
-        release
-    } else {
-        PathBuf::from(env!("CARGO_BIN_EXE_maw-rs"))
-    }
+    PathBuf::from(env!("CARGO_BIN_EXE_maw-rs"))
 }
 
 fn temp_dir(name: &str) -> PathBuf {
