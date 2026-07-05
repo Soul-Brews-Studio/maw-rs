@@ -1,3 +1,9 @@
+const DISPATCH_323: &[DispatcherEntry] = &[
+    DispatcherEntry { command: "policy", handler: Handler::Sync(run_policy_plan) },
+    DispatcherEntry { command: "plugin-policy", handler: Handler::Sync(run_policy_plan) },
+    DispatcherEntry { command: "transport", handler: Handler::Sync(run_transport_plan) },
+];
+
 fn render_identity_node_plan_json(host: &str, user: Option<&str>, canonical: &str) -> String {
     let mut input_fields = vec![format!("\"host\":{}", json_string(host))];
     if let Some(user) = user {

@@ -1,3 +1,7 @@
+const DISPATCH_301: &[DispatcherEntry] = &[
+    DispatcherEntry { command: "plugin-scaffold", handler: Handler::Sync(run_plugin_scaffold_plan) },
+];
+
 enum XdgPlanAction {
     Paths { plan_json: bool, env: MawXdgEnv },
     CorePaths { plan_json: bool, env: MawXdgEnv },

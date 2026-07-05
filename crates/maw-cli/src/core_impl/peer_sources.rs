@@ -1,3 +1,8 @@
+const DISPATCH_314: &[DispatcherEntry] = &[
+    DispatcherEntry { command: "federation-sync", handler: Handler::Sync(run_federation_sync_plan) },
+    DispatcherEntry { command: "peer-sources", handler: Handler::Sync(run_peer_sources_plan) },
+];
+
 fn run_peer_probe_handshake_constants_plan(argv: &[String]) -> CliOutput {
     let mut plan_json = false;
     for arg in argv {

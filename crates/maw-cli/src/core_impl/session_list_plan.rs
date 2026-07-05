@@ -1,3 +1,8 @@
+const DISPATCH_304: &[DispatcherEntry] = &[
+    DispatcherEntry { command: "bring", handler: Handler::Sync(run_bring_plan) },
+    DispatcherEntry { command: "b", handler: Handler::Sync(run_bring_plan) },
+];
+
 const LS_WATCH_DEFAULT_SECS: u64 = 2;
 const LS_WATCH_ENTER: &str = "\x1b[?1049h\x1b[?25l";
 const LS_WATCH_REPAINT: &str = "\x1b[H\x1b[2J";

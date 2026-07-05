@@ -1,3 +1,9 @@
+const DISPATCH_319: &[DispatcherEntry] = &[
+    DispatcherEntry { command: "recent-hello", handler: Handler::Sync(run_recent_hello_plan) },
+    DispatcherEntry { command: "pair-code", handler: Handler::Sync(run_pair_code_plan) },
+    DispatcherEntry { command: "pair-code-store", handler: Handler::Sync(run_pair_code_store_plan) },
+];
+
 fn render_consent_pending_status_plan_json(
     id: &str,
     updated: bool,

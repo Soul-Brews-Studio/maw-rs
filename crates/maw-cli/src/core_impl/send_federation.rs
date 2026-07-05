@@ -1,3 +1,11 @@
+const DISPATCH_307: &[DispatcherEntry] = &[
+    DispatcherEntry { command: "hey", handler: Handler::Async(run_hey_async) },
+    DispatcherEntry { command: "send", handler: Handler::Async(run_send_async) },
+    DispatcherEntry { command: "health", handler: Handler::Async(run_health_async) },
+    DispatcherEntry { command: "reply", handler: Handler::Async(run_reply_async) },
+    DispatcherEntry { command: "rp", handler: Handler::Async(run_reply_async) },
+];
+
 #[derive(Debug, Clone, Default)]
 struct SendArgs {
     target: String,

@@ -1,3 +1,7 @@
+const DISPATCH_303: &[DispatcherEntry] = &[
+    DispatcherEntry { command: "tmux", handler: Handler::Sync(run_tmux_command) },
+];
+
 #[derive(Clone, Copy)]
 pub(crate) struct TmuxSubcommandEntry {
     names: &'static [&'static str],

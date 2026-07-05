@@ -1,3 +1,7 @@
+const DISPATCH_312: &[DispatcherEntry] = &[
+    DispatcherEntry { command: "discover", handler: Handler::Sync(run_discover_plan) },
+];
+
 #[allow(clippy::too_many_lines)]
 fn run_discover_plan(argv: &[String]) -> CliOutput {
     if matches!(argv.first().map(String::as_str), Some("constants")) {

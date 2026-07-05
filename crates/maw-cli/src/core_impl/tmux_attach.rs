@@ -1,3 +1,7 @@
+const DISPATCH_305: &[DispatcherEntry] = &[
+    DispatcherEntry { command: "send-enter", handler: Handler::Sync(run_send_enter_command) },
+];
+
 fn run_attach_plan(argv: &[String]) -> CliOutput {
     let mut print = false;
     let mut readonly = false;

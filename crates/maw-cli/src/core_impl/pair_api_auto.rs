@@ -1,3 +1,7 @@
+const DISPATCH_321: &[DispatcherEntry] = &[
+    DispatcherEntry { command: "pair-api-auto", handler: Handler::Sync(run_pair_api_auto_plan) },
+];
+
 fn parse_seed_accepted(value: &str) -> Result<PairAcceptInput, String> {
     let Some((node, url)) = value.split_once('=') else {
         return Err("pair-api: --seed-accepted must be node=url".to_owned());
