@@ -3,12 +3,11 @@ const DISPATCH_324: &[DispatcherEntry] = &[DispatcherEntry {
     handler: Handler::Sync(run_more_command),
 }];
 
-const MORE_USAGE: &str = "usage: maw more codex [N] [--dry-run] [-e|--engine <engine>] [--session <session>]\n       maw more status";
+const MORE_USAGE: &str = "usage: maw more codex [N] [--session <s>] [--dry-run] [-e|--engine <e>]\n       maw more status\n\nPlan additional Codex coder lanes.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MoreCodexOptions {
     count: usize,
-    dry_run: bool,
     engine: String,
     session: Option<String>,
 }
@@ -42,7 +41,6 @@ fn more_run(argv: &[String]) -> Result<String, String> {
 
 fn more_parse_codex(argv: &[String]) -> Result<MoreCodexOptions, String> {
     let mut count = None::<usize>;
-    let mut dry_run = false;
     let mut engine = "codex".to_owned();
     let mut session = None::<String>;
     let mut index = 0usize;
@@ -50,7 +48,7 @@ fn more_parse_codex(argv: &[String]) -> Result<MoreCodexOptions, String> {
         let arg = &argv[index];
         match arg.as_str() {
             "--help" | "-h" => return Err(MORE_USAGE.to_owned()),
-            "--dry-run" => dry_run = true,
+            "--dry-run" => {}
             "-e" | "--engine" => {
                 index += 1;
                 engine = more_take_safe_value(argv, index, arg, "engine")?;
@@ -73,7 +71,6 @@ fn more_parse_codex(argv: &[String]) -> Result<MoreCodexOptions, String> {
     }
     Ok(MoreCodexOptions {
         count: count.unwrap_or(1),
-        dry_run,
         engine,
         session,
     })
@@ -143,9 +140,8 @@ fn more_parse_count(value: &str) -> Result<usize, String> {
 
 fn more_render_codex(options: &MoreCodexOptions) -> String {
     let session = options.session.as_deref().unwrap_or("current");
-    let mode = if options.dry_run { "dry-run" } else { "plan" };
     format!(
-        "would spawn {} coders...\nengine={}\nsession={}\nmode={}\nrequested={}\n",
-        options.count, options.engine, session, mode, options.count
+        "would spawn {} coders in session {session} with engine {}\n",
+        options.count, options.engine
     )
 }

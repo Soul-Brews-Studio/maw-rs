@@ -58,25 +58,31 @@ fn more_is_native_and_status_is_discoverable() {
 #[test]
 fn more_codex_arg_parsing_defaults_count_and_engine() {
     let stdout = assert_more_ok(&["more", "codex"]);
-    assert!(stdout.contains("would spawn 1 coders..."), "{stdout}");
-    assert!(stdout.contains("engine=codex"), "{stdout}");
-    assert!(stdout.contains("mode=plan"), "{stdout}");
-    assert!(stdout.contains("requested=1"), "{stdout}");
+    assert_eq!(
+        stdout,
+        "would spawn 1 coders in session current with engine codex\n"
+    );
 }
 
 #[test]
-fn more_codex_arg_parsing_accepts_count_dry_run_and_engine() {
+fn more_codex_arg_parsing_accepts_count_dry_run_session_and_engine() {
     let three = assert_more_ok(&["more", "codex", "3"]);
-    assert!(three.contains("would spawn 3 coders..."), "{three}");
-    assert!(three.contains("requested=3"), "{three}");
+    assert_eq!(
+        three,
+        "would spawn 3 coders in session current with engine codex\n"
+    );
 
     let dry_run = assert_more_ok(&["more", "codex", "--dry-run"]);
-    assert!(dry_run.contains("would spawn 1 coders..."), "{dry_run}");
-    assert!(dry_run.contains("mode=dry-run"), "{dry_run}");
+    assert_eq!(
+        dry_run,
+        "would spawn 1 coders in session current with engine codex\n"
+    );
 
-    let engine = assert_more_ok(&["more", "codex", "-e", "omx"]);
-    assert!(engine.contains("would spawn 1 coders..."), "{engine}");
-    assert!(engine.contains("engine=omx"), "{engine}");
+    let custom = assert_more_ok(&["more", "codex", "2", "--session", "team-a", "-e", "omx"]);
+    assert_eq!(
+        custom,
+        "would spawn 2 coders in session team-a with engine omx\n"
+    );
 }
 
 #[test]
