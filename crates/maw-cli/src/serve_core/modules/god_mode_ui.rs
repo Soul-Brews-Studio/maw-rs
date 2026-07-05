@@ -61,7 +61,9 @@ where
         .route("/api/pin-info", get(godui_pin_info_get))
         .route(
             "/ws",
-            get(godui_ws_upgrade).layer(Extension(super::ws::WsConfig::ws_from_process_env())),
+            get(godui_ws_upgrade).layer(Extension(
+                super::websocket_routes::WsConfig::ws_from_process_env(),
+            )),
         )
 }
 
@@ -99,9 +101,10 @@ async fn godui_ws_upgrade(
     ws: WebSocketUpgrade,
     uri: Uri,
     Extension(state): Extension<Arc<ServecoreSharedState>>,
-    Extension(config): Extension<super::ws::WsConfig>,
+    Extension(config): Extension<super::websocket_routes::WsConfig>,
 ) -> Response {
-    let target = match super::ws::ws_validate_target(servecore_ws_target(uri.query())) {
+    let target = match super::websocket_routes::ws_validate_target(servecore_ws_target(uri.query()))
+    {
         Ok(target) => target,
         Err(error) => {
             return (StatusCode::BAD_REQUEST, Json(json!({"error":error}))).into_response()
@@ -133,7 +136,7 @@ async fn godui_ws_stream(
     mut socket: WebSocket,
     state: Arc<ServecoreSharedState>,
     target: Option<String>,
-    config: super::ws::WsConfig,
+    config: super::websocket_routes::WsConfig,
 ) {
     let Some(_guard) = servecore_ws_connection_guard(config.max_connections) else {
         let _ = socket
@@ -210,7 +213,7 @@ async fn godui_ws_stream(
 async fn godui_ws_send_initial(
     socket: &mut WebSocket,
     state: &ServecoreSharedState,
-    config: &super::ws::WsConfig,
+    config: &super::websocket_routes::WsConfig,
 ) -> bool {
     servecore_ws_send_text_frames(
         socket,
@@ -223,7 +226,7 @@ async fn godui_ws_send_initial(
 async fn godui_ws_send_session_recent(
     socket: &mut WebSocket,
     state: &ServecoreSharedState,
-    config: &super::ws::WsConfig,
+    config: &super::websocket_routes::WsConfig,
 ) -> bool {
     servecore_ws_send_text_frames(
         socket,
