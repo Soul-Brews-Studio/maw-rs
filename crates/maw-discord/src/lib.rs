@@ -47,3 +47,5 @@ use self::{
 
 #[cfg(test)]
 mod command_dispatch_tests;
+#[cfg(test)]
+mod tokens_tests;

@@ -6,7 +6,13 @@ pub(super) fn resolve_bot_for_rest(
     log: &mut Vec<String>,
 ) -> Option<(BotResolved, String, String)> {
     let pre = resolve_bot(env, bot, log)?;
-    let token = decrypt_token(&pre.token_name)?;
+    let token = match decrypt_token_result(&pre.token_name) {
+        Ok(token) => token,
+        Err(error) => {
+            log.push(error.to_string());
+            return None;
+        }
+    };
     Some((pre, token, bot.to_owned()))
 }
 

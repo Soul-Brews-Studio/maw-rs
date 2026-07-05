@@ -1,4 +1,8 @@
 use super::*;
+use std::{
+    process::{Child, Output, Stdio},
+    time::{Duration, Instant},
+};
 
 pub(super) fn list_pass_tokens(env: &DiscordEnv) -> Vec<TokenEntry> {
     let dir = env.pass_dir();
@@ -25,25 +29,84 @@ pub(super) fn list_pass_tokens(env: &DiscordEnv) -> Vec<TokenEntry> {
     out
 }
 
+const TOKEN_DECRYPT_TIMEOUT: Duration = Duration::from_secs(5);
+const TOKEN_DECRYPT_POLL: Duration = Duration::from_millis(50);
+const TIMEOUT_MSG: &str = "token decrypt timed out — set DISCORD_BOT_TOKEN or unlock gpg-agent";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[rustfmt::skip]
+pub(super) enum TokenDecryptError { InvalidName, SpawnFailed, CommandFailed, EmptyToken, TimedOut }
+
+impl std::fmt::Display for TokenDecryptError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::InvalidName => "token decrypt failed: invalid token name",
+            Self::SpawnFailed => "token decrypt failed: pass command did not start",
+            Self::CommandFailed => "token decrypt failed: pass command failed",
+            Self::EmptyToken => "token decrypt failed: pass returned an empty token",
+            Self::TimedOut => TIMEOUT_MSG,
+        })
+    }
+}
+
 pub(super) fn decrypt_token(name: &str) -> Option<String> {
+    decrypt_token_result(name).ok()
+}
+
+pub(super) fn decrypt_token_result(name: &str) -> Result<String, TokenDecryptError> {
     if let Ok(token) = env::var("DISCORD_BOT_TOKEN") {
         let trimmed = token.trim().to_owned();
         if !trimmed.is_empty() {
-            return Some(trimmed);
+            return Ok(trimmed);
         }
     }
+    decrypt_token_with_command(name, "pass", TOKEN_DECRYPT_TIMEOUT)
+}
+
+pub(super) fn decrypt_token_with_command(
+    name: &str,
+    command: &str,
+    timeout: Duration,
+) -> Result<String, TokenDecryptError> {
     if rejects_option_arg(name) || name.contains('/') || name.contains("..") {
-        return None;
+        return Err(TokenDecryptError::InvalidName);
     }
-    let out = Command::new("pass")
+    let child = Command::new(command)
         .args(["show", &format!("discord/{name}")])
-        .output()
-        .ok()?;
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|_| TokenDecryptError::SpawnFailed)?;
+    let out = wait_with_timeout(child, timeout)?;
     if !out.status.success() {
-        return None;
+        return Err(TokenDecryptError::CommandFailed);
     }
     let token = String::from_utf8_lossy(&out.stdout).trim().to_owned();
-    (!token.is_empty()).then_some(token)
+    (!token.is_empty())
+        .then_some(token)
+        .ok_or(TokenDecryptError::EmptyToken)
+}
+
+fn wait_with_timeout(mut child: Child, timeout: Duration) -> Result<Output, TokenDecryptError> {
+    let start = Instant::now();
+    loop {
+        let exited = child
+            .try_wait()
+            .map_err(|_| TokenDecryptError::CommandFailed)?
+            .is_some();
+        if exited {
+            return child
+                .wait_with_output()
+                .map_err(|_| TokenDecryptError::CommandFailed);
+        }
+        if start.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(TokenDecryptError::TimedOut);
+        }
+        let remaining = timeout.saturating_sub(start.elapsed());
+        std::thread::sleep(std::cmp::min(TOKEN_DECRYPT_POLL, remaining));
+    }
 }
 
 pub(super) fn rejects_option_arg(value: &str) -> bool {
@@ -144,10 +207,14 @@ pub(super) async fn tokens_check(
     let mut fail_count = 0;
     for entry in &filtered {
         let name = format!("{:<38}", entry.name);
-        let Some(token) = decrypt_token(&entry.name) else {
-            log.push(format!("  {name}✗ fail   —        —"));
-            fail_count += 1;
-            continue;
+        let token = match decrypt_token_result(&entry.name) {
+            Ok(token) => token,
+            Err(error) => {
+                log.push(format!("  {name}✗ fail   —        —"));
+                log.push(format!("    {error}"));
+                fail_count += 1;
+                continue;
+            }
         };
         let (ok, status, username) = ping(rest, &token).await;
         let status_text = if ok {
