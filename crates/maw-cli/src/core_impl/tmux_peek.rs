@@ -41,10 +41,7 @@ fn peek_with_runner<R: maw_tmux::TmuxRunner>(
     let options = peek_parse(argv)?;
     if let Some(target) = options.target.as_deref() {
         peek_validate_tmux_target(target).map_err(|message| (1, message))?;
-        let resolved = resolve_local_tmux_runner_target(runner, target, "peek")
-            .map_err(|message| (1, message))?;
-        peek_validate_tmux_target(&resolved).map_err(|message| (1, message))?;
-        let content = peek_capture(runner, &resolved, options.lines, options.history)
+        let (resolved, content) = peek_resolve_and_capture(runner, target, options.lines, options.history)
             .map_err(|message| (1, message))?;
         return Ok(CliOutput {
             code: 0,
@@ -59,6 +56,42 @@ fn peek_with_runner<R: maw_tmux::TmuxRunner>(
         stdout: peek_render_overview(runner, &windows)?,
         stderr: String::new(),
     })
+}
+
+fn peek_resolve_and_capture<R: maw_tmux::TmuxRunner>(
+    runner: &mut R,
+    target: &str,
+    lines: u32,
+    history: bool,
+) -> Result<(String, String), String> {
+    let resolved = match resolve_local_tmux_runner_target(runner, target, "peek") {
+        Ok(resolved) => resolved,
+        Err(resolve_error) => {
+            return peek_capture(runner, target, lines, history)
+                .map(|content| (target.to_owned(), content))
+                .map_err(|_| resolve_error);
+        }
+    };
+    peek_validate_tmux_target(&resolved)?;
+
+    match peek_capture(runner, &resolved, lines, history) {
+        Ok(content) if resolved == target || peek_capture_has_content(&content) => {
+            Ok((resolved, content))
+        }
+        Ok(content) => match peek_capture(runner, target, lines, history) {
+            Ok(raw_content) if peek_capture_has_content(&raw_content) => {
+                Ok((target.to_owned(), raw_content))
+            }
+            _ => Ok((resolved, content)),
+        },
+        Err(capture_error) => peek_capture(runner, target, lines, history)
+            .map(|content| (target.to_owned(), content))
+            .map_err(|_| capture_error),
+    }
+}
+
+fn peek_capture_has_content(content: &str) -> bool {
+    content.lines().any(|line| !line.trim().is_empty())
 }
 
 fn peek_parse(argv: &[String]) -> Result<PeekOptions, (i32, String)> {
@@ -317,6 +350,39 @@ mod peek_tests {
     }
 
     #[test]
+    fn peek_falls_back_to_direct_live_tmux_target_when_resolver_misses_raw_window() {
+        let mut runner = PeekFakeRunner {
+            list: "webhook-relay-v3|||0|||oracle|||1|||\n".to_owned(),
+            ..PeekFakeRunner::default()
+        };
+        runner.captures.insert("webhook-relay-v3:raw-codex".to_owned(), "raw pane\n".to_owned());
+
+        let output = peek_with_runner(&args(&["webhook-relay-v3:raw-codex"]), &mut runner)
+            .expect("raw tmux fallback");
+
+        assert_eq!(output.stdout, "\x1b[36m--- webhook-relay-v3:raw-codex ---\x1b[0m\nraw pane\n");
+        assert_eq!(runner.calls[0].0, "list-windows");
+        assert_eq!(runner.calls[1].1, args(&["-p", "-t", "webhook-relay-v3:raw-codex", "-S", "-30", "-J"]));
+    }
+
+    #[test]
+    fn peek_prefers_direct_raw_target_when_canonical_capture_is_blank() {
+        let mut runner = PeekFakeRunner {
+            list: "webhook-relay-v3|||2|||raw-codex|||1|||\n".to_owned(),
+            ..PeekFakeRunner::default()
+        };
+        runner.captures.insert("webhook-relay-v3:2".to_owned(), "\n  \n".to_owned());
+        runner.captures.insert("webhook-relay-v3:raw-codex".to_owned(), "raw pane\n".to_owned());
+
+        let output = peek_with_runner(&args(&["webhook-relay-v3:raw-codex"]), &mut runner)
+            .expect("nonblank raw fallback");
+
+        assert_eq!(output.stdout, "\x1b[36m--- webhook-relay-v3:raw-codex ---\x1b[0m\nraw pane\n");
+        assert_eq!(runner.calls[1].1, args(&["-p", "-t", "webhook-relay-v3:2", "-S", "-30", "-J"]));
+        assert_eq!(runner.calls[2].1, args(&["-p", "-t", "webhook-relay-v3:raw-codex", "-S", "-30", "-J"]));
+    }
+
+    #[test]
     fn peek_explicit_session_window_miss_is_loud_without_cross_session_fallback() {
         let mut runner = PeekFakeRunner {
             list: concat!(
@@ -332,6 +398,10 @@ mod peek_tests {
 
         assert_eq!(error.0, 1);
         assert!(error.1.contains("no window 'codex-1' in session 'webhook-relay-v3'"), "{error:?}");
-        assert_eq!(runner.calls.len(), 1, "{:?}", runner.calls);
+        assert_eq!(runner.calls[1].1, args(&["-p", "-t", "webhook-relay-v3:codex-1", "-S", "-30", "-J"]));
+        assert!(!runner
+            .calls
+            .iter()
+            .any(|(_, call_args)| call_args.iter().any(|arg| arg.contains("arra-oracle-v3"))));
     }
 }
