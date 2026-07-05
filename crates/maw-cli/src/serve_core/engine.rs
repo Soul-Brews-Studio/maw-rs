@@ -136,22 +136,16 @@ mod tests {
     #[test]
     fn serveengine_runner_reaches_marker_with_argv_and_cwd() {
         let root = temp_dir("marker");
-        let bin = root.join("maw-marker");
         let marker = root.join("marker.json");
-        fs::write(
-            &bin,
-            format!(
-                r#"#!/bin/sh
-printf '{{"cwd":"%s","argv":["%s","%s","%s","%s"]}}' "$(pwd)" "$1" "$2" "$3" "$4" > '{}'
-"#,
-                marker.display()
-            ),
-        )
-        .expect("script");
-        fs::set_permissions(&bin, fs::Permissions::from_mode(0o700)).expect("chmod");
         serveengine_run_with_timeout(
-            &bin,
+            Path::new("/bin/sh"),
             &[
+                "-c".to_owned(),
+                format!(
+                    "printf '{{\"cwd\":\"%s\",\"argv\":[\"%s\",\"%s\",\"%s\",\"%s\"]}}' \"$(pwd)\" \"$1\" \"$2\" \"$3\" \"$4\" > '{}'",
+                    marker.display()
+                ),
+                "maw-marker".to_owned(),
                 "workon".to_owned(),
                 "demo".to_owned(),
                 "--layout".to_owned(),

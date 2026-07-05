@@ -103,7 +103,24 @@ fn run(root: &Path, bin_dir: &Path, args: &[&str]) -> std::process::Output {
 }
 
 fn normalize_root(text: &str, root: &Path) -> String {
-    text.replace(&root.display().to_string(), "<ROOT>")
+    let mut candidates = vec![root.display().to_string()];
+    if let Ok(canonical) = root.canonicalize() {
+        candidates.push(canonical.display().to_string());
+    }
+    if let Some(path) = root.to_str() {
+        if path.starts_with("/var/") {
+            candidates.push(format!("/private{path}"));
+        } else if let Some(stripped) = path.strip_prefix("/private") {
+            candidates.push(stripped.to_owned());
+        }
+    }
+    candidates.sort_by_key(|path| std::cmp::Reverse(path.len()));
+    candidates.dedup();
+    let mut output = text.to_owned();
+    for candidate in candidates {
+        output = output.replace(&candidate, "<ROOT>");
+    }
+    output
 }
 
 #[test]

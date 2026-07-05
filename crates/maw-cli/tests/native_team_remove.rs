@@ -70,9 +70,24 @@ fn live_panes() -> &'static str {
 }
 
 fn normalize(root: &Path, bytes: &[u8]) -> String {
-    String::from_utf8(bytes.to_vec())
-        .expect("utf8")
-        .replace(&root.display().to_string(), "<ROOT>")
+    let mut candidates = vec![root.display().to_string()];
+    if let Ok(canonical) = root.canonicalize() {
+        candidates.push(canonical.display().to_string());
+    }
+    if let Some(path) = root.to_str() {
+        if path.starts_with("/var/") {
+            candidates.push(format!("/private{path}"));
+        } else if let Some(stripped) = path.strip_prefix("/private") {
+            candidates.push(stripped.to_owned());
+        }
+    }
+    candidates.sort_by_key(|path| std::cmp::Reverse(path.len()));
+    candidates.dedup();
+    let mut output = String::from_utf8(bytes.to_vec()).expect("utf8");
+    for candidate in candidates {
+        output = output.replace(&candidate, "<ROOT>");
+    }
+    output
 }
 
 #[test]

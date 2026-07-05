@@ -202,7 +202,12 @@ fn ping_render(probes: &[PingProbe133]) -> String {
     out
 }
 
-fn ping_now_millis() -> u128 { current_epoch_seconds().saturating_mul(1000).into() }
+fn ping_now_millis() -> u128 {
+    std::env::var("MAW_RS_PING_NOW_MS")
+        .ok()
+        .and_then(|value| value.parse::<u128>().ok())
+        .unwrap_or_else(|| current_epoch_seconds().saturating_mul(1000).into())
+}
 
 #[cfg(test)]
 mod ping_tests133 {
