@@ -296,7 +296,7 @@ mod dispatcher_fragment_tests {
 
     const CORE_COMMANDS: &[&str] = &[
         "hey", "send", "serve", "health", "ls", "wake", "hub", "tmux", "init", "reply", "run",
-        "attach",
+        "attach", "bud", "buddy",
     ];
 
     #[test]
