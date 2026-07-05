@@ -416,6 +416,11 @@ fn godui_read_team(
     let alive = godui_team_alive(object.get("members"), live_pane_ids, home, now_ms);
     object.insert("tasks".to_owned(), Value::Array(tasks));
     object.insert("alive".to_owned(), Value::Bool(alive));
+    for field in ["description", "leadRepo", "leadSessionId"] {
+        if godui_field_str(&object, field).is_none() {
+            object.insert(field.to_owned(), Value::String(String::new()));
+        }
+    }
     Some((team_name, Value::Object(object)))
 }
 
@@ -510,6 +515,11 @@ fn godui_normalize_team_member(
             "backendType".to_owned(),
             Value::String("in-process".to_owned()),
         );
+    }
+    for field in ["model", "repo", "color"] {
+        if godui_field_str(&object, field).is_none() {
+            object.insert(field.to_owned(), Value::String(String::new()));
+        }
     }
     Value::Object(object)
 }
