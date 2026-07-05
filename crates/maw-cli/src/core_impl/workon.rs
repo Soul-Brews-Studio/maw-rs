@@ -469,12 +469,21 @@ fn workon_plan_worktree(
         return Ok(WorkonWorktreePlan::Create { wt_name, wt_path, branch, branch_exists });
     }
 
+    let wt_name = request.slug.clone();
+    let wt_path = workon_worktree_path_for_layout(repo, &wt_name, layout);
+    let branch = format!("agents/{wt_name}");
+    let plain_collides = workon_worktree_name_or_path_exists(&wt_name, &wt_path, worktrees)
+        || branches.contains(&branch);
+    if !plain_collides {
+        return Ok(WorkonWorktreePlan::Create { wt_name, wt_path, branch, branch_exists: false });
+    }
+
     let mut next = workon_next_worktree_number(worktrees, branches);
     for _ in 0..1000 {
         let wt_name = format!("{next}-{}", request.slug);
         let wt_path = workon_worktree_path_for_layout(repo, &wt_name, layout);
         let branch = format!("agents/{wt_name}");
-        let known_worktree = worktrees.iter().any(|wt| wt.name == wt_name || wt.path == wt_path);
+        let known_worktree = workon_worktree_name_or_path_exists(&wt_name, &wt_path, worktrees);
         if known_worktree || branches.contains(&branch) {
             next += 1;
             continue;
@@ -482,6 +491,14 @@ fn workon_plan_worktree(
         return Ok(WorkonWorktreePlan::Create { wt_name, wt_path, branch, branch_exists: false });
     }
     Err(format!("workon: could not allocate worktree for {}", request.slug))
+}
+
+fn workon_worktree_name_or_path_exists(
+    wt_name: &str,
+    wt_path: &std::path::Path,
+    worktrees: &[WorkonWorktree],
+) -> bool {
+    worktrees.iter().any(|wt| wt.name == wt_name || wt.path == wt_path)
 }
 
 fn workon_find_reusable_worktree(
@@ -932,24 +949,61 @@ mod workon_tests {
     }
 
     #[test]
-    fn workon_plan_increments_past_worktrees_and_stale_agent_branches() {
-        let root = std::path::PathBuf::from("/tmp/workon-plan");
+    fn workon_plan_uses_plain_slug_in_clean_repo() {
+        let root = std::path::PathBuf::from("/tmp/workon-clean");
         let repo = workon_test_repo(&root);
-        let worktrees = vec![
-            WorkonWorktree { name: "1-old".to_owned(), path: repo.repo_path.join("agents/1-old") },
-            WorkonWorktree { name: "3-other".to_owned(), path: repo.repo_path.join("agents/3-other") },
-        ];
-        let branches = workon_branch_set(&["agents/4-stale", "main"]);
         let request = WorkonResolvedWorktreeName { slug: "feat".to_owned(), named: false };
+
+        let plan = workon_plan_worktree(&repo, &request, false, WorkonLayout::Nested, &[], &workon_branch_set(&["main"])).expect("plan");
+
+        assert_eq!(
+            plan,
+            WorkonWorktreePlan::Create {
+                wt_name: "feat".to_owned(),
+                wt_path: repo.repo_path.join("agents/feat"),
+                branch: "agents/feat".to_owned(),
+                branch_exists: false,
+            }
+        );
+    }
+
+    #[test]
+    fn workon_plan_prefixes_only_for_same_name_collision() {
+        let root = std::path::PathBuf::from("/tmp/workon-collision");
+        let repo = workon_test_repo(&root);
+        let worktrees = vec![WorkonWorktree { name: "feat".to_owned(), path: repo.repo_path.join("agents/feat") }];
+        let branches = workon_branch_set(&["agents/feat", "main"]);
+        let request = WorkonResolvedWorktreeName { slug: "feat".to_owned(), named: false };
+
+        let plan = workon_plan_worktree(&repo, &request, true, WorkonLayout::Nested, &worktrees, &branches).expect("plan");
+
+        assert_eq!(
+            plan,
+            WorkonWorktreePlan::Create {
+                wt_name: "1-feat".to_owned(),
+                wt_path: repo.repo_path.join("agents/1-feat"),
+                branch: "agents/1-feat".to_owned(),
+                branch_exists: false,
+            }
+        );
+    }
+
+    #[test]
+    fn workon_plan_ignores_unrelated_stale_agent_branches_for_plain_slug() {
+        let root = std::path::PathBuf::from("/tmp/workon-stale");
+        let repo = workon_test_repo(&root);
+        let worktrees = vec![WorkonWorktree { name: "1-old".to_owned(), path: repo.repo_path.join("agents/1-old") }];
+        let branches = workon_branch_set(&["agents/4-stale", "agents/fix-probe", "main"]);
+        let request = WorkonResolvedWorktreeName { slug: "fix-probe2".to_owned(), named: false };
 
         let plan = workon_plan_worktree(&repo, &request, false, WorkonLayout::Nested, &worktrees, &branches).expect("plan");
 
         assert_eq!(
             plan,
             WorkonWorktreePlan::Create {
-                wt_name: "5-feat".to_owned(),
-                wt_path: repo.repo_path.join("agents/5-feat"),
-                branch: "agents/5-feat".to_owned(),
+                wt_name: "fix-probe2".to_owned(),
+                wt_path: repo.repo_path.join("agents/fix-probe2"),
+                branch: "agents/fix-probe2".to_owned(),
                 branch_exists: false,
             }
         );
@@ -971,9 +1025,9 @@ mod workon_tests {
         assert_eq!(
             fresh,
             WorkonWorktreePlan::Create {
-                wt_name: "3-feat".to_owned(),
-                wt_path: repo.repo_path.join("agents/3-feat"),
-                branch: "agents/3-feat".to_owned(),
+                wt_name: "feat".to_owned(),
+                wt_path: repo.repo_path.join("agents/feat"),
+                branch: "agents/feat".to_owned(),
                 branch_exists: false,
             }
         );
