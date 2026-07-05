@@ -4,10 +4,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::ServecoreEngine;
+use super::{modules::websocket_routes::ws_validate_target, ServecoreEngine, ServecoreWsKind};
 
 const SERVEENGINE_CHILD_TIMEOUT_SECS: u64 = 30;
 const SERVEENGINE_CHILD_TIMEOUT_ENV: &str = "MAW_RS_SERVE_CHILD_TIMEOUT_SECS";
+const SERVEENGINE_FAKE_TMUX_LOG_ENV: &str = "MAW_RS_SERVECORE_FAKE_TMUX_LOG";
+const SERVEENGINE_FAKE_CAPTURE_ENV: &str = "MAW_RS_SERVECORE_FAKE_CAPTURE";
 
 #[derive(Debug)]
 pub struct ServecoreNativeEngine;
@@ -15,6 +17,18 @@ pub struct ServecoreNativeEngine;
 impl ServecoreEngine for ServecoreNativeEngine {
     fn servecore_engine_name(&self) -> &'static str {
         "maw-rs"
+    }
+
+    fn servecore_ws_text(
+        &self,
+        kind: ServecoreWsKind,
+        text: &str,
+        target: Option<&str>,
+    ) -> Option<String> {
+        if !matches!(kind, ServecoreWsKind::Engine) {
+            return Some(text.to_owned());
+        }
+        Some(serveengine_ws_text(text, target))
     }
 }
 
@@ -97,6 +111,100 @@ pub(crate) fn serveengine_run_with_timeout(
         }
         std::thread::sleep(Duration::from_millis(25));
     }
+}
+
+pub(crate) fn serveengine_tmux_capture(target: &str) -> Result<String, String> {
+    let target = serveengine_ws_validate_target(target)?;
+    if let Ok(capture) = std::env::var(SERVEENGINE_FAKE_CAPTURE_ENV) {
+        return Ok(capture);
+    }
+    let mut tmux = maw_tmux::TmuxClient::local();
+    tmux.capture(&target, None)
+        .map_err(|error| format!("serve-ws: capture failed: {}", error.message))
+}
+
+fn serveengine_ws_text(text: &str, fallback_target: Option<&str>) -> String {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+        return serveengine_ws_error("invalid_json");
+    };
+    match value.get("type").and_then(serde_json::Value::as_str) {
+        Some("subscribe" | "select") => serveengine_ws_target(&value, fallback_target).map_or_else(
+            |error| serveengine_ws_error(&error),
+            |target| serde_json::json!({"type":"subscribed","target":target}).to_string(),
+        ),
+        Some("send") => {
+            let target = match serveengine_ws_target(&value, fallback_target) {
+                Ok(target) => target,
+                Err(error) => return serveengine_ws_error(&error),
+            };
+            let Some(text) = value
+                .get("text")
+                .or_else(|| value.get("content"))
+                .and_then(serde_json::Value::as_str)
+            else {
+                return serveengine_ws_error("missing_text");
+            };
+            match serveengine_tmux_send(
+                &target,
+                text,
+                value
+                    .get("force")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+            ) {
+                Ok(()) => serde_json::json!({"type":"sent","target":target}).to_string(),
+                Err(error) => serveengine_ws_error(&error),
+            }
+        }
+        Some(_) => serveengine_ws_error("unsupported_message"),
+        None => serveengine_ws_error("missing_type"),
+    }
+}
+
+fn serveengine_ws_target(
+    value: &serde_json::Value,
+    fallback: Option<&str>,
+) -> Result<String, String> {
+    value
+        .get("target")
+        .and_then(serde_json::Value::as_str)
+        .or(fallback)
+        .ok_or_else(|| "missing_target".to_owned())
+        .and_then(serveengine_ws_validate_target)
+}
+
+fn serveengine_ws_validate_target(target: &str) -> Result<String, String> {
+    ws_validate_target(Some(target))
+        .map_err(str::to_owned)?
+        .ok_or_else(|| "missing_target".to_owned())
+}
+
+fn serveengine_tmux_send(target: &str, text: &str, enter: bool) -> Result<(), String> {
+    serveengine_tmux_run(
+        "send-keys",
+        &maw_tmux::tmux_send_keys_literal_args(target, text),
+    )?;
+    if enter {
+        serveengine_tmux_run("send-keys", &maw_tmux::tmux_send_enter_args(target))?;
+    }
+    Ok(())
+}
+
+fn serveengine_tmux_run(subcommand: &str, args: &[String]) -> Result<String, String> {
+    if let Some(log) = std::env::var_os(SERVEENGINE_FAKE_TMUX_LOG_ENV).map(PathBuf::from) {
+        let mut body = std::fs::read_to_string(&log).unwrap_or_default();
+        body.push_str(&serde_json::json!({"subcommand":subcommand,"args":args}).to_string());
+        body.push('\n');
+        std::fs::write(log, body)
+            .map_err(|error| format!("serve-ws: fake tmux log failed: {error}"))?;
+        return Ok(String::new());
+    }
+    let mut runner = maw_tmux::CommandTmuxRunner::new();
+    maw_tmux::TmuxRunner::run(&mut runner, subcommand, args).map_err(|error| error.message)
+}
+
+fn serveengine_ws_error(error: &str) -> String {
+    serde_json::json!({"type":"error","error":error}).to_string()
 }
 
 #[cfg(test)]
@@ -221,5 +329,40 @@ printf '{{"cwd":"%s","argv":["%s","%s","%s","%s"]}}' "$(pwd)" "$1" "$2" "$3" "$4
         let err = serveengine_run_with_timeout(&bin, &[], &root, Duration::from_millis(10))
             .expect_err("timeout");
         assert_eq!(err, "serve-orchestration: workon timed out");
+    }
+
+    #[test]
+    fn serveengine_native_ws_handles_terminal_messages_without_echo() {
+        let root = temp_dir("ws");
+        let log = root.join("tmux.jsonl");
+        let _guard = EnvGuard::set_path(SERVEENGINE_FAKE_TMUX_LOG_ENV, &log);
+        let engine = ServecoreNativeEngine;
+
+        let reply = engine
+            .servecore_ws_text(
+                ServecoreWsKind::Engine,
+                r#"{"type":"subscribe","target":"demo:1"}"#,
+                None,
+            )
+            .expect("reply");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&reply).expect("json")["type"],
+            "subscribed"
+        );
+        let reply = engine
+            .servecore_ws_text(
+                ServecoreWsKind::Engine,
+                r#"{"type":"send","target":"demo:1","text":"ls","force":true}"#,
+                None,
+            )
+            .expect("reply");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&reply).expect("json")["type"],
+            "sent"
+        );
+        let log = fs::read_to_string(log).expect("tmux log");
+        assert!(log.contains(r#""send-keys""#));
+        assert!(log.contains(r#""ls""#));
+        fs::remove_dir_all(root).ok();
     }
 }

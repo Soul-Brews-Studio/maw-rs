@@ -4244,7 +4244,7 @@ mod serve_tests {
     }
 
     #[tokio::test]
-    async fn serve_real_wire_websocket_relay_echoes_text_frame() {
+    async fn serve_real_wire_websocket_subscribe_returns_native_ack_not_echo() {
         let addr = spawn_test_server().await;
         let url = format!("ws://{addr}/ws");
         let (mut ws, _response) = tokio_tungstenite::connect_async(&url)
@@ -4252,27 +4252,29 @@ mod serve_tests {
             .expect("connect websocket");
 
         ws.send(tokio_tungstenite::tungstenite::Message::Text(
-            "relay-check".to_owned(),
+            r#"{"type":"subscribe","target":"demo:1"}"#.to_owned(),
         ))
         .await
         .expect("send websocket text");
 
-        let echo = tokio::time::timeout(Duration::from_secs(2), async {
+        let ack = tokio::time::timeout(Duration::from_secs(2), async {
             loop {
                 let received = ws
                     .next()
                     .await
                     .expect("websocket should yield a frame")
                     .expect("frame should be ok");
-                if received
-                    == tokio_tungstenite::tungstenite::Message::Text("relay-check".to_owned())
-                {
-                    break;
+                if let tokio_tungstenite::tungstenite::Message::Text(text) = received {
+                    let value = serde_json::from_str::<Value>(&text).expect("json");
+                    if value["type"] == "subscribed" {
+                        assert_eq!(value["target"], "demo:1");
+                        break;
+                    }
                 }
             }
         })
         .await;
-        assert!(echo.is_ok(), "websocket should echo text after stream frames");
+        assert!(ack.is_ok(), "websocket should ack subscribe after stream frames");
     }
 
     #[tokio::test]

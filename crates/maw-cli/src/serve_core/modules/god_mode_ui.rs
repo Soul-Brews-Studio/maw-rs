@@ -1,9 +1,9 @@
 use super::ServecoreModuleRegistration;
 use crate::serve_core::{
-    servecore_ws_connection_guard, servecore_ws_connection_limit_reached,
-    servecore_ws_handle_frame, servecore_ws_send, servecore_ws_send_text_frames,
-    servecore_ws_target, ServecoreAgentPane, ServecoreLifecycleModule, ServecoreSharedState,
-    ServecoreWsKind,
+    process_engine::serveengine_tmux_capture, servecore_ws_connection_guard,
+    servecore_ws_connection_limit_reached, servecore_ws_handle_frame, servecore_ws_send,
+    servecore_ws_send_text_frames, servecore_ws_target, ServecoreAgentPane,
+    ServecoreLifecycleModule, ServecoreSharedState, ServecoreWsKind,
 };
 use axum::{
     body::{to_bytes, Body},
@@ -161,6 +161,7 @@ async fn godui_ws_stream(
         tokio::time::Instant::now() + Duration::from_secs(2),
         Duration::from_secs(2),
     );
+    let mut subscribed_target = target.clone();
     let idle_timer = tokio::time::sleep(config.idle_timeout);
     tokio::pin!(idle_timer);
     loop {
@@ -168,6 +169,11 @@ async fn godui_ws_stream(
             _ = refresh.tick() => {
                 if !godui_ws_send_session_recent(&mut socket, &state, &config).await {
                     break;
+                }
+                if let Some(frame) = subscribed_target.as_deref().and_then(godui_ws_capture_frame) {
+                    if servecore_ws_send(&mut socket, Message::Text(frame), config.send_timeout).await.is_err() {
+                        break;
+                    }
                 }
                 idle_timer.as_mut().reset(tokio::time::Instant::now() + config.idle_timeout);
             }
@@ -187,11 +193,19 @@ async fn godui_ws_stream(
                         if resets_idle {
                             idle_timer.as_mut().reset(tokio::time::Instant::now() + config.idle_timeout);
                         }
+                        let frame_target = if let Message::Text(text) = &frame {
+                            if let Some(selected) = godui_ws_selected_target(text) {
+                                subscribed_target = Some(selected);
+                            }
+                            godui_ws_message_target(text).or_else(|| subscribed_target.clone()).or_else(|| target.clone())
+                        } else {
+                            subscribed_target.clone().or_else(|| target.clone())
+                        };
                         if !servecore_ws_handle_frame(
                             &mut socket,
                             state.as_ref(),
                             ServecoreWsKind::Engine,
-                            target.as_deref(),
+                            frame_target.as_deref(),
                             &config,
                             frame,
                         )
@@ -302,6 +316,35 @@ pub(crate) fn godui_ws_session_recent_frames(sessions: Vec<TmuxSession>) -> Vec<
 
 fn godui_ws_json_text(value: &Value) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "{}".to_owned())
+}
+
+fn godui_ws_selected_target(text: &str) -> Option<String> {
+    let value = serde_json::from_str::<Value>(text).ok()?;
+    matches!(
+        value.get("type").and_then(Value::as_str),
+        Some("subscribe" | "select")
+    )
+    .then(|| godui_ws_value_target(&value))
+    .flatten()
+}
+
+fn godui_ws_message_target(text: &str) -> Option<String> {
+    let value = serde_json::from_str::<Value>(text).ok()?;
+    godui_ws_value_target(&value)
+}
+
+fn godui_ws_value_target(value: &Value) -> Option<String> {
+    let target = value.get("target").and_then(Value::as_str)?;
+    super::websocket_routes::ws_validate_target(Some(target))
+        .ok()
+        .flatten()
+}
+
+fn godui_ws_capture_frame(target: &str) -> Option<String> {
+    let content = serveengine_tmux_capture(target).ok()?;
+    Some(godui_ws_json_text(
+        &json!({"type":"capture","target":target,"content":content}),
+    ))
 }
 
 async fn godui_store_json_body(req: Request<Body>, path: &Path) -> Response {
@@ -690,6 +733,25 @@ mod tests {
     use tokio::sync::oneshot;
     use tower::ServiceExt;
 
+    struct EnvGuard(&'static str, Option<std::ffi::OsString>);
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let old = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self(key, old)
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.1 {
+                Some(value) => std::env::set_var(self.0, value),
+                None => std::env::remove_var(self.0),
+            }
+        }
+    }
+
     #[test]
     fn godui_empty_payloads_match_maw_js_shapes() {
         let costs = godui_costs_payload();
@@ -737,6 +799,18 @@ mod tests {
                 {"target": "142-athena:2", "name": "athena-codex-1", "session": "142-athena"}
             ])
         );
+    }
+
+    #[test]
+    fn godui_ws_subscribe_target_drives_capture_frame() {
+        let _guard = EnvGuard::set("MAW_RS_SERVECORE_FAKE_CAPTURE", "pane ansi");
+        let target =
+            godui_ws_selected_target(r#"{"type":"subscribe","target":"demo:1"}"#).expect("target");
+        let frame = godui_ws_capture_frame(&target).expect("capture frame");
+        let value = serde_json::from_str::<Value>(&frame).expect("json");
+        assert_eq!(value["type"], "capture");
+        assert_eq!(value["target"], "demo:1");
+        assert_eq!(value["content"], "pane ansi");
     }
 
     #[tokio::test]
