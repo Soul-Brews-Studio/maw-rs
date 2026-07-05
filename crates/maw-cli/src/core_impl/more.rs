@@ -5,7 +5,7 @@ const DISPATCH_324: &[DispatcherEntry] = &[DispatcherEntry {
     handler: Handler::Sync(run_more_command),
 }];
 
-const MORE_USAGE: &str = "usage: maw more codex [N] [--session <s>] [--dry-run] [-e|--engine <e>]\n       maw more status\n\nPlan additional Codex coder lanes.";
+const MORE_USAGE: &str = "usage: maw more codex [N] [--session <s>] [--dry-run] [-e|--engine <e>] [--pool <n|engine>]\n       maw more status\n\nPlan additional Codex coder lanes.";
 const MORE_DEFAULT_BASE: &str = "origin/alpha";
 const MORE_CODEX_ENGINE: &str = "codex";
 
@@ -14,13 +14,22 @@ struct MoreCodexOptions {
     count: u32,
     dry_run: bool,
     engine: String,
+    pool: Option<String>,
     session: Option<String>,
 }
 
 trait MoreRuntime {
     fn more_current_session(&mut self) -> Result<String, String>;
     fn more_discover(&mut self, session: &str) -> Result<LiveTeamState, String>;
-    fn more_spawn(&mut self, prefix: &str, index: u32, base: &str) -> Result<SpawnResult, String>;
+    fn more_codex_update(&mut self) -> Result<(), String>;
+    fn more_spawn(
+        &mut self,
+        session: &str,
+        prefix: &str,
+        index: u32,
+        base: &str,
+        engine: &str,
+    ) -> Result<SpawnResult, String>;
     fn more_status(&mut self) -> String;
 }
 
@@ -61,8 +70,34 @@ impl MoreRuntime for MoreSystemRuntime {
         more_discover::more_discover_live_team_state(&mut self.tmux, session)
     }
 
-    fn more_spawn(&mut self, prefix: &str, index: u32, base: &str) -> Result<SpawnResult, String> {
-        more_spawn_codex(prefix, index, base)
+    fn more_codex_update(&mut self) -> Result<(), String> {
+        let output = std::process::Command::new("codex")
+            .arg("update")
+            .output()
+            .map_err(|error| format!("more codex: failed to run codex update: {error}"))?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+            Err(if stderr.is_empty() {
+                "more codex: codex update failed".to_owned()
+            } else {
+                format!("more codex: codex update failed: {stderr}")
+            })
+        }
+    }
+
+    fn more_spawn(
+        &mut self,
+        session: &str,
+        prefix: &str,
+        index: u32,
+        base: &str,
+        engine: &str,
+    ) -> Result<SpawnResult, String> {
+        let result = more_spawn_codex_engine(prefix, index, base, engine)?;
+        more_boot_spawned_codex(session, &result, engine)?;
+        Ok(result)
     }
 
     fn more_status(&mut self) -> String {
@@ -119,20 +154,16 @@ fn more_run_codex(
         .unwrap_or(MORE_DEFAULT_BASE)
         .to_owned();
     let indices = more_spawn_indices(live.next_index, options.count)?;
+    let engine = more_effective_engine(options, &live);
 
     if options.dry_run {
-        return Ok(more_render_codex_plan(options, &live));
+        return Ok(more_render_codex_plan(options, &live, &engine));
     }
-    if options.engine != MORE_CODEX_ENGINE {
-        return Err(format!(
-            "more codex: only engine '{MORE_CODEX_ENGINE}' can spawn today, got '{}'",
-            options.engine
-        ));
-    }
+    runtime.more_codex_update()?;
 
     let mut spawned = Vec::with_capacity(indices.len());
     for index in indices {
-        spawned.push(runtime.more_spawn(&live.prefix, index, &base)?);
+        spawned.push(runtime.more_spawn(&session, &live.prefix, index, &base, &engine)?);
     }
     Ok(more_render_codex_spawned(options, &live, &spawned))
 }
@@ -156,6 +187,7 @@ fn more_parse_codex(argv: &[String]) -> Result<MoreCodexOptions, String> {
     let mut count = None::<u32>;
     let mut dry_run = false;
     let mut engine = MORE_CODEX_ENGINE.to_owned();
+    let mut pool = None::<String>;
     let mut session = None::<String>;
     let mut index = 0usize;
     while index < argv.len() {
@@ -166,6 +198,13 @@ fn more_parse_codex(argv: &[String]) -> Result<MoreCodexOptions, String> {
             "-e" | "--engine" => {
                 index += 1;
                 engine = more_take_safe_value(argv, index, arg, "engine")?;
+                more_validate_engine_token(&engine)?;
+            }
+            "--pool" => {
+                index += 1;
+                let pool_value = more_take_safe_value(argv, index, arg, "pool")?;
+                engine = more_engine_from_pool(&pool_value)?;
+                pool = Some(pool_value);
             }
             "--session" => {
                 index += 1;
@@ -187,6 +226,7 @@ fn more_parse_codex(argv: &[String]) -> Result<MoreCodexOptions, String> {
         count: count.unwrap_or(1),
         dry_run,
         engine,
+        pool,
         session,
     })
 }
@@ -248,10 +288,82 @@ fn more_spawn_indices(start: u32, count: u32) -> Result<Vec<u32>, String> {
         .collect()
 }
 
-fn more_render_codex_plan(options: &MoreCodexOptions, live: &LiveTeamState) -> String {
+fn more_engine_from_pool(pool: &str) -> Result<String, String> {
+    if pool.chars().all(|ch| ch.is_ascii_digit()) {
+        return Ok(format!("omx-{pool}"));
+    }
+    more_validate_engine_token(pool)?;
+    Ok(pool.to_owned())
+}
+
+fn more_validate_engine_token(engine: &str) -> Result<(), String> {
+    if engine.is_empty() || engine.starts_with('-') {
+        return Err(format!("more codex: invalid engine '{engine}'"));
+    }
+    if !engine
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+    {
+        return Err(format!("more codex: invalid engine '{engine}'"));
+    }
+    Ok(())
+}
+
+fn more_effective_engine(options: &MoreCodexOptions, live: &LiveTeamState) -> String {
+    if options.engine != MORE_CODEX_ENGINE || options.pool.is_some() {
+        return options.engine.clone();
+    }
+    live.existing_coders
+        .iter()
+        .filter_map(|coder| coder.worktree.as_ref())
+        .find_map(|worktree| {
+            std::fs::read_to_string(worktree.join(".maw-engine"))
+                .ok()
+                .map(|raw| raw.trim().to_owned())
+                .filter(|engine| more_validate_engine_token(engine).is_ok())
+        })
+        .unwrap_or_else(|| MORE_CODEX_ENGINE.to_owned())
+}
+
+fn more_boot_spawned_codex(
+    session: &str,
+    result: &SpawnResult,
+    engine: &str,
+) -> Result<(), String> {
+    let args = vec![
+        result.window_name.clone(),
+        "--session".to_owned(),
+        session.to_owned(),
+        "--no-attach".to_owned(),
+        "--new".to_owned(),
+        "-e".to_owned(),
+        engine.to_owned(),
+        "--repo-path".to_owned(),
+        result.worktree_path.display().to_string(),
+    ];
+    let (code, stdout) = wake_run(&args, &mut WakeNativeTmux)?;
+    if code == 0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "more codex: wake failed for {} with code {code}: {}",
+            result.window_name,
+            stdout.trim()
+        ))
+    }
+}
+
+fn more_engine_pool(engine: &str) -> &str {
+    engine
+        .strip_prefix("omx-")
+        .filter(|pool| !pool.is_empty() && pool.chars().all(|ch| ch.is_ascii_digit()))
+        .unwrap_or("-")
+}
+
+fn more_render_codex_plan(options: &MoreCodexOptions, live: &LiveTeamState, engine: &str) -> String {
     format!(
         "would spawn {} coders in session {} with engine {}\n",
-        options.count, live.session, options.engine
+        options.count, live.session, engine
     )
 }
 
@@ -266,21 +378,36 @@ fn more_render_codex_spawned(
         "spawned {} coders in session {} with engine {}\n",
         spawned.len(),
         live.session,
-        options.engine
+        spawned
+            .first()
+            .map_or(options.engine.as_str(), |result| result.engine.as_str())
     );
-    if spawned.is_empty() {
-        return out;
-    }
-    out.push_str("window | worktree | branch\n");
     for result in spawned {
         let _ = writeln!(
             out,
-            "{} | {} | {}",
+            "window={} worktree={} branch={} engine={} pool={} boot={}",
             result.window_name,
             result.worktree_path.display(),
-            result.branch
+            result.branch,
+            result.engine,
+            more_engine_pool(&result.engine),
+            if result.success { "OK" } else { "FAIL" }
+        );
+        let _ = writeln!(
+            out,
+            "dispatch=maw hey {}:{} \"<task + done-criteria>\"",
+            live.session, result.window_name
         );
     }
+    let failed = spawned.iter().filter(|result| !result.success).count();
+    let before = live.existing_coders.len();
+    let after = before + spawned.len() - failed;
+    let _ = writeln!(
+        out,
+        "before={before} after={after} requested={} spawned={} failed={failed}",
+        options.count,
+        spawned.len()
+    );
     out
 }
 
@@ -294,7 +421,8 @@ mod more_wiring_tests {
         discover: Result<LiveTeamState, String>,
         status: String,
         discover_sessions: Vec<String>,
-        spawns: Vec<(String, u32, String)>,
+        updates: usize,
+        spawns: Vec<(String, String, u32, String, String)>,
     }
 
     impl FakeMoreRuntime {
@@ -304,6 +432,7 @@ mod more_wiring_tests {
                 discover: Ok(discover),
                 status: "status output\n".to_owned(),
                 discover_sessions: Vec::new(),
+                updates: 0,
                 spawns: Vec::new(),
             }
         }
@@ -319,21 +448,33 @@ mod more_wiring_tests {
             self.discover.clone()
         }
 
+        fn more_codex_update(&mut self) -> Result<(), String> {
+            self.updates += 1;
+            Ok(())
+        }
+
         fn more_spawn(
             &mut self,
+            session: &str,
             prefix: &str,
             index: u32,
             base: &str,
+            engine: &str,
         ) -> Result<SpawnResult, String> {
-            self.spawns
-                .push((prefix.to_owned(), index, base.to_owned()));
+            self.spawns.push((
+                session.to_owned(),
+                prefix.to_owned(),
+                index,
+                base.to_owned(),
+                engine.to_owned(),
+            ));
             Ok(SpawnResult {
                 window_name: format!("{prefix}-codex-{index}"),
                 worktree_path: std::path::PathBuf::from(format!(
                     "/repo/agents/{prefix}-codex-{index}"
                 )),
                 branch: format!("agents/{prefix}-codex-{index}"),
-                engine: MORE_CODEX_ENGINE.to_owned(),
+                engine: engine.to_owned(),
                 success: true,
             })
         }
@@ -416,8 +557,20 @@ mod more_wiring_tests {
         assert_eq!(
             runtime.spawns,
             vec![
-                ("maw-rs".to_owned(), 4, "agents/maw-rs-codex-3".to_owned()),
-                ("maw-rs".to_owned(), 5, "agents/maw-rs-codex-3".to_owned()),
+                (
+                    "188-maw-rs".to_owned(),
+                    "maw-rs".to_owned(),
+                    4,
+                    "agents/maw-rs-codex-3".to_owned(),
+                    "codex".to_owned()
+                ),
+                (
+                    "188-maw-rs".to_owned(),
+                    "maw-rs".to_owned(),
+                    5,
+                    "agents/maw-rs-codex-3".to_owned(),
+                    "codex".to_owned()
+                ),
             ]
         );
     }

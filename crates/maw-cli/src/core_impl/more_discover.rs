@@ -61,6 +61,9 @@ pub(crate) mod more_discover {
         more_validate_session_name(session)?;
         let fallback_prefix = more_prefix_from_session(session);
         let rows = more_parse_list_windows(raw)?;
+        if !rows.iter().any(|row| row.session == session) {
+            return Err(format!("more discover: live session '{session}' not found"));
+        }
         let mut coders = rows
             .iter()
             .filter(|row| row.session == session)
