@@ -45,6 +45,7 @@ struct PairAcceptLive {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PairConfig {
     node: String,
+    oracle: Option<String>,
     port: u16,
 }
 
@@ -61,6 +62,7 @@ impl PairHost for PairSystemHost {
         let config = load_hey_config();
         PairConfig {
             node: config.node.unwrap_or_else(|| "local".to_owned()),
+            oracle: config.oracle,
             port: 3456,
         }
     }
@@ -312,7 +314,7 @@ fn pair_system_accept_live(plan: &PairAcceptPlan, config: &PairConfig) -> Result
     let remote_url = pair_json_string(&value, "url").ok_or_else(|| "pair accept: missing url".to_owned())?;
     let token_received = pair_json_string(&value, "federationToken").is_some();
     pair_validate_peer_identity(&remote_node, &remote_url)?;
-    pair_write_peer(&remote_node, &remote_url)?;
+    pair_write_peer(&remote_node, &remote_url, config.oracle.as_deref())?;
     Ok(PairAcceptLive { remote_node, remote_url, token_received, peers_written: true })
 }
 
@@ -344,13 +346,14 @@ fn pair_validate_peer_identity(node: &str, url: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn pair_write_peer(node: &str, url: &str) -> Result<(), String> {
+fn pair_write_peer(node: &str, url: &str, config_oracle: Option<&str>) -> Result<(), String> {
     let env = pair_peer_store_env();
-    pair_write_peer_to_env(&env, node, url)
+    pair_write_peer_to_env(&env, node, url, config_oracle)
 }
 
-fn pair_write_peer_to_env(env: &maw_peer::PeerStoreEnv, node: &str, url: &str) -> Result<(), String> {
+fn pair_write_peer_to_env(env: &maw_peer::PeerStoreEnv, node: &str, url: &str, config_oracle: Option<&str>) -> Result<(), String> {
     let now = now_iso_utc();
+    let oracle = pair_sender_oracle(config_oracle);
     maw_peer::mutate_peer_store(env, |store| {
         store.peers.insert(node.to_owned(), maw_peer::PeerRecord {
             url: url.to_owned(),
@@ -361,12 +364,21 @@ fn pair_write_peer_to_env(env: &maw_peer::PeerStoreEnv, node: &str, url: &str) -
             nickname: None,
             pubkey: None,
             pubkey_first_seen: None,
-            identity: Some(maw_peer::PeerIdentity { oracle: "mawjs".to_owned(), node: node.to_owned() }),
+            identity: Some(maw_peer::PeerIdentity { oracle, node: node.to_owned() }),
             one_way: Some(false),
             last_symmetric_check: Some(now.clone()),
         });
     }).map_err(|error| format!("pair peers.json write failed: {error}"))?;
     Ok(())
+}
+
+fn pair_sender_oracle(config_oracle: Option<&str>) -> String {
+    let session_window = std::env::var("MAW_SESSION_WINDOW").ok();
+    if session_window.as_deref().is_some_and(|value| !value.trim().is_empty()) {
+        return resolve_sender_oracle(session_window.as_deref(), None, config_oracle);
+    }
+    let tmux_window_name = current_tmux_window_name();
+    resolve_sender_oracle(None, tmux_window_name.as_deref(), config_oracle)
 }
 
 fn pair_peer_store_env() -> maw_peer::PeerStoreEnv {
@@ -402,7 +414,7 @@ mod pair_tests {
 
     impl PairHost for PairFakeHost {
         fn pair_config(&mut self) -> PairConfig {
-            PairConfig { node: "fake-node".to_owned(), port: 5002 }
+            PairConfig { node: "fake-node".to_owned(), oracle: Some("fake-oracle".to_owned()), port: 5002 }
         }
 
         fn pair_generate_live(&mut self, _plan: &PairGeneratePlan) -> Result<PairGenerateLive, String> {
@@ -505,11 +517,26 @@ mod pair_tests {
             root.clone(),
             [("PEERS_FILE", peers.to_string_lossy().to_string())],
         );
-        pair_write_peer_to_env(&env, "peer-node", "https://peer.example").expect("write peer");
+        pair_write_peer_to_env(&env, "peer-node", "https://peer.example", Some("config-oracle")).expect("write peer");
         let raw = std::fs::read_to_string(&peers).expect("read peers");
         let value: serde_json::Value = serde_json::from_str(&raw).expect("json");
         assert_eq!(value["peers"]["peer-node"]["url"], "https://peer.example");
         assert!(!peers.with_extension("json.tmp").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn pair_write_peer_uses_sender_window_oracle() {
+        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _restore = EnvVarRestore::capture("MAW_SESSION_WINDOW");
+        std::env::set_var("MAW_SESSION_WINDOW", "33-maw-rs:maw-rs");
+        let root = std::env::temp_dir().join(format!("maw-rs-pair-oracle-{}", std::process::id()));
+        let peers = root.join("state").join("peers.json");
+        let env = maw_peer::PeerStoreEnv::with_vars(root.clone(), [("PEERS_FILE", peers.to_string_lossy().to_string())]);
+        pair_write_peer_to_env(&env, "peer-node", "https://peer.example", Some("config-oracle")).expect("write peer");
+        let raw = std::fs::read_to_string(&peers).expect("read peers");
+        let value: serde_json::Value = serde_json::from_str(&raw).expect("json");
+        assert_eq!(value["peers"]["peer-node"]["identity"]["oracle"], "maw-rs");
         let _ = std::fs::remove_dir_all(root);
     }
 

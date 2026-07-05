@@ -77,7 +77,7 @@ async fn run_send_like_async_with_args(
     acl_bypass: bool,
 ) -> CliOutput {
     let config = load_hey_config();
-    let sender_oracle = resolve_hey_sender_oracle(&config);
+    let sender_oracle = resolve_hey_sender_oracle_for_from(&config, send_args.from.as_deref());
     let mut tmux = TmuxClient::local();
     let sessions = route_sessions_from_tmux(&mut tmux);
     let mut runner = maw_tmux::CommandTmuxRunner::new();
@@ -624,7 +624,7 @@ async fn run_wake_async_impl(raw_args: &[String]) -> CliOutput {
             target,
             node: _,
         } => {
-            let sender_oracle = resolve_hey_sender_oracle(&config);
+            let sender_oracle = resolve_hey_sender_oracle_for_from(&config, wake_args.from.as_deref());
             wake_peer_target(&peer_url, &target, &wake_args, &config, &sender_oracle).await
         }
         RouteResult::Local { target } | RouteResult::SelfNode { target } => {
@@ -806,6 +806,16 @@ fn format_local_hey_message(
         ToOwned::to_owned,
     );
     format!("[{display}] {text}")
+}
+
+fn resolve_hey_sender_oracle_for_from(config: &HeyConfig, from: Option<&str>) -> String {
+    from.and_then(explicit_wire_sender_oracle)
+        .unwrap_or_else(|| resolve_hey_sender_oracle(config))
+}
+
+fn explicit_wire_sender_oracle(from: &str) -> Option<String> {
+    let (oracle, node) = from.split_once(':')?;
+    (!oracle.is_empty() && !node.is_empty()).then(|| oracle.to_owned())
 }
 
 fn resolve_hey_sender_oracle(config: &HeyConfig) -> String {

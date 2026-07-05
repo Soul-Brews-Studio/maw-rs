@@ -137,6 +137,7 @@ fn servepeerstartupwarnings_push_duplicate_warnings(
     peers: &maw_peer::PeerStoreFile,
     warnings: &mut Vec<String>,
 ) {
+    // Duplicate checks compare node identity from config/peer-store, not the current sender window.
     let local = config.node.as_ref().map(|node| (config.oracle.as_deref().unwrap_or("mawjs"), node.as_str()));
     let mut groups: BTreeMap<String, Vec<(String, Option<String>)>> = BTreeMap::new();
     if let Some((oracle, node)) = local {
