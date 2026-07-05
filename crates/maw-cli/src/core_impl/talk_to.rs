@@ -155,12 +155,22 @@ async fn talkto_peer(
 ) -> CliOutput {
     if let Err(message) = talkto_validate_transport_target(target) { return talkto_saved_or_error(&message, thread); }
     let send_args = SendArgs { target: target.to_owned(), text: notification.to_owned(), inbox: None, from: None, approve: false, trust: false, dry_run: false };
-    let mut output = match send_acl_gate_peer("talk-to", target, &send_args, config, false) {
+    let sender_oracle = resolve_hey_sender_oracle(config);
+    let mut output = match send_acl_gate_peer("talk-to", target, &send_args, &sender_oracle, false) {
         SendAclGateResult::Proceed { stderr_prefix } => {
             if let Some(output) = talkto_fake_peer(peer_url, target, node, args, notification, thread) {
                 send_acl_apply_proceed_stderr(output, &stderr_prefix)
             } else {
-                send_acl_deliver_peer_message("talk-to", peer_url, target, &send_args, config, stderr_prefix).await
+                send_acl_deliver_peer_message(
+                    "talk-to",
+                    peer_url,
+                    target,
+                    &send_args,
+                    config,
+                    &sender_oracle,
+                    stderr_prefix,
+                )
+                .await
             }
         }
         SendAclGateResult::Queued(output) | SendAclGateResult::Reject(output) => return output,

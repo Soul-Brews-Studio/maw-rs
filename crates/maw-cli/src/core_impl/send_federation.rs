@@ -69,6 +69,7 @@ async fn run_send_like_async_with_args(
     acl_bypass: bool,
 ) -> CliOutput {
     let config = load_hey_config();
+    let sender_oracle = resolve_hey_sender_oracle(&config);
     let mut tmux = TmuxClient::local();
     let sessions = route_sessions_from_tmux(&mut tmux);
     let mut runner = maw_tmux::CommandTmuxRunner::new();
@@ -89,13 +90,25 @@ async fn run_send_like_async_with_args(
             &target,
             &send_args.text,
             &config,
+            &sender_oracle,
             send_args.from.as_deref(),
         ),
         RouteResult::Peer {
             peer_url,
             target,
             node: _,
-        } => gated_send_peer_message(command, &peer_url, &target, &send_args, &config, acl_bypass).await,
+        } => {
+            gated_send_peer_message(
+                command,
+                &peer_url,
+                &target,
+                &send_args,
+                &config,
+                &sender_oracle,
+                acl_bypass,
+            )
+            .await
+        }
         RouteResult::Error { detail, hint, .. } => CliOutput {
             code: 2,
             stdout: String::new(),
@@ -121,10 +134,22 @@ async fn gated_send_peer_message(
     target: &str,
     args: &SendArgs,
     config: &HeyConfig,
+    sender_oracle: &str,
     acl_bypass: bool,
 ) -> CliOutput {
-    match send_acl_gate_peer(command, target, args, config, acl_bypass) {
-        SendAclGateResult::Proceed { stderr_prefix } => send_acl_deliver_peer_message(command, peer_url, target, args, config, stderr_prefix).await,
+    match send_acl_gate_peer(command, target, args, sender_oracle, acl_bypass) {
+        SendAclGateResult::Proceed { stderr_prefix } => {
+            send_acl_deliver_peer_message(
+                command,
+                peer_url,
+                target,
+                args,
+                config,
+                sender_oracle,
+                stderr_prefix,
+            )
+            .await
+        }
         SendAclGateResult::Queued(output) | SendAclGateResult::Reject(output) => output,
     }
 }
@@ -135,9 +160,13 @@ async fn send_acl_deliver_peer_message(
     target: &str,
     args: &SendArgs,
     config: &HeyConfig,
+    sender_oracle: &str,
     stderr_prefix: String,
 ) -> CliOutput {
-    send_acl_apply_proceed_stderr(send_peer_message(command, peer_url, target, args, config).await, &stderr_prefix)
+    send_acl_apply_proceed_stderr(
+        send_peer_message(command, peer_url, target, args, config, sender_oracle).await,
+        &stderr_prefix,
+    )
 }
 
 fn send_acl_apply_proceed_stderr(mut output: CliOutput, stderr_prefix: &str) -> CliOutput {
@@ -151,7 +180,7 @@ fn send_acl_gate_peer(
     command: &str,
     target: &str,
     args: &SendArgs,
-    config: &HeyConfig,
+    sender_oracle: &str,
     acl_bypass: bool,
 ) -> SendAclGateResult {
     if args.trust && !args.approve {
@@ -161,7 +190,7 @@ fn send_acl_gate_peer(
             stderr: format!("{command}: --trust requires --approve\n"),
         });
     }
-    let sender = match send_acl_sender(args, config) {
+    let sender = match send_acl_sender(args, sender_oracle) {
         Ok(sender) => sender,
         Err(message) => {
             return SendAclGateResult::Reject(CliOutput {
@@ -206,12 +235,12 @@ fn send_acl_gate_peer(
     }
 }
 
-fn send_acl_sender(args: &SendArgs, config: &HeyConfig) -> Result<String, String> {
+fn send_acl_sender(args: &SendArgs, sender_oracle: &str) -> Result<String, String> {
     if let Some(explicit) = args.from.as_deref() {
         let wire = validate_wire_from(explicit)?;
         return send_acl_oracle_component(&wire);
     }
-    send_acl_validate_actor(config.oracle.as_deref().unwrap_or(DEFAULT_ORACLE))
+    send_acl_validate_actor(sender_oracle)
 }
 
 fn send_acl_oracle_component(wire_from: &str) -> Result<String, String> {
@@ -486,9 +515,10 @@ fn send_local_message(
     target: &str,
     text: &str,
     config: &HeyConfig,
+    sender_oracle: &str,
     from: Option<&str>,
 ) -> CliOutput {
-    let outbound = format_local_hey_message(text, config, from);
+    let outbound = format_local_hey_message(text, config, sender_oracle, from);
     if let Err(error) = tmux.send_text(target, &outbound) {
         return CliOutput {
             code: 1,
@@ -509,8 +539,9 @@ async fn send_peer_message(
     target: &str,
     args: &SendArgs,
     config: &HeyConfig,
+    sender_oracle: &str,
 ) -> CliOutput {
-    let from = match resolve_hey_wire_from(args.from.as_deref(), config) {
+    let from = match resolve_hey_wire_from(args.from.as_deref(), config, sender_oracle) {
         Ok(from) => from,
         Err(message) => {
             return CliOutput {
@@ -577,6 +608,7 @@ async fn run_wake_async_impl(raw_args: &[String]) -> CliOutput {
         Err(message) => return wake_usage_error(&message),
     };
     let config = load_hey_config();
+    let sender_oracle = resolve_hey_sender_oracle(&config);
     let mut tmux = TmuxClient::local();
     let sessions = route_sessions_from_tmux(&mut tmux);
     match resolve_route_target(&wake_args.target, &config.route, &sessions) {
@@ -584,7 +616,7 @@ async fn run_wake_async_impl(raw_args: &[String]) -> CliOutput {
             peer_url,
             target,
             node: _,
-        } => wake_peer_target(&peer_url, &target, &wake_args, &config).await,
+        } => wake_peer_target(&peer_url, &target, &wake_args, &config, &sender_oracle).await,
         RouteResult::Local { target } | RouteResult::SelfNode { target } => {
             wake_fail_closed_local(&wake_args.target, &target)
         }
@@ -658,8 +690,9 @@ async fn wake_peer_target(
     target: &str,
     args: &WakeArgs,
     config: &HeyConfig,
+    sender_oracle: &str,
 ) -> CliOutput {
-    let from = match resolve_hey_wire_from(args.from.as_deref(), config) {
+    let from = match resolve_hey_wire_from(args.from.as_deref(), config, sender_oracle) {
         Ok(from) => from,
         Err(message) => {
             return CliOutput {
@@ -711,7 +744,11 @@ async fn wake_peer_target(
     }
 }
 
-fn resolve_hey_wire_from(explicit: Option<&str>, config: &HeyConfig) -> Result<String, String> {
+fn resolve_hey_wire_from(
+    explicit: Option<&str>,
+    config: &HeyConfig,
+    sender_oracle: &str,
+) -> Result<String, String> {
     if let Some(value) = explicit {
         return validate_wire_from(value);
     }
@@ -723,8 +760,7 @@ fn resolve_hey_wire_from(explicit: Option<&str>, config: &HeyConfig) -> Result<S
         .as_deref()
         .filter(|value| !value.is_empty())
         .ok_or_else(|| "cannot resolve sender identity; set MAW_SENDER or config node".to_owned())?;
-    let oracle = config.oracle.as_deref().unwrap_or(DEFAULT_ORACLE);
-    Ok(format!("{oracle}:{node}"))
+    Ok(format!("{sender_oracle}:{node}"))
 }
 
 fn validate_wire_from(value: &str) -> Result<String, String> {
@@ -743,19 +779,47 @@ fn human_sender_to_wire_from(value: &str) -> Result<String, String> {
     Ok(format!("{}:{}", parts[1], parts[0]))
 }
 
-fn format_local_hey_message(text: &str, config: &HeyConfig, from: Option<&str>) -> String {
+fn format_local_hey_message(
+    text: &str,
+    config: &HeyConfig,
+    sender_oracle: &str,
+    from: Option<&str>,
+) -> String {
     if text.starts_with('/') || text.starts_with('[') {
         return text.to_owned();
     }
     let display = from.map_or_else(
         || {
             let node = config.node.as_deref().unwrap_or("local");
-            let oracle = config.oracle.as_deref().unwrap_or(DEFAULT_ORACLE);
-            format!("{node}:{oracle}")
+            format!("{node}:{sender_oracle}")
         },
         ToOwned::to_owned,
     );
     format!("[{display}] {text}")
+}
+
+fn resolve_hey_sender_oracle(config: &HeyConfig) -> String {
+    let session_window = std::env::var("MAW_SESSION_WINDOW").ok();
+    if session_window
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        return resolve_sender_oracle(session_window.as_deref(), None, config.oracle.as_deref());
+    }
+    let tmux_window_name = current_tmux_window_name();
+    resolve_sender_oracle(None, tmux_window_name.as_deref(), config.oracle.as_deref())
+}
+
+fn current_tmux_window_name() -> Option<String> {
+    let mut runner = CommandTmuxRunner::new();
+    let raw = maw_tmux::TmuxRunner::run(
+        &mut runner,
+        "display-message",
+        &["-p".to_owned(), "#{window_name}".to_owned()],
+    )
+    .ok()?;
+    let window = raw.trim();
+    (!window.is_empty()).then(|| window.to_owned())
 }
 
 fn route_sessions_from_tmux(
@@ -1336,18 +1400,71 @@ mod send_acl_hotpath_tests {
     }
 
     #[test]
+    fn send_identity_uses_invocation_oracle_for_wire_and_local_tags() {
+        let _lock = env_test_lock().lock().unwrap();
+        let _sender = EnvVarRestore::capture("MAW_SENDER");
+        std::env::remove_var("MAW_SENDER");
+        let config = HeyConfig {
+            node: Some("m5".to_owned()),
+            oracle: Some("configured".to_owned()),
+            route: RouteConfig::default(),
+        };
+
+        assert_eq!(
+            resolve_hey_wire_from(None, &config, "maw-rs").expect("wire from"),
+            "maw-rs:m5"
+        );
+        assert_eq!(
+            format_local_hey_message("hello", &config, "maw-rs", None),
+            "[m5:maw-rs] hello"
+        );
+        assert_eq!(
+            format_local_hey_message("[pretagged] hello", &config, "maw-rs", None),
+            "[pretagged] hello"
+        );
+    }
+
+    #[test]
     fn send_acl_no_scope_same_scope_and_trusted_allow_peer_send() {
         let _lock = env_test_lock().lock().unwrap();
         let _env = SendAclEnvGuard::new("allow");
         let config = send_acl_config("alice");
-        assert_eq!(send_acl_assert_proceed(send_acl_gate_peer("hey", "bob", &send_acl_args("remote-bob", "hello"), &config, false)), "");
+        let sender = config.oracle.as_deref().expect("test oracle");
+        assert_eq!(
+            send_acl_assert_proceed(send_acl_gate_peer(
+                "hey",
+                "bob",
+                &send_acl_args("remote-bob", "hello"),
+                sender,
+                false,
+            )),
+            ""
+        );
 
         send_acl_write_scope("team", &["alice", "bob"]);
-        assert_eq!(send_acl_assert_proceed(send_acl_gate_peer("hey", "bob", &send_acl_args("remote-bob", "hello"), &config, false)), "");
+        assert_eq!(
+            send_acl_assert_proceed(send_acl_gate_peer(
+                "hey",
+                "bob",
+                &send_acl_args("remote-bob", "hello"),
+                sender,
+                false,
+            )),
+            ""
+        );
 
         std::fs::remove_file(scope_native_path("team")).unwrap();
         scope_trust_add_to_path(&scope_trust_path(), "alice", "bob", "2026-06-26T00:00:00.000Z").unwrap();
-        assert_eq!(send_acl_assert_proceed(send_acl_gate_peer("hey", "bob", &send_acl_args("remote-bob", "hello"), &config, false)), "");
+        assert_eq!(
+            send_acl_assert_proceed(send_acl_gate_peer(
+                "hey",
+                "bob",
+                &send_acl_args("remote-bob", "hello"),
+                sender,
+                false,
+            )),
+            ""
+        );
     }
 
     #[test]
@@ -1356,7 +1473,7 @@ mod send_acl_hotpath_tests {
         let env = SendAclEnvGuard::new("queue");
         send_acl_write_scope("team", &["alice", "carol"]);
         let args = send_acl_args("remote-bob", "SECRET_BODY token=abc123");
-        let result = send_acl_gate_peer("hey", "bob", &args, &send_acl_config("alice"), false);
+        let result = send_acl_gate_peer("hey", "bob", &args, "alice", false);
         let output = match result { SendAclGateResult::Queued(output) => output, other => panic!("expected queue, got {other:?}") };
         assert_eq!(output.code, 0);
         assert!(output.stdout.contains("queued pending ACL approval"));
@@ -1378,13 +1495,20 @@ mod send_acl_hotpath_tests {
         send_acl_write_scope("team", &["alice", "carol"]);
         let config = send_acl_config("alice");
 
+        let sender = config.oracle.as_deref().expect("test oracle");
         let mut approve = send_acl_args("remote-bob", "hello");
         approve.approve = true;
-        assert_eq!(send_acl_assert_proceed(send_acl_gate_peer("hey", "bob", &approve, &config, false)), "");
+        assert_eq!(
+            send_acl_assert_proceed(send_acl_gate_peer("hey", "bob", &approve, sender, false)),
+            ""
+        );
         assert!(!scope_trust_path().exists());
 
         approve.trust = true;
-        assert_eq!(send_acl_assert_proceed(send_acl_gate_peer("hey", "bob", &approve, &config, false)), "");
+        assert_eq!(
+            send_acl_assert_proceed(send_acl_gate_peer("hey", "bob", &approve, sender, false)),
+            ""
+        );
         let trusted = scope_trust_load_from_path(&scope_trust_path());
         assert_eq!(trusted.len(), 1);
         assert_eq!(trusted[0].sender, "alice");
@@ -1400,12 +1524,12 @@ mod send_acl_hotpath_tests {
         let _env = SendAclEnvGuard::new("bypass");
         send_acl_write_scope("team", &["alice", "carol"]);
         std::env::set_var("MAW_ACL_BYPASS", "1");
-        let queued = send_acl_gate_peer("hey", "bob", &send_acl_args("remote-bob", "hello"), &send_acl_config("alice"), false);
+        let queued = send_acl_gate_peer("hey", "bob", &send_acl_args("remote-bob", "hello"), "alice", false);
         assert!(
             matches!(queued, SendAclGateResult::Queued(_)),
             "env must not bypass ACL"
         );
-        assert_eq!(send_acl_assert_proceed(send_acl_gate_peer("hey", "bob", &send_acl_args("remote-bob", "hello"), &send_acl_config("alice"), true)), "");
+        assert_eq!(send_acl_assert_proceed(send_acl_gate_peer("hey", "bob", &send_acl_args("remote-bob", "hello"), "alice", true)), "");
         assert!(!scope_trust_path().exists());
         assert_eq!(std::env::var("MAW_ACL_BYPASS").as_deref(), Ok("1"));
     }
@@ -1417,14 +1541,14 @@ mod send_acl_hotpath_tests {
         let dir = scope_native_dir();
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("broken.json"), "{not json").unwrap();
-        let stderr = send_acl_assert_proceed(send_acl_gate_peer("hey", "bob", &send_acl_args("remote-bob", "hello"), &send_acl_config("alice"), false));
+        let stderr = send_acl_assert_proceed(send_acl_gate_peer("hey", "bob", &send_acl_args("remote-bob", "hello"), "alice", false));
         assert!(stderr.contains("warn: ACL check failed, allowing send"));
         assert!(stderr.contains("broken.json"));
         assert!(stderr.contains("fix"));
 
         std::fs::remove_file(dir.join("broken.json")).unwrap();
         std::fs::write(scope_trust_path(), "{not json").unwrap();
-        let stderr = send_acl_assert_proceed(send_acl_gate_peer("hey", "bob", &send_acl_args("remote-bob", "hello"), &send_acl_config("alice"), false));
+        let stderr = send_acl_assert_proceed(send_acl_gate_peer("hey", "bob", &send_acl_args("remote-bob", "hello"), "alice", false));
         assert!(stderr.contains("warn: ACL check failed, allowing send"));
         assert!(stderr.contains("scope-trust.json"));
     }
@@ -1474,7 +1598,13 @@ mod send_acl_hotpath_tests {
         };
         let output = tokio::runtime::Runtime::new()
             .unwrap()
-            .block_on(notify_peer("http://127.0.0.1:1", "bob", &args, &config));
+            .block_on(notify_peer(
+                "http://127.0.0.1:1",
+                "bob",
+                &args,
+                &config,
+                "alice",
+            ));
         assert_eq!(output.code, 0);
         assert!(output.stdout.contains("queued pending ACL approval"));
         assert!(!output.stdout.contains("SECRET_NOTIFY"));

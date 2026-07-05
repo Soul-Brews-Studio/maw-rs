@@ -1,6 +1,7 @@
 use maw_auth::{
     build_from_sign_payload, build_legacy_from_sign_payload, hash_body, is_loopback,
-    is_refuse_decision, resolve_from_address, sign, sign_headers_at, sign_headers_v3_at,
+    is_refuse_decision, resolve_from_address, resolve_sender_oracle, sign, sign_headers_at,
+    sign_headers_v3_at,
     sign_hmac_sig, sign_request_v3, verify, verify_hmac_sig, verify_request, FromAddressConfig,
     FromVerifyDecision, Headers, VerifyRequestArgs, DEFAULT_ORACLE,
 };
@@ -118,6 +119,36 @@ fn hashing_and_signing_helpers_cover_v1_v2_v3_and_validation_branches() {
         }),
         None
     );
+}
+
+
+#[test]
+fn sender_oracle_resolution_uses_invocation_window_before_config_default() {
+    assert_eq!(
+        resolve_sender_oracle(
+            Some("33-maw-rs:maw-rs.0"),
+            Some("tmux-window"),
+            Some("configured")
+        ),
+        "maw-rs"
+    );
+    assert_eq!(
+        resolve_sender_oracle(Some("maw-rs"), Some("tmux-window"), Some("configured")),
+        "maw-rs"
+    );
+    assert_eq!(
+        resolve_sender_oracle(Some("   "), Some("tmux-window.1"), Some("configured")),
+        "tmux-window"
+    );
+    assert_eq!(
+        resolve_sender_oracle(None, Some("homekeeper-oracle.wt-1-bridge"), Some("configured")),
+        "homekeeper-oracle.wt-1-bridge"
+    );
+    assert_eq!(
+        resolve_sender_oracle(None, Some("  "), Some("configured")),
+        "configured"
+    );
+    assert_eq!(resolve_sender_oracle(None, None, None), DEFAULT_ORACLE);
 }
 
 #[test]

@@ -290,7 +290,8 @@ fn kill_peer_forward(
     let alias = options.peer.as_deref().ok_or_else(|| "kill: missing --peer value".to_owned())?;
     kill_validate_peer_alias(alias)?;
     let peer = kill_resolve_peer(alias)?;
-    let from = resolve_hey_wire_from(None, config)?;
+    let sender_oracle = resolve_hey_sender_oracle(config);
+    let from = resolve_hey_wire_from(None, config, &sender_oracle)?;
     let request = KillPeerRequest {
         peer,
         target: options.target.clone(),

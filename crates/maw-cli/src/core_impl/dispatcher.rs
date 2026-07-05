@@ -9,7 +9,8 @@ use maw_auth::{
     hash_body, hash_consent_pin, is_loopback, is_valid_pair_code_shape, normalize_pair_code,
     pair_api_accept_plan, pair_api_auto_plan, pair_api_generate_plan, pair_api_probe_plan,
     pair_api_status_plan, pretty_pair_code, redact_pair_code, reject_consent_plan,
-    request_consent_plan, resolve_from_address, sign, sign_auto_pair_proof, sign_headers_at,
+    request_consent_plan, resolve_from_address, resolve_sender_oracle, sign, sign_auto_pair_proof,
+    sign_headers_at,
     sign_headers_v3_at, sign_hmac_sig, sign_request_v3, trust_key, verify, verify_auto_pair_proof,
     verify_consent_pin, verify_hmac_sig, verify_request, ApprovedBy, AutoPairAddOutcome,
     AutoPairIdentity, AutoPairInput, ConsentAction, ConsentApprovalResult, ConsentRequestArgs,
@@ -66,7 +67,8 @@ use maw_split::{decide_split_policy, SplitPolicyDecision, SplitPolicyInput};
 use maw_tmux::{
     decide_tmux_attach_action, mark_peer_targets_live, resolve_tmux_live_state,
     resolve_tmux_attach_session, tmux_attach_spawn_command, DiscoverLivePane, PeerTargetWithLive,
-    TmuxAttachAction, TmuxAttachSessionResolution, TmuxClient, TmuxLiveStateResult, TmuxPane, TmuxSession,
+    CommandTmuxRunner, TmuxAttachAction, TmuxAttachSessionResolution, TmuxClient,
+    TmuxLiveStateResult, TmuxPane, TmuxSession,
 };
 use maw_transport::{
     classify_error, classify_symmetric_federation_status, FederationPeerStatus, FederationPeerView,

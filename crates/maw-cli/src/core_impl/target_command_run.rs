@@ -187,7 +187,9 @@ fn run_peer(
     run_validate_node(node).map_err(|message| (2, message))?;
     run_validate_peer_url(peer_url).map_err(|message| (2, message))?;
     run_validate_tmux_target(target).map_err(|message| (2, message))?;
-    let from = resolve_hey_wire_from(deps.from, deps.config).map_err(|message| (2, message))?;
+    let sender_oracle = resolve_hey_sender_oracle(deps.config);
+    let from = resolve_hey_wire_from(deps.from, deps.config, &sender_oracle)
+        .map_err(|message| (2, message))?;
     let request = RunPeerRequest {
         node: node.to_owned(),
         peer_url: peer_url.to_owned(),

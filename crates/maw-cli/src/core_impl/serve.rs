@@ -456,8 +456,11 @@ fn serve_deliver_send(
     let raw_from = header_to_string(headers, "x-maw-from");
     let from = (!raw_from.trim().is_empty()).then_some(raw_from);
     let config = load_hey_config();
-    let log_from = from.clone().unwrap_or_else(|| serve_local_identity(&config));
-    let log_to = serve_local_identity(&config);
+    let sender_oracle = resolve_hey_sender_oracle(&config);
+    let log_from = from
+        .clone()
+        .unwrap_or_else(|| serve_local_identity(&config, &sender_oracle));
+    let log_to = serve_local_identity(&config, &sender_oracle);
 
     if target.trim().is_empty() {
         serve_log_delivery_failed(state, &target, &message, &log_from, &log_to, "empty-target", "validate");
@@ -471,6 +474,7 @@ fn serve_deliver_send(
     if parsed.inbox.unwrap_or(false) {
         let context = ServeInboxContext {
             config: &config,
+            sender_oracle: &sender_oracle,
             log_from: &log_from,
             log_to: &log_to,
             target: &target,
@@ -491,6 +495,7 @@ fn serve_deliver_send(
         RouteResult::Local { target: resolved } | RouteResult::SelfNode { target: resolved } => {
             let context = ServeDeliverContext {
                 config: &config,
+                sender_oracle: &sender_oracle,
                 from: from.as_deref(),
                 log_from: &log_from,
                 log_to: &log_to,
@@ -522,6 +527,7 @@ fn serve_deliver_send(
 
 struct ServeInboxContext<'a> {
     config: &'a HeyConfig,
+    sender_oracle: &'a str,
     log_from: &'a str,
     log_to: &'a str,
     target: &'a str,
@@ -568,7 +574,7 @@ fn serve_deliver_inbox(
         ServeInboxIdempotencyClaim::Claimed(key) => key,
         ServeInboxIdempotencyClaim::Duplicate(response) => return *response,
     };
-    let from = serve_display_from(headers, config);
+    let from = serve_display_from(headers, config, context.sender_oracle);
     match state.receiver_inbox.write_receiver_inbox(ReceiverInboxInput {
         query: target,
         target: Some(&resolved),
@@ -904,6 +910,7 @@ fn serve_log_delivery_deduped(
 
 struct ServeDeliverContext<'a> {
     config: &'a HeyConfig,
+    sender_oracle: &'a str,
     from: Option<&'a str>,
     log_from: &'a str,
     log_to: &'a str,
@@ -954,7 +961,12 @@ fn serve_deliver_local(
         }
     }
 
-    let outbound = format_local_hey_message(context.message, context.config, context.from);
+    let outbound = format_local_hey_message(
+        context.message,
+        context.config,
+        context.sender_oracle,
+        context.from,
+    );
     if let Err(error) = state.delivery.send_literal_enter(context.resolved, &outbound) {
         if let Some(key) = idempotency_key.as_ref() {
             serve_delivery_idempotency_cancel(state, key);
@@ -1134,10 +1146,9 @@ fn serve_truncate(value: &str, max: usize) -> String {
     out
 }
 
-fn serve_local_identity(config: &HeyConfig) -> String {
+fn serve_local_identity(config: &HeyConfig, sender_oracle: &str) -> String {
     let node = config.node.as_deref().unwrap_or("local");
-    let oracle = config.oracle.as_deref().unwrap_or(DEFAULT_ORACLE);
-    format!("{node}:{oracle}")
+    format!("{node}:{sender_oracle}")
 }
 
 fn serve_oracle_from_target(target: &str) -> String {
@@ -1148,11 +1159,11 @@ fn serve_oracle_from_target(target: &str) -> String {
         .to_owned()
 }
 
-fn serve_display_from(headers: &HeaderMap, config: &HeyConfig) -> String {
+fn serve_display_from(headers: &HeaderMap, config: &HeyConfig, sender_oracle: &str) -> String {
     let raw = header_to_string(headers, "x-maw-from");
     let raw = raw.trim();
     if raw.is_empty() {
-        return serve_local_identity(config);
+        return serve_local_identity(config, sender_oracle);
     }
     if let Some((oracle, node)) = raw.split_once(':') {
         let oracle = oracle.trim();

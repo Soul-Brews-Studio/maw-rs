@@ -1,4 +1,7 @@
-use std::{fs, io, path::{Path, PathBuf}};
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+};
 
 use super::types::{MawCorePaths, MawXdgEnv};
 
@@ -142,7 +145,6 @@ pub fn maw_state_path(env: &MawXdgEnv, parts: &[&str]) -> PathBuf {
 pub fn maw_cache_path(env: &MawXdgEnv, parts: &[&str]) -> PathBuf {
     join_parts(maw_cache_dir(env), parts)
 }
-
 
 fn is_lower_alnum(ch: char) -> bool {
     ch.is_ascii_lowercase() || ch.is_ascii_digit()

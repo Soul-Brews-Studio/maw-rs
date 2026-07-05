@@ -1,3 +1,5 @@
+const PEER_DEFAULT_ORACLE: &str = "mawjs";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ParsedRemoteIdentity {
     pubkey: Option<String>,
@@ -23,7 +25,7 @@ fn parse_remote_identity(identity: &ProbeRemoteIdentity) -> Option<ParsedRemoteI
         oracle: oracle
             .as_deref()
             .filter(|value| !value.is_empty())
-            .unwrap_or("mawjs")
+            .unwrap_or(PEER_DEFAULT_ORACLE)
             .to_owned(),
         node: node.to_owned(),
     });
