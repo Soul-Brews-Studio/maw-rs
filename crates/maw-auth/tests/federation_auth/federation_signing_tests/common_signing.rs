@@ -89,12 +89,14 @@ fn hashing_and_signing_helpers_cover_v1_v2_v3_and_validation_branches() {
             &build_from_sign_payload(FROM, NOW, "POST", "/api/send", &hash_body(Some(b"body")))
         )
     );
+    let stacked = sign_headers_v3_at(PEER_KEY, FROM, "POST", "/api/send", None, NOW)
+        .expect("v3 headers should sign");
+    assert_eq!(stacked.get("X-Maw-Auth-Version"), Some("v3"));
     assert_eq!(
-        sign_headers_v3_at(PEER_KEY, FROM, "POST", "/api/send", None, NOW)
-            .expect("v3 headers should sign")
-            .get("X-Maw-Auth-Version"),
-        Some("v3")
+        stacked.get("X-Maw-Signature"),
+        Some(direct_hmac(PEER_KEY, "POST:/api/send:1700000000").as_str())
     );
+    assert!(stacked.get("X-Maw-Signature-V3").is_some());
     let get_default = sign_request_v3(PEER_KEY, FROM, "", "/api/send", NOW, None)
         .expect("empty method defaults to GET");
     assert_eq!(

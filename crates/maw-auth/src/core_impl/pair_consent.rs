@@ -61,7 +61,7 @@ pub fn sign_request_v3(
     })
 }
 
-/// Produce v3 outbound auth headers.
+/// Produce outbound auth headers with transitional v1 + v3 signatures.
 ///
 /// # Errors
 ///
@@ -74,9 +74,11 @@ pub fn sign_headers_v3_at(
     body: Option<&[u8]>,
     timestamp: i64,
 ) -> Result<Headers, String> {
-    let signature = sign_request_v3(peer_key, from_address, method, path, timestamp, body)?;
+    let method = if method.is_empty() { "GET" } else { method }.to_uppercase();
+    let signature = sign_request_v3(peer_key, from_address, &method, path, timestamp, body)?;
     Ok(Headers::new([
         ("X-Maw-From", from_address.to_owned()),
+        ("X-Maw-Signature", sign(peer_key, &method, path, timestamp, "")),
         ("X-Maw-Signature-V3", signature.signature),
         ("X-Maw-Timestamp", timestamp.to_string()),
         ("X-Maw-Auth-Version", "v3".to_owned()),

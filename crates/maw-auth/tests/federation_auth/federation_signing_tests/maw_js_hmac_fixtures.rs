@@ -44,6 +44,35 @@ fn maw_js_hmac_request() -> maw_auth::RequestAuthParts {
     }
 }
 
+
+#[test]
+fn sign_headers_v3_dual_emits_maw_js_v1_signature_slot() {
+    let fixture = maw_js_hmac_fixture();
+    let headers = maw_auth::sign_headers_v3_at(
+        fixture["token"].as_str().expect("token"),
+        fixture["from"].as_str().expect("from"),
+        fixture["method"].as_str().expect("method"),
+        fixture["path"].as_str().expect("path"),
+        Some(fixture["body"].as_str().expect("body").as_bytes()),
+        fixture["timestamp"].as_i64().expect("timestamp"),
+    )
+    .expect("dual-sign headers");
+
+    assert_eq!(
+        headers.get("X-Maw-Signature"),
+        fixture["fleetHeaders"]["X-Maw-Signature"].as_str()
+    );
+    assert_eq!(
+        headers.get("X-Maw-Timestamp"),
+        fixture["fleetHeaders"]["X-Maw-Timestamp"].as_str()
+    );
+    assert_eq!(
+        headers.get("X-Maw-From"),
+        fixture["v3Headers"]["X-Maw-From"].as_str()
+    );
+    assert_eq!(headers.get("X-Maw-Auth-Version"), Some("v3"));
+}
+
 #[test]
 fn verify_request_accepts_real_maw_js_stacked_fleet_hmac_v3_fixture() {
     use maw_auth::hash_body;
