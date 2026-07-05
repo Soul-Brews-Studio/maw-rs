@@ -37,5 +37,5 @@ fn unique_preserve_order(values: Vec<String>) -> Vec<String> {
 
 #[cfg(test)]
 mod coverage_gap_tests {
-include!("../coverage_gap_tests_impl/helper_live_state_edges.rs");
+include!("../coverage_gap_tests_impl/live_state_edge_tests.rs");
 }

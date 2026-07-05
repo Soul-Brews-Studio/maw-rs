@@ -1,4 +1,4 @@
-include!("wasm_host/preamble.rs");
+include!("wasm_host/host_prelude.rs");
 include!("wasm_host/host_setup.rs");
 include!("wasm_host/host_dispatch_audit.rs");
 include!("wasm_host/host_exec_paths_config.rs");

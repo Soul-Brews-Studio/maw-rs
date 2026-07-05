@@ -144,11 +144,11 @@ fn next_backoff(current: Duration, max: Duration) -> Duration {
     current.saturating_mul(2).min(max)
 }
 
-mod mock;
-mod types;
+mod mock_event_source;
+mod gateway_contract;
 
-pub use mock::MockGatewaySource;
-pub use types::{
+pub use mock_event_source::MockGatewaySource;
+pub use gateway_contract::{
     resolve_gateway_token, GatewayConfig, GatewayEvent, GatewayHandle, GatewayRunStats,
     GatewayStatus, GatewayToken,
 };
@@ -185,4 +185,4 @@ pub async fn observe_mock_gateway_events(events: &[String]) -> usize {
 }
 
 #[cfg(test)]
-mod tests;
+mod gateway_tests;

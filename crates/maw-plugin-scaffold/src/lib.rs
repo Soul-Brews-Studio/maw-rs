@@ -9,12 +9,12 @@ use std::{fs, io, path::Path};
 
 use serde_json::{json, Map, Value};
 
-include!("lib/types_command.rs");
+include!("lib/plugin_create_command.rs");
 include!("lib/scaffold_entrypoints.rs");
 include!("lib/manifest_rewrites.rs");
 include!("lib/copy_tree.rs");
 
 #[cfg(test)]
 mod tests {
-    include!("lib/tests.rs");
+    include!("lib/scaffold_regression_tests.rs");
 }

@@ -247,4 +247,4 @@ fn parse_base(base: &str) -> Option<[i32; 3]> {
 }
 
 #[cfg(test)]
-mod tests;
+mod calver_regression_tests;
