@@ -1597,12 +1597,63 @@ async fn api_feed_post(
 }
 
 async fn api_sessions(Query(query): Query<SessionsQuery>) -> impl IntoResponse {
-    let _ = query.local.unwrap_or(false);
-    Json(Vec::<Value>::new())
+    let _local = query.local.unwrap_or(false);
+    let mut tmux = TmuxClient::local();
+    let panes = tmux.list_panes();
+    let sessions = tmux
+        .list_all()
+        .into_iter()
+        .map(|session| serve_tmux_session_json(&session, &panes))
+        .collect::<Vec<_>>();
+    Json(sessions)
 }
 
 async fn api_capture(Query(query): Query<CaptureQuery>) -> impl IntoResponse {
-    Json(json!({"content": "", "target": query.target}))
+    let target = query.target.unwrap_or_default();
+    let mut tmux = TmuxClient::local();
+    match tmux.capture(&target, None) {
+        Ok(content) => Json(json!({"content": content, "target": target})).into_response(),
+        Err(error) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"content": "", "target": target, "error": error.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+fn serve_tmux_session_json(session: &TmuxSession, panes: &[TmuxPane]) -> Value {
+    let windows = session
+        .windows
+        .iter()
+        .map(|window| {
+            let pane_prefix = format!("{}:{}.", session.name, window.name);
+            let window_panes = panes
+                .iter()
+                .filter(|pane| pane.target.starts_with(&pane_prefix))
+                .map(serve_tmux_pane_json)
+                .collect::<Vec<_>>();
+            json!({
+                "index": window.index,
+                "name": window.name,
+                "active": window.active,
+                "cwd": window.cwd,
+                "panes": window_panes,
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({"name": session.name, "windows": windows})
+}
+
+fn serve_tmux_pane_json(pane: &TmuxPane) -> Value {
+    json!({
+        "id": pane.id,
+        "command": pane.command,
+        "target": pane.target,
+        "title": pane.title,
+        "pid": pane.pid,
+        "cwd": pane.cwd,
+        "lastActivity": pane.last_activity,
+    })
 }
 
 async fn api_probe(
