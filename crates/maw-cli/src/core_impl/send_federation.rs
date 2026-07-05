@@ -616,7 +616,6 @@ async fn run_wake_async_impl(raw_args: &[String]) -> CliOutput {
         Err(message) => return wake_usage_error(&message),
     };
     let config = load_hey_config();
-    let sender_oracle = resolve_hey_sender_oracle(&config);
     let mut tmux = TmuxClient::local();
     let sessions = route_sessions_from_tmux(&mut tmux);
     match resolve_route_target(&wake_args.target, &config.route, &sessions) {
@@ -624,7 +623,10 @@ async fn run_wake_async_impl(raw_args: &[String]) -> CliOutput {
             peer_url,
             target,
             node: _,
-        } => wake_peer_target(&peer_url, &target, &wake_args, &config, &sender_oracle).await,
+        } => {
+            let sender_oracle = resolve_hey_sender_oracle(&config);
+            wake_peer_target(&peer_url, &target, &wake_args, &config, &sender_oracle).await
+        }
         RouteResult::Local { target } | RouteResult::SelfNode { target } => {
             wake_fail_closed_local(&wake_args.target, &target)
         }

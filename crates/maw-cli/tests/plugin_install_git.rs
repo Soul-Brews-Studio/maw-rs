@@ -174,7 +174,11 @@ fn plugin_install_git_file_url_clones_builds_and_installs_to_default_root() {
     assert!(install_dir.join("index.js").is_file());
     assert!(!install_dir.join("src/index.ts").exists());
 
+    let no_bun_bin = root.join("no-bun-bin");
+    fs::create_dir_all(&no_bun_bin).expect("no bun bin");
+    let verb_path = std::env::join_paths([no_bun_bin]).expect("verb path");
     let verb = with_host_plugin_env(Command::new(maw_bin()).arg("git-fixture"), &root)
+        .env("PATH", verb_path)
         .output()
         .expect("maw git-fixture");
     assert_eq!(verb.status.code(), Some(2));

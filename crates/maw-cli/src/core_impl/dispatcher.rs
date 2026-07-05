@@ -441,16 +441,59 @@ fn dispatch_cli_plugin(argv: &[String]) -> Option<CliOutput> {
 }
 
 fn dispatch_ts_cli_plugin(plugin: &LoadedPlugin, ctx: &InvokeContext) -> CliOutput {
-    if !plugin_manifest_opts_into_bun_dev(plugin) {
-        return CliOutput {
+    dispatch_ts_cli_plugin_with_bun_probe(plugin, ctx, bun_binary_available_on_path)
+}
+
+fn dispatch_ts_cli_plugin_with_bun_probe(
+    plugin: &LoadedPlugin,
+    ctx: &InvokeContext,
+    bun_available: impl FnOnce() -> bool,
+) -> CliOutput {
+    match ts_cli_dispatch_decision(plugin, bun_available) {
+        TsCliDispatchDecision::BunDev => dispatch_bun_dev_plugin(plugin, ctx),
+        TsCliDispatchDecision::FailClosed => CliOutput {
             code: 2,
             stdout: String::new(),
             stderr: "TS/JS plugin requires prebuilt WASM artifact; no maw-js/Bun fallback\n"
                 .to_owned(),
-        };
+        },
     }
+}
 
-    dispatch_bun_dev_plugin(plugin, ctx)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TsCliDispatchDecision {
+    BunDev,
+    FailClosed,
+}
+
+fn ts_cli_dispatch_decision(
+    plugin: &LoadedPlugin,
+    bun_available: impl FnOnce() -> bool,
+) -> TsCliDispatchDecision {
+    if plugin_manifest_opts_into_bun_dev(plugin) {
+        return TsCliDispatchDecision::BunDev;
+    }
+    if plugin.kind == LoadedPluginKind::Ts && plugin.entry_path.is_some() && bun_available() {
+        TsCliDispatchDecision::BunDev
+    } else {
+        TsCliDispatchDecision::FailClosed
+    }
+}
+
+fn bun_binary_available_on_path() -> bool {
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|dir| bun_binary_exists_in_dir(&dir))
+}
+
+#[cfg(windows)]
+const BUN_BINARY_NAMES: &[&str] = &["bun.exe", "bun.cmd", "bun.bat", "bun"];
+#[cfg(not(windows))]
+const BUN_BINARY_NAMES: &[&str] = &["bun"];
+
+fn bun_binary_exists_in_dir(dir: &Path) -> bool {
+    BUN_BINARY_NAMES.iter().any(|name| dir.join(name).is_file())
 }
 
 fn plugin_manifest_opts_into_bun_dev(plugin: &LoadedPlugin) -> bool {
@@ -465,6 +508,88 @@ fn plugin_manifest_opts_into_bun_dev(plugin: &LoadedPlugin) -> bool {
         .get("runtime")
         .and_then(serde_json::Value::as_str)
         .is_some_and(|runtime| runtime == "bun-dev")
+}
+
+
+#[cfg(test)]
+mod ts_plugin_dispatch_decision_tests {
+    use super::*;
+    use serde_json::json;
+    use std::cell::Cell;
+
+    fn temp_plugin_dir(label: &str) -> std::path::PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "maw-rs-ts-dispatch-{label}-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("plugin dir");
+        dir
+    }
+
+    fn load_ts_plugin(label: &str, runtime: Option<&str>) -> (std::path::PathBuf, LoadedPlugin) {
+        let dir = temp_plugin_dir(label);
+        std::fs::write(dir.join("index.ts"), "export default async function main() {}\n")
+            .expect("entry");
+        let mut manifest = json!({
+            "name": label,
+            "version": "1.0.0",
+            "sdk": "*",
+            "target": "js",
+            "entry": "index.ts",
+            "cli": { "command": label }
+        });
+        if let Some(runtime) = runtime {
+            manifest["runtime"] = json!(runtime);
+        }
+        std::fs::write(dir.join("plugin.json"), manifest.to_string()).expect("manifest");
+        let plugin = load_manifest_from_dir(&dir)
+            .expect("load manifest")
+            .expect("loaded plugin");
+        assert_eq!(plugin.kind, LoadedPluginKind::Ts);
+        (dir, plugin)
+    }
+
+    #[test]
+    fn bare_ts_plugin_uses_bun_dev_decision_when_bun_probe_succeeds() {
+        let (dir, plugin) = load_ts_plugin("bare-ts-bun", None);
+        let decision = ts_cli_dispatch_decision(&plugin, || true);
+
+        assert_eq!(decision, TsCliDispatchDecision::BunDev);
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[test]
+    fn bare_ts_plugin_fails_closed_when_bun_probe_fails() {
+        let (dir, plugin) = load_ts_plugin("bare-ts-no-bun", None);
+        let ctx = InvokeContext::new(InvokeSource::Cli, Vec::new());
+        let output = dispatch_ts_cli_plugin_with_bun_probe(&plugin, &ctx, || false);
+
+        assert_eq!(output.code, 2);
+        assert!(output.stdout.is_empty());
+        assert_eq!(
+            output.stderr,
+            "TS/JS plugin requires prebuilt WASM artifact; no maw-js/Bun fallback\n"
+        );
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[test]
+    fn explicit_bun_dev_runtime_does_not_call_bun_probe() {
+        let (dir, plugin) = load_ts_plugin("explicit-bun-dev", Some("bun-dev"));
+        let called = Cell::new(false);
+        let decision = ts_cli_dispatch_decision(&plugin, || {
+            called.set(true);
+            false
+        });
+
+        assert_eq!(decision, TsCliDispatchDecision::BunDev);
+        assert!(!called.get(), "runtime=bun-dev should bypass the probe");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
 }
 
 fn dispatch_bun_dev_plugin(plugin: &LoadedPlugin, ctx: &InvokeContext) -> CliOutput {

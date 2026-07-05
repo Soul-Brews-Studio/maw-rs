@@ -285,7 +285,7 @@ fn dispatch_cli_plugin_runs_import_bearing_wasm_on_extism_runtime() {
 }
 
 #[test]
-fn dispatch_cli_plugin_finds_matching_ts_plugin_and_refuses_maw_bridge() {
+fn dispatch_cli_plugin_finds_matching_ts_plugin_and_uses_bun_fallback_without_maw_bridge() {
     let _guard = env_lock().lock().expect("env lock");
     let _restore = EnvRestore::capture();
     let root = temp_dir("prefix");
@@ -305,19 +305,50 @@ fn dispatch_cli_plugin_finds_matching_ts_plugin_and_refuses_maw_bridge() {
 
     let dispatched = run_cli(&args(&["weather", "report", "--city", "Bangkok"]));
 
+    assert_eq!(dispatched.code, 0, "{}", dispatched.stderr);
+    assert_eq!(dispatched.stdout, "bun stdout\n");
+    assert_eq!(
+        dispatched.stderr,
+        "⚠ [dev-tier: bun] weather-demo — TS runs unsandboxed; ship tier = WASM (maw plugin build)\nbun stderr\n"
+    );
+    assert!(
+        !marker.exists(),
+        "fake PATH maw was invoked, but TS/JS fallback must use bun directly"
+    );
+    let captured = read_to_string(&bun_args).expect("bun args");
+    assert!(
+        captured.contains(&format!(
+            "entry={}\n",
+            plugins_dir.join("weather-demo").join("index.ts").display()
+        )),
+        "{captured}"
+    );
+    assert!(captured.contains("arg0=--city\n"), "{captured}");
+    assert!(captured.contains("arg1=Bangkok\n"), "{captured}");
+
+    remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn dispatch_cli_plugin_keeps_fail_closed_error_for_implicit_ts_when_bun_is_absent() {
+    let _guard = env_lock().lock().expect("env lock");
+    let _restore = EnvRestore::capture();
+    let root = temp_dir("implicit-ts-no-bun");
+    let bin_dir = root.join("bin");
+    let plugins_dir = root.join("plugins");
+    create_dir_all(&bin_dir).expect("bin dir");
+    create_dir_all(&plugins_dir).expect("plugins dir");
+    write_ts_plugin(&plugins_dir, "weather-demo", "weather report");
+    std::env::set_var("PATH", &bin_dir);
+    std::env::set_var("MAW_PLUGINS_DIR", &plugins_dir);
+
+    let dispatched = run_cli(&args(&["weather", "report"]));
+
     assert_eq!(dispatched.code, 2, "{}", dispatched.stdout);
     assert!(dispatched.stdout.is_empty(), "{}", dispatched.stdout);
     assert_eq!(
         dispatched.stderr,
         "TS/JS plugin requires prebuilt WASM artifact; no maw-js/Bun fallback\n"
-    );
-    assert!(
-        !marker.exists(),
-        "fake PATH maw was invoked, but TS/JS plugin dispatch must fail closed"
-    );
-    assert!(
-        !bun_args.exists(),
-        "fake PATH bun was invoked without runtime=bun-dev opt-in"
     );
 
     remove_dir_all(root).expect("cleanup");
