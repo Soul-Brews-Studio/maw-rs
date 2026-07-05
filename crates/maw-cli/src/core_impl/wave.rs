@@ -1,4 +1,4 @@
-const DISPATCH_325: &[DispatcherEntry] = &[DispatcherEntry { command: "wave", handler: Handler::Sync(wave_run_command) }];
+const DISPATCH_326: &[DispatcherEntry] = &[DispatcherEntry { command: "wave", handler: Handler::Sync(wave_run_command) }];
 
 const WAVE_USAGE: &str = "usage: maw wave <start|status|dispatch|teardown> ...";
 const WAVE_BASE_REF: &str = "origin/alpha";

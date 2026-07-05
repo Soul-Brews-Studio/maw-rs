@@ -74,13 +74,15 @@ fn tab_with_runner<R: maw_tmux::TmuxRunner>(
     tab_send_message(runner, tab.1.as_str(), &message, force, talk)
 }
 
-const TAB_NEW_USAGE: &str = "usage: maw tab new [<session>] [--name <window>] [--cmd <command>]";
+const TAB_NEW_USAGE: &str =
+    "usage: maw tab new [<session>] [--name <window>] [-c|--cwd <dir>] [--cmd <command>]";
 const TAB_NEW_DEFAULT_WINDOW: &str = "shell";
 
 #[derive(Debug, PartialEq, Eq)]
 struct TabNewOptions {
     session: Option<String>,
     name: String,
+    cwd: Option<String>,
     command: Option<String>,
 }
 
@@ -118,16 +120,14 @@ fn tab_new_with_runner<R: maw_tmux::TmuxRunner>(
     }
 
     let session_target = format!("{session}:");
+    let mut new_window_args = vec!["-t".to_owned(), session_target, "-n".to_owned(), options.name.clone()];
+    if let Some(cwd) = &options.cwd {
+        tab_validate_tmux_cwd(cwd).map_err(|message| (1, message))?;
+        new_window_args.push("-c".to_owned());
+        new_window_args.push(cwd.clone());
+    }
     runner
-        .run(
-            "new-window",
-            &[
-                "-t".to_owned(),
-                session_target,
-                "-n".to_owned(),
-                options.name.clone(),
-            ],
-        )
+        .run("new-window", &new_window_args)
         .map_err(|error| (1, format!("tab new: {}", error.message)))?;
 
     let target = format!("{session}:{}", options.name);
@@ -146,6 +146,7 @@ fn tab_new_with_runner<R: maw_tmux::TmuxRunner>(
 fn tab_parse_new_options(argv: &[String]) -> Result<TabNewOptions, (i32, String)> {
     let mut session = None;
     let mut name = TAB_NEW_DEFAULT_WINDOW.to_owned();
+    let mut cwd = None;
     let mut command = None;
     let mut index = 0;
 
@@ -168,6 +169,24 @@ fn tab_parse_new_options(argv: &[String]) -> Result<TabNewOptions, (i32, String)
                 }
                 command = Some(value.clone());
             }
+            "--cwd" | "-c" => {
+                let flag = argv[index].clone();
+                index += 1;
+                let Some(value) = argv.get(index) else {
+                    return Err(tab_new_usage_error(format!("tab new: {flag} requires a value")));
+                };
+                if value.is_empty() {
+                    return Err(tab_new_usage_error("tab new: cwd requires a non-empty value"));
+                }
+                cwd = Some(value.clone());
+            }
+            value if value.starts_with("--cwd=") => {
+                let value = &value["--cwd=".len()..];
+                if value.is_empty() {
+                    return Err(tab_new_usage_error("tab new: cwd requires a non-empty value"));
+                }
+                cwd = Some(value.to_owned());
+            }
             value if value.starts_with('-') => {
                 return Err(tab_new_usage_error(format!("tab new: unexpected option {value}")));
             }
@@ -186,6 +205,7 @@ fn tab_parse_new_options(argv: &[String]) -> Result<TabNewOptions, (i32, String)
     Ok(TabNewOptions {
         session,
         name,
+        cwd,
         command,
     })
 }
@@ -335,6 +355,14 @@ fn tab_validate_tmux_window_name(name: &str) -> Result<(), String> {
     }
 }
 
+fn tab_validate_tmux_cwd(cwd: &str) -> Result<(), String> {
+    if cwd.is_empty() || cwd.trim() != cwd || cwd.starts_with('-') || cwd.contains('\0') {
+        Err("tmux cwd must be non-empty, unpadded, and not start with '-'".to_owned())
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tab_tests {
     use super::*;
@@ -420,6 +448,29 @@ mod tab_tests {
                 ),
                 ("new-window".to_owned(), strings(&["-t", "alpha:", "-n", "scratch"])),
             ]
+        );
+    }
+
+    #[test]
+    fn tab_new_supports_tmux_new_window_cwd_replacement() {
+        let mut runner = MockTmuxRunner {
+            windows: "0:shell:0\n".to_owned(),
+            ..MockTmuxRunner::default()
+        };
+
+        let output = tab_with_runner(
+            &strings(&["new", "alpha", "--name", "scratch", "-c", "/repo/wt"]),
+            &mut runner,
+        )
+        .expect("tab new -c");
+
+        assert_eq!(output.stdout, "created → alpha:scratch\n");
+        assert_eq!(
+            runner.calls[1],
+            (
+                "new-window".to_owned(),
+                strings(&["-t", "alpha:", "-n", "scratch", "-c", "/repo/wt"])
+            )
         );
     }
 
@@ -510,7 +561,7 @@ mod tab_tests {
             error,
             (
                 2,
-                "tab new: session required outside tmux; pass <session>\nusage: maw tab new [<session>] [--name <window>] [--cmd <command>]".to_owned()
+                "tab new: session required outside tmux; pass <session>\nusage: maw tab new [<session>] [--name <window>] [-c|--cwd <dir>] [--cmd <command>]".to_owned()
             )
         );
         assert_eq!(runner.calls, vec![("display-message".to_owned(), strings(&["-p", "#S"]))]);

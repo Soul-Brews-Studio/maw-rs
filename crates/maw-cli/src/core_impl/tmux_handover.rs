@@ -1,7 +1,12 @@
 const DISPATCH_81: &[DispatcherEntry] = &[
     DispatcherEntry { command: "take", handler: Handler::Sync(take_run_command) },
     DispatcherEntry { command: "handover", handler: Handler::Sync(take_run_command) },
+    DispatcherEntry { command: "mv", handler: Handler::Sync(mv_run_command) },
 ];
+
+// Raw tmux funnel map (#208): kill-window -> `maw kill`; new-window -c -> `maw tab new -c`;
+// move-window across sessions -> `maw take`/`maw handover`; same-session renumber -> `maw mv`;
+// rename-window -> `maw rename`; break-window/promote -> `maw promote`.
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TakeOptions { source: String, target: Option<String> }
@@ -198,6 +203,44 @@ fn take_success_output(
     CliOutput { code: 0, stdout, stderr: String::new() }
 }
 
+const MV_USAGE: &str = "usage: maw mv <session>:<window> <index>";
+
+fn mv_run_command(argv: &[String]) -> CliOutput {
+    match mv_with_runner(argv, &mut maw_tmux::CommandTmuxRunner::new()) {
+        Ok(stdout) => CliOutput { code: 0, stdout, stderr: String::new() },
+        Err(message) if message == MV_USAGE => CliOutput { code: 2, stdout: String::new(), stderr: format!("{message}\n") },
+        Err(message) => CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") },
+    }
+}
+
+fn mv_with_runner<R: maw_tmux::TmuxRunner>(argv: &[String], runner: &mut R) -> Result<String, String> {
+    if matches!(argv.first().map(String::as_str), Some("--help" | "-h")) {
+        return Err(MV_USAGE.to_owned());
+    }
+    let [source_raw, index_raw] = argv else { return Err(MV_USAGE.to_owned()); };
+    let source = take_parse_source(&take_validate_cli_value(source_raw, "source")?)?;
+    let dest_index = mv_parse_index(index_raw)?;
+    let sessions = take_list_sessions(runner)?;
+    let src_session = take_find_session(&sessions, &source.session)?;
+    let src_window = take_resolve_source_window(&src_session.windows, &source.window)
+        .ok_or_else(|| format!("window '{}' not found in session '{}'", source.window, source.session))?;
+    let source_target = format!("{}:{}", src_session.name, src_window.index);
+    let dest_target = format!("{}:{dest_index}", src_session.name);
+    take_validate_tmux_target(&source_target)?;
+    take_validate_tmux_target(&dest_target)?;
+    runner
+        .run("move-window", &["-s".to_owned(), source_target, "-t".to_owned(), dest_target.clone()])
+        .map_err(|error| format!("mv: move-window failed: {}", error.message))?;
+    Ok(format!("  \x1b[32m✓\x1b[0m moved {}:{} → {dest_target}\n", src_session.name, src_window.name))
+}
+
+fn mv_parse_index(value: &str) -> Result<u32, String> {
+    if value.is_empty() || value.trim() != value || value.starts_with('-') || !value.chars().all(|ch| ch.is_ascii_digit()) {
+        return Err("mv index must be a non-negative integer".to_owned());
+    }
+    value.parse::<u32>().map_err(|_| "mv index is too large".to_owned())
+}
+
 fn take_validate_tmux_target_part(value: &str, label: &str) -> Result<(), String> {
     if value.is_empty() || value.trim() != value || value.starts_with('-') || value == "--" {
         return Err(format!("take {label} must be non-empty, unpadded, and not start with '-'"));
@@ -278,9 +321,31 @@ mod take_tests {
 
     #[test]
     fn take_dispatch_registers_take_and_handover() {
-        assert_eq!(DISPATCH_81.len(), 2);
+        assert_eq!(DISPATCH_81.len(), 3);
         assert_eq!(DISPATCH_81[0].command, "take");
         assert_eq!(DISPATCH_81[1].command, "handover");
+        assert_eq!(DISPATCH_81[2].command, "mv");
+    }
+
+    #[test]
+    fn mv_renumbers_window_inside_same_session() {
+        let mut tmux = TakeMockTmux { windows: "neo\t2\twork\n".to_owned(), ..Default::default() };
+
+        let stdout = mv_with_runner(&take_strings(&["neo:work", "5"]), &mut tmux).expect("mv");
+
+        assert_eq!(stdout, "  \x1b[32m✓\x1b[0m moved neo:work → neo:5\n");
+        assert_eq!(tmux.calls[0], ("list-windows".to_owned(), take_strings(&["-a", "-F", "#{session_name}\t#{window_index}\t#{window_name}"])));
+        assert_eq!(tmux.calls[1], ("move-window".to_owned(), take_strings(&["-s", "neo:2", "-t", "neo:5"])));
+    }
+
+    #[test]
+    fn mv_rejects_bad_index_before_move_window() {
+        let mut tmux = TakeMockTmux::default();
+
+        let err = mv_with_runner(&take_strings(&["neo:work", "-1"]), &mut tmux).expect_err("bad index");
+
+        assert!(err.contains("index"));
+        assert!(tmux.calls.is_empty());
     }
 
     #[test]
