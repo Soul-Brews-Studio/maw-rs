@@ -15,11 +15,16 @@ async fn notify_run_async_impl(raw_args: &[String]) -> CliOutput {
         Err(message) => return notify_usage_error(&message),
     };
     let config = load_hey_config();
+    let sender_oracle = resolve_hey_sender_oracle(&config);
     let mut tmux = TmuxClient::local();
     let sessions = route_sessions_from_tmux(&mut tmux);
     match resolve_route_target(&args.target, &config.route, &sessions) {
-        RouteResult::Local { target } | RouteResult::SelfNode { target } => notify_local(&args, &target, &config),
-        RouteResult::Peer { peer_url, target, node: _ } => notify_peer(&peer_url, &target, &args, &config).await,
+        RouteResult::Local { target } | RouteResult::SelfNode { target } => {
+            notify_local(&args, &target, &config, &sender_oracle)
+        }
+        RouteResult::Peer { peer_url, target, node: _ } => {
+            notify_peer(&peer_url, &target, &args, &config, &sender_oracle).await
+        }
         RouteResult::Error { detail, hint, .. } => notify_route_error(&detail, hint.as_deref()),
     }
 }
@@ -81,9 +86,14 @@ fn notify_validate_from(value: &str) -> Result<String, String> {
     Ok(value.to_owned())
 }
 
-fn notify_local(args: &NotifyArgs, resolved_target: &str, config: &HeyConfig) -> CliOutput {
+fn notify_local(
+    args: &NotifyArgs,
+    resolved_target: &str,
+    config: &HeyConfig,
+    sender_oracle: &str,
+) -> CliOutput {
     let env = inbox_real_env();
-    let from = notify_display_from(args.from.as_deref(), config);
+    let from = notify_display_from(args.from.as_deref(), config, sender_oracle);
     let to = notify_inbox_to(&args.target, resolved_target);
     match inbox_write_file(&env.inbox_dir, &from, &to, &args.text, inbox_now_ms()) {
         Ok(filename) => CliOutput { code: 0, stdout: notify_success(&to, &filename, args.force), stderr: String::new() },
@@ -91,7 +101,13 @@ fn notify_local(args: &NotifyArgs, resolved_target: &str, config: &HeyConfig) ->
     }
 }
 
-async fn notify_peer(peer_url: &str, target: &str, args: &NotifyArgs, config: &HeyConfig) -> CliOutput {
+async fn notify_peer(
+    peer_url: &str,
+    target: &str,
+    args: &NotifyArgs,
+    config: &HeyConfig,
+    sender_oracle: &str,
+) -> CliOutput {
     let send_args = SendArgs {
         target: target.to_owned(),
         text: args.text.clone(),
@@ -101,7 +117,9 @@ async fn notify_peer(peer_url: &str, target: &str, args: &NotifyArgs, config: &H
         trust: args.trust,
         dry_run: false,
     };
-    let mut output = gated_send_peer_message("notify", peer_url, target, &send_args, config, false).await;
+    let mut output =
+        gated_send_peer_message("notify", peer_url, target, &send_args, config, sender_oracle, false)
+            .await;
     if output.code == 0 && args.force { output.stderr.push_str("\x1b[90mnote: --force is not meaningful for notify (delivery is always inbox-only).\x1b[0m\n"); }
     output
 }
@@ -110,13 +128,17 @@ fn notify_route_error(detail: &str, hint: Option<&str>) -> CliOutput {
     CliOutput { code: 2, stdout: String::new(), stderr: if let Some(hint) = hint { format!("notify: {detail}; {hint}\n") } else { format!("notify: {detail}\n") } }
 }
 
-fn notify_display_from(explicit: Option<&str>, config: &HeyConfig) -> String {
-    explicit.map_or_else(|| {
-        if let Ok(sender) = std::env::var("MAW_SENDER") { return sender; }
-        let node = config.node.as_deref().unwrap_or("local");
-        let oracle = config.oracle.as_deref().unwrap_or(DEFAULT_ORACLE);
-        format!("{node}:{oracle}")
-    }, ToOwned::to_owned)
+fn notify_display_from(explicit: Option<&str>, config: &HeyConfig, sender_oracle: &str) -> String {
+    explicit.map_or_else(
+        || {
+            if let Ok(sender) = std::env::var("MAW_SENDER") {
+                return sender;
+            }
+            let node = config.node.as_deref().unwrap_or("local");
+            format!("{node}:{sender_oracle}")
+        },
+        ToOwned::to_owned,
+    )
 }
 
 fn notify_inbox_to(requested: &str, resolved: &str) -> String {

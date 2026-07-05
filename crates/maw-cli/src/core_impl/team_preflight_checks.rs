@@ -412,6 +412,7 @@ mod team_preflight_tests {
             ],
             defaults_worktree: false,
             governance_requires_human_approval: false,
+            ..Default::default()
         }
     }
 

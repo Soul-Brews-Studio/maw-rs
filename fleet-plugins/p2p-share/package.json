@@ -1,0 +1,9 @@
+{
+  "name": "maw-fleet-p2p-share",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "werift": "^0.20.0"
+  }
+}

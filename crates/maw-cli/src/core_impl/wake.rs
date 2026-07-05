@@ -103,6 +103,9 @@ impl WakeTmuxNative for WakeNativeTmux {
 
 fn wake_async_native(args: Vec<String>) -> Pin<Box<dyn Future<Output = CliOutput> + Send>> {
     Box::pin(async move {
+        if wants_help(&args, wake_help_value_flags()) {
+            return help_output(wake_usage());
+        }
         match wake_parse_args(&args) {
             Ok(options) if wake_should_use_peer_target(&options) => run_wake_async(args).await,
             Ok(_) => run_wake_command(&args),
@@ -112,6 +115,9 @@ fn wake_async_native(args: Vec<String>) -> Pin<Box<dyn Future<Output = CliOutput
 }
 
 fn run_wake_command(argv: &[String]) -> CliOutput {
+    if wants_help(argv, wake_help_value_flags()) {
+        return help_output(wake_usage());
+    }
     match wake_run(argv, &mut WakeNativeTmux) {
         Ok((code, stdout)) => CliOutput { code, stdout, stderr: String::new() },
         Err(message) => CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") },
@@ -268,6 +274,28 @@ fn wake_finalize_options(mut options: WakeOptionsNative, positionals: &[String])
 
 fn wake_usage() -> String {
     "usage: maw wake <target|all> [--task <slug>|--wt <slug>] [--repo <org/repo>] [--prompt <text>] [--all --all-local --attach --no-attach --dry-run --fresh --from-snapshot --kill --layout <nested|legacy> --list --main --new --parent <session> --peer <node> --pick --resume --snapshot <id> --solo --split]".to_owned()
+}
+
+fn wake_help_value_flags() -> &'static [&'static str] {
+    &[
+        "--task",
+        "--wt",
+        "--prompt",
+        "--repo",
+        "--issue",
+        "--pr",
+        "--incubate",
+        "--parent",
+        "--session",
+        "--peer",
+        "--from",
+        "--layout",
+        "--snapshot",
+        "-e",
+        "--engine",
+        "--name",
+        "--repo-path",
+    ]
 }
 
 fn wake_validate_target_value(value: &str, label: &str) -> Result<(), String> {

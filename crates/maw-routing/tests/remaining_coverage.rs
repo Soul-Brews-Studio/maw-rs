@@ -30,13 +30,27 @@ fn colon_query_without_window_uses_first_session_window() {
 }
 
 #[test]
-fn colon_numeric_window_falls_back_to_direct_target() {
-    let sessions = vec![session("dev", vec![window(5, "main")])];
+fn colon_numeric_window_resolves_existing_index_exactly() {
+    let sessions = vec![session("dev", vec![window(4, "work"), window(5, "main")])];
 
     assert_eq!(
         resolve_target("dev:4", &MawConfig::default(), &sessions),
         ResolveResult::Local {
             target: "dev:4".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn colon_numeric_window_miss_is_loud_without_direct_fallback() {
+    let sessions = vec![session("dev", vec![window(5, "main")])];
+
+    assert_eq!(
+        resolve_target("dev:4", &MawConfig::default(), &sessions),
+        ResolveResult::Error {
+            reason: "session_window_not_found".to_owned(),
+            detail: "no window '4' in session 'dev'".to_owned(),
+            hint: Some("windows: dev:5 (main)".to_owned()),
         }
     );
 }

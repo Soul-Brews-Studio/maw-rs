@@ -1,0 +1,17 @@
+{
+  "name": "share",
+  "version": "0.1.0",
+  "sdk": "^1.0.0",
+  "runtime": "bun-dev",
+  "target": "js",
+  "entry": "src/plugin.ts",
+  "description": "Minimal maw terminal-share bridge for sshx-fork sessions. Bun-dev tier only; stores local share URL state under ~/.maw/share.",
+  "author": "Soul Brews Studio",
+  "license": "MIT",
+  "weight": 0,
+  "schemaVersion": 1,
+  "cli": {
+    "command": "share",
+    "help": "maw share <start|ls|url|stop> [--name <label>]"
+  }
+}

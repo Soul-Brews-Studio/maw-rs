@@ -1,3 +1,8 @@
+const DISPATCH_322: &[DispatcherEntry] = &[
+    DispatcherEntry { command: "peer-probe", handler: Handler::Sync(run_peer_probe_plan) },
+    DispatcherEntry { command: "split-policy", handler: Handler::Sync(run_split_policy_plan) },
+];
+
 fn parse_optional_bool(value: Option<&str>, default: bool, name: &str) -> Result<bool, String> {
     match value {
         None | Some("") => Ok(default),

@@ -52,6 +52,7 @@ esac
         r#"#!/bin/sh
 printf '%s\n' "$*" >> "$MAW_FAKE_GIT_LOG"
 if [ "$3" = "branch" ]; then exit 1; fi
+if [ "$3" = "for-each-ref" ]; then exit 0; fi
 if [ "$3" = "rev-parse" ] && [ "$4" = "--show-toplevel" ]; then
   cd "$2" 2>/dev/null || exit 128
   pwd
@@ -157,7 +158,7 @@ fn native_workon_create_nested_matches_committed_golden_without_ref_checkout() {
     assert_eq!(String::from_utf8(output.stderr).expect("stderr"), "");
     let tmux_log = fs::read_to_string(root.join("tmux.log")).expect("tmux log");
     assert!(
-        tmux_log.contains("new-window -t 50-mawjs: -n demo-feat -c"),
+        tmux_log.contains("new-window -P -F #{window_id} -t 50-mawjs: -n demo-feat -c"),
         "{tmux_log}"
     );
     assert!(
@@ -259,7 +260,7 @@ fn native_workon_dot_resolves_current_repo() {
     assert!(stdout.contains("workon 'demo' in 50-mawjs"), "{stdout}");
     let tmux_log = fs::read_to_string(root.join("tmux.log")).expect("tmux log");
     assert!(
-        tmux_log.contains("new-window -t 50-mawjs: -n demo -c"),
+        tmux_log.contains("new-window -P -F #{window_id} -t 50-mawjs: -n demo -c"),
         "{tmux_log}"
     );
     let git_log = fs::read_to_string(root.join("git.log")).expect("git log");

@@ -84,10 +84,47 @@ pub fn sign_headers_v3_at(
 }
 
 #[must_use]
+pub fn resolve_sender_oracle(
+    session_window: Option<&str>,
+    tmux_window_name: Option<&str>,
+    config_oracle: Option<&str>,
+) -> String {
+    sender_oracle_from_window_source(session_window)
+        .or_else(|| sender_oracle_from_window_source(tmux_window_name))
+        .or_else(|| nonempty_trimmed(config_oracle).map(str::to_owned))
+        .unwrap_or_else(|| DEFAULT_ORACLE.to_owned())
+}
+
+#[must_use]
 pub fn resolve_from_address(config: &FromAddressConfig) -> Option<String> {
     let node = config.node.as_deref()?;
-    let oracle = config.oracle.as_deref().unwrap_or(DEFAULT_ORACLE);
+    let oracle = resolve_sender_oracle(None, None, config.oracle.as_deref());
     Some(format!("{oracle}:{node}"))
+}
+
+fn sender_oracle_from_window_source(value: Option<&str>) -> Option<String> {
+    let value = nonempty_trimmed(value)?;
+    let window = value
+        .split_once(':')
+        .map_or(value, |(_session, window)| window)
+        .trim();
+    let window = strip_numeric_pane_suffix(window).trim();
+    nonempty_trimmed(Some(window)).map(str::to_owned)
+}
+
+fn strip_numeric_pane_suffix(value: &str) -> &str {
+    let Some((window, pane)) = value.rsplit_once('.') else {
+        return value;
+    };
+    if !pane.is_empty() && pane.chars().all(|ch| ch.is_ascii_digit()) {
+        window
+    } else {
+        value
+    }
+}
+
+fn nonempty_trimmed(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
 }
 
 #[must_use]

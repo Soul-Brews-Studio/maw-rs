@@ -1,3 +1,7 @@
+const DISPATCH_302: &[DispatcherEntry] = &[
+    DispatcherEntry { command: "bind-host", handler: Handler::Sync(run_bind_host_plan) },
+];
+
 fn parse_plugin_manifest_invoke_source(value: &str) -> Result<InvokeSource, String> {
     match value {
         "cli" => Ok(InvokeSource::Cli),

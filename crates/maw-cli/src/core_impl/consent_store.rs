@@ -1,3 +1,8 @@
+const DISPATCH_317: &[DispatcherEntry] = &[
+    DispatcherEntry { command: "consent-store", handler: Handler::Sync(run_consent_store_plan) },
+    DispatcherEntry { command: "consent-expiry", handler: Handler::Sync(run_consent_expiry_plan) },
+];
+
 fn render_consent_approval_plan_json(
     mode: &str,
     result: &ConsentApprovalResult,

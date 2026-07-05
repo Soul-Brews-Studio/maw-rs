@@ -1,3 +1,7 @@
+const DISPATCH_305: &[DispatcherEntry] = &[
+    DispatcherEntry { command: "send-enter", handler: Handler::Sync(run_send_enter_command) },
+];
+
 fn run_attach_plan(argv: &[String]) -> CliOutput {
     let mut print = false;
     let mut readonly = false;
@@ -248,6 +252,9 @@ fn attach_action_session(action: &TmuxAttachAction) -> &str {
 
 
 fn run_send_enter_command(argv: &[String]) -> CliOutput {
+    if wants_help(argv, &["--N", "-N", "--n"]) {
+        return help_output(send_enter_usage());
+    }
     let (target, count) = match parse_send_enter_command_args(argv) {
         Ok(parsed) => parsed,
         Err(message) => return send_enter_usage_error(&message),
@@ -305,7 +312,7 @@ fn parse_send_enter_command_args(argv: &[String]) -> Result<(String, usize), Str
         index += 1;
     }
     let Some(target) = target else {
-        return Err("usage: maw-rs send-enter <target> [--N <count>]".to_owned());
+        return Err(send_enter_usage().to_owned());
     };
     Ok((target, count))
 }
@@ -321,40 +328,8 @@ fn resolve_local_tmux_command_target(
     client: &mut TmuxClient<maw_tmux::CommandTmuxRunner>,
     query: &str,
 ) -> Result<String, String> {
-    if query.starts_with('%') {
-        return Ok(query.to_owned());
-    }
-    let sessions = client
-        .list_all()
-        .into_iter()
-        .map(|session| RouteSession {
-            name: session.name,
-            windows: session
-                .windows
-                .into_iter()
-                .map(|window| RouteWindow {
-                    index: window.index,
-                    name: window.name,
-                    active: window.active,
-                    kind: None,
-                })
-                .collect(),
-            source: None,
-        })
-        .collect::<Vec<_>>();
-    match resolve_route_target(query, &RouteConfig::default(), &sessions) {
-        RouteResult::Local { target } | RouteResult::SelfNode { target } => Ok(target),
-        RouteResult::Peer { node, target, .. } => Err(format!(
-            "cross-node target '{query}' (node '{node}', target '{target}') is not supported"
-        )),
-        RouteResult::Error { detail, hint, .. } => {
-            if let Some(hint) = hint {
-                Err(format!("{detail} — {hint}"))
-            } else {
-                Err(detail)
-            }
-        }
-    }
+    let sessions = tmux_sessions_to_route_sessions(client.list_all());
+    resolve_local_tmux_target_from_sessions(query, &sessions)
 }
 
 fn command_target_error(command: &str, message: &str) -> CliOutput {
@@ -369,6 +344,10 @@ fn send_enter_usage_error(message: &str) -> CliOutput {
     CliOutput {
         code: 2,
         stdout: String::new(),
-        stderr: format!("{message}\nusage: maw-rs send-enter <target> [--N <count>]\n"),
+        stderr: format!("{message}\n{}\n", send_enter_usage()),
     }
+}
+
+fn send_enter_usage() -> &'static str {
+    "usage: maw-rs send-enter <target> [--N <count>]"
 }

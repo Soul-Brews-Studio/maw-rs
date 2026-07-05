@@ -1,3 +1,8 @@
+const DISPATCH_315: &[DispatcherEntry] = &[
+    DispatcherEntry { command: "auto-pair-proof", handler: Handler::Sync(run_auto_pair_proof_plan) },
+    DispatcherEntry { command: "consent-pin", handler: Handler::Sync(run_consent_pin_plan) },
+];
+
 fn parse_federation_health_peer(value: &str) -> Result<FederationPeerStatus, String> {
     let parts: Vec<&str> = value.split('|').collect();
     if parts.len() != 6 {

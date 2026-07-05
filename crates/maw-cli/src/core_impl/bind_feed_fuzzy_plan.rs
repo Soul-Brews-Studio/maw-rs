@@ -1,3 +1,8 @@
+const DISPATCH_306: &[DispatcherEntry] = &[
+    DispatcherEntry { command: "feed", handler: Handler::Sync(run_feed_plan) },
+    DispatcherEntry { command: "fuzzy", handler: Handler::Sync(run_fuzzy_plan) },
+];
+
 fn run_bind_host_constants_plan(argv: &[String]) -> CliOutput {
     let mut plan_json = false;
     for arg in argv {

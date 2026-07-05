@@ -21,11 +21,9 @@ maw team up <team>               # spawns
 ## Path B — per-worker native wake (recommended; avoids #41)
 ```bash
 codex update                                                   # 0. avoid the version-update prompt blocking boot
-git worktree add agents/<name> -b agents/<name> origin/<base>  # 1. worktree first (verify it exists)
-maw wake <oracle>-codex-N --no-attach --session <NNN-oracle> \
-     -e <engine> --repo-path "$(pwd)/agents/<name>"            # 2. ABSOLUTE repo-path (#95: relative double-cds → engine dies silently)
-maw peek <session>:<oracle>-codex-N                            # 3. confirm engine idle prompt (gpt-5.5), not shell/trust/update
-maw hey <session>:<FULL-window-name> "<task + done-criteria>"  # 4. dispatch (v26.7.3+ hey confirm-submits itself — no send-enter needed)
+maw work <repo|url|.> --wt <name> --fresh -e <engine>           # 1. creates agents/<N>-<name>, branch agents/<N>-<name>, and boots the window
+maw peek <session>:<FULL-window-name>                           # 2. confirm engine idle prompt (gpt-5.5), not shell/trust/update
+maw hey <session>:<FULL-window-name> "<task + done-criteria>"   # 3. dispatch (v26.7.3+ hey confirm-submits itself — no send-enter needed)
 ```
 
 ## Gotchas under maw-rs (current)

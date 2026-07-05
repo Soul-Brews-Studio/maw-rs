@@ -9,7 +9,8 @@ use maw_auth::{
     hash_body, hash_consent_pin, is_loopback, is_valid_pair_code_shape, normalize_pair_code,
     pair_api_accept_plan, pair_api_auto_plan, pair_api_generate_plan, pair_api_probe_plan,
     pair_api_status_plan, pretty_pair_code, redact_pair_code, reject_consent_plan,
-    request_consent_plan, resolve_from_address, sign, sign_auto_pair_proof, sign_headers_at,
+    request_consent_plan, resolve_from_address, resolve_sender_oracle, sign, sign_auto_pair_proof,
+    sign_headers_at,
     sign_headers_v3_at, sign_hmac_sig, sign_request_v3, trust_key, verify, verify_auto_pair_proof,
     verify_consent_pin, verify_hmac_sig, verify_request, ApprovedBy, AutoPairAddOutcome,
     AutoPairIdentity, AutoPairInput, ConsentAction, ConsentApprovalResult, ConsentRequestArgs,
@@ -66,7 +67,8 @@ use maw_split::{decide_split_policy, SplitPolicyDecision, SplitPolicyInput};
 use maw_tmux::{
     decide_tmux_attach_action, mark_peer_targets_live, resolve_tmux_live_state,
     resolve_tmux_attach_session, tmux_attach_spawn_command, DiscoverLivePane, PeerTargetWithLive,
-    TmuxAttachAction, TmuxAttachSessionResolution, TmuxClient, TmuxLiveStateResult, TmuxPane, TmuxSession,
+    CommandTmuxRunner, TmuxAttachAction, TmuxAttachSessionResolution, TmuxClient,
+    TmuxLiveStateResult, TmuxPane, TmuxSession,
 };
 use maw_transport::{
     classify_error, classify_symmetric_federation_status, FederationPeerStatus, FederationPeerView,
@@ -200,55 +202,7 @@ const DISPATCH_01: &[DispatcherEntry] = &[
     DispatcherEntry { command: "-v", handler: Handler::Sync(version_handler) },
     DispatcherEntry { command: "version", handler: Handler::Sync(version_handler) },
     DispatcherEntry { command: "auto-wake", handler: Handler::Sync(run_auto_wake_plan) },
-    DispatcherEntry { command: "hub", handler: Handler::Sync(run_hub_plan) },
-    DispatcherEntry { command: "xdg", handler: Handler::Sync(run_xdg_plan) },
-    DispatcherEntry { command: "plugin-scaffold", handler: Handler::Sync(run_plugin_scaffold_plan) },
-    DispatcherEntry { command: "bind-host", handler: Handler::Sync(run_bind_host_plan) },
-    DispatcherEntry { command: "tmux", handler: Handler::Sync(run_tmux_command) },
-    DispatcherEntry { command: "bring", handler: Handler::Sync(run_bring_plan) },
-    DispatcherEntry { command: "b", handler: Handler::Sync(run_bring_plan) },
-    DispatcherEntry { command: "send-enter", handler: Handler::Sync(run_send_enter_command) },
-    DispatcherEntry { command: "feed", handler: Handler::Sync(run_feed_plan) },
-    DispatcherEntry { command: "hey", handler: Handler::Async(run_hey_async) },
-    DispatcherEntry { command: "send", handler: Handler::Async(run_send_async) },
-    DispatcherEntry { command: "health", handler: Handler::Async(run_health_async) },
-    DispatcherEntry { command: "reply", handler: Handler::Async(run_reply_async) },
-    DispatcherEntry { command: "rp", handler: Handler::Async(run_reply_async) },
-    DispatcherEntry { command: "fuzzy", handler: Handler::Sync(run_fuzzy_plan) },
-    DispatcherEntry { command: "resolve", handler: Handler::Sync(run_resolve_plan) },
-    DispatcherEntry { command: "identity", handler: Handler::Sync(run_identity_plan) },
-    DispatcherEntry { command: "normalize", handler: Handler::Sync(run_normalize_plan) },
-    DispatcherEntry { command: "calver", handler: Handler::Sync(run_calver_plan) },
-    DispatcherEntry { command: "worktree-window", handler: Handler::Sync(run_worktree_window_plan) },
-    DispatcherEntry { command: "route", handler: Handler::Sync(run_route_plan) },
-    DispatcherEntry { command: "discover", handler: Handler::Sync(run_discover_plan) },
     DispatcherEntry { command: "discord", handler: Handler::Async(run_discord_async) },
-    DispatcherEntry { command: "federation-identity", handler: Handler::Sync(run_federation_identity_plan) },
-    DispatcherEntry { command: "federation-health", handler: Handler::Sync(run_federation_health_plan) },
-    DispatcherEntry { command: "federation-sync", handler: Handler::Sync(run_federation_sync_plan) },
-    DispatcherEntry { command: "auto-pair-proof", handler: Handler::Sync(run_auto_pair_proof_plan) },
-    DispatcherEntry { command: "consent-constants", handler: Handler::Sync(run_consent_constants_plan) },
-    DispatcherEntry { command: "consent-pin", handler: Handler::Sync(run_consent_pin_plan) },
-    DispatcherEntry { command: "consent-request", handler: Handler::Sync(run_consent_request_plan) },
-    DispatcherEntry { command: "consent-approval", handler: Handler::Sync(run_consent_approval_plan) },
-    DispatcherEntry { command: "consent-store", handler: Handler::Sync(run_consent_store_plan) },
-    DispatcherEntry { command: "consent-expiry", handler: Handler::Sync(run_consent_expiry_plan) },
-    DispatcherEntry { command: "consent-cleanup", handler: Handler::Sync(run_consent_cleanup_plan) },
-    DispatcherEntry { command: "consent-trust-revoke", handler: Handler::Sync(run_consent_trust_revoke_plan) },
-    DispatcherEntry { command: "consent-trust-check", handler: Handler::Sync(run_consent_trust_check_plan) },
-    DispatcherEntry { command: "consent-pending-read", handler: Handler::Sync(run_consent_pending_read_plan) },
-    DispatcherEntry { command: "consent-pending-status", handler: Handler::Sync(run_consent_pending_status_plan) },
-    DispatcherEntry { command: "recent-hello", handler: Handler::Sync(run_recent_hello_plan) },
-    DispatcherEntry { command: "pair-code", handler: Handler::Sync(run_pair_code_plan) },
-    DispatcherEntry { command: "pair-code-store", handler: Handler::Sync(run_pair_code_store_plan) },
-    DispatcherEntry { command: "pair-api", handler: Handler::Sync(run_pair_api_plan) },
-    DispatcherEntry { command: "pair-api-auto", handler: Handler::Sync(run_pair_api_auto_plan) },
-    DispatcherEntry { command: "peer-sources", handler: Handler::Sync(run_peer_sources_plan) },
-    DispatcherEntry { command: "peer-probe", handler: Handler::Sync(run_peer_probe_plan) },
-    DispatcherEntry { command: "policy", handler: Handler::Sync(run_policy_plan) },
-    DispatcherEntry { command: "plugin-policy", handler: Handler::Sync(run_policy_plan) },
-    DispatcherEntry { command: "split-policy", handler: Handler::Sync(run_split_policy_plan) },
-    DispatcherEntry { command: "transport", handler: Handler::Sync(run_transport_plan) },
     #[cfg(test)]
     DispatcherEntry { command: "__async-dispatch-test", handler: Handler::Async(run_async_dispatch_test) },
 ];
@@ -296,7 +250,7 @@ mod dispatcher_fragment_tests {
 
     const CORE_COMMANDS: &[&str] = &[
         "hey", "send", "serve", "health", "ls", "wake", "hub", "tmux", "init", "reply", "run",
-        "attach",
+        "attach", "bud", "buddy",
     ];
 
     #[test]
@@ -479,8 +433,10 @@ fn dispatch_cli_plugin(argv: &[String]) -> Option<CliOutput> {
     // Ship-tier WASM dispatch runs on the real Extism runtime so plugins that import
     // host functions (maw.exec.*, maw.fs.*, …) load. The MvpWasmInvokeRuntime toy
     // parser rejected any module with imports and is retained only for no-deps unit
-    // tests in maw-plugin-manifest.
-    let mut runtime = ExtismWasmInvokeRuntime::default();
+    // tests in maw-plugin-manifest. with_manifest_fs_roots grants declared fs caps
+    // from the fixed registry (e.g. fs:read:teams) — same wiring as the internal
+    // plugin-manifest invoke path; without it every maw.fs.* call is denied here.
+    let mut runtime = ExtismWasmInvokeRuntime::default().with_manifest_fs_roots();
     Some(render_cli_plugin_result(invoke_plugin(plugin, &ctx, &mut runtime)))
 }
 

@@ -1,3 +1,7 @@
+const DISPATCH_320: &[DispatcherEntry] = &[
+    DispatcherEntry { command: "pair-api", handler: Handler::Sync(run_pair_api_plan) },
+];
+
 enum PairCodeStorePlanResult {
     Register(PairEntry),
     Lookup(LookupResult),

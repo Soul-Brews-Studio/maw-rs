@@ -1,3 +1,8 @@
+const DISPATCH_310: &[DispatcherEntry] = &[
+    DispatcherEntry { command: "calver", handler: Handler::Sync(run_calver_plan) },
+    DispatcherEntry { command: "worktree-window", handler: Handler::Sync(run_worktree_window_plan) },
+];
+
 fn render_route_plan_json(query: &str, result: &RouteResult) -> String {
     let mut fields = vec![
         "\"command\":\"route\"".to_owned(),

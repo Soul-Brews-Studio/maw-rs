@@ -9,18 +9,18 @@
 //! 4. If the module introduces a protected route, extend `maw_auth::is_protected()` in the same PR.
 //! 5. Never mount after `servecore_apply_pipeline`; all module routers must pass through default-deny.
 
-pub mod agents;
-pub mod debug;
-pub mod federation;
-pub mod god_ui;
-pub mod identity;
-pub mod pair;
-pub mod thread_store;
-pub mod triggers;
-pub mod triggers_mutate;
-pub mod views;
-pub mod worktrees;
-pub mod ws;
+pub mod agent_routes;
+pub mod debug_routes;
+pub mod federation_routes;
+pub mod god_mode_ui;
+pub mod identity_routes;
+pub mod pairing;
+pub mod static_views;
+pub mod thread_routes;
+pub mod trigger_mutation_routes;
+pub mod trigger_routes;
+pub mod websocket_routes;
+pub mod worktree_routes;
 use super::{ServecoreLifecycle, ServecoreLifecycleModule};
 use axum::Router;
 
@@ -56,18 +56,18 @@ where
     S: Clone + Send + Sync + 'static,
 {
     vec![
-        agents::agents_registration(),
-        debug::debug_registration(),
-        federation::federation_registration(),
-        god_ui::godui_registration(),
-        identity::identity_registration(),
-        pair::pair_registration(),
-        thread_store::threadstore_registration(),
-        triggers::triggers_registration(),
-        triggers_mutate::triggersmutate_registration(),
-        views::views_registration(),
-        worktrees::worktrees_registration(),
-        ws::ws_registration(),
+        agent_routes::agents_registration(),
+        debug_routes::debug_registration(),
+        federation_routes::federation_registration(),
+        god_mode_ui::godui_registration(),
+        identity_routes::identity_registration(),
+        pairing::pair_registration(),
+        thread_routes::threadstore_registration(),
+        trigger_routes::triggers_registration(),
+        trigger_mutation_routes::triggersmutate_registration(),
+        static_views::views_registration(),
+        worktree_routes::worktrees_registration(),
+        websocket_routes::ws_registration(),
     ]
 }
 

@@ -149,10 +149,7 @@ async fn inbox_run(
     env: &InboxEnv,
     sender: &mut impl InboxSender,
 ) -> Result<String, String> {
-    if argv
-        .first()
-        .is_some_and(|arg| matches!(arg.as_str(), "--help" | "-h"))
-    {
+    if wants_help_before_positionals(argv, &["--from", "--last"]) {
         return Ok(format!("usage: {INBOX_USAGE}\n"));
     }
     match argv.first().map(String::as_str) {
@@ -160,6 +157,7 @@ async fn inbox_run(
         Some("show-pending" | "pending-show") => inbox_run_show_pending(&argv[1..], env, inbox_now_ms()),
         Some("approve") => inbox_run_approve(&argv[1..], env, sender, inbox_now_ms()).await,
         Some("reject") => inbox_run_reject(&argv[1..], env, inbox_now_ms()),
+        Some("list" | "ls") => inbox_run_list(&argv[1..], env, inbox_now_ms()),
         Some("read") => inbox_run_mark_read(&argv[1..], env),
         Some("show") => inbox_run_show(&argv[1..], env),
         Some("write") => inbox_run_write(&argv[1..], env, inbox_now_ms()),
@@ -214,15 +212,10 @@ fn inbox_resolve_dir(config: &serde_json::Value) -> std::path::PathBuf {
 
 fn inbox_run_list(argv: &[String], env: &InboxEnv, now_ms: u64) -> Result<String, String> {
     let options = inbox_parse_list_args(argv)?;
-    let mut messages = inbox_load_messages(&env.inbox_dir)?;
-    if options.unread {
-        messages.retain(|message| !message.read);
-    }
-    if let Some(from) = &options.from {
-        messages.retain(|message| &message.from == from);
-    }
+    let messages = inbox_load_messages(&env.inbox_dir)?;
+    let rows = inbox_list_rows(&messages, &options);
     Ok(inbox_render_list(
-        &messages,
+        &rows,
         options.last.unwrap_or(20),
         now_ms,
     ))
@@ -273,24 +266,57 @@ fn inbox_parse_list_args(argv: &[String]) -> Result<InboxListOptions, String> {
     Ok(options)
 }
 
-fn inbox_render_list(messages: &[InboxMessage], limit: usize, now_ms: u64) -> String {
-    if messages.is_empty() {
+#[derive(Debug, Clone, Copy)]
+struct InboxListRow<'a> {
+    id: usize,
+    message: &'a InboxMessage,
+}
+
+fn inbox_list_rows<'a>(
+    messages: &'a [InboxMessage],
+    options: &InboxListOptions,
+) -> Vec<InboxListRow<'a>> {
+    messages
+        .iter()
+        .enumerate()
+        .filter_map(|(index, message)| {
+            if options.unread && message.read {
+                return None;
+            }
+            if options
+                .from
+                .as_ref()
+                .is_some_and(|from| &message.from != from)
+            {
+                return None;
+            }
+            Some(InboxListRow {
+                id: index + 1,
+                message,
+            })
+        })
+        .collect()
+}
+
+fn inbox_render_list(rows: &[InboxListRow<'_>], limit: usize, now_ms: u64) -> String {
+    if rows.is_empty() {
         return "\u{001b}[90mno inbox messages\u{001b}[0m\n".to_owned();
     }
     let mut out = format!(
         "\n\u{001b}[36mINBOX\u{001b}[0m ({} total)\n\n",
-        messages.len()
+        rows.len()
     );
-    out.push_str("  R FROM           WHEN       SUBJECT\n");
-    out.push_str("  - -------------- ---------- --------------------------------------------\n");
-    for message in messages.iter().take(limit) {
-        inbox_render_list_row(&mut out, message, now_ms);
+    out.push_str("  ID R FROM           WHEN       SUBJECT\n");
+    out.push_str("  -- - -------------- ---------- --------------------------------------------\n");
+    for row in rows.iter().take(limit) {
+        inbox_render_list_row(&mut out, row, now_ms);
     }
     out.push('\n');
     out
 }
 
-fn inbox_render_list_row(out: &mut String, message: &InboxMessage, now_ms: u64) {
+fn inbox_render_list_row(out: &mut String, row: &InboxListRow<'_>, now_ms: u64) {
+    let message = row.message;
     let dot = if message.read {
         "\u{001b}[90m○\u{001b}[0m"
     } else {
@@ -299,37 +325,37 @@ fn inbox_render_list_row(out: &mut String, message: &InboxMessage, now_ms: u64) 
     let from = inbox_pad(&inbox_truncate(&message.from, 14), 14);
     let when = inbox_pad(&inbox_relative_time(message.timestamp_ms, now_ms), 10);
     let subject = inbox_truncate(&message.body.replace('\n', " "), 50);
-    let _ = writeln!(out, "  {dot} {from} {when} {subject}");
+    let _ = writeln!(out, "  {:>2} {dot} {from} {when} {subject}", row.id);
 }
 
 fn inbox_run_mark_read(argv: &[String], env: &InboxEnv) -> Result<String, String> {
     let id = inbox_single_id_arg(argv, "usage: maw inbox read <id>")?;
     let Some(message) = inbox_find_message(&env.inbox_dir, id)? else {
-        return Ok(format!(
-            "\u{001b}[31merror\u{001b}[0m: message not found: {id}\n"
-        ));
+        return Err(format!("message not found: {id}"));
     };
+    let mut out = inbox_render_show(&message);
     if message.read {
-        return Ok(format!(
-            "\u{001b}[90malready read:\u{001b}[0m {}\n",
+        let _ = writeln!(
+            out,
+            "\n\u{001b}[90malready read:\u{001b}[0m {}",
             message.filename
-        ));
+        );
+        return Ok(out);
     }
     let content = std::fs::read_to_string(&message.path)
         .map_err(|error| format!("inbox: read {}: {error}", message.path.display()))?;
     let updated = inbox_mark_frontmatter_read(&content, inbox_now_ms());
     if updated == content {
-        return Ok(format!(
-            "\u{001b}[31merror\u{001b}[0m: could not mark read: {}\n",
-            message.filename
-        ));
+        return Err(format!("could not mark read: {}", message.filename));
     }
     std::fs::write(&message.path, updated)
         .map_err(|error| format!("inbox: write {}: {error}", message.path.display()))?;
-    Ok(format!(
-        "\u{001b}[32m✓\u{001b}[0m marked read: {}\n",
+    let _ = writeln!(
+        out,
+        "\n\u{001b}[32m✓\u{001b}[0m marked read: {}",
         message.filename
-    ))
+    );
+    Ok(out)
 }
 
 fn inbox_run_show(argv: &[String], env: &InboxEnv) -> Result<String, String> {
@@ -827,9 +853,8 @@ fn inbox_find_message(
     inbox_dir: &std::path::Path,
     id: &str,
 ) -> Result<Option<InboxMessage>, String> {
-    Ok(inbox_load_messages(inbox_dir)?
-        .into_iter()
-        .find(|message| message.id == id || message.filename.contains(id)))
+    let messages = inbox_load_messages(inbox_dir)?;
+    Ok(inbox_pick_message(&messages, Some(id)).cloned())
 }
 
 fn inbox_pick_message<'a>(
@@ -853,10 +878,10 @@ fn inbox_pick_message<'a>(
 fn inbox_render_show(message: &InboxMessage) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "\n\u{001b}[36m{}\u{001b}[0m", message.filename);
+    let _ = writeln!(out, "\u{001b}[90mfrom: {}\u{001b}[0m", message.from);
     let _ = writeln!(
         out,
-        "\u{001b}[90mfrom: {}  {}\u{001b}[0m\n",
-        message.from,
+        "\u{001b}[90mwhen: {}\u{001b}[0m\n",
         inbox_iso_label(message.timestamp_ms)
     );
     out.push_str(&message.body);
@@ -1685,9 +1710,37 @@ mod inbox_tests {
     }
 
     fn inbox_write_fixture(env: &InboxEnv, filename: &str, from: &str, read: bool, body: &str) {
+        inbox_write_fixture_at(
+            env,
+            filename,
+            from,
+            read,
+            "2026-06-25T00:00:00.000Z",
+            body,
+        );
+    }
+
+    #[test]
+    fn inbox_help_prints_usage_to_stdout_path() {
+        let env = inbox_temp_env("help");
+        let mut sender = InboxFakeSender::default();
+
+        let output = inbox_run_test(&inbox_strings(&["--help"]), &env, &mut sender).unwrap();
+
+        assert_eq!(output, format!("usage: {INBOX_USAGE}\n"));
+    }
+
+    fn inbox_write_fixture_at(
+        env: &InboxEnv,
+        filename: &str,
+        from: &str,
+        read: bool,
+        timestamp: &str,
+        body: &str,
+    ) {
         std::fs::create_dir_all(&env.inbox_dir).unwrap();
         let text = format!(
-            "---\nfrom: {from}\nto: nova\ntimestamp: 2026-06-25T00:00:00.000Z\nread: {read}\n---\n\n{body}\n"
+            "---\nfrom: {from}\nto: nova\ntimestamp: {timestamp}\nread: {read}\n---\n\n{body}\n"
         );
         std::fs::write(env.inbox_dir.join(filename), text).unwrap();
     }
@@ -1739,6 +1792,69 @@ mod inbox_tests {
         let write =
             inbox_run_test(&inbox_strings(&["write", "new", "note"]), &env, &mut sender).unwrap();
         assert!(write.contains("wrote"));
+    }
+
+    #[test]
+    fn inbox_list_prints_stable_row_ids() {
+        let env = inbox_temp_env("list-ids");
+        inbox_write_fixture_at(
+            &env,
+            "2026-06-25_00-00_alice_old.md",
+            "alice",
+            false,
+            "2026-06-25T00:00:00.000Z",
+            "older message",
+        );
+        inbox_write_fixture_at(
+            &env,
+            "2026-06-26_00-00_bob_new.md",
+            "bob",
+            true,
+            "2026-06-26T00:00:00.000Z",
+            "newer message",
+        );
+        let mut sender = InboxFakeSender::default();
+
+        let list = inbox_run_test(&inbox_strings(&["list"]), &env, &mut sender).unwrap();
+
+        assert!(list.contains("ID R FROM"), "{list}");
+        assert!(list.contains("  1 \u{001b}[90m○\u{001b}[0m bob"), "{list}");
+        assert!(list.contains("  2 \u{001b}[32m●\u{001b}[0m alice"), "{list}");
+    }
+
+    #[test]
+    fn inbox_read_row_id_prints_message_and_marks_read() {
+        let env = inbox_temp_env("read-row");
+        inbox_write_fixture_at(
+            &env,
+            "2026-06-25_00-00_alice_old.md",
+            "alice",
+            false,
+            "2026-06-25T00:00:00.000Z",
+            "older message",
+        );
+        inbox_write_fixture_at(
+            &env,
+            "2026-06-26_00-00_bob_new.md",
+            "bob",
+            false,
+            "2026-06-26T00:00:00.000Z",
+            "first line\nsecond line with full body",
+        );
+        let mut sender = InboxFakeSender::default();
+
+        let read = inbox_run_test(&inbox_strings(&["read", "1"]), &env, &mut sender).unwrap();
+
+        assert!(read.contains("2026-06-26_00-00_bob_new.md"), "{read}");
+        assert!(read.contains("from: bob"), "{read}");
+        assert!(read.contains("when: 2026-06-26T00:00:00.000Z"), "{read}");
+        assert!(read.contains("first line\nsecond line with full body"), "{read}");
+        assert!(read.contains("marked read: 2026-06-26_00-00_bob_new.md"), "{read}");
+        let stored = std::fs::read_to_string(env.inbox_dir.join("2026-06-26_00-00_bob_new.md")).unwrap();
+        assert!(stored.contains("read: true"), "{stored}");
+        assert!(stored.contains("readAt:"), "{stored}");
+        let old = std::fs::read_to_string(env.inbox_dir.join("2026-06-25_00-00_alice_old.md")).unwrap();
+        assert!(old.contains("read: false"), "{old}");
     }
 
     #[test]

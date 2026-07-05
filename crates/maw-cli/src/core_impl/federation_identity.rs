@@ -1,3 +1,8 @@
+const DISPATCH_313: &[DispatcherEntry] = &[
+    DispatcherEntry { command: "federation-identity", handler: Handler::Sync(run_federation_identity_plan) },
+    DispatcherEntry { command: "federation-health", handler: Handler::Sync(run_federation_health_plan) },
+];
+
 fn parse_sync_identity(value: &str) -> Result<SyncPeerIdentity, String> {
     let parts: Vec<&str> = value.split('|').collect();
     if !(parts.len() == 5 || parts.len() == 6) {

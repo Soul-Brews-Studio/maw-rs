@@ -1,3 +1,8 @@
+const DISPATCH_300: &[DispatcherEntry] = &[
+    DispatcherEntry { command: "hub", handler: Handler::Sync(run_hub_plan) },
+    DispatcherEntry { command: "xdg", handler: Handler::Sync(run_xdg_plan) },
+];
+
 struct AuthFromSignPayloadRender<'a> {
     legacy: bool,
     from: &'a str,
