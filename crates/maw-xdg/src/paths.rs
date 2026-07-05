@@ -2,6 +2,7 @@ use std::{fs, io, path::{Path, PathBuf}};
 
 use super::types::{MawCorePaths, MawXdgEnv};
 
+#[must_use]
 pub fn is_maw_xdg_enabled(env: &MawXdgEnv) -> bool {
     truthy_env(env.var("MAW_XDG"))
 }

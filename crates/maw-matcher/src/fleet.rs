@@ -1,4 +1,7 @@
-use super::{aliases::*, resolver::{Named, ResolveResult}};
+use super::{
+    aliases::{aliases_for, strip_oracle_suffix_lower},
+    resolver::{Named, ResolveResult},
+};
 
 /// Window metadata used by [`resolve_fleet_window_session_target`].
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

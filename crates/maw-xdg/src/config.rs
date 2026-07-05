@@ -7,6 +7,7 @@ use super::{
     types::{MawConfigLayerSource, MawConfigScope, MawXdgEnv, MergedMawConfig},
 };
 
+#[must_use]
 pub fn discover_config_layers(env: &MawXdgEnv, cwd: &Path) -> Vec<MawConfigLayerSource> {
     let mut found = Vec::new();
     let config_dir = maw_config_dir(env);
