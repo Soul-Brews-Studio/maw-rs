@@ -147,7 +147,7 @@ fn team_t3_load_or_quick_charter(opts: &TeamT3Options124) -> Result<TeamCharter1
         if count == 0 { return Err("--quick must be a positive integer".to_owned()); }
         let team = opts.team.clone().unwrap_or_else(|| "quick".to_owned());
         let members = (1..=count).map(|number| TeamCharterMember122 { role: format!("builder-{number}"), name: Some(format!("builder-{number}")), engine: opts.engine.clone(), ..Default::default() }).collect();
-        return Ok(TeamCharter122 { name: team, project: None, description: String::new(), goal: String::new(), session: opts.session.clone(), members, defaults_worktree: false, governance_requires_human_approval: false });
+        return Ok(TeamCharter122 { name: team, project: None, description: String::new(), goal: String::new(), session: opts.session.clone(), members, defaults_worktree: false, governance_requires_human_approval: false, ..Default::default() });
     }
     let team = opts.team.as_ref().ok_or_else(|| "team required".to_owned())?;
     let path = team_t3_resolve_charter_path(team, opts.charter_path.as_deref())?;

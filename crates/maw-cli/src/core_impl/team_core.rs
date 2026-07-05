@@ -71,6 +71,8 @@ struct TeamCharter122 {
     goal: String,
     session: Option<String>,
     members: Vec<TeamCharterMember122>,
+    defaults: std::collections::BTreeMap<String, String>,
+    engines: std::collections::BTreeMap<String, String>,
     defaults_worktree: bool,
     governance_requires_human_approval: bool,
 }
@@ -443,32 +445,110 @@ fn team_parse_json_charter(text: &str) -> Result<TeamCharter122, String> {
     let session = value["session"].as_str().map(str::to_owned);
     let members = value["members"].as_array().map_or_else(Vec::new, |items| items.iter().map(team_member_from_json).collect());
     let governance = value["governance"]["requires_human_approval"].as_bool().unwrap_or(false);
-    let defaults_worktree = value["defaults"].as_object().is_some_and(|defaults| defaults.contains_key("worktree"));
-    team_charter_finish(TeamCharter122 { name, project, description: value["description"].as_str().unwrap_or("").to_owned(), goal: value["goal"].as_str().unwrap_or("").to_owned(), session, members, defaults_worktree, governance_requires_human_approval: governance })
+    let defaults = team_string_map_from_json(&value["defaults"]);
+    let engines = team_string_map_from_json(&value["engines"]);
+    let defaults_worktree = defaults.contains_key("worktree");
+    team_charter_finish(TeamCharter122 { name, project, description: value["description"].as_str().unwrap_or("").to_owned(), goal: value["goal"].as_str().unwrap_or("").to_owned(), session, members, defaults, engines, defaults_worktree, governance_requires_human_approval: governance })
+}
+
+fn team_string_map_from_json(value: &serde_json::Value) -> std::collections::BTreeMap<String, String> {
+    value
+        .as_object()
+        .map(|object| {
+            object
+                .iter()
+                .filter_map(|(key, value)| team_json_scalar_to_string(value).map(|value| (key.clone(), value)))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn team_json_scalar_to_string(value: &serde_json::Value) -> Option<String> {
+    value
+        .as_str()
+        .map(str::to_owned)
+        .or_else(|| value.as_bool().map(|value| value.to_string()))
+        .or_else(|| value.as_i64().map(|value| value.to_string()))
+        .or_else(|| value.as_u64().map(|value| value.to_string()))
+        .or_else(|| value.as_f64().map(|value| value.to_string()))
 }
 
 fn team_member_from_json(value: &serde_json::Value) -> TeamCharterMember122 {
-    TeamCharterMember122 { role: value["role"].as_str().unwrap_or("").to_owned(), name: value["name"].as_str().map(str::to_owned), model: value["model"].as_str().map(str::to_owned), cwd: value["cwd"].as_str().map(str::to_owned), engine: value["engine"].as_str().map(str::to_owned), target: value["target"].as_str().map(str::to_owned), prompt: value["prompt"].as_str().map(str::to_owned), worktree: value["worktree"].as_str().map(str::to_owned).or_else(|| value["worktree"].as_bool().map(|v| v.to_string())), branch: value["branch"].as_str().map(str::to_owned) }
+    TeamCharterMember122 { role: value["role"].as_str().unwrap_or("").to_owned(), name: value["name"].as_str().map(str::to_owned), model: value["model"].as_str().map(str::to_owned), cwd: value["cwd"].as_str().map(str::to_owned), engine: value["engine"].as_str().map(str::to_owned), target: value["target"].as_str().map(str::to_owned), prompt: value["prompt"].as_str().map(str::to_owned), worktree: team_member_worktree_from_json(value), branch: value["branch"].as_str().map(str::to_owned) }
+}
+
+fn team_member_worktree_from_json(value: &serde_json::Value) -> Option<String> {
+    value["worktree"]
+        .as_str()
+        .map(str::to_owned)
+        .or_else(|| value["worktree"].as_bool().map(|enabled| if enabled { team_member_name_path(value) } else { "false".to_owned() }))
+}
+
+fn team_member_name_path(value: &serde_json::Value) -> String {
+    value["name"].as_str().filter(|name| !name.trim().is_empty()).or_else(|| value["role"].as_str()).unwrap_or("").to_owned()
 }
 
 fn team_parse_yaml_charter(text: &str) -> Result<TeamCharter122, String> {
     let mut charter = TeamCharter122::default();
     let mut current: Option<TeamCharterMember122> = None;
-    let mut in_defaults = false;
+    let mut block = TeamYamlBlock122::None;
     for raw in text.lines() {
         let line = raw.split('#').next().unwrap_or("").trim_end();
         if line.trim().is_empty() { continue; }
         let indent = line.chars().take_while(|ch| *ch == ' ').count();
         let trimmed = line.trim();
         if indent == 0 {
-            in_defaults = trimmed == "defaults:";
-        } else if in_defaults && trimmed.starts_with("worktree:") {
-            charter.defaults_worktree = true;
+            block = TeamYamlBlock122::from_header(trimmed);
+        } else if team_yaml_block_line(trimmed, block, &mut charter) {
+            continue;
         }
         team_yaml_line(line, &mut charter, &mut current);
     }
     if let Some(member) = current.take() { charter.members.push(member); }
     team_charter_finish(charter)
+}
+
+#[derive(Clone, Copy)]
+enum TeamYamlBlock122 {
+    None,
+    Defaults,
+    Engines,
+}
+
+impl TeamYamlBlock122 {
+    fn from_header(trimmed: &str) -> Self {
+        match trimmed {
+            "defaults:" => Self::Defaults,
+            "engines:" => Self::Engines,
+            _ => Self::None,
+        }
+    }
+}
+
+fn team_yaml_block_line(trimmed: &str, block: TeamYamlBlock122, charter: &mut TeamCharter122) -> bool {
+    match block {
+        TeamYamlBlock122::Defaults => {
+            if let Some((key, value)) = team_yaml_key_value(trimmed) {
+                if key == "worktree" { charter.defaults_worktree = true; }
+                charter.defaults.insert(key, value);
+            }
+            true
+        }
+        TeamYamlBlock122::Engines => {
+            if let Some((key, value)) = team_yaml_key_value(trimmed) {
+                charter.engines.insert(key, value);
+            }
+            true
+        }
+        TeamYamlBlock122::None => false,
+    }
+}
+
+fn team_yaml_key_value(trimmed: &str) -> Option<(String, String)> {
+    let (key, value) = trimmed.split_once(':')?;
+    let key = key.trim();
+    if key.is_empty() { return None; }
+    Some((key.to_owned(), team_unquote(value)))
 }
 
 fn team_yaml_line(line: &str, charter: &mut TeamCharter122, current: &mut Option<TeamCharterMember122>) {
@@ -497,6 +577,11 @@ fn team_charter_finish(mut charter: TeamCharter122) -> Result<TeamCharter122, St
     if name.is_empty() { return Err("team charter requires name".to_owned()); }
     if charter.members.is_empty() { return Err("team charter requires at least one member".to_owned()); }
     charter.name = name;
+    for member in &mut charter.members {
+        if member.worktree.as_deref() == Some("true") {
+            member.worktree = Some(member.name.as_deref().filter(|name| !name.trim().is_empty()).unwrap_or(&member.role).to_owned());
+        }
+    }
     Ok(charter)
 }
 
@@ -600,6 +685,42 @@ mod team_tests {
     fn team_validate_rejects_injection_names() {
         for name in ["", "-bad", "../bad", "bad/name", "bad\0name", "bad\nname"] { assert!(team_validate_name(name).is_err(), "{name:?}"); }
         assert!(team_validate_name("alpha_team-1").is_ok());
+    }
+
+    #[test]
+    fn team_charter_preserves_defaults_engines_and_coerces_yaml_worktree_true() {
+        let charter = team_parse_charter(
+            r#"name: alpha
+project: org/repo
+defaults:
+  worktree: true
+  branch: agents/default
+engines:
+  omx-1: CODEX_HOME=$PWD/.codex omx --direct
+members:
+  - role: coder
+    name: agents/coder
+    worktree: true
+"#,
+        )
+        .expect("charter");
+        assert_eq!(charter.defaults.get("worktree").map(String::as_str), Some("true"));
+        assert_eq!(charter.defaults.get("branch").map(String::as_str), Some("agents/default"));
+        assert_eq!(charter.engines.get("omx-1").map(String::as_str), Some("CODEX_HOME=$PWD/.codex omx --direct"));
+        assert_eq!(charter.members[0].worktree.as_deref(), Some("agents/coder"));
+        assert!(charter.defaults_worktree);
+    }
+
+    #[test]
+    fn team_charter_preserves_json_defaults_engines_and_coerces_worktree_true() {
+        let charter = team_parse_charter(
+            r#"{"name":"alpha","defaults":{"worktree":true},"engines":{"omx-2":"CODEX_HOME=$PWD/.codex2 omx"},"members":[{"role":"reviewer","name":"agents/reviewer","worktree":true},{"role":"planner","worktree":false}]}"#,
+        )
+        .expect("charter");
+        assert_eq!(charter.defaults.get("worktree").map(String::as_str), Some("true"));
+        assert_eq!(charter.engines.get("omx-2").map(String::as_str), Some("CODEX_HOME=$PWD/.codex2 omx"));
+        assert_eq!(charter.members[0].worktree.as_deref(), Some("agents/reviewer"));
+        assert_eq!(charter.members[1].worktree.as_deref(), Some("false"));
     }
 
     #[test]
