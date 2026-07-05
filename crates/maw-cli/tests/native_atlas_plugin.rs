@@ -90,3 +90,90 @@ fn atlas_json_redacts_token_and_validates_guild_id() {
     assert!(stderr.contains("invalid guild id"), "{stderr}");
     assert!(!stderr.contains("mock-token-never-printed"), "{stderr}");
 }
+
+fn atlas_temp_dir(label: &str) -> std::path::PathBuf {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!(
+        "maw-rs-atlas-compat-{label}-{}-{nonce}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    dir
+}
+
+fn write_bun_shim(dir: &std::path::Path) {
+    let shim = dir.join("bun");
+    std::fs::write(
+        &shim,
+        "#!/bin/sh\nprintf 'legacy atlas plugin stdout\\n'\nprintf 'entry=%s\\n' \"$1\" > \"$ATLAS_BUN_ARGS\"\nshift\ni=0\nfor arg in \"$@\"; do printf 'arg%s=%s\\n' \"$i\" \"$arg\" >> \"$ATLAS_BUN_ARGS\"; i=$((i + 1)); done\n",
+    )
+    .expect("write bun");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = std::fs::metadata(&shim)
+            .expect("shim metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&shim, permissions).expect("chmod bun");
+    }
+}
+
+fn write_legacy_atlas_plugin(plugins_dir: &std::path::Path) {
+    let package_dir = plugins_dir.join("legacy-atlas");
+    std::fs::create_dir_all(&package_dir).expect("plugin dir");
+    std::fs::write(
+        package_dir.join("index.ts"),
+        "export default async function plugin() {}\n",
+    )
+    .expect("entry");
+    std::fs::write(
+        package_dir.join("plugin.json"),
+        r#"{"name":"legacy-atlas","version":"1.0.0","sdk":"*","runtime":"bun-dev","target":"js","entry":"index.ts","cli":{"command":"atlas","help":"maw atlas"}}"#,
+    )
+    .expect("manifest");
+}
+
+#[test]
+fn atlas_legacy_subcommand_falls_through_to_ts_plugin() {
+    let _guard = env_lock()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let root = atlas_temp_dir("legacy");
+    let bin_dir = root.join("bin");
+    let plugins_dir = root.join("plugins");
+    let bun_args = root.join("bun-args");
+    std::fs::create_dir_all(&bin_dir).expect("bin dir");
+    std::fs::create_dir_all(&plugins_dir).expect("plugins dir");
+    write_bun_shim(&bin_dir);
+    write_legacy_atlas_plugin(&plugins_dir);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_maw-rs"))
+        .args(["atlas", "ls", "--json"])
+        .env("PATH", &bin_dir)
+        .env("MAW_PLUGINS_DIR", &plugins_dir)
+        .env("ATLAS_BUN_ARGS", &bun_args)
+        .env_remove("MAW_RS_ATLAS_FAKE_DISCORD")
+        .output()
+        .expect("run atlas legacy");
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).expect("stdout"),
+        "legacy atlas plugin stdout\n"
+    );
+    let captured = std::fs::read_to_string(&bun_args).expect("bun args");
+    assert!(captured.contains("arg0=ls"), "{captured}");
+    assert!(captured.contains("arg1=--json"), "{captured}");
+    let stderr = String::from_utf8(output.stderr).expect("stderr");
+    assert!(stderr.contains("legacy-atlas"), "{stderr}");
+
+    std::fs::remove_dir_all(root).expect("cleanup");
+}

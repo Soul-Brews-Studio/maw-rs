@@ -7,6 +7,8 @@ const DISPATCH_116: &[DispatcherEntry] = &[DispatcherEntry {
 
 const ATLAS_USAGE: &str = "usage: maw atlas <bot> [--guild <id>] [--all-guilds] [--with-threads] [--json]";
 const ATLAS_FAKE_DISCORD_ENV: &str = "MAW_RS_ATLAS_FAKE_DISCORD";
+const ATLAS_LEGACY_PLUGIN_FALLTHROUGH: &str = "atlas: legacy plugin fallthrough";
+const ATLAS_LEGACY_SUBCOMMANDS: &[&str] = &["ls", "read", "backfill", "check", "wake", "vesicle"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct AtlasArgs {
@@ -59,6 +61,12 @@ async fn atlas_run_async(argv: &[String]) -> CliOutput {
     let parsed = match atlas_parse_args(argv) {
         Ok(parsed) => parsed,
         Err(message) if message == ATLAS_USAGE => return atlas_ok(ATLAS_USAGE),
+        Err(message) if message == ATLAS_LEGACY_PLUGIN_FALLTHROUGH => {
+            let mut full_argv = Vec::with_capacity(argv.len() + 1);
+            full_argv.push("atlas".to_owned());
+            full_argv.extend(argv.iter().cloned());
+            return dispatch_cli_plugin_or_unknown(&full_argv, "atlas");
+        }
         Err(message) => return atlas_error(&message),
     };
     if let Some(fake) = atlas_fake_discord() {
@@ -132,11 +140,18 @@ fn atlas_take_value(argv: &[String], index: &mut usize, flag: &str) -> Result<St
 }
 
 fn atlas_set_bot(parsed: &mut AtlasArgs, value: &str) -> Result<(), String> {
+    if parsed.bot.is_empty() && atlas_is_legacy_subcommand(value) {
+        return Err(ATLAS_LEGACY_PLUGIN_FALLTHROUGH.to_owned());
+    }
     if !parsed.bot.is_empty() {
         return Err(format!("atlas: unexpected argument {value}"));
     }
     parsed.bot = atlas_validate_value("bot", value)?;
     Ok(())
+}
+
+fn atlas_is_legacy_subcommand(value: &str) -> bool {
+    ATLAS_LEGACY_SUBCOMMANDS.contains(&value)
 }
 
 fn atlas_validate_value(label: &str, value: &str) -> Result<String, String> {
@@ -160,95 +175,7 @@ fn atlas_validate_snowflake(label: &str, value: &str) -> Result<(), String> {
     }
 }
 
-fn atlas_fake_discord() -> Option<AtlasFakeDiscord> {
-    let raw = std::env::var(ATLAS_FAKE_DISCORD_ENV).ok()?;
-    serde_json::from_str(&raw).ok()
-}
-
-async fn atlas_render_fake(parsed: &AtlasArgs, fake: &AtlasFakeDiscord) -> Result<String, String> {
-    if fake.bot != parsed.bot {
-        return Err(format!("atlas: fake discord has bot '{}', requested '{}'", fake.bot, parsed.bot));
-    }
-    let guilds = atlas_filter_guilds(parsed, &fake.guilds)?;
-    let gateway_events = atlas_gateway_observed_count(&fake.gateway_events).await;
-    if parsed.json {
-        return Ok(atlas_render_json(&fake.bot, gateway_events, &guilds));
-    }
-    Ok(atlas_render_text(&fake.bot, gateway_events, &guilds))
-}
-
-fn atlas_filter_guilds(parsed: &AtlasArgs, guilds: &[AtlasGuild]) -> Result<Vec<AtlasGuild>, String> {
-    let mut selected = if let Some(guild_id) = &parsed.guild {
-        guilds.iter().filter(|guild| &guild.id == guild_id).cloned().collect::<Vec<_>>()
-    } else if parsed.all_guilds {
-        guilds.to_vec()
-    } else {
-        guilds.iter().take(1).cloned().collect()
-    };
-    if !parsed.with_threads {
-        for guild in &mut selected {
-            guild.channels.retain(|channel| !matches!(channel.kind, 10..=12));
-        }
-    }
-    atlas_validate_fake_ids(&selected)?;
-    Ok(selected)
-}
-
-fn atlas_validate_fake_ids(guilds: &[AtlasGuild]) -> Result<(), String> {
-    for guild in guilds {
-        atlas_validate_snowflake("guild", &guild.id)?;
-        for channel in &guild.channels {
-            atlas_validate_snowflake("channel", &channel.id)?;
-            for user in &channel.allow_from {
-                atlas_validate_snowflake("user", user)?;
-            }
-        }
-    }
-    Ok(())
-}
-
-async fn atlas_gateway_observed_count(events: &[String]) -> usize {
-    maw_discord::gateway::observe_mock_gateway_events(events).await
-}
-
-fn atlas_render_json(bot: &str, gateway_events: usize, guilds: &[AtlasGuild]) -> String {
-    let value = serde_json::json!({
-        "bot": bot,
-        "gatewayEvents": gateway_events,
-        "guilds": guilds,
-    });
-    format!("{}\n", serde_json::to_string_pretty(&value).unwrap_or_default())
-}
-
-fn atlas_render_text(bot: &str, gateway_events: usize, guilds: &[AtlasGuild]) -> String {
-    let mut out = String::new();
-    let _ = writeln!(out, "🗺️ atlas — Discord oracle registry for {bot}");
-    let _ = writeln!(out, "  gateway: {gateway_events} event(s) observed");
-    let mut total_channels = 0usize;
-    let mut total_enabled = 0usize;
-    for guild in guilds {
-        total_channels = total_channels.saturating_add(guild.channels.len());
-        total_enabled = total_enabled.saturating_add(guild.channels.iter().filter(|channel| channel.enabled).count());
-        let _ = writeln!(out, "  ▼ {} ({}) · {} channel(s)", guild.name, guild.id, guild.channels.len());
-        let mut channels = guild.channels.clone();
-        channels.sort_by(|left, right| left.name.cmp(&right.name));
-        for channel in channels {
-            let _ = writeln!(out, "{}", atlas_render_channel(&channel));
-        }
-    }
-    let _ = writeln!(out, "summary: {} server(s) · {total_channels} channels visible · {total_enabled} enabled", guilds.len());
-    out
-}
-
-fn atlas_render_channel(channel: &AtlasChannel) -> String {
-    if channel.enabled {
-        let mention = if channel.require_mention { "mention" } else { "all-msg" };
-        let allow = if channel.allow_from.is_empty() { "EVERYONE".to_owned() } else { channel.allow_from.join(",") };
-        format!("     ✓ #{:<36} {mention} {allow}", channel.name)
-    } else {
-        format!("     · #{:<36} (in guild, no access)", channel.name)
-    }
-}
+include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/core_impl/atlas_render.rs"));
 
 fn atlas_ok(stdout: &str) -> CliOutput {
     CliOutput { code: 0, stdout: format!("{stdout}\n"), stderr: String::new() }
@@ -275,6 +202,21 @@ mod atlas_tests {
         assert!(atlas_parse_args(&atlas_strings(&["--bad"])).unwrap_err().contains("unknown argument"));
         assert!(atlas_parse_args(&atlas_strings(&["nova", "--"])).unwrap_err().contains("separator"));
         assert!(atlas_parse_args(&["no\npe".to_owned()]).unwrap_err().contains("invalid bot"));
+    }
+
+    #[test]
+    fn atlas_legacy_subcommands_fall_through_before_bot_parse() {
+        for subcommand in ATLAS_LEGACY_SUBCOMMANDS {
+            assert_eq!(
+                atlas_parse_args(&atlas_strings(&[subcommand])).unwrap_err(),
+                ATLAS_LEGACY_PLUGIN_FALLTHROUGH,
+                "{subcommand}"
+            );
+        }
+        let parsed = atlas_parse_args(&atlas_strings(&["nova", "--all-guilds", "--with-threads"])).expect("native bot route");
+        assert_eq!(parsed.bot, "nova");
+        assert!(parsed.all_guilds);
+        assert!(parsed.with_threads);
     }
 
     #[tokio::test]

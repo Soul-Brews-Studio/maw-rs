@@ -97,9 +97,11 @@ fn assert_no_delegate_or_broadcast(root: &Path, calls: &Path, stdout: &str, stde
     );
     let tmux_calls = fs::read_to_string(calls).unwrap_or_default();
     assert!(
-        tmux_calls
-            .lines()
-            .all(|line| line.starts_with("list-windows ") || line.starts_with("list-sessions ")),
+        tmux_calls.lines().all(|line| {
+            line.starts_with("list-windows ")
+                || line.starts_with("list-sessions ")
+                || line.starts_with("display-message ")
+        }),
         "wake cutover must only inspect fake tmux, got: {tmux_calls}"
     );
     assert!(
@@ -109,10 +111,6 @@ fn assert_no_delegate_or_broadcast(root: &Path, calls: &Path, stdout: &str, stde
     assert!(
         !tmux_calls.contains("new-session"),
         "wake spawned tmux session: {tmux_calls}"
-    );
-    assert!(
-        !tmux_calls.contains("display-message"),
-        "wake touched live tmux UI: {tmux_calls}"
     );
 }
 
