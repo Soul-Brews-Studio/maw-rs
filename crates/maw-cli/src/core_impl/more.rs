@@ -91,7 +91,7 @@ fn more_parse_status(argv: &[String]) -> Result<String, String> {
             "more status: unknown argument {extra}\n{MORE_USAGE}"
         ));
     }
-    Ok("more status\nlive coders: 0\nsource: live discovery pending\n".to_owned())
+    Ok(more_status_live())
 }
 
 fn more_take_safe_value(
