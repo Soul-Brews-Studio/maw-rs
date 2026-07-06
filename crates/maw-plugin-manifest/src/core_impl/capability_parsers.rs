@@ -103,9 +103,35 @@ fn parse_endpoints(manifest: &Value) -> Result<Option<PluginEndpointPolicies>, S
     Ok(Some(endpoints))
 }
 
+fn parse_secrets(manifest: &Value) -> Result<Option<PluginSecretPolicies>, String> {
+    let Some(value) = manifest.get("secrets") else {
+        return Ok(None);
+    };
+    let raw = serde_json::from_value::<PluginSecretPolicies>(value.clone())
+        .map_err(|_| "plugin.json: secrets must be an object of secret policies".to_owned())?;
+    for (name, policy) in &raw {
+        if !is_slug(name) {
+            return Err("plugin.json: secrets keys must be slug strings".to_owned());
+        }
+        if policy
+            .env
+            .as_deref()
+            .is_some_and(|env| env.is_empty() || env.bytes().any(|byte| byte == b'=' || byte == 0))
+            || policy.pass.as_deref().is_some_and(str::is_empty)
+            || (policy.env.is_none() && policy.pass.is_none())
+        {
+            return Err(format!(
+                "plugin.json: secrets.{name} requires non-empty env or pass"
+            ));
+        }
+    }
+    Ok(Some(raw))
+}
+
 fn validate_endpoint_capabilities(
     capabilities: Option<&[String]>,
     endpoints: Option<&PluginEndpointPolicies>,
+    secrets: Option<&PluginSecretPolicies>,
 ) -> Result<(), String> {
     for capability in capabilities.unwrap_or(&[]) {
         if let Some(name) = capability.strip_prefix("net:fetch:") {
@@ -113,6 +139,37 @@ fn validate_endpoint_capabilities(
                 return Err(format!(
                     "plugin.json: capability {capability:?} references missing endpoint {name:?}"
                 ));
+            }
+        }
+        if let Some(name) = capability.strip_prefix("secret:use:") {
+            if secrets.is_none_or(|secrets| !secrets.contains_key(name)) {
+                return Err(format!(
+                    "plugin.json: capability {capability:?} references missing secret {name:?}"
+                ));
+            }
+            if endpoints.is_none_or(|endpoints| {
+                !endpoints.values().any(|endpoint| {
+                    endpoint
+                        .auth
+                        .as_ref()
+                        .is_some_and(|auth| auth.secret == name)
+                })
+            }) {
+                return Err(format!(
+                    "plugin.json: capability {capability:?} references unbound secret {name:?}"
+                ));
+            }
+        }
+    }
+    if let Some(endpoints) = endpoints {
+        for (endpoint, policy) in endpoints {
+            if let Some(auth) = &policy.auth {
+                if secrets.is_none_or(|secrets| !secrets.contains_key(&auth.secret)) {
+                    return Err(format!(
+                        "plugin.json: endpoints.{endpoint}.auth references missing secret {:?}",
+                        auth.secret
+                    ));
+                }
             }
         }
     }
@@ -344,13 +401,37 @@ fn is_slug(value: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
+fn is_http_header_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
+}
+
 fn is_known_capability_namespace(namespace: &str) -> bool {
     known_capability_namespaces().contains(&namespace)
 }
 
 fn known_capability_namespaces() -> Vec<&'static str> {
     vec![
-        "net", "fs", "peer", "sdk", "proc", "ffi", "tmux", "shell", "attach",
+        "net", "fs", "peer", "sdk", "proc", "ffi", "tmux", "shell", "attach", "secret",
     ]
 }
 
@@ -388,6 +469,13 @@ fn parse_string_array(
 }
 
 pub type PluginEndpointPolicies = BTreeMap<String, PluginEndpointPolicy>;
+pub type PluginSecretPolicies = BTreeMap<String, PluginSecretPolicy>;
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct PluginSecretPolicy {
+    pub env: Option<String>,
+    pub pass: Option<String>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginEndpointPolicy {
@@ -404,6 +492,7 @@ pub struct PluginEndpointPolicy {
 pub struct PluginEndpointAuth {
     pub kind: String,
     pub secret: String,
+    pub header: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -459,14 +548,26 @@ impl RawEndpointPolicy {
             .map(|path| EndpointPathPattern::parse(path))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| format!("plugin.json: endpoints.{name}.paths: {error}"))?;
-        if self
-            .auth
-            .as_ref()
-            .is_some_and(|auth| auth.kind.is_empty() || auth.secret.is_empty())
-        {
-            return Err(format!(
-                "plugin.json: endpoints.{name}.auth fields must be non-empty"
-            ));
+        if let Some(auth) = &self.auth {
+            if auth.kind.is_empty() || auth.secret.is_empty() {
+                return Err(format!(
+                    "plugin.json: endpoints.{name}.auth fields must be non-empty"
+                ));
+            }
+            match auth.kind.as_str() {
+                "bearer" | "discord-bot" => {}
+                "api-key-header" if auth.header.as_deref().is_some_and(is_http_header_name) => {}
+                "api-key-header" => {
+                    return Err(format!(
+                        "plugin.json: endpoints.{name}.auth.header must be an HTTP header name"
+                    ));
+                }
+                _ => {
+                    return Err(format!(
+                        "plugin.json: endpoints.{name}.auth.kind must be bearer, discord-bot, or api-key-header"
+                    ));
+                }
+            }
         }
         Ok(PluginEndpointPolicy {
             base_url: self.base_url,
@@ -560,6 +661,7 @@ pub struct PluginManifest {
     pub capability_namespaces: Option<Vec<String>>,
     pub capabilities: Option<Vec<String>>,
     pub endpoints: Option<PluginEndpointPolicies>,
+    pub secrets: Option<PluginSecretPolicies>,
     pub capability_warnings: Vec<String>,
     pub dependencies: Option<PluginDependencies>,
     pub artifact: Option<PluginArtifact>,

@@ -2,13 +2,15 @@
   "name": "cross-team-queue",
   "version": "0.1.0",
   "sdk": "^1.0.0",
-  "description": "Unified inbox queue scaffold. Ship-tier slice 1: WASM artifact returns the empty queue contract; scanning lands in slice 2.",
+  "description": "Unified inbox queue scanner. Ship-tier WASM reads the configured vault via fs:read:vault and returns the queue contract.",
   "author": "Soul-Brews-Studio",
   "license": "BUSL-1.1",
   "weight": 50,
   "schemaVersion": 1,
   "entry": "src/plugin.ts",
-  "capabilities": [],
+  "capabilities": [
+    "fs:read:vault"
+  ],
   "cli": {
     "command": "cross-team-queue",
     "help": "maw cross-team-queue [--json] [--recipient <name>]"

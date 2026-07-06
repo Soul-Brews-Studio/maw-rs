@@ -126,7 +126,8 @@ pub fn parse_manifest(json_text: &str, dir: &Path) -> Result<PluginManifest, Str
         (Some(parsed.capabilities), parsed.warnings)
     });
     let endpoints = parse_endpoints(&raw)?;
-    validate_endpoint_capabilities(capabilities.as_deref(), endpoints.as_ref())?;
+    let secrets = parse_secrets(&raw)?;
+    validate_endpoint_capabilities(capabilities.as_deref(), endpoints.as_ref(), secrets.as_ref())?;
 
     Ok(PluginManifest {
         name,
@@ -156,6 +157,7 @@ pub fn parse_manifest(json_text: &str, dir: &Path) -> Result<PluginManifest, Str
         capability_namespaces,
         capabilities,
         endpoints,
+        secrets,
         capability_warnings,
         dependencies: parse_dependencies(&raw)?,
         artifact: parse_artifact(&raw)?,

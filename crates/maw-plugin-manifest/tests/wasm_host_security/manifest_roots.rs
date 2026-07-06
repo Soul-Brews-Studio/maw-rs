@@ -9,54 +9,36 @@ fn host_manifest_roots(dir: &Path, home: &Path, caps: &[&str]) -> MawWasmHost {
         kind: maw_plugin_manifest::LoadedPluginKind::Wasm,
         disabled: false,
     };
-    MawWasmHost::new(&loaded).with_manifest_fs_roots_from(home)
+    MawWasmHost::new(&loaded)
+        .with_paths(None, Some(home.to_string_lossy().into_owned()))
+        .with_manifest_fs_roots_from(home)
 }
 
 fn teams_root(home: &Path) -> PathBuf {
     home.join(".claude").join("teams")
 }
 
-static VAULT_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-struct VaultEnvRestore {
-    saved: [(&'static str, Option<std::ffi::OsString>); 4],
-}
-
-impl Drop for VaultEnvRestore {
-    fn drop(&mut self) {
-        for (key, value) in &self.saved {
-            match value {
-                Some(value) => std::env::set_var(key, value),
-                None => std::env::remove_var(key),
-            }
-        }
-    }
-}
-
-fn with_vault_env<T>(
-    vault_root: Option<&Path>,
-    config_dir: Option<&Path>,
+fn host_manifest_roots_with_vault(
+    dir: &Path,
     home: &Path,
-    test: impl FnOnce() -> T,
-) -> T {
-    let _guard = VAULT_ENV_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let _restore = VaultEnvRestore {
-        saved: ["MAW_VAULT_ROOT", "MAW_CONFIG_DIR", "MAW_HOME", "HOME"]
-            .map(|key| (key, std::env::var_os(key))),
+    caps: &[&str],
+    vault_root: Option<PathBuf>,
+    config_root: Option<PathBuf>,
+) -> MawWasmHost {
+    let manifest = manifest(dir, caps);
+    let loaded = maw_plugin_manifest::LoadedPlugin {
+        manifest,
+        dir: dir.to_path_buf(),
+        wasm_path: dir.join("plugin.wasm"),
+        entry_path: None,
+        wasm_export: "handle".to_owned(),
+        kind: maw_plugin_manifest::LoadedPluginKind::Wasm,
+        disabled: false,
     };
-    match vault_root {
-        Some(path) => std::env::set_var("MAW_VAULT_ROOT", path),
-        None => std::env::remove_var("MAW_VAULT_ROOT"),
-    }
-    match config_dir {
-        Some(path) => std::env::set_var("MAW_CONFIG_DIR", path),
-        None => std::env::remove_var("MAW_CONFIG_DIR"),
-    }
-    std::env::remove_var("MAW_HOME");
-    std::env::set_var("HOME", home);
-    test()
+    MawWasmHost::new(&loaded)
+        .with_paths(None, Some(home.to_string_lossy().into_owned()))
+        .with_vault_config_roots(vault_root, config_root)
+        .with_manifest_fs_roots_from(home)
 }
 
 fn assert_host_error(value: &Value, code: &str) {
@@ -65,13 +47,20 @@ fn assert_host_error(value: &Value, code: &str) {
 }
 
 #[test]
-fn vault_read_cap_grants_env_root_for_paths_list_and_read() {
+fn vault_read_cap_grants_injected_root_for_paths_list_and_read() {
     let dir = temp("vault-env-plugin");
-    let home = temp("vault-env-home");
+    let home = temp("vault-injected-home");
     let vault = temp("vault-root");
     create_dir_all(&vault).expect("vault dir");
-    with_vault_env(Some(&vault), None, &home, || {
-        let host = host_manifest_roots(&dir, &home, &["fs:read:vault"]);
+    let vault = std::fs::canonicalize(vault).expect("canonical vault");
+    {
+        let host = host_manifest_roots_with_vault(
+            &dir,
+            &home,
+            &["fs:read:vault"],
+            Some(vault.clone()),
+            None,
+        );
         let note = vault.join("neo/inbox.md");
         create_dir_all(note.parent().expect("note parent")).expect("note parent dir");
         write(&note, "hello-vault").expect("seed note");
@@ -85,17 +74,28 @@ fn vault_read_cap_grants_env_root_for_paths_list_and_read() {
             &json!({ "path": vault, "recursive": true }),
         );
         assert_eq!(listed["ok"], true, "{listed}");
+        let listed_note = note.canonicalize().expect("canonical note");
         assert!(listed["value"]["entries"]
             .as_array()
             .is_some_and(|entries| {
                 entries
                     .iter()
-                    .any(|entry| entry["path"] == note.display().to_string())
+                    .any(|entry| entry["path"] == listed_note.display().to_string())
             }));
-        let ok = call(&host, "maw.fs.read", &json!({ "path": note }));
+        let ok = call(
+            &host,
+            "maw.fs.read",
+            &json!({ "path": note.canonicalize().expect("canonical note") }),
+        );
         assert_eq!(ok["value"]["content"], "hello-vault", "{ok}");
 
-        let write_host = host_manifest_roots(&dir, &home, &["fs:read:vault", "fs:write:vault"]);
+        let write_host = host_manifest_roots_with_vault(
+            &dir,
+            &home,
+            &["fs:read:vault", "fs:write:vault"],
+            Some(vault.clone()),
+            None,
+        );
         assert_host_error(
             &call(
                 &write_host,
@@ -104,7 +104,7 @@ fn vault_read_cap_grants_env_root_for_paths_list_and_read() {
             ),
             "capability_denied",
         );
-    });
+    }
 }
 
 #[test]
@@ -113,14 +113,22 @@ fn vault_root_can_fall_back_to_config() {
     let home = temp("vault-config-home");
     let vault = temp("vault-root");
     let config_dir = temp("vault-config-dir");
+    let config_dir = std::fs::canonicalize(config_dir).expect("canonical config");
     create_dir_all(&vault).expect("vault dir");
+    let vault = std::fs::canonicalize(vault).expect("canonical vault");
     write(
         config_dir.join("maw.config.json"),
         json!({ "vaultRoot": vault }).to_string(),
     )
     .expect("config");
-    with_vault_env(None, Some(&config_dir), &home, || {
-        let host = host_manifest_roots(&dir, &home, &["fs:read:vault"]);
+    {
+        let host = host_manifest_roots_with_vault(
+            &dir,
+            &home,
+            &["fs:read:vault"],
+            None,
+            Some(config_dir.clone()),
+        );
         let note = vault.join("atlas/inbox.md");
         create_dir_all(note.parent().expect("note parent")).expect("note parent dir");
         write(&note, "from-config").expect("note");
@@ -130,9 +138,13 @@ fn vault_root_can_fall_back_to_config() {
             vault.display().to_string(),
             "{resolved}"
         );
-        let ok = call(&host, "maw.fs.read", &json!({ "path": note }));
+        let ok = call(
+            &host,
+            "maw.fs.read",
+            &json!({ "path": note.canonicalize().expect("canonical note") }),
+        );
         assert_eq!(ok["value"]["content"], "from-config", "{ok}");
-    });
+    }
 }
 
 #[test]
@@ -141,10 +153,11 @@ fn vault_without_cap_or_root_is_denied_or_missing() {
     let home = temp("vault-deny-home");
     let vault = temp("vault-root");
     create_dir_all(&vault).expect("vault dir");
+    let vault = std::fs::canonicalize(vault).expect("canonical vault");
     let note = vault.join("msg.md");
     write(&note, "secret").expect("note");
-    with_vault_env(Some(&vault), None, &home, || {
-        let host = host_manifest_roots(&dir, &home, &[]);
+    {
+        let host = host_manifest_roots_with_vault(&dir, &home, &[], Some(vault.clone()), None);
         assert_host_error(
             &call(&host, "maw.paths.get", &json!({ "name": "vault" })),
             "capability_denied",
@@ -153,17 +166,24 @@ fn vault_without_cap_or_root_is_denied_or_missing() {
             &call(&host, "maw.fs.read", &json!({ "path": note })),
             "capability_denied",
         );
-    });
+    }
     let empty_config = temp("vault-empty-config");
-    with_vault_env(None, Some(&empty_config), &home, || {
-        let host = host_manifest_roots(&dir, &home, &["fs:read:vault"]);
+    let empty_config = std::fs::canonicalize(empty_config).expect("canonical empty config");
+    {
+        let host = host_manifest_roots_with_vault(
+            &dir,
+            &home,
+            &["fs:read:vault"],
+            None,
+            Some(empty_config.clone()),
+        );
         let missing = call(&host, "maw.paths.get", &json!({ "name": "vault" }));
         assert_host_error(&missing, "not_found");
         assert!(missing["error"]
             .as_str()
             .unwrap_or_default()
             .contains("MAW_VAULT_ROOT"));
-    });
+    }
 }
 
 #[test]
@@ -173,10 +193,17 @@ fn vault_read_cap_rejects_traversal_and_absolute_outside_paths() {
     let vault = temp("vault-root");
     let outside = temp("vault-outside");
     create_dir_all(&vault).expect("vault dir");
+    let vault = std::fs::canonicalize(vault).expect("canonical vault");
     let outside_note = outside.join("secret.md");
     write(&outside_note, "outside").expect("outside");
-    with_vault_env(Some(&vault), None, &home, || {
-        let host = host_manifest_roots(&dir, &home, &["fs:read:vault"]);
+    {
+        let host = host_manifest_roots_with_vault(
+            &dir,
+            &home,
+            &["fs:read:vault"],
+            Some(vault.clone()),
+            None,
+        );
         let via_parent = vault
             .join("..")
             .join(outside.file_name().expect("outside leaf"))
@@ -187,7 +214,7 @@ fn vault_read_cap_rejects_traversal_and_absolute_outside_paths() {
                 "capability_denied",
             );
         }
-    });
+    }
 }
 
 #[test]

@@ -45,6 +45,15 @@ fn host(dir: &Path, caps: &[&str]) -> MawWasmHost {
 }
 
 fn endpoint_host(dir: &Path, caps: &[&str], endpoints: Value) -> MawWasmHost {
+    endpoint_secret_host(dir, caps, endpoints, None)
+}
+
+fn endpoint_secret_host(
+    dir: &Path,
+    caps: &[&str],
+    endpoints: Value,
+    secrets: Option<Value>,
+) -> MawWasmHost {
     write(dir.join("plugin.wasm"), b"\0asm\x01\0\0\0").expect("wasm");
     let mut raw = json!({
         "name": "secure-plugin",
@@ -56,11 +65,12 @@ fn endpoint_host(dir: &Path, caps: &[&str], endpoints: Value) -> MawWasmHost {
     raw.as_object_mut()
         .expect("manifest object")
         .insert("endpoints".to_owned(), endpoints);
-    let manifest = parse_manifest(
-        &raw.to_string(),
-        dir,
-    )
-    .expect("manifest");
+    if let Some(secrets) = secrets {
+        raw.as_object_mut()
+            .expect("manifest object")
+            .insert("secrets".to_owned(), secrets);
+    }
+    let manifest = parse_manifest(&raw.to_string(), dir).expect("manifest");
     wasm_host_from_manifest(dir, manifest)
 }
 

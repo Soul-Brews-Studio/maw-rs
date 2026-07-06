@@ -329,6 +329,7 @@ fn make_plugin(dir: &Path, kind: LoadedPluginKind) -> LoadedPlugin {
             capability_namespaces: None,
             capabilities: None,
             endpoints: None,
+            secrets: None,
             capability_warnings: Vec::new(),
             dependencies: None,
             artifact: None,
