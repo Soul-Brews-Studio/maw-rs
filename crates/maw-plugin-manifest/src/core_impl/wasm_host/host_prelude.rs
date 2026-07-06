@@ -1,8 +1,8 @@
+#[cfg(target_os = "macos")]
+use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
 use std::io::Read;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
-#[cfg(target_os = "macos")]
-use std::ffi::OsString;
 #[cfg(target_os = "macos")]
 use std::os::fd::AsFd;
 #[cfg(target_os = "linux")]
@@ -214,4 +214,6 @@ pub struct MawWasmHost {
     http_resolver_overrides: BTreeMap<String, Vec<IpAddr>>,
     cwd: Option<String>,
     home: Option<String>,
+    vault_root: Option<PathBuf>,
+    config_root: Option<PathBuf>,
 }

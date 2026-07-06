@@ -107,7 +107,11 @@ impl MawWasmHost {
                     );
                 }
                 match self.home.as_ref() {
-                    Some(home) => match configured_vault_root(Path::new(home)) {
+                    Some(home) => match configured_vault_root(
+                        Path::new(home),
+                        self.config_root.as_deref(),
+                        self.vault_root.as_deref(),
+                    ) {
                         Ok(path) => Some(path.to_string_lossy().into_owned()),
                         Err(err) => return err,
                     },
@@ -130,7 +134,13 @@ impl MawWasmHost {
             },
             |path| HostResult::ok(json!({ "name": name, "path": path })),
         );
-        self.audit("maw.paths.get", "paths:get", name, status_of(&result), start);
+        self.audit(
+            "maw.paths.get",
+            "paths:get",
+            name,
+            status_of(&result),
+            start,
+        );
         result
     }
 
@@ -170,5 +180,4 @@ impl MawWasmHost {
         self.audit("maw.config.get", &cap, &resource, status_of(&result), start);
         result
     }
-
 }

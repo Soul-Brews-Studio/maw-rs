@@ -148,7 +148,10 @@ fn deny_special_path(path: &Path) -> bool {
         || path.starts_with("/sys")
         || path.starts_with("/root")
 }
-fn default_config_root() -> PathBuf {
+fn default_config_root(config_root: Option<&Path>) -> PathBuf {
+    if let Some(path) = config_root {
+        return path.to_path_buf();
+    }
     if let Some(path) = std::env::var_os("MAW_CONFIG_DIR") {
         return PathBuf::from(path);
     }
@@ -185,10 +188,15 @@ fn home_dir() -> Option<PathBuf> {
 /// `maw.fs.*` in production: a manifest may name one of these scopes but can
 /// never inject a path of its own. Extend by adding an arm here — never by
 /// reading a path from a manifest.
-fn known_fs_root(scope: &str, home: &Path) -> Option<PathBuf> {
+fn known_fs_root(
+    scope: &str,
+    home: &Path,
+    config_root: Option<&Path>,
+    vault_root: Option<&Path>,
+) -> Option<PathBuf> {
     match scope {
         "teams" => Some(home.join(".claude").join("teams")),
-        "vault" => configured_vault_root(home).ok(),
+        "vault" => configured_vault_root(home, config_root, vault_root).ok(),
         _ => None,
     }
 }
@@ -197,11 +205,18 @@ fn known_fs_root_should_create(scope: &str) -> bool {
     scope == "teams"
 }
 
-fn configured_vault_root(home: &Path) -> Result<PathBuf, HostResult<Value>> {
+fn configured_vault_root(
+    home: &Path,
+    config_root: Option<&Path>,
+    vault_root: Option<&Path>,
+) -> Result<PathBuf, HostResult<Value>> {
+    if let Some(root) = vault_root {
+        return Ok(resolve_configured_path(root.to_path_buf(), home));
+    }
     if let Some(root) = std::env::var_os("MAW_VAULT_ROOT").filter(|value| !value.is_empty()) {
         return Ok(resolve_configured_path(PathBuf::from(root), home));
     }
-    let config = read_config_json(&default_config_root().join("maw.config.json"))?;
+    let config = read_config_json(&default_config_root(config_root).join("maw.config.json"))?;
     for key in ["vaultRoot", "vault.root"] {
         if let Some(root) = get_json_path(&config, key)
             .and_then(Value::as_str)

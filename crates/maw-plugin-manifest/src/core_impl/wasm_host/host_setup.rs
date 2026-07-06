@@ -16,6 +16,8 @@ impl MawWasmHost {
             http_resolver_overrides: BTreeMap::new(),
             cwd: None,
             home: None,
+            vault_root: None,
+            config_root: None,
         }
     }
 
@@ -42,9 +44,9 @@ impl MawWasmHost {
     /// Real user home for exec'd children: the context-supplied value, falling
     /// back to the host process `$HOME`.
     fn exec_home(&self) -> Option<String> {
-        self.home.clone().or_else(|| {
-            std::env::var_os("HOME").map(|home| home.to_string_lossy().into_owned())
-        })
+        self.home
+            .clone()
+            .or_else(|| std::env::var_os("HOME").map(|home| home.to_string_lossy().into_owned()))
     }
 
     #[must_use]
@@ -78,7 +80,12 @@ impl MawWasmHost {
                 if self.fs_roots.contains_key(&scope) {
                     continue;
                 }
-                if let Some(path) = known_fs_root(&scope, home) {
+                if let Some(path) = known_fs_root(
+                    &scope,
+                    home,
+                    self.config_root.as_deref(),
+                    self.vault_root.as_deref(),
+                ) {
                     // Fixed-registry path only. Some legacy roots are created as
                     // anchors; read-only configured roots (e.g. vault) are not.
                     if known_fs_root_should_create(&scope) {
@@ -88,6 +95,18 @@ impl MawWasmHost {
                 }
             }
         }
+        self
+    }
+
+    /// Override vault/config roots for deterministic host tests without process-env mutation.
+    #[must_use]
+    pub fn with_vault_config_roots(
+        mut self,
+        vault_root: Option<PathBuf>,
+        config_root: Option<PathBuf>,
+    ) -> Self {
+        self.vault_root = vault_root;
+        self.config_root = config_root;
         self
     }
 
@@ -176,5 +195,4 @@ impl MawWasmHost {
             },
         )
     }
-
 }
