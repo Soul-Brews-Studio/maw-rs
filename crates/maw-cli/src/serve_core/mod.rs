@@ -1727,6 +1727,12 @@ async fn servecore_ws_stream(
             .await;
         return;
     };
+    if matches!(kind, ServecoreWsKind::Pty) {
+        process_engine::serveengine_ws_pty_stream(socket, state.clone(), target.clone(), &config)
+            .await;
+        state.engine.servecore_ws_close(kind, target.as_deref());
+        return;
+    }
     let mut heartbeat = tokio::time::interval_at(
         tokio::time::Instant::now() + config.heartbeat_interval,
         config.heartbeat_interval,
@@ -1957,6 +1963,25 @@ mod tests {
     use std::{net::Ipv4Addr, time::Duration};
     use tokio::sync::oneshot;
     use tower::ServiceExt;
+
+    struct EnvGuard(&'static str, Option<std::ffi::OsString>);
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let old = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self(key, old)
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.1 {
+                Some(value) => std::env::set_var(self.0, value),
+                None => std::env::remove_var(self.0),
+            }
+        }
+    }
 
     #[derive(Default)]
     struct FakeOrchestrator {
@@ -2981,6 +3006,68 @@ mod tests {
             .await
             .expect("protected");
         assert_eq!(protected.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn servecore_ws_pty_attaches_and_bridges_binary_frames() {
+        let _guard = EnvGuard::set("MAW_RS_SERVECORE_PTY_PROGRAM", "/bin/cat");
+        let addr = servecore_spawn_ws_test_server(
+            ServecoreSharedState::default(),
+            modules::websocket_routes::WsConfig {
+                idle_timeout: Duration::from_secs(5),
+                heartbeat_interval: Duration::from_secs(5),
+                send_timeout: Duration::from_secs(2),
+                max_frame_bytes: 1024,
+                max_connections: 8,
+            },
+        )
+        .await;
+        let (mut ws, _response) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws/pty"))
+            .await
+            .expect("connect pty websocket");
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(
+            r#"{"type":"attach","target":"demo:1","cols":80,"rows":24}"#.to_owned(),
+        ))
+        .await
+        .expect("attach");
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if let tokio_tungstenite::tungstenite::Message::Text(text) =
+                    ws.next().await.expect("ack frame").expect("ack ok")
+                {
+                    let value = serde_json::from_str::<serde_json::Value>(&text).expect("json");
+                    if value["type"] == "attached" {
+                        assert_eq!(value["target"], "demo:1");
+                        break;
+                    }
+                }
+            }
+        })
+        .await
+        .expect("attached ack");
+        ws.send(tokio_tungstenite::tungstenite::Message::Binary(
+            b"pty-roundtrip\n".to_vec(),
+        ))
+        .await
+        .expect("binary input");
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if let tokio_tungstenite::tungstenite::Message::Binary(bytes) =
+                    ws.next().await.expect("pty frame").expect("pty ok")
+                {
+                    if String::from_utf8_lossy(&bytes).contains("pty-roundtrip") {
+                        break;
+                    }
+                }
+            }
+        })
+        .await
+        .expect("binary pty output");
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(
+            r#"{"type":"detach"}"#.to_owned(),
+        ))
+        .await
+        .expect("detach");
     }
 
     #[tokio::test]
