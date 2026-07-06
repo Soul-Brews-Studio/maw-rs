@@ -22,6 +22,7 @@
 use maw_cli::run_cli;
 use maw_plugin_manifest::hash_file;
 use serde_json::Value;
+use std::ffi::OsString;
 use std::fs::{self, create_dir_all, read_to_string};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -73,6 +74,32 @@ fn copy_tree(src: &Path, dst: &Path) {
             fs::copy(&from, &to).expect("copy file");
         }
     }
+}
+
+fn seed_ctq_vault(root: &Path) {
+    let atlas = root.join("vault/atlas/inbox");
+    let neo = root.join("vault/neo/inbox");
+    create_dir_all(&atlas).expect("atlas inbox");
+    create_dir_all(&neo).expect("neo inbox");
+    fs::write(atlas.join("001-handoff.md"), "---\nfrom: zai\nto: nat\nteam: atlas\ntype: handoff\nsubject: Review vault scanner\n---\nPlease review the vault scanner.\n").expect("atlas msg");
+    fs::write(neo.join("002-question.md"), "---\nfrom: morpheus\nto: zai\nteam: neo\ntype: question\nsubject: Need queue answer\n---\nCan you confirm the queue filter?\n").expect("neo msg");
+}
+
+fn restore_env(key: &str, value: Option<OsString>) {
+    match value {
+        Some(value) => std::env::set_var(key, value),
+        None => std::env::remove_var(key),
+    }
+}
+
+fn normalize_root(root: &Path, output: &str) -> String {
+    let raw = root.display().to_string();
+    let mut normalized = output.replace(&format!("/private{raw}"), "$ROOT");
+    normalized = normalized.replace(&raw, "$ROOT");
+    if let Ok(canonical) = root.canonicalize() {
+        normalized = normalized.replace(&canonical.display().to_string(), "$ROOT");
+    }
+    normalized
 }
 
 /// An `artifact` pin declared by one manifest: the relative artifact path + its sha256.
@@ -243,10 +270,11 @@ fn fleet_plugins_artifacts_match_manifest_sha256() {
 }
 
 #[test]
-fn cross_team_queue_fleet_artifact_installs_and_invokes_scaffold() {
+fn cross_team_queue_fleet_artifact_installs_and_scans_vault() {
     let source = fleet_plugins_dir().join("cross-team-queue");
     assert!(source.join("plugin.json").is_file(), "missing cross-team-queue fleet plugin");
     let root = temp_dir("ctq-invoke");
+    seed_ctq_vault(&root);
     let install_root = root.join("plugins");
     let install = run_cli(&args(&[
         "plugin",
@@ -257,6 +285,10 @@ fn cross_team_queue_fleet_artifact_installs_and_invokes_scaffold() {
     ]));
     assert_eq!(install.code, 0, "plugin install failed: {}\n{}", install.stderr, install.stdout);
 
+    let saved_home = std::env::var_os("HOME");
+    let saved_vault = std::env::var_os("MAW_VAULT_ROOT");
+    std::env::set_var("HOME", &root);
+    std::env::set_var("MAW_VAULT_ROOT", root.join("vault"));
     let invoke = run_cli(&args(&[
         "plugin-manifest",
         "invoke",
@@ -266,19 +298,24 @@ fn cross_team_queue_fleet_artifact_installs_and_invokes_scaffold() {
         "cross-team-queue",
         "--arg",
         "--json",
-        "--arg",
-        "--recipient",
-        "--arg",
-        "nat",
     ]));
+    let filtered = run_cli(&args(&[
+        "plugin-manifest", "invoke", "--scan-dir", &install_root.display().to_string(),
+        "--plugin", "cross-team-queue", "--arg", "--json", "--arg", "--recipient", "--arg", "nat",
+    ]));
+    restore_env("MAW_VAULT_ROOT", saved_vault);
+    restore_env("HOME", saved_home);
     fs::remove_dir_all(&root).ok();
 
     assert_eq!(invoke.code, 0, "plugin invoke failed: {}\n{}", invoke.stderr, invoke.stdout);
     assert_eq!(
-        invoke.stdout,
-        include_str!("fixtures/zerobun/cross-team-queue-empty.stdout")
+        normalize_root(&root, &invoke.stdout),
+        include_str!("fixtures/zerobun/cross-team-queue-scan.stdout")
     );
     assert!(invoke.stderr.is_empty(), "{}", invoke.stderr);
+    assert_eq!(filtered.code, 0, "filtered invoke failed: {}\n{}", filtered.stderr, filtered.stdout);
+    let filtered = normalize_root(&root, &filtered.stdout);
+    assert!(filtered.contains("\"totalItems\":1") && filtered.contains("\"recipient\":\"nat\"") && !filtered.contains("\"recipient\":\"zai\""), "{filtered}");
 }
 
 #[test]

@@ -133,8 +133,8 @@ fn ensure_dir_within_roots(
 }
 
 fn verify_fd_path(file: &File, expected: &Path) -> Result<(), HostResult<Value>> {
-    let actual = fd_real_path(file)?;
-    if actual == expected {
+    let actual = canonicalize_checked_path(&fd_real_path(file)?)?;
+    if actual == expected || fd_matches_path(file, expected)? {
         Ok(())
     } else {
         Err(HostResult::err(
@@ -144,11 +144,21 @@ fn verify_fd_path(file: &File, expected: &Path) -> Result<(), HostResult<Value>>
     }
 }
 
+fn fd_matches_path(file: &File, expected: &Path) -> Result<bool, HostResult<Value>> {
+    let fd_meta = file.metadata().map_err(|error| {
+        HostResult::err(HostErrorCode::IoError, format!("metadata failed: {error}"))
+    })?;
+    let path_meta = std::fs::metadata(expected).map_err(|error| {
+        HostResult::err(HostErrorCode::IoError, format!("metadata failed: {error}"))
+    })?;
+    Ok(fd_meta.dev() == path_meta.dev() && fd_meta.ino() == path_meta.ino())
+}
+
 fn verify_fd_under_roots(
     file: &File,
     roots: &BTreeMap<String, PathBuf>,
 ) -> Result<(), HostResult<Value>> {
-    let actual = fd_real_path(file)?;
+    let actual = canonicalize_checked_path(&fd_real_path(file)?)?;
     if roots.values().any(|root| actual.starts_with(root)) {
         Ok(())
     } else {

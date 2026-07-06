@@ -9,7 +9,9 @@ fn host_manifest_roots(dir: &Path, home: &Path, caps: &[&str]) -> MawWasmHost {
         kind: maw_plugin_manifest::LoadedPluginKind::Wasm,
         disabled: false,
     };
-    MawWasmHost::new(&loaded).with_manifest_fs_roots_from(home)
+    MawWasmHost::new(&loaded)
+        .with_paths(None, Some(home.to_string_lossy().into_owned()))
+        .with_manifest_fs_roots_from(home)
 }
 
 fn teams_root(home: &Path) -> PathBuf {
@@ -85,14 +87,19 @@ fn vault_read_cap_grants_env_root_for_paths_list_and_read() {
             &json!({ "path": vault, "recursive": true }),
         );
         assert_eq!(listed["ok"], true, "{listed}");
+        let listed_note = note.canonicalize().expect("canonical note");
         assert!(listed["value"]["entries"]
             .as_array()
             .is_some_and(|entries| {
                 entries
                     .iter()
-                    .any(|entry| entry["path"] == note.display().to_string())
+                    .any(|entry| entry["path"] == listed_note.display().to_string())
             }));
-        let ok = call(&host, "maw.fs.read", &json!({ "path": note }));
+        let ok = call(
+            &host,
+            "maw.fs.read",
+            &json!({ "path": note.canonicalize().expect("canonical note") }),
+        );
         assert_eq!(ok["value"]["content"], "hello-vault", "{ok}");
 
         let write_host = host_manifest_roots(&dir, &home, &["fs:read:vault", "fs:write:vault"]);
@@ -130,7 +137,11 @@ fn vault_root_can_fall_back_to_config() {
             vault.display().to_string(),
             "{resolved}"
         );
-        let ok = call(&host, "maw.fs.read", &json!({ "path": note }));
+        let ok = call(
+            &host,
+            "maw.fs.read",
+            &json!({ "path": note.canonicalize().expect("canonical note") }),
+        );
         assert_eq!(ok["value"]["content"], "from-config", "{ok}");
     });
 }

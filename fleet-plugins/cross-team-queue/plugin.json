@@ -1,15 +1,17 @@
 {
   "artifact": {
     "path": "./plugin.wasm",
-    "sha256": "sha256:1d483b0e36933619e7d444f6d4b62ca2dfea8bdd42cc155b6569565cbb2d07fa"
+    "sha256": "sha256:5f8fd46790d85bd9e8f13a99b255cee6412a8aca676b75ee5ad4b0ac5c0a84a9"
   },
   "author": "Soul-Brews-Studio",
-  "capabilities": [],
+  "capabilities": [
+    "fs:read:vault"
+  ],
   "cli": {
     "command": "cross-team-queue",
     "help": "maw cross-team-queue [--json] [--recipient <name>]"
   },
-  "description": "Unified inbox queue scaffold. Ship-tier slice 1: WASM artifact returns the empty queue contract; scanning lands in slice 2.",
+  "description": "Unified inbox queue scanner. Ship-tier WASM reads the configured vault via fs:read:vault and returns the queue contract.",
   "entry": {
     "export": "handle",
     "kind": "wasm",
