@@ -1483,6 +1483,10 @@ fn servecore_add_cors_headers(
         HeaderValue::from_static("GET, POST, OPTIONS"),
     );
     headers.insert("access-control-allow-headers", allow_headers.clone());
+    headers.insert(
+        "access-control-allow-private-network",
+        HeaderValue::from_static("true"),
+    );
     servecore_add_vary_origin(headers);
 }
 
