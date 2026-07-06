@@ -2,6 +2,7 @@
 
 Rust port of maw-js — distributed terminal multiplexing & fleet management.
 A Cargo workspace of small, focused crates. BUSL-1.1 licensed.
+For repo-wide agent execution conventions, read `AGENTS.md` first; this file remains the Claude-specific memory and release detail.
 
 ## Build Gate
 
