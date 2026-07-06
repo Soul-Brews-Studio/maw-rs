@@ -3,6 +3,7 @@ include!("wasm_host_security/manifest_fs_localserver.rs");
 include!("wasm_host_security/exec_ssh_capabilities.rs");
 include!("wasm_host_security/config_consent.rs");
 include!("wasm_host_security/consent_http_network.rs");
+include!("wasm_host_security/net_fetch.rs");
 include!("wasm_host_security/tmux_contracts.rs");
 include!("wasm_host_security/filesystem_protection.rs");
 include!("wasm_host_security/manifest_roots.rs");

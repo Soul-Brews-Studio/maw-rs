@@ -37,6 +37,7 @@ use serde_json::json;
 use url::Url;
 
 const MAX_HTTP_TIMEOUT_MS: u64 = 30_000;
+const MAX_NET_FETCH_RESPONSE_BYTES: u64 = 1024 * 1024;
 const MAX_EXEC_TIMEOUT_MS: u64 = 30_000;
 const MAX_READ_BYTES: u64 = 10 * 1024 * 1024;
 const O_NOFOLLOW_FLAG: i32 = libc::O_NOFOLLOW;
@@ -201,6 +202,7 @@ struct FakeHostResponse {
 pub struct MawWasmHost {
     plugin_name: String,
     caps: CapabilitySet,
+    endpoints: PluginEndpointPolicies,
     fs_roots: BTreeMap<String, PathBuf>,
     secret_store: BTreeMap<String, String>,
     fake_responses: BTreeMap<(String, String), FakeHostResponse>,
@@ -213,4 +215,3 @@ pub struct MawWasmHost {
     cwd: Option<String>,
     home: Option<String>,
 }
-

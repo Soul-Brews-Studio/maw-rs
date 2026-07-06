@@ -89,6 +89,16 @@ struct LocalserverArgs {
 }
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct NetFetchArgs {
+    endpoint: String,
+    method: Option<String>,
+    path: String,
+    query: Option<BTreeMap<String, String>>,
+    body: Option<String>,
+    timeout_ms: Option<u64>,
+}
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct PeerSendArgs {
     peer_url: String,
     target: String,

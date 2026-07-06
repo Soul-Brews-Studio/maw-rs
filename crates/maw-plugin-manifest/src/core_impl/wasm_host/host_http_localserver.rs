@@ -55,7 +55,169 @@ impl MawWasmHost {
             ),
             follow_redirects: args.follow_redirects.unwrap_or(false),
             pinned_addr: Some(pinned_addr),
+            max_response_bytes: None,
         };
+        let result = self.run_http_transport(&request);
+        self.audit("maw.http.request", &cap, &host, status_of(&result), start);
+        result
+    }
+
+    fn net_fetch(&self, input: &str) -> HostResult<Value> {
+        let start = Instant::now();
+        let args = match parse_args::<NetFetchArgs>(input) {
+            Ok(args) => args,
+            Err(err) => return err,
+        };
+        let endpoint = args.endpoint.clone();
+        let method = args.method.as_deref().unwrap_or("GET").to_ascii_uppercase();
+        let resource = format!("{endpoint} {method} {}", args.path);
+        let cap = match self.caps.require("net", "fetch", Some(&endpoint)) {
+            Ok(cap) => cap,
+            Err(err) => return err,
+        };
+        let result = self.net_fetch_checked(args, &method);
+        self.audit("maw.net.fetch", &cap, &resource, status_of(&result), start);
+        result
+    }
+
+    fn net_fetch_checked(&self, args: NetFetchArgs, method: &str) -> HostResult<Value> {
+        let Some(policy) = self.endpoints.get(&args.endpoint) else {
+            return HostResult::err(
+                HostErrorCode::CapabilityDenied,
+                "endpoint is not allowlisted",
+            );
+        };
+        if !policy.methods.iter().any(|allowed| allowed == method) {
+            return HostResult::err(HostErrorCode::CapabilityDenied, "endpoint method denied");
+        }
+        if !policy
+            .paths
+            .iter()
+            .any(|pattern| pattern.matches(&args.path))
+        {
+            return HostResult::err(HostErrorCode::CapabilityDenied, "endpoint path denied");
+        }
+        let url = match self.endpoint_url(policy, &args.path, args.query.as_ref()) {
+            Ok(url) => url,
+            Err(err) => return err,
+        };
+        let pinned_addr = if policy.loopback_only {
+            match self.loopback_endpoint_addr(&url) {
+                Ok(addr) => Some(addr),
+                Err(err) => return err,
+            }
+        } else {
+            None
+        };
+        let request = TransportHttpRequest {
+            method: method.to_owned(),
+            url: url.to_string(),
+            headers: BTreeMap::new(),
+            body: args.body,
+            timeout_ms: Some(
+                args.timeout_ms
+                    .unwrap_or(self.http_timeout_ms)
+                    .min(MAX_HTTP_TIMEOUT_MS),
+            ),
+            follow_redirects: false,
+            pinned_addr,
+            max_response_bytes: Some(MAX_NET_FETCH_RESPONSE_BYTES),
+        };
+        self.run_http_transport(&request)
+    }
+
+    fn endpoint_url(
+        &self,
+        policy: &PluginEndpointPolicy,
+        path: &str,
+        query: Option<&BTreeMap<String, String>>,
+    ) -> Result<Url, HostResult<Value>> {
+        let base = self.endpoint_base_url(policy)?;
+        let mut url = Url::parse(base.trim_end_matches('/')).map_err(|error| {
+            HostResult::err(
+                HostErrorCode::InvalidArgs,
+                format!("invalid endpoint url: {error}"),
+            )
+        })?;
+        if !matches!(url.scheme(), "http" | "https") {
+            return Err(HostResult::err(
+                HostErrorCode::CapabilityDenied,
+                "endpoint URL must be http/https",
+            ));
+        }
+        url.set_query(None);
+        url.set_fragment(None);
+        let base_path = url.path().trim_end_matches('/');
+        let suffix = path.trim_start_matches('/');
+        let full_path = if suffix.is_empty() {
+            if base_path.is_empty() { "/" } else { base_path }.to_owned()
+        } else if base_path.is_empty() || base_path == "/" {
+            format!("/{suffix}")
+        } else {
+            format!("{base_path}/{suffix}")
+        };
+        url.set_path(&full_path);
+        if let Some(query) = query {
+            let mut pairs = url.query_pairs_mut();
+            for (key, value) in query {
+                pairs.append_pair(key, value);
+            }
+        }
+        if is_discord_gateway(&url) {
+            return Err(HostResult::err(
+                HostErrorCode::CapabilityDenied,
+                "Discord gateway is hard-denied from WASM host functions",
+            ));
+        }
+        Ok(url)
+    }
+
+    fn endpoint_base_url(
+        &self,
+        policy: &PluginEndpointPolicy,
+    ) -> Result<String, HostResult<Value>> {
+        if let Some(base) = &policy.base_url {
+            return Ok(base.clone());
+        }
+        if let Some(key) = &policy.base_url_ref {
+            let path = self.config_file_path()?;
+            let config = read_config_json(&path)?;
+            if let Some(base) = get_json_path(&config, key)
+                .and_then(Value::as_str)
+                .filter(|base| !base.is_empty())
+            {
+                return Ok(base.to_owned());
+            }
+        }
+        policy
+            .default_base_url
+            .clone()
+            .ok_or_else(|| HostResult::err(HostErrorCode::NotFound, "endpoint base URL not found"))
+    }
+
+    fn loopback_endpoint_addr(&self, url: &Url) -> Result<SocketAddr, HostResult<Value>> {
+        let host = url.host_str().ok_or_else(|| {
+            HostResult::err(HostErrorCode::InvalidArgs, "endpoint URL host is required")
+        })?;
+        let Some(port) = url.port_or_known_default() else {
+            return Err(HostResult::err(
+                HostErrorCode::InvalidArgs,
+                "endpoint URL port is required",
+            ));
+        };
+        let addrs = self
+            .resolve_http_host_once(host, port)
+            .map_err(|error| HostResult::err(HostErrorCode::NetworkError, error))?;
+        if addrs.is_empty() || addrs.iter().any(|ip| !ip.to_canonical().is_loopback()) {
+            return Err(HostResult::err(
+                HostErrorCode::CapabilityDenied,
+                "loopbackOnly endpoint must resolve to loopback",
+            ));
+        }
+        Ok(SocketAddr::new(addrs[0], port))
+    }
+
+    fn run_http_transport(&self, request: &TransportHttpRequest) -> HostResult<Value> {
         let runtime = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -73,18 +235,19 @@ impl MawWasmHost {
                 Ok(client) => client,
                 Err(error) => return HostResult::err(HostErrorCode::NetworkError, error),
             };
-        let result = match runtime.block_on(client.request(&request)) {
+        match runtime.block_on(client.request(request)) {
             Ok(resp) => HostResult::ok(
                 json!({"status": resp.status, "headers": resp.headers, "body": resp.body, "url": resp.url}),
             ),
             Err(error) => HostResult::err(HostErrorCode::NetworkError, error),
-        };
-        self.audit("maw.http.request", &cap, &host, status_of(&result), start);
-        result
+        }
     }
 
-
-    fn resolve_http_pinned_addr(&self, url: &Url, host: &str) -> Result<SocketAddr, HostResult<Value>> {
+    fn resolve_http_pinned_addr(
+        &self,
+        url: &Url,
+        host: &str,
+    ) -> Result<SocketAddr, HostResult<Value>> {
         let Some(port) = url.port_or_known_default() else {
             return Err(HostResult::err(
                 HostErrorCode::InvalidArgs,
@@ -112,7 +275,9 @@ impl MawWasmHost {
         addrs
             .first()
             .map(|ip| SocketAddr::new(*ip, port))
-            .ok_or_else(|| HostResult::err(HostErrorCode::NetworkError, "host resolved no addresses"))
+            .ok_or_else(|| {
+                HostResult::err(HostErrorCode::NetworkError, "host resolved no addresses")
+            })
     }
 
     fn resolve_http_host_once(&self, host: &str, port: u16) -> Result<Vec<IpAddr>, String> {
@@ -128,7 +293,6 @@ impl MawWasmHost {
             .map(|addrs| addrs.map(|addr| addr.ip()).collect::<Vec<_>>())
             .map_err(|error| format!("failed to resolve {host}: {error}"))
     }
-
 
     fn localserver_request(&self, input: &str) -> HostResult<Value> {
         let start = Instant::now();
@@ -161,29 +325,9 @@ impl MawWasmHost {
             ),
             follow_redirects: false,
             pinned_addr: None,
+            max_response_bytes: None,
         };
-        let runtime = match tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-        {
-            Ok(rt) => rt,
-            Err(error) => {
-                return HostResult::err(
-                    HostErrorCode::NetworkError,
-                    format!("tokio runtime failed: {error}"),
-                )
-            }
-        };
-        let client = match ReqwestHttpTransportIo::new(request.timeout_ms.unwrap_or(self.http_timeout_ms)) {
-            Ok(client) => client,
-            Err(error) => return HostResult::err(HostErrorCode::NetworkError, error),
-        };
-        let result = match runtime.block_on(client.request(&request)) {
-            Ok(resp) => HostResult::ok(
-                json!({"status": resp.status, "headers": resp.headers, "body": resp.body, "url": resp.url}),
-            ),
-            Err(error) => HostResult::err(HostErrorCode::NetworkError, error),
-        };
+        let result = self.run_http_transport(&request);
         self.audit(
             "maw.localserver.request",
             &cap,
@@ -193,5 +337,4 @@ impl MawWasmHost {
         );
         result
     }
-
 }

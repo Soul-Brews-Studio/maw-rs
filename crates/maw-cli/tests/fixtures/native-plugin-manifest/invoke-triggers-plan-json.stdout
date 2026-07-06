@@ -13,7 +13,7 @@
     "mode": "extism-wasm",
     "pluginKind": "wasm",
     "wasmExport": "handle",
-    "hostFnCount": 26,
+    "hostFnCount": 27,
     "noBunFallback": true,
     "tsRefused": false,
     "muslStaticCompat": "extism-crate-linked"

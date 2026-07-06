@@ -109,7 +109,7 @@ fn validate_endpoint_capabilities(
 ) -> Result<(), String> {
     for capability in capabilities.unwrap_or(&[]) {
         if let Some(name) = capability.strip_prefix("net:fetch:") {
-            if endpoints.map_or(true, |endpoints| !endpoints.contains_key(name)) {
+            if endpoints.is_none_or(|endpoints| !endpoints.contains_key(name)) {
                 return Err(format!(
                     "plugin.json: capability {capability:?} references missing endpoint {name:?}"
                 ));

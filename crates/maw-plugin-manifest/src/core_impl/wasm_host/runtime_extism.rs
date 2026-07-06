@@ -92,6 +92,7 @@ pub const HOST_FN_NAMES: &[&str] = &[
     "maw.fs.list",
     "maw.fs.stat",
     "maw.http.request",
+    "maw.net.fetch",
     "maw.localserver.request",
     "maw.http.peer_send",
     "maw.http.peer_wake",

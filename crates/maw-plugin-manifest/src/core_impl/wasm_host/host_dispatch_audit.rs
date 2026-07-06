@@ -41,6 +41,7 @@ impl MawWasmHost {
             "maw.fs.list" => to_json(&self.fs_list(input)),
             "maw.fs.stat" => to_json(&self.fs_stat(input)),
             "maw.http.request" => to_json(&self.http_request(input)),
+            "maw.net.fetch" => to_json(&self.net_fetch(input)),
             "maw.localserver.request" => to_json(&self.localserver_request(input)),
             "maw.http.peer_send" => to_json(&self.peer_send(input)),
             "maw.http.peer_wake" => to_json(&self.peer_wake(input)),
