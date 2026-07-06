@@ -87,6 +87,38 @@ pub fn parse_capabilities(
     }))
 }
 
+fn parse_endpoints(manifest: &Value) -> Result<Option<PluginEndpointPolicies>, String> {
+    let Some(value) = manifest.get("endpoints") else {
+        return Ok(None);
+    };
+    let raw = serde_json::from_value::<BTreeMap<String, RawEndpointPolicy>>(value.clone())
+        .map_err(|_| "plugin.json: endpoints must be an object of endpoint policies".to_owned())?;
+    let mut endpoints = BTreeMap::new();
+    for (name, raw) in raw {
+        if !is_slug(&name) {
+            return Err("plugin.json: endpoints keys must be slug strings".to_owned());
+        }
+        endpoints.insert(name.clone(), raw.into_policy(&name)?);
+    }
+    Ok(Some(endpoints))
+}
+
+fn validate_endpoint_capabilities(
+    capabilities: Option<&[String]>,
+    endpoints: Option<&PluginEndpointPolicies>,
+) -> Result<(), String> {
+    for capability in capabilities.unwrap_or(&[]) {
+        if let Some(name) = capability.strip_prefix("net:fetch:") {
+            if endpoints.map_or(true, |endpoints| !endpoints.contains_key(name)) {
+                return Err(format!(
+                    "plugin.json: capability {capability:?} references missing endpoint {name:?}"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Parse optional `dependencies`.
 ///
 /// # Errors
@@ -355,6 +387,156 @@ fn parse_string_array(
     Ok(parsed)
 }
 
+pub type PluginEndpointPolicies = BTreeMap<String, PluginEndpointPolicy>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginEndpointPolicy {
+    pub base_url: Option<String>,
+    pub base_url_ref: Option<String>,
+    pub default_base_url: Option<String>,
+    pub methods: Vec<String>,
+    pub paths: Vec<EndpointPathPattern>,
+    pub auth: Option<PluginEndpointAuth>,
+    pub loopback_only: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct PluginEndpointAuth {
+    pub kind: String,
+    pub secret: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawEndpointPolicy {
+    base_url: Option<String>,
+    base_url_ref: Option<String>,
+    default_base_url: Option<String>,
+    methods: Option<Vec<String>>,
+    paths: Vec<String>,
+    auth: Option<PluginEndpointAuth>,
+    #[serde(default)]
+    loopback_only: bool,
+}
+
+impl RawEndpointPolicy {
+    fn into_policy(self, name: &str) -> Result<PluginEndpointPolicy, String> {
+        if self.base_url.as_deref().is_some_and(str::is_empty)
+            || self.base_url_ref.as_deref().is_some_and(str::is_empty)
+            || self.default_base_url.as_deref().is_some_and(str::is_empty)
+        {
+            return Err(format!(
+                "plugin.json: endpoints.{name} URLs must be non-empty strings"
+            ));
+        }
+        if self.base_url.is_none() && self.base_url_ref.is_none() {
+            return Err(format!(
+                "plugin.json: endpoints.{name} requires baseUrl or baseUrlRef"
+            ));
+        }
+        let mut methods = self.methods.unwrap_or_else(|| vec!["GET".to_owned()]);
+        if methods.is_empty() || methods.iter().any(String::is_empty) {
+            return Err(format!(
+                "plugin.json: endpoints.{name}.methods must be non-empty"
+            ));
+        }
+        for method in &mut methods {
+            *method = method.to_ascii_uppercase();
+            if method.bytes().any(|byte| !byte.is_ascii_uppercase()) {
+                return Err(format!(
+                    "plugin.json: endpoints.{name}.methods must be HTTP tokens"
+                ));
+            }
+        }
+        if self.paths.is_empty() {
+            return Err(format!(
+                "plugin.json: endpoints.{name}.paths must be non-empty"
+            ));
+        }
+        let paths = self
+            .paths
+            .iter()
+            .map(|path| EndpointPathPattern::parse(path))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("plugin.json: endpoints.{name}.paths: {error}"))?;
+        if self
+            .auth
+            .as_ref()
+            .is_some_and(|auth| auth.kind.is_empty() || auth.secret.is_empty())
+        {
+            return Err(format!(
+                "plugin.json: endpoints.{name}.auth fields must be non-empty"
+            ));
+        }
+        Ok(PluginEndpointPolicy {
+            base_url: self.base_url,
+            base_url_ref: self.base_url_ref,
+            default_base_url: self.default_base_url,
+            methods,
+            paths,
+            auth: self.auth,
+            loopback_only: self.loopback_only,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EndpointPathPattern {
+    segments: Vec<String>,
+}
+
+impl EndpointPathPattern {
+    fn parse(pattern: &str) -> Result<Self, String> {
+        Ok(Self {
+            segments: endpoint_path_segments(pattern)?,
+        })
+    }
+
+    #[must_use]
+    pub fn matches(&self, path: &str) -> bool {
+        endpoint_path_segments(path).is_ok_and(|segments| {
+            self.segments.len() == segments.len()
+                && self
+                    .segments
+                    .iter()
+                    .zip(segments.iter())
+                    .all(|(pattern, actual)| pattern == "*" || pattern == actual)
+        })
+    }
+}
+
+// V1 grammar: absolute literal path segments plus full-segment `*`; no `**`, scheme/host, query, fragment, or `..`.
+fn endpoint_path_segments(path: &str) -> Result<Vec<String>, String> {
+    if !path.starts_with('/') || path.starts_with("//") || path.contains("://") {
+        return Err("path must be absolute and must not include scheme or host".to_owned());
+    }
+    if path.contains('?') || path.contains('#') {
+        return Err("path must not include query or fragment".to_owned());
+    }
+    let rest = &path[1..];
+    if rest.is_empty() {
+        return Ok(Vec::new());
+    }
+    rest.split('/')
+        .map(|segment| {
+            if segment.is_empty() {
+                return Err("path segments must be non-empty".to_owned());
+            }
+            if segment == ".."
+                || segment.eq_ignore_ascii_case("%2e%2e")
+                || segment.eq_ignore_ascii_case(".%2e")
+                || segment.eq_ignore_ascii_case("%2e.")
+            {
+                return Err("path must not contain .. segments".to_owned());
+            }
+            if segment == "**" || (segment.contains('*') && segment != "*") {
+                return Err("only full-segment * wildcards are supported".to_owned());
+            }
+            Ok(segment.to_owned())
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginManifest {
     pub name: String,
@@ -377,6 +559,7 @@ pub struct PluginManifest {
     pub target: Option<PluginTarget>,
     pub capability_namespaces: Option<Vec<String>>,
     pub capabilities: Option<Vec<String>>,
+    pub endpoints: Option<PluginEndpointPolicies>,
     pub capability_warnings: Vec<String>,
     pub dependencies: Option<PluginDependencies>,
     pub artifact: Option<PluginArtifact>,

@@ -125,6 +125,8 @@ pub fn parse_manifest(json_text: &str, dir: &Path) -> Result<PluginManifest, Str
     let (capabilities, capability_warnings) = capabilities.map_or((None, Vec::new()), |parsed| {
         (Some(parsed.capabilities), parsed.warnings)
     });
+    let endpoints = parse_endpoints(&raw)?;
+    validate_endpoint_capabilities(capabilities.as_deref(), endpoints.as_ref())?;
 
     Ok(PluginManifest {
         name,
@@ -153,6 +155,7 @@ pub fn parse_manifest(json_text: &str, dir: &Path) -> Result<PluginManifest, Str
         target,
         capability_namespaces,
         capabilities,
+        endpoints,
         capability_warnings,
         dependencies: parse_dependencies(&raw)?,
         artifact: parse_artifact(&raw)?,

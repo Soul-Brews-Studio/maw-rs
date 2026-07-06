@@ -410,6 +410,7 @@ fn minimal_manifest(name: &str) -> PluginManifest {
         target: None,
         capability_namespaces: None,
         capabilities: None,
+        endpoints: None,
         capability_warnings: Vec::new(),
         dependencies: None,
         artifact: None,

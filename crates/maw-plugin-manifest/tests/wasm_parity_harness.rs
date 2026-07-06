@@ -1099,6 +1099,7 @@ fn manifest(name: &str) -> PluginManifest {
         target: None,
         capability_namespaces: None,
         capabilities: Some(Vec::new()),
+        endpoints: None,
         capability_warnings: Vec::new(),
         dependencies: None,
         artifact: None,

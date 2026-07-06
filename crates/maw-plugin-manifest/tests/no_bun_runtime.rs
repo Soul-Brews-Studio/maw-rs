@@ -84,6 +84,7 @@ fn ts_plugin(dir: &Path, entry_path: &Path) -> LoadedPlugin {
             target: Some(PluginTarget::Js),
             capability_namespaces: None,
             capabilities: Some(Vec::new()),
+            endpoints: None,
             capability_warnings: Vec::new(),
             dependencies: None,
             artifact: None,

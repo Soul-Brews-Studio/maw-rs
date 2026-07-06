@@ -191,6 +191,7 @@ fn write_wasm_plugin(dir: &Path, name: &str, bytes: &[u8]) -> LoadedPlugin {
             target: None,
             capability_namespaces: None,
             capabilities: None,
+            endpoints: None,
             capability_warnings: Vec::new(),
             dependencies: None,
             artifact: None,
