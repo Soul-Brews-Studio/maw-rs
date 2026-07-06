@@ -23,9 +23,19 @@ use maw_cli::run_cli;
 use maw_plugin_manifest::hash_file;
 use serde_json::Value;
 use std::ffi::OsString;
+use std::fmt::Write as FmtWrite;
 use std::fs::{self, create_dir_all, read_to_string};
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
+use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+type HermesFake = (String, Arc<Mutex<Vec<String>>>, Arc<AtomicBool>, thread::JoinHandle<()>);
 
 /// Manifest filenames a fleet plugin may use to declare its ship artifact. `plugin.json`
 /// is the active manifest (possibly a bun-dev dev-tier manifest with no artifact);
@@ -83,6 +93,65 @@ fn seed_ctq_vault(root: &Path) {
     create_dir_all(&neo).expect("neo inbox");
     fs::write(atlas.join("001-handoff.md"), "---\nfrom: zai\nto: nat\nteam: atlas\ntype: handoff\nsubject: Review vault scanner\n---\nPlease review the vault scanner.\n").expect("atlas msg");
     fs::write(neo.join("002-question.md"), "---\nfrom: morpheus\nto: zai\nteam: neo\ntype: question\nsubject: Need queue answer\n---\nCan you confirm the queue filter?\n").expect("neo msg");
+}
+
+fn hermes_args(root: &Path, values: &[&str]) -> Vec<String> {
+    let mut out = args(&[
+        "plugin-manifest", "invoke", "--scan-dir", &root.display().to_string(), "--plugin", "hermes",
+    ]);
+    for value in values {
+        out.push("--arg".to_owned());
+        out.push((*value).to_owned());
+    }
+    out
+}
+
+fn set_hermes_base_url(plugin: &Path, base_url: &str) {
+    let manifest = plugin.join("plugin.json");
+    let mut value: Value = serde_json::from_str(&read_to_string(&manifest).expect("manifest json")).expect("json");
+    value["endpoints"]["discord-rest"]["baseUrl"] = Value::String(base_url.to_owned());
+    fs::write(&manifest, serde_json::to_string_pretty(&value).expect("serialize manifest")).expect("write manifest");
+}
+
+fn spawn_hermes_discord_fake() -> HermesFake {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("fake discord bind");
+    listener.set_nonblocking(true).expect("nonblocking");
+    let base = format!("http://{}", listener.local_addr().expect("local addr"));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&requests);
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_loop = Arc::clone(&stop);
+    let handle = thread::spawn(move || {
+        while !stop_loop.load(Ordering::SeqCst) {
+            let Ok((mut stream, _)) = listener.accept() else {
+                thread::sleep(std::time::Duration::from_millis(10));
+                continue;
+            };
+            let mut buf = [0_u8; 8192];
+            let n = stream.read(&mut buf).unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            let path = req.lines().next().and_then(|line| line.split_whitespace().nth(1)).unwrap_or("/");
+            seen.lock().expect("seen").push(req.clone());
+            let body = hermes_fake_body(path.split('?').next().unwrap_or(path));
+            let resp = format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}", body.len(), body);
+            stream.write_all(resp.as_bytes()).ok();
+        }
+    });
+    (base, requests, stop, handle)
+}
+
+fn hermes_fake_body(path: &str) -> &'static str {
+    match path {
+        "/users/@me" => r#"{"username":"hermes-bot","id":"bot-42","bot":true}"#,
+        "/users/@me/guilds" => r#"[{"name":"Nous","id":"guild1"}]"#,
+        "/channels/ch1" => r#"{"id":"ch1","guild_id":"guild1"}"#,
+        "/channels/ch1/messages" => r#"[{"id":"m2","author":{"username":"trinity","bot":true},"content":"ack"},{"id":"m1","author":{"username":"neo","bot":false},"content":"hello"}]"#,
+        "/guilds/guild1/threads/active" => r#"{"threads":[{"id":"th1","name":"Alpha","parent_id":"ch1","message_count":2,"last_message_id":"9"}]}"#,
+        "/channels/ch1/threads/archived/public" => r#"{"threads":[{"id":"th2","name":"Old","parent_id":"ch1","message_count":1,"last_message_id":"7"}]}"#,
+        "/channels/th1/messages" => r#"[{"id":"tm1","author":{"username":"morpheus","bot":false},"content":"thread hi"}]"#,
+        "/channels/th2/messages" => r#"[{"id":"tm0","author":{"username":"archive-bot","bot":true},"content":"old note"}]"#,
+        _ => r#"{"error":"unexpected fake path"}"#,
+    }
 }
 
 fn restore_env(key: &str, value: Option<OsString>) {
@@ -316,6 +385,51 @@ fn cross_team_queue_fleet_artifact_installs_and_scans_vault() {
     assert_eq!(filtered.code, 0, "filtered invoke failed: {}\n{}", filtered.stderr, filtered.stdout);
     let filtered = normalize_root(&root, &filtered.stdout);
     assert!(filtered.contains("\"totalItems\":1") && filtered.contains("\"recipient\":\"nat\"") && !filtered.contains("\"recipient\":\"zai\""), "{filtered}");
+}
+
+#[test]
+fn hermes_fleet_artifact_invokes_discord_read_only_verbs() {
+    let source = fleet_plugins_dir().join("hermes");
+    let manifest: Value = serde_json::from_str(&read_to_string(source.join("plugin.json")).expect("hermes manifest")).expect("json");
+    assert_eq!(
+        manifest["capabilities"],
+        serde_json::json!(["net:fetch:discord-rest", "secret:use:discord-bot-token"])
+    );
+    let root = temp_dir("hermes-invoke");
+    let staged = root.join("hermes");
+    copy_tree(&source, &staged);
+    let (base_url, requests, stop, server) = spawn_hermes_discord_fake();
+    set_hermes_base_url(&staged, &base_url);
+    let install_root = root.join("plugins");
+    let install = run_cli(&args(&[
+        "plugin", "install", &staged.display().to_string(), "--root", &install_root.display().to_string(),
+    ]));
+    assert_eq!(install.code, 0, "plugin install failed: {}\n{}", install.stderr, install.stdout);
+
+    let saved_token = std::env::var_os("DISCORD_BOT_TOKEN");
+    std::env::set_var("DISCORD_BOT_TOKEN", "TEST_TOKEN_245");
+    let mut observed = String::new();
+    for (label, argv) in [
+        ("whoami", vec!["whoami"]),
+        ("channels", vec!["channels"]),
+        ("read", vec!["read", "ch1", "2"]),
+        ("threads-list", vec!["threads", "list", "ch1", "--all"]),
+        ("threads-read", vec!["threads", "read", "ch1", "--all"]),
+    ] {
+        let invoke = run_cli(&hermes_args(&install_root, &argv));
+        assert_eq!(invoke.code, 0, "hermes {label} failed: {}\n{}", invoke.stderr, invoke.stdout);
+        write!(&mut observed, "## {label}\n{}", invoke.stdout).expect("append observed");
+        assert!(!invoke.stdout.contains("TEST_TOKEN_245"), "token leaked in stdout");
+        assert!(invoke.stderr.is_empty(), "{}", invoke.stderr);
+    }
+    restore_env("DISCORD_BOT_TOKEN", saved_token);
+    stop.store(true, Ordering::SeqCst);
+    server.join().expect("fake server join");
+    fs::remove_dir_all(&root).ok();
+
+    assert_eq!(observed, include_str!("fixtures/zerobun/hermes-wasm-read-only.stdout"));
+    let requests = requests.lock().expect("requests");
+    assert!(requests.iter().all(|req| req.contains("authorization: Bot TEST_TOKEN_245")), "{requests:#?}");
 }
 
 #[test]
