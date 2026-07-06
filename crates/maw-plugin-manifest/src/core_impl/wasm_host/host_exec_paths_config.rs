@@ -99,10 +99,25 @@ impl MawWasmHost {
                     .to_string_lossy()
                     .into_owned()
             }),
+            "vault" => {
+                if !self.has_exact_cap("fs:read:vault") {
+                    return HostResult::err(
+                        HostErrorCode::CapabilityDenied,
+                        "capability denied: fs:read:vault",
+                    );
+                }
+                match self.home.as_ref() {
+                    Some(home) => match configured_vault_root(Path::new(home)) {
+                        Ok(path) => Some(path.to_string_lossy().into_owned()),
+                        Err(err) => return err,
+                    },
+                    None => None,
+                }
+            }
             _ => {
                 return HostResult::err(
                     HostErrorCode::InvalidArgs,
-                    format!("unknown path name '{name}'; allowed: home, cwd, teams"),
+                    format!("unknown path name '{name}'; allowed: home, cwd, teams, vault"),
                 );
             }
         };

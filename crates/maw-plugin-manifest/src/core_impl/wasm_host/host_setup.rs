@@ -78,9 +78,11 @@ impl MawWasmHost {
                     continue;
                 }
                 if let Some(path) = known_fs_root(&scope, home) {
-                    // Fixed-registry path only; ensure it exists so bounded ops
-                    // can canonicalize it (and so mkdirp has an anchor to build on).
-                    let _ = std::fs::create_dir_all(&path);
+                    // Fixed-registry path only. Some legacy roots are created as
+                    // anchors; read-only configured roots (e.g. vault) are not.
+                    if known_fs_root_should_create(&scope) {
+                        let _ = std::fs::create_dir_all(&path);
+                    }
                     self.fs_roots.insert(scope, path);
                 }
             }

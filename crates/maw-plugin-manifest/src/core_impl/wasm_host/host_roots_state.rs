@@ -4,6 +4,9 @@ impl MawWasmHost {
             .scopes_for("fs", verb)
             .into_iter()
             .filter_map(|scope| {
+                if scope == "vault" && verb != "read" {
+                    return None;
+                }
                 self.fs_roots
                     .get(&scope)
                     .and_then(|root| canonicalize_checked_path(root).ok())

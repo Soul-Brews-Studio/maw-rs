@@ -188,7 +188,39 @@ fn home_dir() -> Option<PathBuf> {
 fn known_fs_root(scope: &str, home: &Path) -> Option<PathBuf> {
     match scope {
         "teams" => Some(home.join(".claude").join("teams")),
+        "vault" => configured_vault_root(home).ok(),
         _ => None,
+    }
+}
+
+fn known_fs_root_should_create(scope: &str) -> bool {
+    scope == "teams"
+}
+
+fn configured_vault_root(home: &Path) -> Result<PathBuf, HostResult<Value>> {
+    if let Some(root) = std::env::var_os("MAW_VAULT_ROOT").filter(|value| !value.is_empty()) {
+        return Ok(resolve_configured_path(PathBuf::from(root), home));
+    }
+    let config = read_config_json(&default_config_root().join("maw.config.json"))?;
+    for key in ["vaultRoot", "vault.root"] {
+        if let Some(root) = get_json_path(&config, key)
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+        {
+            return Ok(resolve_configured_path(PathBuf::from(root), home));
+        }
+    }
+    Err(HostResult::err(
+        HostErrorCode::NotFound,
+        "vault root is not configured; set MAW_VAULT_ROOT or maw.config.json vaultRoot",
+    ))
+}
+
+fn resolve_configured_path(path: PathBuf, home: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path
+    } else {
+        home.join(path)
     }
 }
 
