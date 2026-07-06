@@ -161,6 +161,10 @@ async fn godui_ws_stream(
         tokio::time::Instant::now() + Duration::from_secs(2),
         Duration::from_secs(2),
     );
+    let mut capture_tick = tokio::time::interval_at(
+        tokio::time::Instant::now() + config.capture_interval,
+        config.capture_interval,
+    );
     let mut subscribed_target = target.clone();
     let idle_timer = tokio::time::sleep(config.idle_timeout);
     tokio::pin!(idle_timer);
@@ -170,12 +174,15 @@ async fn godui_ws_stream(
                 if !godui_ws_send_session_recent(&mut socket, &state, &config).await {
                     break;
                 }
+                idle_timer.as_mut().reset(tokio::time::Instant::now() + config.idle_timeout);
+            }
+            _ = capture_tick.tick() => {
                 if let Some(frame) = subscribed_target.as_deref().and_then(godui_ws_capture_frame) {
                     if servecore_ws_send(&mut socket, Message::Text(frame), config.send_timeout).await.is_err() {
                         break;
                     }
+                    idle_timer.as_mut().reset(tokio::time::Instant::now() + config.idle_timeout);
                 }
-                idle_timer.as_mut().reset(tokio::time::Instant::now() + config.idle_timeout);
             }
             _ = heartbeat.tick() => {
                 if servecore_ws_send(&mut socket, Message::Ping(Vec::new()), config.send_timeout).await.is_err() {

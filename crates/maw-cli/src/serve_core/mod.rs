@@ -3016,6 +3016,7 @@ mod tests {
             modules::websocket_routes::WsConfig {
                 idle_timeout: Duration::from_secs(5),
                 heartbeat_interval: Duration::from_secs(5),
+                capture_interval: Duration::from_secs(2),
                 send_timeout: Duration::from_secs(2),
                 max_frame_bytes: 1024,
                 max_connections: 8,
@@ -3088,6 +3089,7 @@ mod tests {
         let config = modules::websocket_routes::WsConfig {
             idle_timeout: Duration::from_millis(80),
             heartbeat_interval: Duration::from_millis(20),
+            capture_interval: Duration::from_secs(2),
             send_timeout: Duration::from_millis(50),
             max_frame_bytes: 1024,
             max_connections: 8,
