@@ -16,6 +16,7 @@ struct CapturedRequest {
 #[tokio::test]
 async fn reqwest_http_transport_posts_api_send_with_verifiable_v3_signature() {
     let peer_key = "known-peer-key";
+    let federation_token = "known-federation-token";
     let timestamp = 1_700_000_123_i64;
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");
@@ -41,6 +42,7 @@ async fn reqwest_http_transport_posts_api_send_with_verifiable_v3_signature() {
             text: "E1 signed capture".to_owned(),
             inbox: Some(true),
             from: "sender-oracle:sender-node".to_owned(),
+            federation_token: federation_token.to_owned(),
             peer_key: peer_key.to_owned(),
             timestamp,
         })
@@ -90,7 +92,7 @@ async fn reqwest_http_transport_posts_api_send_with_verifiable_v3_signature() {
         .expect("legacy signature");
     assert_eq!(
         legacy_signature,
-        &sign(peer_key, "POST", "/api/send", timestamp, "")
+        &sign(federation_token, "POST", "/api/send", timestamp, "")
     );
 
     let body_hash = hash_body(Some(captured.body.as_bytes()));
@@ -107,6 +109,7 @@ async fn reqwest_http_transport_posts_api_send_with_verifiable_v3_signature() {
 #[tokio::test]
 async fn reqwest_http_transport_posts_api_wake_with_verifiable_v3_signature() {
     let peer_key = "known-peer-key";
+    let federation_token = "known-federation-token";
     let timestamp = 1_700_000_456_i64;
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");
@@ -131,6 +134,7 @@ async fn reqwest_http_transport_posts_api_wake_with_verifiable_v3_signature() {
             target: "remote-oracle".to_owned(),
             task: Some("fix issue".to_owned()),
             from: "sender-oracle:sender-node".to_owned(),
+            federation_token: federation_token.to_owned(),
             peer_key: peer_key.to_owned(),
             timestamp,
         })
@@ -180,7 +184,7 @@ async fn reqwest_http_transport_posts_api_wake_with_verifiable_v3_signature() {
         .expect("legacy signature");
     assert_eq!(
         legacy_signature,
-        &sign(peer_key, "POST", "/api/wake", timestamp, "")
+        &sign(federation_token, "POST", "/api/wake", timestamp, "")
     );
 
     let body_hash = hash_body(Some(captured.body.as_bytes()));

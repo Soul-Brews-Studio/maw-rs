@@ -62,11 +62,14 @@ pub fn sign_request_v3(
 }
 
 /// Produce outbound auth headers with transitional v1 + v3 signatures.
+/// The legacy `X-Maw-Signature` slot is fleet-token HMAC for maw-js
+/// compatibility; `X-Maw-Signature-V3` remains peer-key from-signing.
 ///
 /// # Errors
 ///
 /// Returns an error when v3 signing inputs are invalid.
 pub fn sign_headers_v3_at(
+    federation_token: &str,
     peer_key: &str,
     from_address: &str,
     method: &str,
@@ -78,7 +81,10 @@ pub fn sign_headers_v3_at(
     let signature = sign_request_v3(peer_key, from_address, &method, path, timestamp, body)?;
     Ok(Headers::new([
         ("X-Maw-From", from_address.to_owned()),
-        ("X-Maw-Signature", sign(peer_key, &method, path, timestamp, "")),
+        (
+            "X-Maw-Signature",
+            sign(federation_token, &method, path, timestamp, ""),
+        ),
         ("X-Maw-Signature-V3", signature.signature),
         ("X-Maw-Timestamp", timestamp.to_string()),
         ("X-Maw-Auth-Version", "v3".to_owned()),
@@ -518,4 +524,3 @@ pub fn build_legacy_from_sign_payload(
         method.to_uppercase()
     )
 }
-

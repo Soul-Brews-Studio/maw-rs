@@ -95,6 +95,7 @@ struct PeerSendArgs {
     text: String,
     inbox: Option<bool>,
     from: String,
+    federation_token_ref: Option<String>,
     peer_key_ref: Option<String>,
     timestamp: Option<i64>,
 }
@@ -105,6 +106,7 @@ struct PeerWakeArgs {
     target: String,
     task: Option<String>,
     from: String,
+    federation_token_ref: Option<String>,
     peer_key_ref: Option<String>,
     timestamp: Option<i64>,
 }

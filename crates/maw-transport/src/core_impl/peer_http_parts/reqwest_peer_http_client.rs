@@ -15,6 +15,7 @@ pub struct PeerSendRequest {
     pub text: String,
     pub inbox: Option<bool>,
     pub from: String,
+    pub federation_token: String,
     pub peer_key: String,
     pub timestamp: i64,
 }
@@ -26,6 +27,7 @@ pub struct PeerWakeRequest {
     pub target: String,
     pub task: Option<String>,
     pub from: String,
+    pub federation_token: String,
     pub peer_key: String,
     pub timestamp: i64,
 }
@@ -48,6 +50,13 @@ pub struct PeerWakeResponse {
     pub status: u16,
     pub target: Option<String>,
     pub error: Option<String>,
+}
+
+struct PeerAuth<'a> {
+    from: &'a str,
+    federation_token: &'a str,
+    peer_key: &'a str,
+    timestamp: i64,
 }
 
 impl PeerSendResponse {
@@ -100,9 +109,12 @@ impl ReqwestHttpTransportIo {
                 &request.peer_url,
                 SEND_PATH,
                 &body,
-                &request.from,
-                &request.peer_key,
-                request.timestamp,
+                PeerAuth {
+                    from: &request.from,
+                    federation_token: &request.federation_token,
+                    peer_key: &request.peer_key,
+                    timestamp: request.timestamp,
+                },
             )
             .await?;
         let wire = serde_json::from_str::<PeerSendWireResponse>(&text)
@@ -125,7 +137,10 @@ impl ReqwestHttpTransportIo {
             return Err(format!(
                 "remote /api/send failed: state={} error={}",
                 parsed.state.as_deref().unwrap_or("-"),
-                parsed.error.as_deref().unwrap_or("remote returned ok=false")
+                parsed
+                    .error
+                    .as_deref()
+                    .unwrap_or("remote returned ok=false")
             ));
         }
         Ok(parsed)
@@ -143,9 +158,12 @@ impl ReqwestHttpTransportIo {
                 &request.peer_url,
                 WAKE_PATH,
                 &body,
-                &request.from,
-                &request.peer_key,
-                request.timestamp,
+                PeerAuth {
+                    from: &request.from,
+                    federation_token: &request.federation_token,
+                    peer_key: &request.peer_key,
+                    timestamp: request.timestamp,
+                },
             )
             .await?;
         let wire = serde_json::from_str::<PeerWakeWireResponse>(&text)
@@ -165,7 +183,10 @@ impl ReqwestHttpTransportIo {
         if !parsed.ok {
             return Err(format!(
                 "remote /api/wake failed: error={}",
-                parsed.error.as_deref().unwrap_or("remote returned ok=false")
+                parsed
+                    .error
+                    .as_deref()
+                    .unwrap_or("remote returned ok=false")
             ));
         }
         Ok(parsed)
@@ -176,17 +197,16 @@ impl ReqwestHttpTransportIo {
         peer_url: &str,
         path: &str,
         body: &str,
-        from: &str,
-        peer_key: &str,
-        timestamp: i64,
+        auth: PeerAuth<'_>,
     ) -> Result<(u16, String), String> {
         let headers = sign_headers_v3_at(
-            peer_key,
-            from,
+            auth.federation_token,
+            auth.peer_key,
+            auth.from,
             POST_METHOD,
             path,
             Some(body.as_bytes()),
-            timestamp,
+            auth.timestamp,
         )?;
         let url = format!("{}{}", peer_url.trim_end_matches('/'), path);
         let mut builder = self
@@ -210,4 +230,3 @@ impl ReqwestHttpTransportIo {
         Ok((status, text))
     }
 }
-

@@ -2881,6 +2881,7 @@ mod serve_tests {
     fn signed_trust_request(method: &str, uri: &str, auth_path: &str, body: &'static str) -> axum::http::Request<Body> {
         let headers = sign_headers_v3_at(
             KEY,
+            KEY,
             FROM,
             method,
             auth_path,
@@ -3004,7 +3005,7 @@ mod serve_tests {
         from: &str,
         now: i64,
     ) -> axum::http::Request<Body> {
-        let headers = sign_headers_v3_at(key, from, method, path, Some(body.as_bytes()), now)
+        let headers = sign_headers_v3_at(key, key, from, method, path, Some(body.as_bytes()), now)
             .expect("sign v3");
         let mut builder = axum::http::Request::builder()
             .method(method)
@@ -3995,6 +3996,7 @@ mod serve_tests {
         let body = r#"{"target":"remote-oracle","text":"hello"}"#;
         let timestamp = 1_782_277_200_i64;
         let headers = sign_headers_v3_at(
+            KEY,
             KEY,
             FROM,
             "POST",

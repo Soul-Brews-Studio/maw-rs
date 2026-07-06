@@ -2,6 +2,7 @@ use maw_auth::{sign_headers_v3_at, sign_request_v3};
 use maw_cli::run_cli;
 
 const PEER_KEY: &str = "feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface";
+const TOKEN: &str = "0123456789abcdef-federation-token";
 const FROM: &str = "mawjs:m5";
 const NOW: i64 = 1_700_000_000;
 
@@ -14,6 +15,7 @@ fn json(output: &maw_cli::CliOutput) -> serde_json::Value {
 
 fn signed_header_args(body: &str, timestamp: i64) -> Vec<String> {
     let headers = sign_headers_v3_at(
+        TOKEN,
         PEER_KEY,
         FROM,
         "POST",

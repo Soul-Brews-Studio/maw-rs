@@ -454,6 +454,7 @@ mod tests {
         const NOW: i64 = 1_700_000_000;
         let headers = maw_auth::sign_headers_v3_at(
             KEY,
+            KEY,
             "gm-bo:test",
             "POST",
             "/worktrees/cleanup",

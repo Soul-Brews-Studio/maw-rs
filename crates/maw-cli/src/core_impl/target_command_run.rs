@@ -82,7 +82,9 @@ impl RunPeerTransport for RunCurlPeerTransport {
     fn run_peer_keys(&mut self, request: &RunPeerRequest) -> Result<RunPeerResponse, String> {
         run_validate_peer_request(request)?;
         let body = run_peer_body(&request.target, &request.text)?;
+        let federation_token = load_federation_token()?;
         let headers = sign_headers_v3_at(
+            &federation_token,
             &request.peer_key,
             &request.from,
             "POST",
@@ -587,7 +589,7 @@ fn run_session(name: &str, windows: Vec<RouteWindow>) -> RouteSession {
 
     #[test]
     fn run_curl_argv_has_separator_before_url() {
-        let headers = sign_headers_v3_at("key", "test-oracle:test-node", "POST", RUN_PANE_KEYS_PATH, Some(b"{}"), run_now()).expect("headers");
+        let headers = sign_headers_v3_at("token", "key", "test-oracle:test-node", "POST", RUN_PANE_KEYS_PATH, Some(b"{}"), run_now()).expect("headers");
         let argv = run_curl_argv("http://peer.example/", &headers, "{}").expect("argv");
         let sep = argv.iter().position(|arg| arg == "--").expect("separator");
         assert_eq!(argv[sep + 1], "http://peer.example/api/pane-keys");

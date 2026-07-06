@@ -7,8 +7,16 @@ fn verify_request_covers_o6_current_v3_decisions_and_malformed_cases() {
         }
     );
 
-    let signed = sign_headers_v3_at(PEER_KEY, FROM, "POST", "/api/send", Some(b"body"), NOW)
-        .expect("v3 headers should sign");
+    let signed = sign_headers_v3_at(
+        TOKEN,
+        PEER_KEY,
+        FROM,
+        "POST",
+        "/api/send",
+        Some(b"body"),
+        NOW,
+    )
+    .expect("v3 headers should sign");
     assert_eq!(
         verify_req(signed.clone(), b"body", None).kind(),
         "accept-tofu-record"
@@ -79,7 +87,6 @@ fn verify_request_accepts_legacy_from_signing_and_identifies_refusals() {
     }));
 }
 
-
 #[test]
 fn verify_request_accepts_loopback_real_ip_and_rejects_xff_spoof() {
     use maw_auth::{RequestAuthDecision, RequestAuthParts};
@@ -116,4 +123,3 @@ fn verify_request_accepts_loopback_real_ip_and_rejects_xff_spoof() {
     });
     assert_eq!(spoof.reason(), Some("missing-credentials"));
 }
-

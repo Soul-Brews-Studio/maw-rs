@@ -44,12 +44,12 @@ fn maw_js_hmac_request() -> maw_auth::RequestAuthParts {
     }
 }
 
-
 #[test]
 fn sign_headers_v3_dual_emits_maw_js_v1_signature_slot() {
     let fixture = maw_js_hmac_fixture();
     let headers = maw_auth::sign_headers_v3_at(
         fixture["token"].as_str().expect("token"),
+        fixture["peerKey"].as_str().expect("peer key"),
         fixture["from"].as_str().expect("from"),
         fixture["method"].as_str().expect("method"),
         fixture["path"].as_str().expect("path"),
@@ -69,6 +69,10 @@ fn sign_headers_v3_dual_emits_maw_js_v1_signature_slot() {
     assert_eq!(
         headers.get("X-Maw-From"),
         fixture["v3Headers"]["X-Maw-From"].as_str()
+    );
+    assert_eq!(
+        headers.get("X-Maw-Signature-V3"),
+        fixture["v3Headers"]["X-Maw-Signature-V3"].as_str()
     );
     assert_eq!(headers.get("X-Maw-Auth-Version"), Some("v3"));
 }
@@ -238,4 +242,3 @@ fn verify_request_legacy_from_sign_accepts_api_path_when_receiver_path_is_stripp
     });
     assert!(decision.is_accept(), "{decision:?}");
 }
-

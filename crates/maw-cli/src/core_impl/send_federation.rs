@@ -569,6 +569,16 @@ async fn send_peer_message(
             }
         }
     };
+    let federation_token = match load_federation_token() {
+        Ok(token) => token,
+        Err(message) => {
+            return CliOutput {
+                code: 1,
+                stdout: String::new(),
+                stderr: format!("{command}: {message}\n"),
+            }
+        }
+    };
     let client = match ReqwestHttpTransportIo::new(5_000) {
         Ok(client) => client,
         Err(message) => {
@@ -585,6 +595,7 @@ async fn send_peer_message(
         text: args.text.clone(),
         inbox: args.inbox,
         from,
+        federation_token,
         peer_key,
         timestamp: i64::try_from(current_epoch_seconds()).unwrap_or(i64::MAX),
     };
@@ -722,6 +733,16 @@ async fn wake_peer_target(
             }
         }
     };
+    let federation_token = match load_federation_token() {
+        Ok(token) => token,
+        Err(message) => {
+            return CliOutput {
+                code: 1,
+                stdout: String::new(),
+                stderr: format!("wake: {message}\n"),
+            }
+        }
+    };
     let client = match ReqwestHttpTransportIo::new(5_000) {
         Ok(client) => client,
         Err(message) => {
@@ -737,6 +758,7 @@ async fn wake_peer_target(
         target: target.to_owned(),
         task: args.task.clone(),
         from,
+        federation_token,
         peer_key,
         timestamp: i64::try_from(current_epoch_seconds()).unwrap_or(i64::MAX),
     };
@@ -937,6 +959,11 @@ fn load_peer_key() -> Result<String, String> {
     }
     write_peer_key_file(&path, &key)?;
     Ok(key)
+}
+
+fn load_federation_token() -> Result<String, String> {
+    load_serve_workspace_key()
+        .ok_or_else(|| "federationToken is required for peer federation auth".to_owned())
 }
 
 fn generate_peer_key() -> Result<String, String> {

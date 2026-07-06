@@ -1,9 +1,8 @@
 use maw_auth::{
     build_from_sign_payload, build_legacy_from_sign_payload, hash_body, is_loopback,
     is_refuse_decision, resolve_from_address, resolve_sender_oracle, sign, sign_headers_at,
-    sign_headers_v3_at,
-    sign_hmac_sig, sign_request_v3, verify, verify_hmac_sig, verify_request, FromAddressConfig,
-    FromVerifyDecision, Headers, VerifyRequestArgs, DEFAULT_ORACLE,
+    sign_headers_v3_at, sign_hmac_sig, sign_request_v3, verify, verify_hmac_sig, verify_request,
+    FromAddressConfig, FromVerifyDecision, Headers, VerifyRequestArgs, DEFAULT_ORACLE,
 };
 
 const TOKEN: &str = "0123456789abcdef-federation-token";
@@ -89,12 +88,12 @@ fn hashing_and_signing_helpers_cover_v1_v2_v3_and_validation_branches() {
             &build_from_sign_payload(FROM, NOW, "POST", "/api/send", &hash_body(Some(b"body")))
         )
     );
-    let stacked = sign_headers_v3_at(PEER_KEY, FROM, "POST", "/api/send", None, NOW)
+    let stacked = sign_headers_v3_at(TOKEN, PEER_KEY, FROM, "POST", "/api/send", None, NOW)
         .expect("v3 headers should sign");
     assert_eq!(stacked.get("X-Maw-Auth-Version"), Some("v3"));
     assert_eq!(
         stacked.get("X-Maw-Signature"),
-        Some(direct_hmac(PEER_KEY, "POST:/api/send:1700000000").as_str())
+        Some(direct_hmac(TOKEN, "POST:/api/send:1700000000").as_str())
     );
     assert!(stacked.get("X-Maw-Signature-V3").is_some());
     let get_default = sign_request_v3(PEER_KEY, FROM, "", "/api/send", NOW, None)
@@ -106,7 +105,7 @@ fn hashing_and_signing_helpers_cover_v1_v2_v3_and_validation_branches() {
             &build_from_sign_payload(FROM, NOW, "GET", "/api/send", "")
         )
     );
-    assert!(sign_headers_v3_at("", FROM, "POST", "/api/send", None, NOW).is_err());
+    assert!(sign_headers_v3_at(TOKEN, "", FROM, "POST", "/api/send", None, NOW).is_err());
     assert_eq!(
         resolve_from_address(&FromAddressConfig {
             oracle: None,
@@ -122,7 +121,6 @@ fn hashing_and_signing_helpers_cover_v1_v2_v3_and_validation_branches() {
         None
     );
 }
-
 
 #[test]
 fn sender_oracle_resolution_uses_invocation_window_before_config_default() {
@@ -143,7 +141,11 @@ fn sender_oracle_resolution_uses_invocation_window_before_config_default() {
         "tmux-window"
     );
     assert_eq!(
-        resolve_sender_oracle(None, Some("homekeeper-oracle.wt-1-bridge"), Some("configured")),
+        resolve_sender_oracle(
+            None,
+            Some("homekeeper-oracle.wt-1-bridge"),
+            Some("configured")
+        ),
         "homekeeper-oracle.wt-1-bridge"
     );
     assert_eq!(
@@ -177,4 +179,3 @@ fn verify_req(headers: Headers, body: &[u8], cached_pubkey: Option<&str>) -> Fro
         now: NOW,
     })
 }
-

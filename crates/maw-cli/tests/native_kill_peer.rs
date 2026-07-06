@@ -84,6 +84,7 @@ fn kill_peer_native_forward_matches_committed_golden_without_real_maw_or_network
             "MAW_PEER_KEY",
             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         )
+        .env("MAW_FEDERATION_TOKEN", "test-federation-token")
         .env("MAW_JS_REF_DIR", "/nonexistent")
         .env("PATH", &fake_bin)
         .env("FAKE_CURL_ARGS", &curl_args)

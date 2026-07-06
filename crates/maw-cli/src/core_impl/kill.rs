@@ -86,7 +86,9 @@ impl KillPeerTransport for KillCurlPeerTransport {
     fn kill_peer(&mut self, request: &KillPeerRequest) -> Result<KillPeerResponse, String> {
         kill_validate_peer_request(request)?;
         let body = kill_peer_body(request)?;
+        let federation_token = load_federation_token()?;
         let headers = sign_headers_v3_at(
+            &federation_token,
             &request.peer_key,
             &request.from,
             "POST",
@@ -1240,7 +1242,7 @@ mod kill_tests {
         assert_eq!(value["pane"], 1);
         assert_eq!(value["index"], 2);
         assert_eq!(value["all"], true);
-        let headers = sign_headers_v3_at("key", "oracle:node", "POST", KILL_PEER_API_PATH, Some(body.as_bytes()), 1).expect("headers");
+        let headers = sign_headers_v3_at("token", "key", "oracle:node", "POST", KILL_PEER_API_PATH, Some(body.as_bytes()), 1).expect("headers");
         let argv = kill_peer_curl_argv("http://peer/", &headers, &body).expect("argv");
         assert!(argv.iter().any(|arg| arg == "--"));
         assert!(argv.iter().any(|arg| arg == "http://peer/api/kill"));
