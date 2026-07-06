@@ -10,9 +10,9 @@
   },
   "artifact": {
     "path": "plugin.wasm",
-    "sha256": "sha256:5e065ee4c1abf33c368404991befa7359d6e559b2b227bf0e6f633c186618898"
+    "sha256": "sha256:324b2f55964ed7f2fa3d70d0ef12d05260fc932eebbc3317e7f0074c449b59dd"
   },
-  "capabilities": ["fs:read:teams", "fs:write:teams", "tmux:read", "proc:exec:date"],
+  "capabilities": ["fs:read:teams", "fs:write:teams", "tmux:read", "tmux:send", "proc:exec:date"],
   "description": "The lead IS the team. Run from the lead oracle's repo — start / join / say / ls, no team name typed. Loud & clear, no ceremony. Ship tier: WASM (dev fallback: impl.ts, runtime=bun-dev).",
   "author": "athena-oracle",
   "license": "MIT",

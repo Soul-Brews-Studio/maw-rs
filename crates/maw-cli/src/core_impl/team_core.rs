@@ -690,7 +690,7 @@ mod team_tests {
     #[test]
     fn team_charter_preserves_defaults_engines_and_coerces_yaml_worktree_true() {
         let charter = team_parse_charter(
-            r#"name: alpha
+            r"name: alpha
 project: org/repo
 defaults:
   worktree: true
@@ -701,7 +701,7 @@ members:
   - role: coder
     name: agents/coder
     worktree: true
-"#,
+",
         )
         .expect("charter");
         assert_eq!(charter.defaults.get("worktree").map(String::as_str), Some("true"));

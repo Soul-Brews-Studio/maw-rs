@@ -6,7 +6,7 @@
   "author": "athena-oracle",
   "license": "MIT",
   "entry": "src/plugin.ts",
-  "capabilities": ["fs:read:teams", "fs:write:teams", "tmux:read", "proc:exec:date"],
+  "capabilities": ["fs:read:teams", "fs:write:teams", "tmux:read", "tmux:send", "proc:exec:date"],
   "cli": {
     "command": "squad",
     "help": "maw squad <start|join|say|ls>"

@@ -18,7 +18,7 @@ implicit to the repo you run from" — is preserved exactly, including every gua
 
 - **Ship tier (ACTIVE — graduated in #145):** `src/plugin.ts` → `plugin.wasm` via
   `maw plugin build`. The WASM talks to the host only through capability-gated host fns
-  (`fs:read:teams` / `fs:write:teams` / `tmux:read` / `proc:exec:date`) and derives cwd/home
+  (`fs:read:teams` / `fs:write:teams` / `tmux:read` / `tmux:send` / `proc:exec:date`) and derives cwd/home
   from the InvokeContext the dispatch injects (cwd = the invoking process cwd — *not* `$PWD`;
   tests that steer the team must chdir, see `crates/maw-cli/tests/squad_acceptance.rs`). It is
   byte-compatible with athena's roster format (config keys `[name, members, createdAt,

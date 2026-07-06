@@ -108,7 +108,7 @@ function cmdJoin(role: string, color = "cyan") {
   console.log(`  ✓ ${role} joined. say: maw squad say ${role} "<text>"   view: maw a ${role}`);
 }
 
-// maw squad say <member> <text...> — append a message to a member's inbox (never clobbers)
+// maw squad say <member> <text...> — append a message to a member's inbox (never clobbers), then nudge it
 function cmdSay(member: string, text: string) {
   if (!member || !text) throw new Error("usage: maw squad say <member> <text>");
   if (!NAME_RE.test(member)) throw new Error(`invalid member name '${member}' (letters/digits/-/_ only)`);
@@ -129,7 +129,12 @@ function cmdSay(member: string, text: string) {
     color: "cyan", type: "message", read: false,
   });
   writeFileSync(p, JSON.stringify(msgs, null, 2) + "\n");
+  const nudge = spawnSync("maw", ["hey", member, "nudge"], { encoding: "utf-8" });
   console.log(`✓ said to ${member}@${team}: ${text}`);
+  if (nudge.status !== 0) {
+    const detail = (nudge.stderr || nudge.stdout || "member polling nudge failed").trim();
+    console.warn(`  ⚠ nudge skipped: ${detail}`);
+  }
 }
 
 // maw squad ls — show THIS repo's squad: members + inboxes + live tmux

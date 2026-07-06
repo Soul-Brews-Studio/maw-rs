@@ -6,6 +6,7 @@
 //   fs:read:teams / fs:write:teams  → ~/.claude/teams   (roster + inboxes)
 //   tmux:read                       → live-session check for `ls`
 //   proc:exec:date                  → wall clock (WASM has no clock; see notes below)
+//   tmux:send                       → post-say member nudge (same polling trigger as `maw hey <member> nudge`)
 //
 // The lead IS the team: team = basename(cwd) minus "-oracle", where cwd/home come
 // from the InvokeContext the CLI dispatch injects into the guest input. join stays
@@ -19,7 +20,7 @@
 //   * only the 8 valid --agent-color values are accepted
 //   * inbox append never clobbers existing message bytes
 import { Host } from "@extism/as-pdk";
-import { fsRead, fsWrite, fsList, listSessions, hostExec } from "@maw-rs/wasm-sdk";
+import { fsRead, fsWrite, fsList, listSessions, sendKeys, hostExec } from "@maw-rs/wasm-sdk";
 
 export function myAbort(message: string | null, fileName: string | null, lineNumber: u32, columnNumber: u32): void {}
 
@@ -127,7 +128,7 @@ function cmdJoin(team: string, args: string[]): i32 {
 }
 
 // ── say ──────────────────────────────────────────────────────────────────────
-// maw squad say <member> <text...> — append to a member's inbox (never clobbers).
+// maw squad say <member> <text...> — append to a member's inbox (never clobbers), then nudge it.
 function cmdSay(teams: string, team: string, args: string[]): i32 {
   const member = args.length > 1 ? args[1] : "";
   const text = args.length > 2 ? args.slice(2).join(" ") : "";
@@ -152,7 +153,18 @@ function cmdSay(teams: string, team: string, args: string[]): i32 {
   const msg = messageJson("team-lead", text, isoNow());
   const w = writeFile(path, appendToArray(existing, msg));
   if (w != "") return finish(false, null, w);
-  return finish(true, "✓ said to " + member + "@" + team + ": " + text, null);
+  let out = "✓ said to " + member + "@" + team + ": " + text;
+  const nudge = nudgeMember(member);
+  if (nudge != "") out += "\n  ⚠ nudge skipped: " + nudge;
+  return finish(true, out, null);
+}
+
+function nudgeMember(member: string): string {
+  const req = "{\"target\":" + quote(member) + ",\"keys\":[\"nudge\"],\"literal\":true,\"enter\":true,\"allowAiPane\":true}";
+  const res = sendKeys(req);
+  if (res.indexOf("\"ok\":true") >= 0) return "";
+  const err = jsonStringField(res, "error");
+  return err == "" ? "member polling nudge failed" : err;
 }
 
 // ── ls ───────────────────────────────────────────────────────────────────────
