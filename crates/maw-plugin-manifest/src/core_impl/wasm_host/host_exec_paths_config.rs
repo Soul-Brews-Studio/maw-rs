@@ -92,12 +92,10 @@ impl MawWasmHost {
         let value = match name {
             "home" => self.home.clone(),
             "cwd" => self.cwd.clone(),
-            "teams" => self.home.as_ref().map(|home| {
-                Path::new(home)
-                    .join(".claude")
-                    .join("teams")
-                    .to_string_lossy()
-                    .into_owned()
+            "teams" => self.fs_roots.get("teams").map(|root| root.to_string_lossy().into_owned()).or_else(|| {
+                self.home.as_ref().map(|home| {
+                    Path::new(home).join(".claude").join("teams").to_string_lossy().into_owned()
+                })
             }),
             "vault" => {
                 if !self.has_exact_cap("fs:read:vault") {
@@ -106,12 +104,16 @@ impl MawWasmHost {
                         "capability denied: fs:read:vault",
                     );
                 }
-                match self.home.as_ref() {
-                    Some(home) => match configured_vault_root(Path::new(home)) {
-                        Ok(path) => Some(path.to_string_lossy().into_owned()),
-                        Err(err) => return err,
-                    },
-                    None => None,
+                if let Some(root) = self.fs_roots.get("vault") {
+                    Some(root.to_string_lossy().into_owned())
+                } else {
+                    match self.home.as_ref().map(PathBuf::from).or_else(home_dir) {
+                        Some(home) => match configured_vault_root(&home) {
+                            Ok(path) => Some(path.to_string_lossy().into_owned()),
+                            Err(err) => return err,
+                        },
+                        None => None,
+                    }
                 }
             }
             _ => {

@@ -20,7 +20,7 @@ fn temp(label: &str) -> PathBuf {
         std::process::id()
     ));
     create_dir_all(&dir).expect("temp dir");
-    dir
+    std::fs::canonicalize(&dir).unwrap_or(dir)
 }
 
 fn manifest(dir: &Path, caps: &[&str]) -> PluginManifest {

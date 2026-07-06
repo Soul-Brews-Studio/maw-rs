@@ -1,6 +1,6 @@
 const DISPATCH_122: &[DispatcherEntry] = &[];
 
-const TEAM_USAGE: &str = "usage: maw team <create|new|list|ls|status|tasks|oracle-members|members|lives|history|plan|preflight|check|load|send|msg|broadcast|inbox|invite|up|bring|apply|reassign|liveness|down|remove|delete|rm|prune|shutdown|enter|send-enter|add|task|done|assign>";
+const TEAM_USAGE: &str = "usage: maw team <create|new|list|ls|status|tasks|oracle-members|members|lives|history|plan|preflight|check|load|send|msg|broadcast|inbox|invite|up|bring|apply|reassign|liveness|down|remove|delete|rm|prune|gc|shutdown|enter|send-enter|add|task|done|assign>";
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -32,7 +32,12 @@ struct TeamMember122 {
     model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     backend_type: Option<String>,
+    #[serde(default, skip_serializing_if = "team_false")]
+    is_active: bool,
 }
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn team_false(value: &bool) -> bool { !*value }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -134,6 +139,7 @@ fn team_run(argv: &[String]) -> Result<String, String> {
         "remove" => team_remove(argv),
         "delete" | "rm" => team_delete(argv),
         "prune" => team_prune(argv),
+        "gc" => team_gc(argv),
         "shutdown" => team_shutdown(argv),
         "resume" => team_resume(argv),
         "enter" | "send-enter" => team_enter_send_enter(argv),
