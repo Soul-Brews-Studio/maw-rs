@@ -5,6 +5,7 @@ impl MawWasmHost {
             plugin_name: plugin.manifest.name.clone(),
             caps: CapabilitySet::from_manifest(&plugin.manifest),
             endpoints: plugin.manifest.endpoints.clone().unwrap_or_default(),
+            secrets: plugin.manifest.secrets.clone().unwrap_or_default(),
             fs_roots: BTreeMap::new(),
             secret_store: BTreeMap::new(),
             fake_responses: BTreeMap::new(),

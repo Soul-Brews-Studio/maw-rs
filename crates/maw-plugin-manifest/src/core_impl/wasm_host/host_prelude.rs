@@ -203,6 +203,7 @@ pub struct MawWasmHost {
     plugin_name: String,
     caps: CapabilitySet,
     endpoints: PluginEndpointPolicies,
+    secrets: PluginSecretPolicies,
     fs_roots: BTreeMap<String, PathBuf>,
     secret_store: BTreeMap<String, String>,
     fake_responses: BTreeMap<(String, String), FakeHostResponse>,

@@ -109,10 +109,14 @@ impl MawWasmHost {
         } else {
             None
         };
+        let headers = match self.net_fetch_headers(policy) {
+            Ok(headers) => headers,
+            Err(err) => return err,
+        };
         let request = TransportHttpRequest {
             method: method.to_owned(),
             url: url.to_string(),
-            headers: BTreeMap::new(),
+            headers,
             body: args.body,
             timeout_ms: Some(
                 args.timeout_ms
@@ -124,6 +128,65 @@ impl MawWasmHost {
             max_response_bytes: Some(MAX_NET_FETCH_RESPONSE_BYTES),
         };
         self.run_http_transport(&request)
+    }
+
+    fn net_fetch_headers(
+        &self,
+        policy: &PluginEndpointPolicy,
+    ) -> Result<BTreeMap<String, String>, HostResult<Value>> {
+        let Some(auth) = &policy.auth else {
+            return Ok(BTreeMap::new());
+        };
+        self.caps.require("secret", "use", Some(&auth.secret))?;
+        let token = self.resolve_net_fetch_secret(&auth.secret)?;
+        let (name, value) = match auth.kind.as_str() {
+            "bearer" => ("authorization".to_owned(), format!("Bearer {token}")),
+            "discord-bot" => ("authorization".to_owned(), format!("Bot {token}")),
+            "api-key-header" => {
+                let header = auth.header.clone().ok_or_else(|| {
+                    HostResult::err(
+                        HostErrorCode::InvalidArgs,
+                        "api-key-header auth requires configured header",
+                    )
+                })?;
+                (header, token)
+            }
+            _ => {
+                return Err(HostResult::err(
+                    HostErrorCode::InvalidArgs,
+                    "unsupported endpoint auth kind",
+                ));
+            }
+        };
+        Ok(BTreeMap::from([(name, value)]))
+    }
+
+    fn resolve_net_fetch_secret(&self, name: &str) -> Result<String, HostResult<Value>> {
+        let policy = self.secrets.get(name).ok_or_else(|| {
+            HostResult::err(
+                HostErrorCode::NotFound,
+                format!("secret {name} is not configured"),
+            )
+        })?;
+        if let Some(env) = &policy.env {
+            if let Ok(value) = std::env::var(env) {
+                if !value.is_empty() {
+                    return Ok(value);
+                }
+            }
+        }
+        if let Some(pass) = &policy.pass {
+            if let Some(value) = resolve_pass_secret(pass) {
+                return Ok(value);
+            }
+        }
+        if let Some(value) = self.secret_store.get(name) {
+            return Ok(value.clone());
+        }
+        Err(HostResult::err(
+            HostErrorCode::NotFound,
+            format!("secret {name} is not available"),
+        ))
     }
 
     fn endpoint_url(
@@ -337,4 +400,15 @@ impl MawWasmHost {
         );
         result
     }
+}
+
+fn resolve_pass_secret(path: &str) -> Option<String> {
+    let output = Command::new("pass").arg("show").arg(path).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout)
+        .ok()
+        .and_then(|stdout| stdout.lines().next().map(str::to_owned))
+        .filter(|value| !value.is_empty())
 }

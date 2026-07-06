@@ -22,6 +22,14 @@ fn raw_response(status: &str, headers: &str, body: &str) -> String {
     )
 }
 
+fn has_header(request: &str, name: &str, value: &str) -> bool {
+    request.lines().any(|line| {
+        line.split_once(':').is_some_and(|(actual, actual_value)| {
+            actual.eq_ignore_ascii_case(name) && actual_value.trim() == value
+        })
+    })
+}
+
 #[test]
 fn net_fetch_granted_endpoint_uses_policy_and_audits_hostless_path() {
     let dir = temp("net-fetch-ok");
@@ -51,10 +59,166 @@ fn net_fetch_granted_endpoint_uses_policy_and_audits_hostless_path() {
 }
 
 #[test]
+fn net_fetch_secret_use_injects_bound_auth_without_guest_or_audit_leak() {
+    let dir = temp("net-fetch-secret-auth");
+    let (bearer_base, bearer_rx) = serve_net_once(raw_response("200 OK", "", "ok"), 0);
+    let (discord_base, discord_rx) = serve_net_once(raw_response("200 OK", "", "ok"), 0);
+    let (api_base, api_rx) = serve_net_once(raw_response("200 OK", "", "ok"), 0);
+    let host = endpoint_secret_host(
+        &dir,
+        &[
+            "net:fetch:bearer",
+            "net:fetch:discord",
+            "net:fetch:api",
+            "secret:use:bearer-token",
+            "secret:use:discord-token",
+            "secret:use:api-token",
+        ],
+        json!({
+            "bearer":{"baseUrl":bearer_base,"paths":["/ok"],"auth":{"kind":"bearer","secret":"bearer-token"}},
+            "discord":{"baseUrl":discord_base,"paths":["/ok"],"auth":{"kind":"discord-bot","secret":"discord-token"}},
+            "api":{"baseUrl":api_base,"paths":["/ok"],"auth":{"kind":"api-key-header","secret":"api-token","header":"x-api-key"}}
+        }),
+        Some(json!({
+            "bearer-token":{"env":"MAW_UNUSED_BEARER_TOKEN"},
+            "discord-token":{"env":"MAW_UNUSED_DISCORD_TOKEN"},
+            "api-token":{"env":"MAW_UNUSED_API_TOKEN"}
+        })),
+    )
+    .with_secret_ref("bearer-token", "BEARER_SECRET_244")
+    .with_secret_ref("discord-token", "DISCORD_SECRET_244")
+    .with_secret_ref("api-token", "API_SECRET_244");
+    for (endpoint, rx, header, value, token) in [
+        (
+            "bearer",
+            bearer_rx,
+            "authorization",
+            "Bearer BEARER_SECRET_244",
+            "BEARER_SECRET_244",
+        ),
+        (
+            "discord",
+            discord_rx,
+            "authorization",
+            "Bot DISCORD_SECRET_244",
+            "DISCORD_SECRET_244",
+        ),
+        (
+            "api",
+            api_rx,
+            "x-api-key",
+            "API_SECRET_244",
+            "API_SECRET_244",
+        ),
+    ] {
+        let result = call(
+            &host,
+            "maw.net.fetch",
+            &json!({"endpoint":endpoint,"path":"/ok"}),
+        );
+        assert_eq!(result["value"]["status"], 200, "{result}");
+        assert!(has_header(&rx.recv().expect("request"), header, value));
+        assert!(!result.to_string().contains(token), "{result}");
+    }
+    let audit = host.audit_json_lines();
+    for token in ["BEARER_SECRET_244", "DISCORD_SECRET_244", "API_SECRET_244"] {
+        assert!(!audit.contains(token), "{audit}");
+    }
+}
+
+#[test]
+fn net_fetch_secret_use_missing_or_network_errors_do_not_leak_secret_material() {
+    let dir = temp("net-fetch-secret-errors");
+    let missing_path = format!("maw-rs-tests/missing-secret-{}", std::process::id());
+    let missing = endpoint_secret_host(
+        &dir,
+        &["net:fetch:api", "secret:use:missing-token"],
+        json!({"api":{"baseUrl":"http://127.0.0.1:9","paths":["/ok"],"auth":{"kind":"bearer","secret":"missing-token"}}}),
+        Some(json!({"missing-token":{"pass":missing_path}})),
+    );
+    let missing_result = call(
+        &missing,
+        "maw.net.fetch",
+        &json!({"endpoint":"api","path":"/ok"}),
+    );
+    assert_eq!(missing_result["code"], "not_found", "{missing_result}");
+    assert!(missing_result.to_string().contains("missing-token"));
+    assert!(!missing_result.to_string().contains("maw-rs-tests"));
+
+    let (base, _) = serve_net_once(String::new(), 0);
+    let host = endpoint_secret_host(
+        &dir,
+        &["net:fetch:api", "secret:use:leaky-token"],
+        json!({"api":{"baseUrl":base,"paths":["/fail"],"auth":{"kind":"bearer","secret":"leaky-token"}}}),
+        Some(json!({"leaky-token":{"env":"MAW_UNUSED_LEAKY_TOKEN"}})),
+    )
+    .with_secret_ref("leaky-token", "LEAKY_SECRET_244");
+    let network_result = call(
+        &host,
+        "maw.net.fetch",
+        &json!({"endpoint":"api","path":"/fail"}),
+    );
+    assert_eq!(network_result["code"], "network_error", "{network_result}");
+    assert!(!network_result.to_string().contains("LEAKY_SECRET_244"));
+    assert!(!host.audit_json_lines().contains("LEAKY_SECRET_244"));
+}
+
+#[test]
+fn net_fetch_secret_use_grant_does_not_inject_on_unbound_endpoint() {
+    let dir = temp("net-fetch-secret-unbound-call");
+    let (plain_base, plain_rx) = serve_net_once(raw_response("200 OK", "", "ok"), 0);
+    let host = endpoint_secret_host(
+        &dir,
+        &["net:fetch:plain", "secret:use:unused-token"],
+        json!({
+            "plain":{"baseUrl":plain_base,"paths":["/ok"]},
+            "auth-only":{"baseUrl":"http://127.0.0.1:9","paths":["/ok"],"auth":{"kind":"bearer","secret":"unused-token"}}
+        }),
+        Some(json!({"unused-token":{"env":"MAW_UNUSED_TOKEN"}})),
+    )
+    .with_secret_ref("unused-token", "UNUSED_SECRET_244");
+    let result = call(
+        &host,
+        "maw.net.fetch",
+        &json!({"endpoint":"plain","path":"/ok"}),
+    );
+    assert_eq!(result["value"]["status"], 200, "{result}");
+    let request = plain_rx.recv().expect("request");
+    assert!(!request.contains("UNUSED_SECRET_244"), "{request}");
+    assert!(
+        !request.to_ascii_lowercase().contains("authorization:"),
+        "{request}"
+    );
+}
+
+#[test]
+fn net_fetch_secret_policy_manifest_validation() {
+    let dir = temp("net-fetch-secret-manifest");
+    write(dir.join("plugin.wasm"), b"\0asm\x01\0\0\0").expect("wasm");
+    let missing_secret = json!({
+        "name":"secure-plugin","version":"1.0.0","sdk":"*",
+        "entry":{"kind":"wasm","path":"plugin.wasm","export":"handle"},
+        "capabilities":["net:fetch:api"],
+        "endpoints":{"api":{"baseUrl":"http://127.0.0.1:9","paths":["/ok"],"auth":{"kind":"bearer","secret":"missing-token"}}}
+    });
+    let err = parse_manifest(&missing_secret.to_string(), &dir).expect_err("missing secret");
+    assert!(err.contains("auth references missing secret"), "{err}");
+
+    let unbound_secret_cap = json!({
+        "name":"secure-plugin","version":"1.0.0","sdk":"*",
+        "entry":{"kind":"wasm","path":"plugin.wasm","export":"handle"},
+        "capabilities":["secret:use:unused-token"],
+        "secrets":{"unused-token":{"env":"MAW_UNUSED_TOKEN"}},
+        "endpoints":{"api":{"baseUrl":"http://127.0.0.1:9","paths":["/ok"]}}
+    });
+    let err = parse_manifest(&unbound_secret_cap.to_string(), &dir).expect_err("unbound secret");
+    assert!(err.contains("unbound secret"), "{err}");
+}
+
+#[test]
 fn net_fetch_denies_ungranted_method_and_paths_before_network() {
     let dir = temp("net-fetch-deny");
-    let endpoints =
-        json!({"local-api":{"baseUrl":"http://127.0.0.1:9","methods":["GET"],"paths":["/ok"]},"wss":{"baseUrl":"wss://gateway.discord.gg","paths":["/"]}});
+    let endpoints = json!({"local-api":{"baseUrl":"http://127.0.0.1:9","methods":["GET"],"paths":["/ok"]},"wss":{"baseUrl":"wss://gateway.discord.gg","paths":["/"]}});
     let ungranted = endpoint_host(&dir, &[], endpoints.clone());
     let granted = endpoint_host(&dir, &["net:fetch:local-api", "net:fetch:wss"], endpoints);
     for (host, args) in [

@@ -254,6 +254,7 @@ fn make_plugin(dir: &Path, module: Option<PluginModule>, disabled: bool) -> Load
             capability_namespaces: None,
             capabilities: None,
             endpoints: None,
+            secrets: None,
             capability_warnings: Vec::new(),
             dependencies: None,
             artifact: None,
