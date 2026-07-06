@@ -243,6 +243,45 @@ fn fleet_plugins_artifacts_match_manifest_sha256() {
 }
 
 #[test]
+fn cross_team_queue_fleet_artifact_installs_and_invokes_scaffold() {
+    let source = fleet_plugins_dir().join("cross-team-queue");
+    assert!(source.join("plugin.json").is_file(), "missing cross-team-queue fleet plugin");
+    let root = temp_dir("ctq-invoke");
+    let install_root = root.join("plugins");
+    let install = run_cli(&args(&[
+        "plugin",
+        "install",
+        &source.display().to_string(),
+        "--root",
+        &install_root.display().to_string(),
+    ]));
+    assert_eq!(install.code, 0, "plugin install failed: {}\n{}", install.stderr, install.stdout);
+
+    let invoke = run_cli(&args(&[
+        "plugin-manifest",
+        "invoke",
+        "--scan-dir",
+        &install_root.display().to_string(),
+        "--plugin",
+        "cross-team-queue",
+        "--arg",
+        "--json",
+        "--arg",
+        "--recipient",
+        "--arg",
+        "nat",
+    ]));
+    fs::remove_dir_all(&root).ok();
+
+    assert_eq!(invoke.code, 0, "plugin invoke failed: {}\n{}", invoke.stderr, invoke.stdout);
+    assert_eq!(
+        invoke.stdout,
+        include_str!("fixtures/zerobun/cross-team-queue-empty.stdout")
+    );
+    assert!(invoke.stderr.is_empty(), "{}", invoke.stderr);
+}
+
+#[test]
 #[ignore = "requires the AssemblyScript toolchain: run `npm ci` in packages/wasm-sdk first"]
 fn fleet_plugins_rebuild_is_deterministic() {
     // Reproduce each fleet artifact from its committed source form and assert the rebuilt
