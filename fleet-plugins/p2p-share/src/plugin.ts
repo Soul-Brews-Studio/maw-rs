@@ -14,6 +14,7 @@ declare const process: any;
 type Log = (msg: string) => void;
 type Dims = { cols: number; rows: number };
 type PtyStream = { stop: () => void };
+type SpawnSync = (cmd: string[]) => { exitCode?: number; stderr?: { toString(): string } };
 type Werift = {
   RTCPeerConnection: any;
   RTCSessionDescription: any;
@@ -79,6 +80,45 @@ function captureSnapshot(target: string): string {
   const r = Bun.spawnSync(["tmux", "capture-pane", "-t", target, "-e", "-p"]);
   if (r.exitCode !== 0) return "";
   return r.stdout.toString().replace(/\n/g, "\r\n");
+}
+
+function dataChannelPayloadToText(data: unknown): string {
+  if (typeof data === "string") return data;
+  if (data instanceof Buffer) return data.toString("utf8");
+  if (data instanceof ArrayBuffer) return Buffer.from(data).toString("utf8");
+  if (ArrayBuffer.isView(data)) return Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString("utf8");
+  return "";
+}
+
+function runTmuxInput(target: string, args: string[], action: string, log: Log, spawnSync: SpawnSync): void {
+  const r = spawnSync(["tmux", "send-keys", "-t", target, ...args]);
+  if (r.exitCode !== 0) log(`tmux ${action} failed: ${r.stderr?.toString() || "unknown error"}`);
+}
+
+export function sendDataChannelTextToPane(
+  target: string,
+  data: unknown,
+  log: Log = () => {},
+  spawnSync: SpawnSync = Bun.spawnSync,
+): void {
+  const text = dataChannelPayloadToText(data);
+  if (!text) return;
+
+  let literal = "";
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch !== "\n" && ch !== "\r") {
+      literal += ch;
+      continue;
+    }
+
+    if (literal) runTmuxInput(target, ["-l", "--", literal], "literal input", log, spawnSync);
+    literal = "";
+    runTmuxInput(target, ["Enter"], "enter", log, spawnSync);
+    if (ch === "\r" && text[i + 1] === "\n") i += 1;
+  }
+
+  if (literal) runTmuxInput(target, ["-l", "--", literal], "literal input", log, spawnSync);
 }
 
 function startPtyStream(
@@ -209,6 +249,9 @@ async function startSharePeer(opts: {
     });
 
     const dc = pc.createDataChannel("pty-stream", { ordered: true });
+    dc.onmessage = (event: { data?: unknown }) => {
+      sendDataChannelTextToPane(target, event?.data, log);
+    };
     dc.stateChanged.subscribe?.((state: string) => {
       log(`DataChannel state: ${state} (viewer ${msg.from})`);
       if (state === "open") {
@@ -359,7 +402,7 @@ async function handleP2pShare(args: string[], log: Log): Promise<number> {
   log("Viewer ready:");
   log(`  Local: http://localhost:${port}`);
   log(`  Share: http://localhost:${port}/?peer=${encodeURIComponent(peerName)}`);
-  log("  Anyone with this link + signaling access can view (read-only)");
+  log("  Anyone with this link + signaling access can view and type into the shared pane");
   log("");
 
   try {

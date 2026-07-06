@@ -1,5 +1,12 @@
 import { expect, test } from "bun:test";
-import handler, { DEFAULT_SIGNAL_URL, VIEWER_PORT, getFlag, loadWerift, parseShareOptions } from "./plugin";
+import handler, {
+  DEFAULT_SIGNAL_URL,
+  VIEWER_PORT,
+  getFlag,
+  loadWerift,
+  parseShareOptions,
+  sendDataChannelTextToPane,
+} from "./plugin";
 
 async function run(args: string[]) {
   return handler({ source: "cli", args });
@@ -63,4 +70,35 @@ test("loadWerift reports missing dependency with install hint", async () => {
   await expect(loadWerift(async () => {
     throw new Error("Cannot find package 'werift'");
   })).rejects.toThrow(/missing dependency 'werift'.*Run `bun install` in fleet-plugins\/p2p-share/s);
+});
+
+test("DataChannel text is sent literally to tmux and newlines become Enter", () => {
+  const calls: string[][] = [];
+  const spawnSync = (cmd: string[]) => {
+    calls.push(cmd);
+    return { exitCode: 0, stderr: { toString: () => "" } };
+  };
+
+  sendDataChannelTextToPane("session:window.0", "echo FLEETPAD_E2E_123\r\npwd", () => {}, spawnSync);
+
+  expect(calls).toEqual([
+    ["tmux", "send-keys", "-t", "session:window.0", "-l", "--", "echo FLEETPAD_E2E_123"],
+    ["tmux", "send-keys", "-t", "session:window.0", "Enter"],
+    ["tmux", "send-keys", "-t", "session:window.0", "-l", "--", "pwd"],
+  ]);
+});
+
+test("DataChannel binary payload is decoded before tmux input", () => {
+  const calls: string[][] = [];
+  const payload = new TextEncoder().encode("hello\n").buffer;
+
+  sendDataChannelTextToPane("pane", payload, () => {}, (cmd: string[]) => {
+    calls.push(cmd);
+    return { exitCode: 0, stderr: { toString: () => "" } };
+  });
+
+  expect(calls).toEqual([
+    ["tmux", "send-keys", "-t", "pane", "-l", "--", "hello"],
+    ["tmux", "send-keys", "-t", "pane", "Enter"],
+  ]);
 });
