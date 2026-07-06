@@ -5,6 +5,11 @@ use std::{
 };
 
 use super::{modules::websocket_routes::ws_validate_target, ServecoreEngine, ServecoreWsKind};
+use maw_routing::{
+    resolve_target as resolve_route_target, MawConfig as RouteConfig, ResolveResult as RouteResult,
+    Session as RouteSession, Window as RouteWindow,
+};
+use maw_tmux::TmuxSession;
 
 const SERVEENGINE_CHILD_TIMEOUT_SECS: u64 = 30;
 const SERVEENGINE_CHILD_TIMEOUT_ENV: &str = "MAW_RS_SERVE_CHILD_TIMEOUT_SECS";
@@ -119,8 +124,37 @@ pub(crate) fn serveengine_tmux_capture(target: &str) -> Result<String, String> {
         return Ok(capture);
     }
     let mut tmux = maw_tmux::TmuxClient::local();
-    tmux.capture(&target, None)
+    let sessions = tmux.list_all();
+    let resolved = serveengine_resolve_capture_target(&target, &sessions);
+    tmux.capture(&resolved, None)
         .map_err(|error| format!("serve-ws: capture failed: {}", error.message))
+}
+
+fn serveengine_resolve_capture_target(target: &str, sessions: &[TmuxSession]) -> String {
+    if target.trim().is_empty() || target.starts_with('%') {
+        return target.to_owned();
+    }
+    let route_sessions = sessions
+        .iter()
+        .map(|session| RouteSession {
+            name: session.name.clone(),
+            source: None,
+            windows: session
+                .windows
+                .iter()
+                .map(|window| RouteWindow {
+                    index: window.index,
+                    name: window.name.clone(),
+                    active: window.active,
+                    kind: None,
+                })
+                .collect(),
+        })
+        .collect::<Vec<_>>();
+    match resolve_route_target(target, &RouteConfig::default(), &route_sessions) {
+        RouteResult::Local { target } | RouteResult::SelfNode { target } => target,
+        RouteResult::Peer { .. } | RouteResult::Error { .. } => target.to_owned(),
+    }
 }
 
 fn serveengine_ws_text(text: &str, fallback_target: Option<&str>) -> String {
@@ -364,5 +398,23 @@ printf '{{"cwd":"%s","argv":["%s","%s","%s","%s"]}}' "$(pwd)" "$1" "$2" "$3" "$4
         assert!(log.contains(r#""send-keys""#));
         assert!(log.contains(r#""ls""#));
         fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn serveengine_capture_resolves_bare_window_names() {
+        let sessions = vec![TmuxSession {
+            name: "35-fable-learn-speckit".to_owned(),
+            windows: vec![maw_tmux::TmuxWindow {
+                index: 2,
+                name: "fable-codex-2".to_owned(),
+                active: false,
+                cwd: None,
+            }],
+        }];
+
+        assert_eq!(
+            serveengine_resolve_capture_target("fable-codex-2", &sessions),
+            "35-fable-learn-speckit:2"
+        );
     }
 }

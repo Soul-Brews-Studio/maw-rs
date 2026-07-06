@@ -1,4 +1,4 @@
-const DISPATCH_326: &[DispatcherEntry] = &[DispatcherEntry { command: "zai", handler: Handler::Async(zai_run_async) }];
+const DISPATCH_327: &[DispatcherEntry] = &[DispatcherEntry { command: "zai", handler: Handler::Async(zai_run_async) }];
 
 const ZAI_USAGE: &str = "usage: maw zai <status|mon|test>\n  status  show configured Z.AI token pool (redacted)\n  mon     monitor snapshot (status + next action)\n  test    probe each configured key with a tiny chat completion\n";
 

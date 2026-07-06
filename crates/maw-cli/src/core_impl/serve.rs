@@ -1611,13 +1611,28 @@ async fn api_sessions(Query(query): Query<SessionsQuery>) -> impl IntoResponse {
 async fn api_capture(Query(query): Query<CaptureQuery>) -> impl IntoResponse {
     let target = query.target.unwrap_or_default();
     let mut tmux = TmuxClient::local();
-    match tmux.capture(&target, None) {
-        Ok(content) => Json(json!({"content": content, "target": target})).into_response(),
+    let resolved = serve_resolve_capture_target(&target, &mut tmux);
+    match tmux.capture(&resolved, None) {
+        Ok(content) => Json(json!({"content": content, "target": target, "resolvedTarget": resolved})).into_response(),
         Err(error) => (
             StatusCode::BAD_REQUEST,
-            Json(json!({"content": "", "target": target, "error": error.to_string()})),
+            Json(json!({"content": "", "target": target, "resolvedTarget": resolved, "error": error.to_string()})),
         )
             .into_response(),
+    }
+}
+
+fn serve_resolve_capture_target(
+    target: &str,
+    tmux: &mut TmuxClient<maw_tmux::CommandTmuxRunner>,
+) -> String {
+    if target.trim().is_empty() || target.starts_with('%') {
+        return target.to_owned();
+    }
+    let sessions = route_sessions_from_tmux(tmux);
+    match resolve_route_target(target, &load_hey_config().route, &sessions) {
+        RouteResult::Local { target } | RouteResult::SelfNode { target } => target,
+        RouteResult::Peer { .. } | RouteResult::Error { .. } => target.to_owned(),
     }
 }
 
