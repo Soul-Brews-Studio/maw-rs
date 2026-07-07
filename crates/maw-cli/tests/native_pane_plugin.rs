@@ -31,6 +31,10 @@ case "$1" in
     exit 0
     ;;
   list-panes)
+    if [ "$2" = "-a" ] && [ "$3" = "-F" ]; then
+      printf '%s\n' '81-kru32|||%1' '81-kru32|||%2' '81-kru32|||%3' 'fleet|||%8'
+      exit 0
+    fi
     if [ "$2" != "-t" ] || [ "$3" != "%7" ] || [ "$4" != "-F" ]; then
       echo "unexpected list-panes argv: $*" >&2
       exit 8
@@ -42,7 +46,14 @@ case "$1" in
       echo "unexpected list-windows argv: $*" >&2
       exit 7
     fi
-    printf '%s\n' 'fleet|||1|||codex-1|||1|||/repo' 'fleet|||2|||codex-2|||0|||/repo'
+    printf '%s\n' '81-kru32|||0|||kru32-oracle|||1|||/repo' '81-kru32|||2|||codex-team|||0|||/repo' 'fleet|||1|||codex-1|||1|||/repo' 'fleet|||2|||codex-2|||0|||/repo'
+    ;;
+  display-message)
+    if [ "$2" != "-p" ] || [ "$3" != "-t" ] || [ "$4" != "81-kru32:2.0" ] || [ "$5" != '#{pane_current_command}|||#{pane_pid}|||#{pane_current_path}|||#{pane_title}' ]; then
+      echo "unexpected display-message argv: $*" >&2
+      exit 10
+    fi
+    printf '%s\n' 'omx|||37115|||/opt/Code/kru32-oracle|||Coder 1'
     ;;
   swap-pane)
     case "$3:$5" in
@@ -84,6 +95,58 @@ fn pane_command(root: &Path) -> Command {
         .env("MAW_FAKE_TMUX_LOG", root.join("tmux.log"))
         .env("PATH", root.join("bin"));
     command
+}
+
+#[test]
+fn alive_native_resolves_session_alias_and_counts_panes() {
+    let root = pane_temp("alive");
+    pane_install_fake_tmux(&root);
+    let output = pane_command(&root)
+        .args(["alive", "--json", "kru32"])
+        .output()
+        .expect("run alive");
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).expect("stdout"),
+        "{\"alive\":true,\"session\":\"81-kru32\",\"panes\":3}\n"
+    );
+    assert_eq!(dispatcher_status("alive"), DispatchKind::Native);
+    let log = std::fs::read_to_string(root.join("tmux.log")).expect("log");
+    assert!(log.contains("list-windows -a -F #{session_name}|||#{window_index}|||#{window_name}|||#{window_active}|||#{pane_current_path}"), "{log}");
+    assert!(
+        log.contains("list-panes -a -F #{session_name}|||#{pane_id}"),
+        "{log}"
+    );
+    assert!(!log.contains("has-session"), "{log}");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn inspect_native_resolves_named_window_pane_and_reads_display_fields() {
+    let root = pane_temp("inspect");
+    pane_install_fake_tmux(&root);
+    let output = pane_command(&root)
+        .args(["inspect", "--json", "81-kru32:codex-team.0"])
+        .output()
+        .expect("run inspect");
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).expect("stdout"),
+        "{\"command\":\"omx\",\"pid\":37115,\"cwd\":\"/opt/Code/kru32-oracle\",\"title\":\"Coder 1\"}\n"
+    );
+    assert_eq!(dispatcher_status("inspect"), DispatchKind::Native);
+    let log = std::fs::read_to_string(root.join("tmux.log")).expect("log");
+    assert!(log.contains("list-windows -a -F #{session_name}|||#{window_index}|||#{window_name}|||#{window_active}|||#{pane_current_path}"), "{log}");
+    assert!(log.contains("display-message -p -t 81-kru32:2.0 #{pane_current_command}|||#{pane_pid}|||#{pane_current_path}|||#{pane_title}"), "{log}");
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]
