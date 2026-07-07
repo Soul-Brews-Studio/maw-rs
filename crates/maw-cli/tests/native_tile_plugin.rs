@@ -134,8 +134,26 @@ fn tile_native_spawn_cmd_uses_safe_tmux_argv_and_layouts() {
         "{log}"
     );
     assert!(log.contains("select-layout -t @7 main-vertical"), "{log}");
+    assert!(!log.contains("pane-border-status"), "{log}");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn tile_native_border_flag_opts_in_to_top_border_status() {
+    let root = tile_temp("border");
+    tile_install_fake_tmux(&root);
+    let output = tile_command(&root)
+        .args(["tile", "1", "--border"])
+        .output()
+        .expect("run tile border");
     assert!(
-        log.contains("set-option -w -t @7 pane-border-status bottom"),
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let log = std::fs::read_to_string(root.join("tmux.log")).expect("log");
+    assert!(
+        log.contains("set-option -w -t @7 pane-border-status top"),
         "{log}"
     );
     let _ = std::fs::remove_dir_all(root);

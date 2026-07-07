@@ -1,13 +1,13 @@
 const DISPATCH_79: &[DispatcherEntry] = &[DispatcherEntry { command: "tile", handler: Handler::Sync(run_tile_command) }];
 
-const TILE_USAGE: &str = "usage: maw tile [N] [--wt <name>] [--layout nested|legacy] [--path <dir>] [--cmd <cmd>] [--shell] [--engine <name>] [--parent-session-id <id>] [--session-id <id>]";
+const TILE_USAGE: &str = "usage: maw tile [N] [--border] [--wt <name>] [--layout nested|legacy] [--path <dir>] [--cmd <cmd>] [--shell] [--engine <name>] [--parent-session-id <id>] [--session-id <id>]";
 const TILE_PANE_FORMAT: &str = "#{pane_id}|||#{pane_title}|||#{@maw_tile}";
 const TILE_SWAP_FORMAT: &str = "#{pane_index}|||#{pane_id}|||#{pane_title}|||#{pane_top}";
 const TILE_HEIGHT_FORMAT: &str = "#{pane_height}";
 const TILE_COLORS: &[(&str, &str, &str)] = &[("blue", "34", "blue"), ("green", "32", "green"), ("yellow", "33", "yellow"), ("cyan", "36", "cyan"), ("magenta", "35", "magenta"), ("red", "31", "red"), ("white", "37", "white"), ("orange", "38;5;208", "colour208")];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct TileOptions { action: TileAction, count: usize, path: Option<String>, cmd: Option<String>, shell: bool, engine: Option<String>, layout: Option<String>, wt: TileWt, parent_session_id: Option<String>, session_id: Option<String> }
+struct TileOptions { action: TileAction, count: usize, path: Option<String>, cmd: Option<String>, shell: bool, border: bool, engine: Option<String>, layout: Option<String>, wt: TileWt, parent_session_id: Option<String>, session_id: Option<String> }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TileAction { Help, Clean, Swap(String, String), Spawn }
@@ -43,7 +43,7 @@ fn tile_run_with_runner<R: maw_tmux::TmuxRunner>(argv: &[String], runner: &mut R
 
 fn tile_parse_args(argv: &[String]) -> Result<TileOptions, (i32, String, String)> {
     let (cli_args, wt) = tile_extract_wt_arg(argv)?;
-    let mut opts = TileOptions { action: TileAction::Spawn, count: 0, path: None, cmd: None, shell: false, engine: None, layout: None, wt, parent_session_id: None, session_id: None };
+    let mut opts = TileOptions { action: TileAction::Spawn, count: 0, path: None, cmd: None, shell: false, border: false, engine: None, layout: None, wt, parent_session_id: None, session_id: None };
     let mut pos = Vec::<String>::new();
     let mut i = 0usize;
     while i < cli_args.len() {
@@ -52,6 +52,7 @@ fn tile_parse_args(argv: &[String]) -> Result<TileOptions, (i32, String, String)
             "--" => return Err(tile_usage_err("tile: -- separator is not supported")),
             "--help" | "-h" => opts.action = TileAction::Help,
             "--shell" => opts.shell = true,
+            "--border" => opts.border = true,
             "--path" | "-p" => { i += 1; opts.path = Some(tile_take_value(&cli_args, i, arg)?); },
             "--cmd" | "-c" => { i += 1; opts.cmd = Some(tile_take_value(&cli_args, i, arg)?); },
             "--engine" | "-e" => { i += 1; opts.engine = Some(tile_safe_token(&tile_take_value(&cli_args, i, arg)?, "engine")?); },
@@ -141,7 +142,7 @@ fn tile_spawn<R: maw_tmux::TmuxRunner>(opts: &TileOptions, runner: &mut R) -> Re
         if opts.cmd.is_none() { tile_send_engine(&pane_id, opts.engine.as_deref(), runner)?; }
         out.push_str(&tile_spawn_line(i, &role, &pane_id, &cwd, opts));
     }
-    tile_layout_after_spawn(&window, runner)?;
+    tile_layout_after_spawn(&window, opts, runner)?;
     out.push_str(&tile_summary(opts, &cwd));
     Ok(out)
 }
@@ -254,11 +255,11 @@ fn tile_send_engine<R: maw_tmux::TmuxRunner>(pane_id: &str, engine: Option<&str>
     Ok(())
 }
 
-fn tile_layout_after_spawn<R: maw_tmux::TmuxRunner>(window: &str, runner: &mut R) -> Result<(), String> {
+fn tile_layout_after_spawn<R: maw_tmux::TmuxRunner>(window: &str, opts: &TileOptions, runner: &mut R) -> Result<(), String> {
     let count = tile_tmux(runner, "list-panes", &["-t", window, "-F", "#{pane_id}"])?.lines().filter(|line| !line.is_empty()).count();
     let layout = if count == 2 { "even-horizontal" } else if count <= 4 { "main-vertical" } else { "tiled" };
     tile_select_layout(window, layout, runner)?;
-    tile_enable_border_status(window, runner);
+    if opts.border { tile_enable_border_status(window, runner); }
     Ok(())
 }
 
@@ -267,7 +268,7 @@ fn tile_select_layout<R: maw_tmux::TmuxRunner>(window: &str, layout: &str, runne
 fn tile_enable_border_status<R: maw_tmux::TmuxRunner>(window: &str, runner: &mut R) {
     let heights = tile_tmux(runner, "list-panes", &["-t", window, "-F", TILE_HEIGHT_FORMAT]).unwrap_or_default();
     let ok = heights.lines().filter_map(|line| line.trim().parse::<i64>().ok()).all(|height| height >= 4);
-    if ok { let _ = tile_tmux(runner, "set-option", &["-w", "-t", window, "pane-border-status", "bottom"]); }
+    if ok { let _ = tile_tmux(runner, "set-option", &["-w", "-t", window, "pane-border-status", "top"]); }
 }
 
 fn tile_spawn_line(index: usize, role: &str, pane_id: &str, cwd: &str, opts: &TileOptions) -> String {
@@ -403,13 +404,14 @@ fn tile_shell_quote(value: &str) -> String { format!("'{}'", value.replace('\'',
 
 fn tile_help_text() -> String {
     concat!(
-        "usage: maw tile [N] [--wt <name>] [--layout nested|legacy] [--path <dir>] [--cmd <cmd>] [--shell] [--engine <name>] [--parent-session-id <id>] [--session-id <id>]\n",
+        "usage: maw tile [N] [--border] [--wt <name>] [--layout nested|legacy] [--path <dir>] [--cmd <cmd>] [--shell] [--engine <name>] [--parent-session-id <id>] [--session-id <id>]\n",
         "       maw tile clean\n",
         "       maw tile swap <a> <b>\n\n",
         "  maw tile              apply tiled layout to current window (pane grid)\n",
         "  maw tile 3            spawn 3 empty panes and tile them\n",
         "  maw tile 3 -p /repo   spawn 3 shells cd'd to /repo\n",
         "  maw tile 3 -p /repo -c \"bun test\"  cd then run a command in each pane\n",
+        "  maw tile 3 --border enable tmux pane-border-status=top after tiling\n",
         "  maw tile 3 --shell    explicit blank-shell mode (default)\n",
         "  maw tile 3 --wt feat  spawn 3 blank shells in a reusable worktree\n",
         "  maw tile 3 --wt feat --layout legacy  use the old sibling .wt-N-X layout\n",
@@ -435,8 +437,9 @@ mod tile_tests {
 
     #[test]
     fn tile_parse_flags_and_rejects_separator_and_bad_targets() {
-        let opts = tile_parse_args(&tile_strings(&["3", "--wt", "feat", "--layout", "nested", "-e", "claude"])).unwrap();
+        let opts = tile_parse_args(&tile_strings(&["3", "--border", "--wt", "feat", "--layout", "nested", "-e", "claude"])).unwrap();
         assert_eq!(opts.count, 3);
+        assert!(opts.border);
         assert_eq!(opts.wt, TileWt::Named("feat".to_owned()));
         assert_eq!(opts.engine.as_deref(), Some("claude"));
         assert!(tile_parse_args(&tile_strings(&["--", "3"])).unwrap_err().2.contains("-- separator"));
