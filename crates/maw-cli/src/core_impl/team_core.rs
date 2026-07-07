@@ -92,6 +92,7 @@ struct TeamCharterMember122 {
     target: Option<String>,
     prompt: Option<String>,
     worktree: Option<String>,
+    worktree_opt_out: bool,
     branch: Option<String>,
 }
 
@@ -480,14 +481,21 @@ fn team_json_scalar_to_string(value: &serde_json::Value) -> Option<String> {
 }
 
 fn team_member_from_json(value: &serde_json::Value) -> TeamCharterMember122 {
-    TeamCharterMember122 { role: value["role"].as_str().unwrap_or("").to_owned(), name: value["name"].as_str().map(str::to_owned), model: value["model"].as_str().map(str::to_owned), cwd: value["cwd"].as_str().map(str::to_owned), engine: value["engine"].as_str().map(str::to_owned), target: value["target"].as_str().map(str::to_owned), prompt: value["prompt"].as_str().map(str::to_owned), worktree: team_member_worktree_from_json(value), branch: value["branch"].as_str().map(str::to_owned) }
+    TeamCharterMember122 { role: value["role"].as_str().unwrap_or("").to_owned(), name: value["name"].as_str().map(str::to_owned), model: value["model"].as_str().map(str::to_owned), cwd: value["cwd"].as_str().map(str::to_owned), engine: value["engine"].as_str().map(str::to_owned), target: value["target"].as_str().map(str::to_owned), prompt: value["prompt"].as_str().map(str::to_owned), worktree: team_member_worktree_from_json(value), worktree_opt_out: team_member_worktree_opt_out_from_json(value), branch: value["branch"].as_str().map(str::to_owned) }
 }
 
 fn team_member_worktree_from_json(value: &serde_json::Value) -> Option<String> {
-    value["worktree"]
-        .as_str()
-        .map(str::to_owned)
-        .or_else(|| value["worktree"].as_bool().map(|enabled| if enabled { team_member_name_path(value) } else { "false".to_owned() }))
+    let worktree = value.get("worktree")?;
+    if team_json_worktree_is_opt_out(worktree) { return None; }
+    worktree.as_str().map(str::to_owned).or_else(|| worktree.as_bool().filter(|enabled| *enabled).map(|_| team_member_name_path(value)))
+}
+
+fn team_member_worktree_opt_out_from_json(value: &serde_json::Value) -> bool {
+    value.get("worktree").is_some_and(team_json_worktree_is_opt_out)
+}
+
+fn team_json_worktree_is_opt_out(value: &serde_json::Value) -> bool {
+    value.is_null() || value.as_bool() == Some(false) || value.as_str().is_some_and(team_worktree_literal_is_opt_out)
 }
 
 fn team_member_name_path(value: &serde_json::Value) -> String {
@@ -569,6 +577,12 @@ fn team_yaml_line(line: &str, charter: &mut TeamCharter122, current: &mut Option
 }
 
 fn team_yaml_member_line(line: &str, member: &mut TeamCharterMember122) {
+    if let Some(rest) = line.trim_start().strip_prefix("worktree:") {
+        let value = team_unquote(rest);
+        member.worktree_opt_out = team_worktree_literal_is_opt_out(&value);
+        member.worktree = (!member.worktree_opt_out).then_some(value);
+        return;
+    }
     for (key, slot) in [("name:", &mut member.name), ("model:", &mut member.model), ("cwd:", &mut member.cwd), ("engine:", &mut member.engine), ("target:", &mut member.target), ("prompt:", &mut member.prompt), ("worktree:", &mut member.worktree), ("branch:", &mut member.branch)] {
         if let Some(rest) = line.trim_start().strip_prefix(key) { *slot = Some(team_unquote(rest)); }
     }
@@ -578,14 +592,28 @@ fn team_unquote(raw: &str) -> String {
     raw.trim().trim_matches('"').trim_matches('\'').to_owned()
 }
 
+fn team_worktree_literal_is_opt_out(value: &str) -> bool {
+    let value = value.trim();
+    value.is_empty() || value == "~" || value.eq_ignore_ascii_case("false") || value.eq_ignore_ascii_case("null")
+}
+
 fn team_charter_finish(mut charter: TeamCharter122) -> Result<TeamCharter122, String> {
     let name = charter.name.trim().to_owned();
     if name.is_empty() { return Err("team charter requires name".to_owned()); }
     if charter.members.is_empty() { return Err("team charter requires at least one member".to_owned()); }
     charter.name = name;
     for member in &mut charter.members {
-        if member.worktree.as_deref() == Some("true") {
-            member.worktree = Some(member.name.as_deref().filter(|name| !name.trim().is_empty()).unwrap_or(&member.role).to_owned());
+        if member.worktree_opt_out {
+            member.worktree = None;
+            continue;
+        }
+        if let Some(worktree) = member.worktree.as_deref() {
+            if team_worktree_literal_is_opt_out(worktree) {
+                member.worktree = None;
+                member.worktree_opt_out = true;
+            } else if worktree == "true" {
+                member.worktree = Some(member.name.as_deref().filter(|name| !name.trim().is_empty()).unwrap_or(&member.role).to_owned());
+            }
         }
     }
     Ok(charter)
@@ -726,7 +754,39 @@ members:
         assert_eq!(charter.defaults.get("worktree").map(String::as_str), Some("true"));
         assert_eq!(charter.engines.get("omx-2").map(String::as_str), Some("CODEX_HOME=$PWD/.codex2 omx"));
         assert_eq!(charter.members[0].worktree.as_deref(), Some("agents/reviewer"));
-        assert_eq!(charter.members[1].worktree.as_deref(), Some("false"));
+        assert_eq!(charter.members[1].worktree, None);
+        assert!(charter.members[1].worktree_opt_out);
+    }
+
+    #[test]
+    fn team_charter_worktree_false_and_yaml_null_opt_out_even_with_defaults() {
+        let charter = team_parse_charter(
+            r#"name: alpha
+defaults:
+  worktree: true
+members:
+  - role: lead
+    name: lead-window
+    worktree: false
+  - role: reviewer
+    worktree: "false"
+  - role: planner
+    worktree: ~
+  - role: scribe
+    worktree: null
+  - role: coder
+    name: agents/coder
+    worktree: true
+"#,
+        )
+        .expect("charter");
+        assert!(charter.defaults_worktree);
+        for member in &charter.members[..4] {
+            assert_eq!(member.worktree, None, "{}", member.role);
+            assert!(member.worktree_opt_out, "{}", member.role);
+        }
+        assert_eq!(charter.members[4].worktree.as_deref(), Some("agents/coder"));
+        assert!(!charter.members[4].worktree_opt_out);
     }
 
     #[test]

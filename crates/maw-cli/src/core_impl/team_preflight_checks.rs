@@ -46,7 +46,7 @@ fn team_preflight_charter_schema_check(charter: &TeamCharter122) -> TeamPrefligh
         Some(project) if !project.is_empty() => problems.push(format!("project must be owner/repo, got {project:?}")),
         _ => problems.push("project must be owner/repo".to_owned()),
     }
-    let missing_worktree = charter.members.iter().filter(|member| team_preflight_member_worktree_raw(member).is_none()).map(team_preflight_member_label).collect::<Vec<_>>();
+    let missing_worktree = charter.members.iter().filter(|member| !member.worktree_opt_out && team_preflight_member_worktree_raw(member).is_none()).map(team_preflight_member_label).collect::<Vec<_>>();
     if !missing_worktree.is_empty() {
         problems.push(format!("members missing worktree: {}", missing_worktree.join(", ")));
     }
@@ -345,6 +345,7 @@ fn team_preflight_trust_path_candidates(path: &std::path::Path) -> Vec<String> {
 }
 
 fn team_preflight_member_worktree_raw(member: &TeamCharterMember122) -> Option<&str> {
+    if member.worktree_opt_out { return None; }
     member.worktree.as_deref().map(str::trim).filter(|value| !value.is_empty())
 }
 

@@ -13,6 +13,7 @@ struct TeamRosterItem124 {
     identity: String,
     engine: String,
     worktree: String,
+    worktree_opt_out: bool,
     state: String,
     action: String,
     pane: Option<TeamPane124>,
@@ -233,12 +234,13 @@ fn team_t3_classify(member: &TeamCharterMember122, opts: &TeamT3Options124, sess
     let identity = member.name.clone().unwrap_or_else(|| role.clone());
     let engine = opts.engine.clone().or_else(|| member.engine.clone()).or_else(|| member.model.clone()).unwrap_or_else(|| "claude".to_owned());
     let worktree = member.worktree.clone().or_else(|| member.cwd.clone()).unwrap_or_else(|| identity.clone());
-    if !opts.only.is_empty() && !team_t3_matches_selectors(member, &opts.only, &identity, &worktree) { return TeamRosterItem124 { role, identity, engine, worktree, state: "skipped".to_owned(), action: String::new(), pane: None }; }
-    if !opts.members.is_empty() && !opts.members.iter().any(|item| item == &member.role) { return TeamRosterItem124 { role, identity, engine, worktree, state: "skipped".to_owned(), action: String::new(), pane: None }; }
+    let worktree_opt_out = member.worktree_opt_out;
+    if !opts.only.is_empty() && !team_t3_matches_selectors(member, &opts.only, &identity, &worktree) { return TeamRosterItem124 { role, identity, engine, worktree, worktree_opt_out, state: "skipped".to_owned(), action: String::new(), pane: None }; }
+    if !opts.members.is_empty() && !opts.members.iter().any(|item| item == &member.role) { return TeamRosterItem124 { role, identity, engine, worktree, worktree_opt_out, state: "skipped".to_owned(), action: String::new(), pane: None }; }
     let candidates = team_t3_window_candidates(member, &identity, &worktree);
     let pane = panes.iter().find(|pane| pane.session == session && candidates.iter().any(|candidate| candidate == &pane.window || pane.window.ends_with(&format!("-{candidate}")))).cloned();
     let state = pane.as_ref().map_or("missing", |p| if team_t3_is_live_command(&p.command) { "live" } else { "dead" }).to_owned();
-    TeamRosterItem124 { role, identity, engine, worktree, state, action: String::new(), pane }
+    TeamRosterItem124 { role, identity, engine, worktree, worktree_opt_out, state, action: String::new(), pane }
 }
 
 fn team_t3_matches_selectors(member: &TeamCharterMember122, selectors: &[String], identity: &str, worktree: &str) -> bool {
@@ -255,11 +257,12 @@ fn team_t3_window_candidates(member: &TeamCharterMember122, identity: &str, work
 
 fn team_t3_up_action(item: &TeamRosterItem124, opts: &TeamT3Options124) -> String {
     if item.state == "skipped" { return "skip (selector)".to_owned(); }
-    if team_t3_has(opts, TEAM_T3_FORCE) { return format!("would force fresh wake --wt {} -e {} --session {}", item.worktree, item.engine, opts.session.as_deref().unwrap_or("<team>")); }
+    let wt = if item.worktree_opt_out { String::new() } else { format!(" --wt {}", item.worktree) };
+    if team_t3_has(opts, TEAM_T3_FORCE) { return format!("would force fresh wake{wt} -e {} --session {}", item.engine, opts.session.as_deref().unwrap_or("<team>")); }
     match item.state.as_str() {
         "live" => "skip live".to_owned(),
         "dead" => "would relaunch in place with resume".to_owned(),
-        _ => format!("would fresh wake --wt {} -e {}", item.worktree, item.engine),
+        _ => format!("would fresh wake{wt} -e {}", item.engine),
     }
 }
 
