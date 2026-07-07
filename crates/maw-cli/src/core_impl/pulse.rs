@@ -1,4 +1,5 @@
 const DISPATCH_51: &[DispatcherEntry] = &[ DispatcherEntry { command: "pulse", handler: Handler::Sync(run_pulse_command) } ];
+const PULSE_DEFAULT_REPO: &str = "laris-co/pulse-oracle";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PulseIssue {
@@ -147,7 +148,8 @@ fn pulse_parse_add_args(argv: &[String]) -> Result<PulseAddOptions, String> {
 }
 
 fn pulse_add(options: &PulseAddOptions) -> Result<String, String> {
-    let repo = "laris-co/pulse-oracle";
+    let repo = pulse_repo()?;
+    let repo = repo.as_str();
     let period = pulse_time_period();
     let thread = pulse_find_or_create_daily_thread(repo)?;
     let mut stdout = String::new();
@@ -220,7 +222,8 @@ fn pulse_add(options: &PulseAddOptions) -> Result<String, String> {
 }
 
 fn pulse_list(sync: bool) -> Result<String, String> {
-    let repo = "laris-co/pulse-oracle";
+    let repo = pulse_repo()?;
+    let repo = repo.as_str();
     let issues_json = pulse_command_stdout(
         "gh",
         &[
@@ -400,7 +403,7 @@ fn pulse_add_task_to_period_comment(repo: &str, thread_num: u64, period: &str, i
     } else {
         format!("{}\n{task_line}", comment.body)
     };
-    pulse_patch_comment(&comment.id, &body)
+    pulse_patch_comment(repo, &comment.id, &body)
 }
 
 fn pulse_ensure_period_comments(repo: &str, thread_num: u64) -> Result<BTreeMap<String, PulseComment>, String> {
@@ -459,7 +462,7 @@ fn pulse_sync_daily_thread(repo: &str, projects: &[PulseIssue], tools: &[PulseIs
     let comments: Vec<PulseComment> = serde_json::from_str(pulse_str_or_default(raw.trim(), "[]"))
         .map_err(|error| format!("pulse: parse comments json: {error}"))?;
     if let Some(comment) = comments.iter().find(|comment| comment.body.contains("Pulse Board Index")) {
-        pulse_patch_comment(&comment.id, &body)?;
+        pulse_patch_comment(repo, &comment.id, &body)?;
         Ok(format!("\x1b[32m✅\x1b[0m synced to daily thread #{}\n", thread.number))
     } else {
         pulse_command_stdout("gh", &["api".to_owned(), format!("repos/{repo}/issues/{}/comments", thread.number), "-f".to_owned(), format!("body={body}")])?;
@@ -467,7 +470,7 @@ fn pulse_sync_daily_thread(repo: &str, projects: &[PulseIssue], tools: &[PulseIs
     }
 }
 
-fn pulse_patch_comment(id: &serde_json::Value, body: &str) -> Result<(), String> {
+fn pulse_patch_comment(repo: &str, id: &serde_json::Value, body: &str) -> Result<(), String> {
     let id = match id {
         serde_json::Value::String(value) => value.clone(),
         serde_json::Value::Number(value) => value.to_string(),
@@ -478,7 +481,7 @@ fn pulse_patch_comment(id: &serde_json::Value, body: &str) -> Result<(), String>
         "gh",
         &[
             "api".to_owned(),
-            format!("repos/laris-co/pulse-oracle/issues/comments/{id}"),
+            format!("repos/{repo}/issues/comments/{id}"),
             "-X".to_owned(),
             "PATCH".to_owned(),
             "-f".to_owned(),
@@ -614,6 +617,30 @@ fn pulse_command_stdout(program: &str, args: &[String]) -> Result<String, String
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
         Err(if stderr.is_empty() { format!("{program} exited {}", output.status) } else { stderr })
+    }
+}
+
+fn pulse_repo() -> Result<String, String> {
+    let repo = match std::env::var("MAW_PULSE_REPO") {
+        Ok(value) if value.trim().is_empty() => PULSE_DEFAULT_REPO.to_owned(),
+        Ok(value) => value,
+        Err(_) => PULSE_DEFAULT_REPO.to_owned(),
+    };
+    pulse_validate_repo_arg(&repo)?;
+    Ok(repo)
+}
+
+fn pulse_validate_repo_arg(value: &str) -> Result<(), String> {
+    let Some((owner, name)) = value.split_once('/') else { return Err("pulse: MAW_PULSE_REPO must be owner/repo".to_owned()); };
+    let safe = |part: &str| {
+        !part.is_empty()
+            && !part.starts_with('-')
+            && part.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+    };
+    if value.trim() != value || name.contains('/') || !safe(owner) || !safe(name) {
+        Err("pulse: MAW_PULSE_REPO must be owner/repo with safe GitHub name characters".to_owned())
+    } else {
+        Ok(())
     }
 }
 

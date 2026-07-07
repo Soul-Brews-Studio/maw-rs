@@ -83,6 +83,14 @@ exit 42
 }
 
 fn run(root: &Path, args: &[&str]) -> std::process::Output {
+    run_with_pulse_repo(root, args, None)
+}
+
+fn run_with_pulse_repo(
+    root: &Path,
+    args: &[&str],
+    pulse_repo: Option<&str>,
+) -> std::process::Output {
     let bin_dir = root.join("bin");
     let home = root.join("home");
     let xdg_config = root.join("xdg-config");
@@ -100,7 +108,8 @@ fn run(root: &Path, args: &[&str]) -> std::process::Output {
     fs::create_dir_all(&xdg_state).expect("xdg state");
     fs::create_dir_all(&ghq).expect("ghq");
 
-    Command::new(bin())
+    let mut command = Command::new(bin());
+    command
         .args(args)
         .current_dir(root)
         .env_clear()
@@ -114,9 +123,11 @@ fn run(root: &Path, args: &[&str]) -> std::process::Output {
         .env("MAW_JS_REF_DIR", "/nonexistent")
         .env("MAW_PULSE_GH_LOG", root.join("gh.log"))
         .env("MAW_PULSE_GIT_LOG", root.join("git.log"))
-        .env("MAW_PULSE_TMUX_LOG", root.join("tmux.log"))
-        .output()
-        .expect("run maw-rs")
+        .env("MAW_PULSE_TMUX_LOG", root.join("tmux.log"));
+    if let Some(repo) = pulse_repo {
+        command.env("MAW_PULSE_REPO", repo);
+    }
+    command.output().expect("run maw-rs")
 }
 
 #[test]
@@ -142,6 +153,28 @@ fn native_pulse_list_matches_committed_golden_without_ref_checkout() {
     assert_eq!(
         fs::read_to_string(root.join("gh.log")).expect("gh log"),
         "issue list --repo laris-co/pulse-oracle --state open --json number,title,labels --limit 50\n"
+    );
+}
+
+#[test]
+fn native_pulse_list_honors_maw_pulse_repo_override() {
+    let root = temp_dir("list-override");
+    let bin_dir = root.join("bin");
+    fs::create_dir_all(&bin_dir).expect("bin dir");
+    write_fake_gh(&bin_dir);
+
+    let output = run_with_pulse_repo(&root, &["pulse", "list"], Some("acme/pulse-board"));
+
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8(output.stderr).expect("stderr"), "");
+    assert_eq!(
+        fs::read_to_string(root.join("gh.log")).expect("gh log"),
+        "issue list --repo acme/pulse-board --state open --json number,title,labels --limit 50\n"
     );
 }
 
