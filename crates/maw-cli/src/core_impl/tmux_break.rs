@@ -1,4 +1,4 @@
-const DISPATCH_280: &[DispatcherEntry] = &[];
+const DISPATCH_280: &[DispatcherEntry] = &[DispatcherEntry { command: "break", handler: Handler::Sync(run_break_command) }];
 
 const TMUX_SUB_280: &[TmuxSubcommandEntry] = &[TmuxSubcommandEntry {
     names: &["break"],
@@ -6,6 +6,7 @@ const TMUX_SUB_280: &[TmuxSubcommandEntry] = &[TmuxSubcommandEntry {
 }];
 
 const TMUX_BREAK_USAGE: &str = "usage: maw tmux break <pane> [--force]";
+const BREAK_USAGE: &str = "usage: maw break <pane>";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TmuxBreakOptions {
@@ -18,6 +19,22 @@ fn run_tmux_break_command(argv: &[String]) -> CliOutput {
         Ok(stdout) => CliOutput { code: 0, stdout, stderr: String::new() },
         Err((code, message)) => CliOutput { code, stdout: String::new(), stderr: format!("{message}\n") },
     }
+}
+
+fn run_break_command(argv: &[String]) -> CliOutput {
+    match break_with_runner(argv, &mut maw_tmux::CommandTmuxRunner::new()) {
+        Ok(stdout) => CliOutput { code: 0, stdout, stderr: String::new() },
+        Err((code, message)) => CliOutput { code, stdout: String::new(), stderr: format!("{message}\n") },
+    }
+}
+
+fn break_with_runner<R: maw_tmux::TmuxRunner>(argv: &[String], runner: &mut R) -> Result<String, (i32, String)> {
+    if argv.iter().any(|arg| arg == "--help" || arg == "-h") { return Err((0, BREAK_USAGE.to_owned())); }
+    let [target] = argv else { return Err((2, BREAK_USAGE.to_owned())); };
+    tmux_break_validate_target(target).map_err(|message| (1, message.replace("tmux break", "break")))?;
+    runner.run("break-pane", &["-t".to_owned(), target.clone(), "-d".to_owned()])
+        .map_err(|error| (1, format!("break: break-pane failed: {}", error.message)))?;
+    Ok(format!("broke {target}\n"))
 }
 
 fn tmux_break_with_runner<R: maw_tmux::TmuxRunner>(
@@ -128,9 +145,16 @@ mod tmux_break_tests {
 
     #[test]
     fn tmux_break_fragment_is_part280_only() {
-        assert!(DISPATCH_280.is_empty());
+        assert_eq!(DISPATCH_280[0].command, "break");
         assert_eq!(TMUX_SUB_280.len(), 1);
         assert_eq!(TMUX_SUB_280[0].names, &["break"]);
+    }
+
+    #[test]
+    fn break_top_level_uses_detached_break_pane_only() {
+        let mut runner = BreakFakeRunner::default();
+        assert_eq!(break_with_runner(&strings(&["%42"]), &mut runner).expect("break"), "broke %42\n");
+        assert_eq!(runner.calls, vec![("break-pane".to_owned(), strings(&["-t", "%42", "-d"]))]);
     }
 
     #[test]
