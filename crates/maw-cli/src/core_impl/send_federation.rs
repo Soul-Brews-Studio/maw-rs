@@ -88,6 +88,8 @@ async fn run_send_like_async_with_args(
         std::env::var_os("TMUX").is_some(),
         &mut runner,
     );
+    let result =
+        route_result_prefer_pane_zero_for_ambiguous_agent(&send_args.target, result, &mut runner);
     if send_args.dry_run {
         return send_dry_run_output(command, &send_args, &result);
     }
