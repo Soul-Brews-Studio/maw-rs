@@ -1044,6 +1044,25 @@ mod plugin_native_tests {
     }
 
     #[test]
+    fn plugin_create_ts_scaffold_self_invokes_when_run_by_bun() {
+        let root = plugin_temp_root("create-ts");
+        let dir = root.join("route-probe");
+        let out = plugin_run_command(&plugin_args(&[
+            "create",
+            "route-probe",
+            "--dir",
+            &dir.display().to_string(),
+        ]));
+        assert_eq!(out.code, 0, "{}", out.stderr);
+        let entry = std::fs::read_to_string(dir.join("src").join("index.ts")).expect("entry");
+        assert!(entry.contains("export async function handler"), "{entry}");
+        assert!(entry.contains("export default handler"), "{entry}");
+        assert!(entry.contains("if (import.meta.main)"), "{entry}");
+        assert!(entry.contains("process.argv.slice(2)"), "{entry}");
+        assert!(entry.contains("process.exit(result.ok ? 0 : 1)"), "{entry}");
+    }
+
+    #[test]
     fn plugin_build_rust_wasm_uses_cargo_argv_no_shell_and_golden_output() {
         let root = plugin_temp_root("rust-build");
         let dir = plugin_write_rust(&root, "route-probe");

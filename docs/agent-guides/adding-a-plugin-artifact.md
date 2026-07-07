@@ -25,6 +25,19 @@ artifact that the runtime hashes and capability-gates.
   `entry.kind: "wasm"`, and `artifact.sha256`.
 - Dev-tier-active plugins can keep `plugin.json` on `runtime: "bun-dev"`; if a staged
   `plugin.wasm` is committed, pin it from `plugin.source.json`.
+- Dev-tier TypeScript entries are run directly with `bun <entry> ...args`, so Bun will
+  only evaluate the module. Add an `import.meta.main` self-invoke block to call the
+  exported handler when the file is executed:
+
+  ```ts
+  if (import.meta.main) {
+    const result = await handler({ source: "cli", args: process.argv.slice(2) });
+    if (result.output) console.log(result.output);
+    if (result.error) console.error(result.error);
+    process.exit(result.ok ? 0 : 1);
+  }
+  ```
+
 - Every committed `plugin.wasm` must be pinned by either `plugin.json` or
   `plugin.source.json`; prose-only pins do not count.
 

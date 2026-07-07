@@ -85,6 +85,11 @@ fn init_and_install_plugin_are_host_authoritative_filesystem_operations() {
     let install_root = root.join("installed");
     let init = init_js_plugin_dir("my_ffi", &source).expect("init plugin");
     assert_eq!(init.name, "my-ffi");
+    let entry = std::fs::read_to_string(&init.entry_path).expect("entry");
+    assert!(entry.contains("export async function handler"), "{entry}");
+    assert!(entry.contains("if (import.meta.main)"), "{entry}");
+    assert!(entry.contains("process.argv.slice(2)"), "{entry}");
+    assert!(entry.contains("hello from my-ffi"), "{entry}");
 
     build_js_plugin_dir(&source, false).expect("build plugin");
     let install = install_built_plugin_dir(&source, &install_root).expect("install plugin");

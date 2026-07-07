@@ -187,7 +187,26 @@ pub fn init_js_plugin_dir(name: &str, dir: &Path) -> Result<PluginInitSummary, S
     .map_err(|error| format!("plugin init: manifest write failed: {error}"))?;
     std::fs::write(
         &entry_path,
-        "import { maw } from \"maw\";\n\nexport async function main() {\n  return { ok: true };\n}\n",
+        format!(
+            r#"type InvokeContext = {{ source: "cli"; args: string[] }};
+type PluginResult = {{ ok: boolean; output?: string; error?: string }};
+
+export async function handler(ctx: InvokeContext): Promise<PluginResult> {{
+  const name = ctx.args[0] ?? "world";
+  return {{ ok: true, output: "hello from {command} to " + name }};
+}}
+
+export default handler;
+
+if (import.meta.main) {{
+  const result = await handler({{ source: "cli", args: process.argv.slice(2) }});
+  if (result.output) console.log(result.output);
+  if (result.error) console.error(result.error);
+  process.exit(result.ok ? 0 : 1);
+}}
+"#,
+            command = name.replace('_', "-")
+        ),
     )
     .map_err(|error| format!("plugin init: entry write failed: {error}"))?;
     Ok(PluginInitSummary {
