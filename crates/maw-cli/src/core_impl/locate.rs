@@ -16,6 +16,10 @@ struct LocateOptions {
 struct LocateResult {
     name: String,
     repo_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    site: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    site_source: Option<String>,
     has_psi: bool,
     session_name: Option<String>,
     window_count: usize,
@@ -50,6 +54,8 @@ struct LocateManifestEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     repo: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    site: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     local_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     session_id: Option<String>,
@@ -72,6 +78,7 @@ struct LocateFleetEntry {
     file: String,
     path: String,
     session: NativeFleetSession,
+    window_sites: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -86,6 +93,8 @@ struct LocateOracleCacheEntry {
     org: String,
     repo: String,
     name: String,
+    site: Option<String>,
+    pages: Option<String>,
     local_path: String,
     has_psi: bool,
     has_fleet_config: bool,
@@ -213,10 +222,14 @@ fn locate_gather_info(
     } else {
         Vec::new()
     };
+    let result_repo_path = repo_path.or_else(|| manifest_entry.as_ref().and_then(|entry| entry.local_path.clone()));
+    let (site, site_source) = locate_resolve_site(manifest_entry.as_ref(), result_repo_path.as_deref());
 
     Ok(LocateResult {
         name: oracle.to_owned(),
-        repo_path: repo_path.or_else(|| manifest_entry.as_ref().and_then(|entry| entry.local_path.clone())),
+        repo_path: result_repo_path,
+        site,
+        site_source,
         has_psi: if has_psi {
             true
         } else {
@@ -361,9 +374,36 @@ fn locate_load_fleet_entries() -> Vec<LocateFleetEntry> {
     fleet_load_entries()
         .into_iter()
         .map(|entry| LocateFleetEntry {
+            window_sites: locate_load_fleet_window_sites(&entry.path),
             file: entry.file,
             path: path_string(entry.path),
             session: entry.session,
+        })
+        .collect()
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct LocateFleetSiteFile {
+    #[serde(default)]
+    windows: Vec<LocateFleetSiteWindow>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct LocateFleetSiteWindow {
+    name: String,
+    site: Option<String>,
+    pages: Option<String>,
+}
+
+fn locate_load_fleet_window_sites(path: &std::path::Path) -> HashMap<String, String> {
+    let Some(file) = std::fs::read_to_string(path).ok().and_then(|text| serde_json::from_str::<LocateFleetSiteFile>(&text).ok()) else {
+        return HashMap::new();
+    };
+    file.windows
+        .into_iter()
+        .filter_map(|window| {
+            let site = window.site.as_deref().or(window.pages.as_deref()).and_then(locate_clean_site_url)?;
+            Some((window.name, site))
         })
         .collect()
 }
@@ -398,6 +438,9 @@ fn locate_load_manifest() -> Vec<LocateManifestEntry> {
             if !locate_window.repo.is_empty() {
                 entry.repo.get_or_insert_with(|| locate_window.repo.clone());
             }
+            if let Some(site) = fleet.window_sites.get(&locate_window.name).and_then(|site| locate_clean_site_url(site)) {
+                entry.site.get_or_insert(site);
+            }
             entry.node.get_or_insert_with(|| "local".to_owned());
         }
     }
@@ -423,6 +466,9 @@ fn locate_load_manifest() -> Vec<LocateManifestEntry> {
             if entry.repo.is_none() && !oracle.org.is_empty() && !oracle.repo.is_empty() {
                 entry.repo = Some(format!("{}/{}", oracle.org, oracle.repo));
             }
+            if entry.site.is_none() {
+                entry.site = oracle.site.as_deref().or(oracle.pages.as_deref()).and_then(locate_clean_site_url);
+            }
             if entry.local_path.is_none() && !oracle.local_path.is_empty() {
                 entry.local_path = Some(oracle.local_path);
             }
@@ -447,6 +493,7 @@ fn locate_ensure_manifest_entry<'a>(
         session: None,
         window: None,
         repo: None,
+        site: None,
         local_path: None,
         session_id: None,
         has_psi: None,
@@ -491,6 +538,57 @@ fn locate_string_map(value: Option<&serde_json::Value>) -> HashMap<String, Strin
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn locate_resolve_site(manifest_entry: Option<&LocateManifestEntry>, repo_path: Option<&str>) -> (Option<String>, Option<String>) {
+    if let Some(site) = manifest_entry.and_then(|entry| entry.site.clone()) {
+        return (Some(site), None);
+    }
+    let repo = manifest_entry
+        .and_then(|entry| entry.repo.as_deref())
+        .map(str::to_owned)
+        .or_else(|| repo_path.and_then(locate_repo_slug_from_path));
+    locate_derive_github_pages_site(repo.as_deref()).map_or((None, None), |site| (Some(site), Some("derived".to_owned())))
+}
+
+fn locate_clean_site_url(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()
+        && (value.starts_with("https://") || value.starts_with("http://"))
+        && !value.chars().any(|ch| ch.is_control() || ch.is_whitespace()))
+    .then(|| value.to_owned())
+}
+
+fn locate_derive_github_pages_site(repo: Option<&str>) -> Option<String> {
+    let repo = repo?.trim().trim_end_matches(".git");
+    let repo = repo.strip_prefix("github.com/").unwrap_or(repo);
+    let mut parts = repo.split('/');
+    let owner = parts.next()?;
+    let name = parts.next()?;
+    if parts.next().is_some() || !locate_github_pages_segment_ok(owner) || !locate_github_pages_segment_ok(name) {
+        return None;
+    }
+    Some(format!("https://{owner}.github.io/{name}"))
+}
+
+fn locate_repo_slug_from_path(path: &str) -> Option<String> {
+    let root = ghq_root().join("github.com");
+    let path = std::path::Path::new(path);
+    let rel = path.strip_prefix(root).ok()?;
+    let mut parts = rel.components().map(|part| part.as_os_str().to_string_lossy());
+    let owner = parts.next()?;
+    let repo = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(format!("{owner}/{repo}"))
+}
+
+fn locate_github_pages_segment_ok(value: &str) -> bool {
+    !value.is_empty()
+        && !value.starts_with('-')
+        && !value.ends_with('-')
+        && value.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
 }
 
 fn locate_find_federation_hits(_oracle: &str) -> Vec<LocateFederationHit> {
@@ -738,6 +836,38 @@ mod locate_tests {
             locate_cmd_with_sessions("pathfinder", &opts, &[]).expect("path"),
             format!("{}\n", repo.display())
         );
+    }
+
+    #[test]
+    fn locate_json_uses_explicit_site_before_derived_pages_default() {
+        let _guard = env_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let env = LocateHermeticEnv::new("site");
+        locate_write(
+            &env.maw_config_path(&["fleet", "kru32.json"]),
+            r#"{"name":"kru32","windows":[{"name":"kru32-oracle","repo":"owner/kru32-oracle","site":"https://kru32.example.test/feed"}]}"#,
+        );
+
+        let info = locate_gather_info("kru32", true, &[]).expect("locate info");
+        assert_eq!(info.site.as_deref(), Some("https://kru32.example.test/feed"));
+        assert_eq!(info.site_source, None);
+        assert_eq!(info.manifest_entry.as_ref().and_then(|entry| entry.site.as_deref()), Some("https://kru32.example.test/feed"));
+        let rendered = serde_json::to_value(&info).expect("json");
+        assert_eq!(rendered["site"], "https://kru32.example.test/feed");
+        assert!(rendered.get("siteSource").is_none());
+    }
+
+    #[test]
+    fn locate_json_omits_site_when_manifest_and_repo_are_absent() {
+        let _guard = env_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let env = LocateHermeticEnv::new("no-site");
+        locate_write(&env.maw_config_path(&["maw.config.json"]), r#"{"agents":{"ghost":"edge"}}"#);
+
+        let info = locate_gather_info("ghost", true, &[]).expect("locate info");
+        assert_eq!(info.site, None);
+        assert_eq!(info.site_source, None);
+        let rendered = serde_json::to_value(&info).expect("json");
+        assert!(rendered.get("site").is_none());
+        assert!(rendered.get("siteSource").is_none());
     }
 
     #[test]
