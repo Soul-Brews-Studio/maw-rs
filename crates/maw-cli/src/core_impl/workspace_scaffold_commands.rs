@@ -1363,7 +1363,11 @@ fn promote_resolution_error_message(target: &str, resolved: PromoteResolveResult
 }
 
 fn promote_destination_session(options: &PromoteOptionsNative, src_window: &str) -> Result<String, String> {
-    let destination = if let Some(value) = &options.as_session { promote_validate_session_name(value, "--as")? } else { wake_session_name(src_window) };
+    let destination = if let Some(value) = &options.as_session {
+        promote_validate_session_name(value, "--as")?
+    } else {
+        wake_session_name(src_window, &[])
+    };
     promote_validate_session_name(&destination, "destination session")
 }
 

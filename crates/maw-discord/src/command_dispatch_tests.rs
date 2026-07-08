@@ -20,8 +20,7 @@ impl DiscordRest for MockRest {
         &'a self,
         path: &'a str,
         _token: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<DiscordHttpResponse, String>> + Send + 'a>>
-    {
+    ) -> Pin<Box<dyn Future<Output = Result<DiscordHttpResponse, String>> + Send + 'a>> {
         Box::pin(async move {
             assert!(path.starts_with('/'));
             assert!(!path.contains("://"));

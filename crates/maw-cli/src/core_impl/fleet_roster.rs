@@ -95,7 +95,10 @@ fn fleet_roster_next_nn(used: &BTreeSet<u32>) -> Option<u32> {
 
 fn fleet_roster_entry_matches(entry: &NativeFleetEntry, group: &str) -> bool {
     let stem = entry.file.strip_suffix(".json").unwrap_or(&entry.file);
-    group == stem || group == fleet_roster_unnumbered_stem(entry) || group == entry.session.name
+    group == stem
+        || group == entry.file
+        || group == fleet_roster_unnumbered_stem(entry)
+        || group == entry.session.name
         || (!entry.session.group_name.is_empty() && group == entry.session.group_name)
 }
 
@@ -106,12 +109,10 @@ fn fleet_roster_unnumbered_stem(entry: &NativeFleetEntry) -> &str {
         .map_or(stem, |(_, tail)| tail)
 }
 
-// Squadron-group view for `maw completions groups` (#307): a roster is any fleet file
-// carrying groupName or members[] (#291); the explicit groupName wins over the file stem.
+// Squadron-group view for completions + ls filtering (#307/#317): a roster is any fleet file
+// with group metadata (`groupName`) or explicit members[] (`members`); explicit groupName wins.
 fn fleet_roster_group_name(entry: &NativeFleetEntry) -> Option<String> {
-    if !entry.session.group_name.is_empty() {
-        return Some(entry.session.group_name.clone());
-    }
+    if !entry.session.group_name.is_empty() { return Some(entry.session.group_name.clone()); }
     entry.session.members.as_ref()?;
     Some(fleet_roster_unnumbered_stem(entry).to_owned())
 }

@@ -144,14 +144,14 @@ fn next_backoff(current: Duration, max: Duration) -> Duration {
     current.saturating_mul(2).min(max)
 }
 
-mod mock_event_source;
 mod gateway_contract;
+mod mock_event_source;
 
-pub use mock_event_source::MockGatewaySource;
 pub use gateway_contract::{
     resolve_gateway_token, GatewayConfig, GatewayEvent, GatewayHandle, GatewayRunStats,
     GatewayStatus, GatewayToken,
 };
+pub use mock_event_source::MockGatewaySource;
 
 /// Observe mock gateway events through [`GatewayHandle::subscribe`].
 ///

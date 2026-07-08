@@ -35,7 +35,12 @@ use std::sync::{
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-type HermesFake = (String, Arc<Mutex<Vec<String>>>, Arc<AtomicBool>, thread::JoinHandle<()>);
+type HermesFake = (
+    String,
+    Arc<Mutex<Vec<String>>>,
+    Arc<AtomicBool>,
+    thread::JoinHandle<()>,
+);
 
 /// Manifest filenames a fleet plugin may use to declare its ship artifact. `plugin.json`
 /// is the active manifest (possibly a bun-dev dev-tier manifest with no artifact);
@@ -97,7 +102,12 @@ fn seed_ctq_vault(root: &Path) {
 
 fn hermes_args(root: &Path, values: &[&str]) -> Vec<String> {
     let mut out = args(&[
-        "plugin-manifest", "invoke", "--scan-dir", &root.display().to_string(), "--plugin", "hermes",
+        "plugin-manifest",
+        "invoke",
+        "--scan-dir",
+        &root.display().to_string(),
+        "--plugin",
+        "hermes",
     ]);
     for value in values {
         out.push("--arg".to_owned());
@@ -108,9 +118,14 @@ fn hermes_args(root: &Path, values: &[&str]) -> Vec<String> {
 
 fn set_hermes_base_url(plugin: &Path, base_url: &str) {
     let manifest = plugin.join("plugin.json");
-    let mut value: Value = serde_json::from_str(&read_to_string(&manifest).expect("manifest json")).expect("json");
+    let mut value: Value =
+        serde_json::from_str(&read_to_string(&manifest).expect("manifest json")).expect("json");
     value["endpoints"]["discord-rest"]["baseUrl"] = Value::String(base_url.to_owned());
-    fs::write(&manifest, serde_json::to_string_pretty(&value).expect("serialize manifest")).expect("write manifest");
+    fs::write(
+        &manifest,
+        serde_json::to_string_pretty(&value).expect("serialize manifest"),
+    )
+    .expect("write manifest");
 }
 
 fn spawn_hermes_discord_fake() -> HermesFake {
@@ -130,7 +145,11 @@ fn spawn_hermes_discord_fake() -> HermesFake {
             let mut buf = [0_u8; 8192];
             let n = stream.read(&mut buf).unwrap_or(0);
             let req = String::from_utf8_lossy(&buf[..n]).to_string();
-            let path = req.lines().next().and_then(|line| line.split_whitespace().nth(1)).unwrap_or("/");
+            let path = req
+                .lines()
+                .next()
+                .and_then(|line| line.split_whitespace().nth(1))
+                .unwrap_or("/");
             seen.lock().expect("seen").push(req.clone());
             let body = hermes_fake_body(path.split('?').next().unwrap_or(path));
             let resp = format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}", body.len(), body);
@@ -145,11 +164,21 @@ fn hermes_fake_body(path: &str) -> &'static str {
         "/users/@me" => r#"{"username":"hermes-bot","id":"bot-42","bot":true}"#,
         "/users/@me/guilds" => r#"[{"name":"Nous","id":"guild1"}]"#,
         "/channels/ch1" => r#"{"id":"ch1","guild_id":"guild1"}"#,
-        "/channels/ch1/messages" => r#"[{"id":"m2","author":{"username":"trinity","bot":true},"content":"ack"},{"id":"m1","author":{"username":"neo","bot":false},"content":"hello"}]"#,
-        "/guilds/guild1/threads/active" => r#"{"threads":[{"id":"th1","name":"Alpha","parent_id":"ch1","message_count":2,"last_message_id":"9"}]}"#,
-        "/channels/ch1/threads/archived/public" => r#"{"threads":[{"id":"th2","name":"Old","parent_id":"ch1","message_count":1,"last_message_id":"7"}]}"#,
-        "/channels/th1/messages" => r#"[{"id":"tm1","author":{"username":"morpheus","bot":false},"content":"thread hi"}]"#,
-        "/channels/th2/messages" => r#"[{"id":"tm0","author":{"username":"archive-bot","bot":true},"content":"old note"}]"#,
+        "/channels/ch1/messages" => {
+            r#"[{"id":"m2","author":{"username":"trinity","bot":true},"content":"ack"},{"id":"m1","author":{"username":"neo","bot":false},"content":"hello"}]"#
+        }
+        "/guilds/guild1/threads/active" => {
+            r#"{"threads":[{"id":"th1","name":"Alpha","parent_id":"ch1","message_count":2,"last_message_id":"9"}]}"#
+        }
+        "/channels/ch1/threads/archived/public" => {
+            r#"{"threads":[{"id":"th2","name":"Old","parent_id":"ch1","message_count":1,"last_message_id":"7"}]}"#
+        }
+        "/channels/th1/messages" => {
+            r#"[{"id":"tm1","author":{"username":"morpheus","bot":false},"content":"thread hi"}]"#
+        }
+        "/channels/th2/messages" => {
+            r#"[{"id":"tm0","author":{"username":"archive-bot","bot":true},"content":"old note"}]"#
+        }
         _ => r#"{"error":"unexpected fake path"}"#,
     }
 }
@@ -341,7 +370,10 @@ fn fleet_plugins_artifacts_match_manifest_sha256() {
 #[test]
 fn cross_team_queue_fleet_artifact_installs_and_scans_vault() {
     let source = fleet_plugins_dir().join("cross-team-queue");
-    assert!(source.join("plugin.json").is_file(), "missing cross-team-queue fleet plugin");
+    assert!(
+        source.join("plugin.json").is_file(),
+        "missing cross-team-queue fleet plugin"
+    );
     let root = temp_dir("ctq-invoke");
     seed_ctq_vault(&root);
     let install_root = root.join("plugins");
@@ -352,7 +384,11 @@ fn cross_team_queue_fleet_artifact_installs_and_scans_vault() {
         "--root",
         &install_root.display().to_string(),
     ]));
-    assert_eq!(install.code, 0, "plugin install failed: {}\n{}", install.stderr, install.stdout);
+    assert_eq!(
+        install.code, 0,
+        "plugin install failed: {}\n{}",
+        install.stderr, install.stdout
+    );
 
     let saved_home = std::env::var_os("HOME");
     let saved_vault = std::env::var_os("MAW_VAULT_ROOT");
@@ -369,28 +405,53 @@ fn cross_team_queue_fleet_artifact_installs_and_scans_vault() {
         "--json",
     ]));
     let filtered = run_cli(&args(&[
-        "plugin-manifest", "invoke", "--scan-dir", &install_root.display().to_string(),
-        "--plugin", "cross-team-queue", "--arg", "--json", "--arg", "--recipient", "--arg", "nat",
+        "plugin-manifest",
+        "invoke",
+        "--scan-dir",
+        &install_root.display().to_string(),
+        "--plugin",
+        "cross-team-queue",
+        "--arg",
+        "--json",
+        "--arg",
+        "--recipient",
+        "--arg",
+        "nat",
     ]));
     restore_env("MAW_VAULT_ROOT", saved_vault);
     restore_env("HOME", saved_home);
     fs::remove_dir_all(&root).ok();
 
-    assert_eq!(invoke.code, 0, "plugin invoke failed: {}\n{}", invoke.stderr, invoke.stdout);
+    assert_eq!(
+        invoke.code, 0,
+        "plugin invoke failed: {}\n{}",
+        invoke.stderr, invoke.stdout
+    );
     assert_eq!(
         normalize_root(&root, &invoke.stdout),
         include_str!("fixtures/zerobun/cross-team-queue-scan.stdout")
     );
     assert!(invoke.stderr.is_empty(), "{}", invoke.stderr);
-    assert_eq!(filtered.code, 0, "filtered invoke failed: {}\n{}", filtered.stderr, filtered.stdout);
+    assert_eq!(
+        filtered.code, 0,
+        "filtered invoke failed: {}\n{}",
+        filtered.stderr, filtered.stdout
+    );
     let filtered = normalize_root(&root, &filtered.stdout);
-    assert!(filtered.contains("\"totalItems\":1") && filtered.contains("\"recipient\":\"nat\"") && !filtered.contains("\"recipient\":\"zai\""), "{filtered}");
+    assert!(
+        filtered.contains("\"totalItems\":1")
+            && filtered.contains("\"recipient\":\"nat\"")
+            && !filtered.contains("\"recipient\":\"zai\""),
+        "{filtered}"
+    );
 }
 
 #[test]
 fn hermes_fleet_artifact_invokes_discord_read_only_verbs() {
     let source = fleet_plugins_dir().join("hermes");
-    let manifest: Value = serde_json::from_str(&read_to_string(source.join("plugin.json")).expect("hermes manifest")).expect("json");
+    let manifest: Value =
+        serde_json::from_str(&read_to_string(source.join("plugin.json")).expect("hermes manifest"))
+            .expect("json");
     assert_eq!(
         manifest["capabilities"],
         serde_json::json!(["net:fetch:discord-rest", "secret:use:discord-bot-token"])
@@ -402,9 +463,17 @@ fn hermes_fleet_artifact_invokes_discord_read_only_verbs() {
     set_hermes_base_url(&staged, &base_url);
     let install_root = root.join("plugins");
     let install = run_cli(&args(&[
-        "plugin", "install", &staged.display().to_string(), "--root", &install_root.display().to_string(),
+        "plugin",
+        "install",
+        &staged.display().to_string(),
+        "--root",
+        &install_root.display().to_string(),
     ]));
-    assert_eq!(install.code, 0, "plugin install failed: {}\n{}", install.stderr, install.stdout);
+    assert_eq!(
+        install.code, 0,
+        "plugin install failed: {}\n{}",
+        install.stderr, install.stdout
+    );
 
     let saved_token = std::env::var_os("DISCORD_BOT_TOKEN");
     std::env::set_var("DISCORD_BOT_TOKEN", "TEST_TOKEN_245");
@@ -417,9 +486,16 @@ fn hermes_fleet_artifact_invokes_discord_read_only_verbs() {
         ("threads-read", vec!["threads", "read", "ch1", "--all"]),
     ] {
         let invoke = run_cli(&hermes_args(&install_root, &argv));
-        assert_eq!(invoke.code, 0, "hermes {label} failed: {}\n{}", invoke.stderr, invoke.stdout);
+        assert_eq!(
+            invoke.code, 0,
+            "hermes {label} failed: {}\n{}",
+            invoke.stderr, invoke.stdout
+        );
         write!(&mut observed, "## {label}\n{}", invoke.stdout).expect("append observed");
-        assert!(!invoke.stdout.contains("TEST_TOKEN_245"), "token leaked in stdout");
+        assert!(
+            !invoke.stdout.contains("TEST_TOKEN_245"),
+            "token leaked in stdout"
+        );
         assert!(invoke.stderr.is_empty(), "{}", invoke.stderr);
     }
     restore_env("DISCORD_BOT_TOKEN", saved_token);
@@ -427,9 +503,17 @@ fn hermes_fleet_artifact_invokes_discord_read_only_verbs() {
     server.join().expect("fake server join");
     fs::remove_dir_all(&root).ok();
 
-    assert_eq!(observed, include_str!("fixtures/zerobun/hermes-wasm-read-only.stdout"));
+    assert_eq!(
+        observed,
+        include_str!("fixtures/zerobun/hermes-wasm-read-only.stdout")
+    );
     let requests = requests.lock().expect("requests");
-    assert!(requests.iter().all(|req| req.contains("authorization: Bot TEST_TOKEN_245")), "{requests:#?}");
+    assert!(
+        requests
+            .iter()
+            .all(|req| req.contains("authorization: Bot TEST_TOKEN_245")),
+        "{requests:#?}"
+    );
 }
 
 #[test]

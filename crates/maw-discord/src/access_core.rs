@@ -84,7 +84,11 @@ pub(super) struct BotResolved {
     pub(super) channel_map: PathBuf,
 }
 
-pub(super) fn resolve_bot(env: &DiscordEnv, bot: &str, log: &mut Vec<String>) -> Option<BotResolved> {
+pub(super) fn resolve_bot(
+    env: &DiscordEnv,
+    bot: &str,
+    log: &mut Vec<String>,
+) -> Option<BotResolved> {
     if rejects_option_arg(bot) {
         log.push("✗ invalid bot name: leading dash/-- separator rejected".to_owned());
         return None;

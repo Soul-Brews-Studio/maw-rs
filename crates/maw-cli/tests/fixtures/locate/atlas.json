@@ -1,5 +1,6 @@
 {
   "name": "atlas",
+  "handle": "atlas",
   "repoPath": "__REPO_PLACEHOLDER__",
   "site": "https://acme.github.io/atlas-oracle",
   "siteSource": "derived",
