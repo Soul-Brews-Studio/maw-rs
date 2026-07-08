@@ -3,7 +3,7 @@ const DISPATCH_63: &[DispatcherEntry] = &[
     DispatcherEntry { command: "oracles", handler: Handler::Sync(run_oracle_command) },
 ];
 
-const ORACLE_USAGE: &str = "usage: maw oracle [ls|scan|search <query>|prune|register <name>|set-nickname <name> <nickname>|get-nickname <name>|about <name>]";
+const ORACLE_USAGE: &str = "usage: maw oracle [ls|scan|search <query>|recruit <fleet> <oracle>|prune|register <name>|set-nickname <name> <nickname>|get-nickname <name>|about <name>]";
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default, PartialEq, Eq)]
 struct OracleEntry {
