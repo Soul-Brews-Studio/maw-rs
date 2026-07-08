@@ -49,10 +49,24 @@ struct OracleFleetEntry { session: NativeFleetSession }
 #[allow(clippy::struct_excessive_bools)]
 struct OracleListOptions { json: bool, awake: bool, org: Option<String>, path: bool, scan: bool, stale: bool, sort_by: Option<String> }
 
+#[derive(Debug, Clone, Default)]
+#[allow(clippy::struct_excessive_bools)]
+struct OracleScanOptions { json: bool, stale: bool, verbose: bool, all: bool, quiet: bool }
+
 #[derive(Default)]
 struct OracleTmux { runner: maw_tmux::CommandTmuxRunner }
 
 fn run_oracle_command(argv: &[String]) -> CliOutput {
+    if argv.first().is_some_and(|arg| arg == "scan") {
+        let opts = match oracle_parse_scan_options(argv, 1) {
+            Ok(opts) => opts,
+            Err(message) => return CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") },
+        };
+        return match oracle_scan_with_progress(&opts) {
+            Ok((stdout, stderr)) => CliOutput { code: 0, stdout, stderr },
+            Err(message) => CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") },
+        };
+    }
     match oracle_run(argv, &mut OracleTmux::default()) {
         Ok(stdout) => CliOutput { code: 0, stdout, stderr: String::new() },
         Err(message) => CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") },
@@ -99,14 +113,17 @@ fn oracle_parse_list_options(argv: &[String], start: usize) -> Result<OracleList
     Ok(opts)
 }
 
-fn oracle_parse_scan_options(argv: &[String], start: usize) -> Result<OracleListOptions, String> {
-    let mut opts = OracleListOptions::default();
+fn oracle_parse_scan_options(argv: &[String], start: usize) -> Result<OracleScanOptions, String> {
+    let mut opts = OracleScanOptions::default();
     let mut i = start;
     while i < argv.len() {
         match argv[i].as_str() {
             "--json" => opts.json = true,
             "--stale" => opts.stale = true,
-            "--force" | "--local" | "--all" | "--verbose" | "-v" | "--quiet" | "-q" => {},
+            "--all" => opts.all = true,
+            "--verbose" | "-v" => opts.verbose = true,
+            "--quiet" | "-q" => opts.quiet = true,
+            "--force" | "--local" => {},
             "--remote" => return Err("oracle scan: --remote is not available in native offline mode".to_owned()),
             value if value.starts_with('-') => return Err(format!("oracle: unknown argument {value}")),
             _ => return Err(ORACLE_USAGE.to_owned()),
@@ -128,12 +145,26 @@ fn oracle_list(opts: &OracleListOptions, tmux: &mut OracleTmux) -> Result<String
     Ok(oracle_text_list(&registry, &entries, &awake, opts.path))
 }
 
-fn oracle_scan(opts: &OracleListOptions) -> Result<String, String> {
+fn oracle_scan(opts: &OracleScanOptions) -> Result<String, String> {
     if opts.stale { return Ok(oracle_stale(opts.json)); }
     let registry = oracle_scan_registry();
     oracle_write_registry(&registry)?;
     if opts.json { return serde_json::to_string_pretty(&registry).map(|value| format!("{value}\n")).map_err(|error| error.to_string()); }
     Ok(format!("\n  \x1b[32m✓\x1b[0m {} oracles locally (cache written)\n\n", registry.oracles.len()))
+}
+
+fn oracle_scan_with_progress(opts: &OracleScanOptions) -> Result<(String, String), String> {
+    if opts.stale {
+        return Ok((oracle_stale(opts.json), String::new()));
+    }
+    let emit_progress = !opts.json && !opts.quiet && std::io::IsTerminal::is_terminal(&std::io::stdout());
+    let (registry, mut stderr) = oracle_scan_registry_with_progress(opts.verbose, emit_progress);
+    oracle_write_registry(&registry)?;
+    if opts.json { return serde_json::to_string_pretty(&registry).map(|value| format!("{value}\n")).map_err(|error| error.to_string()); }
+    if opts.all && emit_progress {
+        stderr.push_str("  remote phase: GitHub API scan requested via --all (native offline mode)\n");
+    }
+    Ok((format!("\n  \x1b[32m✓\x1b[0m {} oracles locally (cache written)\n\n", registry.oracles.len()), stderr))
 }
 
 fn oracle_stale(json: bool) -> String {
@@ -238,16 +269,41 @@ fn oracle_enriched_entries(registry: &OracleRegistry, awake: &BTreeMap<String, S
 }
 
 fn oracle_scan_registry() -> OracleRegistry {
+    oracle_scan_registry_with_progress(false, false).0
+}
+
+fn oracle_scan_registry_with_progress(verbose: bool, show_progress: bool) -> (OracleRegistry, String) {
     let mut entries = Vec::<OracleEntry>::new();
+    let mut progress = String::new();
     let repos_root = ghq_root().join("github.com");
-    let Ok(orgs) = std::fs::read_dir(&repos_root) else { return OracleRegistry { schema: 1, local_scanned_at: oracle_now_string(), ghq_root: ghq_root().display().to_string(), oracles: entries, retired: Vec::new() }; };
+    let Ok(orgs) = std::fs::read_dir(&repos_root) else { return (OracleRegistry { schema: 1, local_scanned_at: oracle_now_string(), ghq_root: ghq_root().display().to_string(), oracles: entries, retired: Vec::new() }, progress); };
+    let mut candidates = Vec::<(String, std::path::PathBuf)>::new();
     for org_entry in orgs.flatten().filter(|entry| entry.path().is_dir()) {
         let org = org_entry.file_name().to_string_lossy().to_string();
         let Ok(repos) = std::fs::read_dir(org_entry.path()) else { continue; };
-        for repo_entry in repos.flatten().filter(|entry| entry.path().is_dir()) { if let Some(entry) = oracle_entry_from_repo(&org, &repo_entry.path()) { entries.push(entry); } }
+        for repo_entry in repos.flatten().filter(|entry| entry.path().is_dir()) {
+            candidates.push((org.clone(), repo_entry.path()));
+        }
+    }
+    let total = candidates.len();
+    for (index, (org, path)) in candidates.into_iter().enumerate() {
+        if let Some(entry) = oracle_entry_from_repo(&org, &path) {
+            if show_progress {
+                if verbose {
+                    let mut flags = Vec::<&str>::new();
+                    if entry.has_psi { flags.push("ψ/"); }
+                    if entry.has_fleet_config { flags.push("fleet-config"); }
+                    let flags = if flags.is_empty() { "(none)".to_owned() } else { flags.join(",") };
+                    progress.push_str(&format!("  scanning {} ({}/{})  path={}  flags={}\n", entry.repo, index + 1, total, entry.local_path, flags));
+                } else {
+                    progress.push_str(&format!("  scanning {} ({}/{})\n", entry.repo, index + 1, total));
+                }
+            }
+            entries.push(entry);
+        }
     }
     entries.sort_by(|a, b| a.name.cmp(&b.name));
-    OracleRegistry { schema: 1, local_scanned_at: oracle_now_string(), ghq_root: ghq_root().display().to_string(), oracles: entries, retired: Vec::new() }
+    (OracleRegistry { schema: 1, local_scanned_at: oracle_now_string(), ghq_root: ghq_root().display().to_string(), oracles: entries, retired: Vec::new() }, progress)
 }
 
 fn oracle_entry_from_repo(org: &str, path: &std::path::Path) -> Option<OracleEntry> {
@@ -378,6 +434,48 @@ mod oracle_tests {
     }
     #[test]
     fn oracle_parser_blocks_leading_dash_values() { assert!(oracle_parse_list_options(&oracle_strings(&["ls", "--org", "-bad"]), 1).is_err()); assert!(oracle_parse_scan_options(&oracle_strings(&["scan", "--remote"]), 1).is_err()); }
+    #[test]
+    fn oracle_scan_parser_supports_verbose_and_all() {
+        let opts = oracle_parse_scan_options(&oracle_strings(&["scan", "--verbose", "--all", "--quiet"]), 1).expect("scan opts");
+        assert!(opts.verbose);
+        assert!(opts.all);
+        assert!(opts.quiet);
+    }
+
+    #[test]
+    fn oracle_scan_progress_reports_lines() {
+        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _home = EnvVarRestore::capture("HOME");
+        let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
+        let _state = EnvVarRestore::capture("MAW_STATE_DIR");
+        let _cache = EnvVarRestore::capture("MAW_CACHE_DIR");
+        let _ghq = EnvVarRestore::capture("GHQ_ROOT");
+        let root = oracle_temp_root("scan-progress");
+        let org = root.join("ghq/github.com/acme");
+        std::fs::create_dir_all(org.join("neo-oracle/ψ")).expect("neo-oracle");
+        std::fs::create_dir_all(org.join("sol-oracle")).expect("sol-oracle");
+        std::fs::create_dir_all(root.join("config/fleet")).expect("fleet");
+        std::fs::write(
+            root.join("config/fleet/01-neo.json"),
+            r#"{"name":"01-neo","windows":[{"name":"neo-oracle","repo":"acme/neo-oracle","kind":"oracle"}]}"#,
+        )
+        .expect("fleet entry");
+
+        std::env::set_var("HOME", root.join("home"));
+        std::env::set_var("MAW_CONFIG_DIR", root.join("config"));
+        std::env::set_var("MAW_STATE_DIR", root.join("state"));
+        std::env::set_var("MAW_CACHE_DIR", root.join("cache"));
+        std::env::set_var("GHQ_ROOT", root.join("ghq"));
+
+        let (_registry, progress) = oracle_scan_registry_with_progress(false, true);
+        assert!(progress.contains("scanning neo-oracle"));
+        assert!(progress.contains("scanning sol-oracle"));
+
+        let (_, verbose_progress) = oracle_scan_registry_with_progress(true, true);
+        assert!(verbose_progress.contains("path="));
+        assert!(verbose_progress.contains("flags="));
+        assert!(verbose_progress.contains("ψ/"));
+    }
     #[test]
     fn oracle_registry_roundtrip_defaults() { let value = serde_json::from_str::<OracleRegistry>(r#"{"oracles":[{"org":"o","repo":"neo-oracle","name":"neo"}]}"#).unwrap(); assert_eq!(value.schema, 1); assert_eq!(value.oracles[0].name, "neo"); }
     #[test]
