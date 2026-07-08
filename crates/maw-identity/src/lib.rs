@@ -19,6 +19,14 @@ pub struct CanonicalSessionNameInput {
     pub slot: Option<u32>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedSessionName {
+    /// Optional numeric session prefix, if present.
+    pub slot: Option<u32>,
+    /// Name stem with any leading numeric prefix removed.
+    pub stem: String,
+}
+
 /// Error returned when an oracle name is reserved or invalid at user-input
 /// boundaries.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,6 +111,32 @@ pub fn canonical_session_name(input: &CanonicalSessionNameInput) -> Result<Strin
 /// [`canonical_session_name`].
 pub fn canonical_session_stem(oracle: &str) -> Result<String, String> {
     canonical_session_name(&CanonicalSessionNameInput::new(oracle))
+}
+
+/// Parse a canonical session name into optional slot + stem.
+///
+/// This is the inverse of [`canonical_session_name`]:
+/// `"81-kru32"` -> `(slot: Some(81), stem: "kru32")`.
+///
+/// Degenerate names like `142` pass through as `(slot: None, stem: "142")`.
+#[must_use]
+pub fn parse_session_name(raw: &str) -> ParsedSessionName {
+    let Some((prefix, stem)) = raw.split_once('-') else {
+        return ParsedSessionName {
+            slot: None,
+            stem: raw.to_owned(),
+        };
+    };
+    if prefix.is_empty() || !prefix.chars().all(|ch| ch.is_ascii_digit()) {
+        return ParsedSessionName {
+            slot: None,
+            stem: raw.to_owned(),
+        };
+    }
+    ParsedSessionName {
+        slot: prefix.parse().ok(),
+        stem: stem.to_owned(),
+    }
 }
 
 /// Validate oracle names at creation/wake user-input boundaries.

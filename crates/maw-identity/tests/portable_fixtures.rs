@@ -1,6 +1,6 @@
 use maw_identity::{
-    canonical_node_identity, canonical_session_name, canonical_session_stem,
-    CanonicalSessionNameInput,
+    canonical_node_identity, canonical_session_name, canonical_session_stem, parse_session_name,
+    CanonicalSessionNameInput, ParsedSessionName,
 };
 use serde::Deserialize;
 
@@ -74,5 +74,27 @@ fn constructors_stem_and_slot_errors_are_covered() {
     assert_eq!(
         canonical_session_name(&CanonicalSessionNameInput::with_slot("foo", 100)).unwrap_err(),
         "invalid fleet slot '100'"
+    );
+}
+
+#[test]
+fn parse_session_name_ignores_non_prefixed_inputs() {
+    assert_eq!(
+        parse_session_name("142"),
+        ParsedSessionName {
+            slot: None,
+            stem: "142".to_owned()
+        }
+    );
+}
+
+#[test]
+fn parse_session_name_parse_prefixed_inputs() {
+    assert_eq!(
+        parse_session_name("81-kru32"),
+        ParsedSessionName {
+            slot: Some(81),
+            stem: "kru32".to_owned()
+        }
     );
 }
