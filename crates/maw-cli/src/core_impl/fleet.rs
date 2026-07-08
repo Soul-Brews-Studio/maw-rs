@@ -887,7 +887,32 @@ fn fleet_registry_upsert_session_for_env(
     fleet_validate_session_name(session)?;
     let dir = env.home_dir().join(".maw").join("fleet");
     std::fs::create_dir_all(&dir).map_err(|error| format!("fleet registry: create {}: {error}", dir.display()))?;
-    let path = dir.join(format!("{session}.json"));
+
+    let mut windows_by_repo: BTreeSet<String> = BTreeSet::new();
+    for window in windows {
+        windows_by_repo.insert(fleet_repo_canonical_key(&window.repo));
+    }
+    let target_stem = fleet_session_stem(session);
+    let write_label = format!("{session}.json");
+    let path = fleet_load_entries_result_for_env(env, "fleet")?
+        .into_iter()
+        .find_map(|entry| {
+            if entry.session.name == session {
+                return Some(entry.path);
+            }
+            if fleet_session_stem(&entry.session.name) == target_stem
+                && entry
+                    .session
+                    .windows
+                    .iter()
+                    .any(|window| windows_by_repo.contains(&fleet_repo_canonical_key(&window.repo)))
+            {
+                return Some(entry.path);
+            }
+            None
+        })
+        .unwrap_or_else(|| dir.join(write_label));
+
     let (created, mut value) = fleet_registry_read_value(&path)?;
     {
         let object = fleet_registry_object(&mut value);
@@ -918,6 +943,20 @@ fn fleet_registry_read_value(path: &std::path::Path) -> Result<(bool, serde_json
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok((true, serde_json::json!({}))),
         Err(error) => Err(format!("fleet registry: read {}: {error}", path.display())),
     }
+}
+
+fn fleet_session_stem(value: &str) -> &str {
+    value
+        .split_once('-')
+        .filter(|(prefix, _)| !prefix.is_empty() && prefix.bytes().all(|byte| byte.is_ascii_digit()))
+        .map_or(value, |(_, stem)| stem)
+}
+
+fn fleet_repo_canonical_key(repo: &str) -> String {
+    native_fleet_repo_path(repo)
+        .and_then(|path| path.canonicalize().ok())
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_else(|| repo.to_owned())
 }
 
 fn fleet_registry_object(value: &mut serde_json::Value) -> &mut serde_json::Map<String, serde_json::Value> {
@@ -989,7 +1028,9 @@ fn native_repo_kind_label(kind: NativeRepoKind) -> &'static str {
 }
 
 fn fleet_repo_slug_from_path(path: &std::path::Path, repos_root: Option<&std::path::Path>) -> Option<String> {
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     if let Some(root) = repos_root {
+        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
         if let Ok(rel) = path.strip_prefix(root) {
             return fleet_repo_slug_from_components(rel.components());
         }
@@ -1340,5 +1381,82 @@ mod fleet_tests {
             assert!(ghost.exists());
             assert!(!ghost.with_file_name("04-ghost.json.disabled").exists());
         });
+    }
+
+    #[test]
+    fn fleet_upsert_session_follows_stem_matches_and_repo_overlap_across_state_and_home_dirs() {
+        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _home = EnvVarRestore::capture("HOME");
+        let _xdg = EnvVarRestore::capture("XDG_CONFIG_HOME");
+        let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
+        let _state = EnvVarRestore::capture("MAW_STATE_DIR");
+        let _ghq = EnvVarRestore::capture("GHQ_ROOT");
+
+        let root = fleet_temp_root("upsert-cross-dir");
+        std::fs::create_dir_all(root.join("config/fleet")).expect("config fleet dir");
+        std::fs::create_dir_all(root.join("state/fleet")).expect("state fleet dir");
+        std::fs::write(root.join("config/fleet/63-homekeeper.json"), r#"{"name":"63-homekeeper","windows":[{"name":"main","repo":"github.com/acme/homekeeper-oracle","kind":"oracle"}]}"#)
+            .expect("state fixture");
+
+        std::env::set_var("HOME", root.join("home"));
+        std::env::set_var("XDG_CONFIG_HOME", root.join("xdg-config"));
+        std::env::set_var("MAW_CONFIG_DIR", root.join("config"));
+        std::env::set_var("MAW_STATE_DIR", root.join("state"));
+        std::env::set_var("GHQ_ROOT", root.join("ghq/github.com"));
+
+        let windows = vec![FleetWindowSummary {
+            name: "main".to_owned(),
+            repo: "github.com/acme/homekeeper-oracle".to_owned(),
+            kind: None,
+        }];
+        let written = fleet_registry_upsert_session_for_env(&current_xdg_env(), "158-homekeeper", &windows, "maw fleet add").expect("upsert");
+
+        assert_eq!(written.path, root.join("config/fleet/63-homekeeper.json"));
+        let merged = serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(&written.path).expect("registry")).expect("json");
+        assert_eq!(merged["name"], "158-homekeeper");
+        assert_eq!(merged["windows"].as_array().expect("windows").len(), 1);
+        assert_eq!(merged["windows"][0]["repo"], "github.com/acme/homekeeper-oracle");
+    }
+
+    #[test]
+    fn fleet_upsert_uses_canonical_repo_overlap_to_merge_symlinked_paths() {
+        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _home = EnvVarRestore::capture("HOME");
+        let _state = EnvVarRestore::capture("MAW_STATE_DIR");
+        let _ghq = EnvVarRestore::capture("GHQ_ROOT");
+
+        let root = fleet_temp_root("upsert-symlink-canonical");
+        std::fs::create_dir_all(root.join("state/fleet")).expect("state fleet dir");
+        let real = root.join("ghq/github.com/acme/homekeeper-oracle");
+        let linked = root.join("ghq/github.com/acme/homelab");
+        std::fs::create_dir_all(&real).expect("repo");
+        #[cfg(unix)] {
+            use std::os::unix::fs::symlink;
+            symlink(&real, &linked).expect("symlink repo");
+        }
+
+        std::fs::write(
+            root.join("state/fleet/63-homelab.json"),
+            r#"{"name":"63-homelab","windows":[{"name":"main","repo":"github.com/acme/homekeeper-oracle","kind":"oracle"}] }"#,
+        )
+        .expect("state fixture");
+        std::env::set_var("HOME", root.join("home"));
+        std::env::set_var("MAW_STATE_DIR", root.join("state"));
+        std::env::set_var("GHQ_ROOT", root.join("ghq/github.com"));
+
+        let windows = vec![FleetWindowSummary {
+            name: "main".to_owned(),
+            repo: "github.com/acme/homelab".to_owned(),
+            kind: None,
+        }];
+        let written = fleet_registry_upsert_session_for_env(&current_xdg_env(), "158-homelab", &windows, "maw fleet add").expect("upsert");
+
+        assert_eq!(written.path, root.join("state/fleet/63-homelab.json"));
+        let merged = serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(&written.path).expect("registry")).expect("json");
+        assert_eq!(merged["name"], "158-homelab");
+        assert_eq!(merged["windows"].as_array().expect("windows").len(), 1);
+        assert_eq!(merged["windows"][0]["repo"], "github.com/acme/homelab");
+
+        let _ = std::fs::remove_dir_all(root);
     }
 }
