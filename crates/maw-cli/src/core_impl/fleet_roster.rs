@@ -95,12 +95,26 @@ fn fleet_roster_next_nn(used: &BTreeSet<u32>) -> Option<u32> {
 
 fn fleet_roster_entry_matches(entry: &NativeFleetEntry, group: &str) -> bool {
     let stem = entry.file.strip_suffix(".json").unwrap_or(&entry.file);
-    let unnumbered = stem
-        .split_once('-')
-        .filter(|(prefix, _)| !prefix.is_empty() && prefix.bytes().all(|byte| byte.is_ascii_digit()))
-        .map_or(stem, |(_, tail)| tail);
-    group == stem || group == unnumbered || group == entry.session.name
+    group == stem
+        || group == entry.file
+        || group == fleet_roster_unnumbered_stem(entry)
+        || group == entry.session.name
         || (!entry.session.group_name.is_empty() && group == entry.session.group_name)
+}
+
+fn fleet_roster_unnumbered_stem(entry: &NativeFleetEntry) -> &str {
+    let stem = entry.file.strip_suffix(".json").unwrap_or(&entry.file);
+    stem.split_once('-')
+        .filter(|(prefix, _)| !prefix.is_empty() && prefix.bytes().all(|byte| byte.is_ascii_digit()))
+        .map_or(stem, |(_, tail)| tail)
+}
+
+// Squadron-group view for completion + ls filtering (#307/#317): a roster is any fleet file
+// with group metadata (`groupName`) or explicit members[] (`members`).
+fn fleet_roster_group_name(entry: &NativeFleetEntry) -> Option<String> {
+    if !entry.session.group_name.is_empty() { return Some(entry.session.group_name.clone()); }
+    entry.session.members.as_ref()?;
+    Some(fleet_roster_unnumbered_stem(entry).to_owned())
 }
 
 fn fleet_roster_show(env: &MawXdgEnv, group: &str, json: bool, live: Option<&[TmuxSession]>) -> Result<(i32, String), String> {
