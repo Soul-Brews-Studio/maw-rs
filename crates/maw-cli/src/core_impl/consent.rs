@@ -50,13 +50,128 @@ fn consent_run_135(argv: &[String]) -> Result<String, String> {
             consent_expect_no_extra_args_135("help", argv, 1)?;
             Ok(format!("{}\n", consent_help_135()))
         }
-        "approve" | "reject" | "trust" | "untrust" => Err(format!(
+        "approve" => consent_approve_native_135(argv),
+        "reject" => consent_reject_native_135(argv),
+        "trust" | "untrust" => Err(format!(
             "maw consent {sub} is not native in maw-rs ZERO-BUN B2; use a human-at-terminal consent command\n\n{}",
             consent_help_135()
         )),
         value if value.starts_with('-') => Err(format!("consent: unknown argument {value}\n\n{}", consent_help_135())),
         value => Err(format!("unknown subcommand: {value}\n\n{}", consent_help_135())),
     }
+}
+
+fn consent_approve_native_135(argv: &[String]) -> Result<String, String> {
+    let (Some(id), Some(pin)) = (argv.get(1), argv.get(2)) else {
+        return Err(format!("consent approve: expected <id> <pin>\n\n{}", consent_help_135()));
+    };
+    consent_expect_no_extra_args_135("approve", argv, 3)?;
+    let (path, mut value, mut store) = consent_load_store_135(id)?;
+    let result = approve_consent_plan(&mut store, id, pin, consent_now_ms_135()?);
+    if !result.ok {
+        return Err(format!("consent approve: {}", result.error.unwrap_or_else(|| "approval failed".to_owned())));
+    }
+    let entry = result.entry.ok_or_else(|| "consent approve: missing trust entry".to_owned())?;
+    consent_append_trust_135(&entry)?;
+    consent_persist_status_135(&path, &mut value, "approved")?;
+    Ok(format!("approved {id}: trust {} → {} action={}\n", entry.from, entry.to, entry.action.as_str()))
+}
+
+fn consent_reject_native_135(argv: &[String]) -> Result<String, String> {
+    let Some(id) = argv.get(1) else {
+        return Err(format!("consent reject: expected <id>\n\n{}", consent_help_135()));
+    };
+    consent_expect_no_extra_args_135("reject", argv, 2)?;
+    let (path, mut value, mut store) = consent_load_store_135(id)?;
+    let result = reject_consent_plan(&mut store, id);
+    if !result.ok {
+        return Err(format!("consent reject: {}", result.error.unwrap_or_else(|| "reject failed".to_owned())));
+    }
+    consent_persist_status_135(&path, &mut value, "rejected")?;
+    Ok(format!("rejected {id}\n"))
+}
+
+fn consent_load_store_135(id: &str) -> Result<(std::path::PathBuf, serde_json::Value, ConsentStore), String> {
+    for dir in consent_pending_dirs_135() {
+        let Ok(entries) = std::fs::read_dir(dir) else { continue; };
+        let mut paths = entries.flatten().map(|entry| entry.path()).collect::<Vec<_>>();
+        paths.sort();
+        for path in paths {
+            let Ok(text) = std::fs::read_to_string(&path) else { continue; };
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else { continue; };
+            if value.get("id").and_then(serde_json::Value::as_str) == Some(id) {
+                let mut store = ConsentStore::default();
+                store.write_pending(consent_pending_from_value_135(&value)?);
+                return Ok((path, value, store));
+            }
+        }
+    }
+    Err(format!("consent: request not found: {id}"))
+}
+
+fn consent_pending_from_value_135(value: &serde_json::Value) -> Result<PendingRequest, String> {
+    let field = |key: &str| value.get(key).and_then(serde_json::Value::as_str).map(str::to_owned)
+        .ok_or_else(|| format!("consent: pending request missing {key}"));
+    let action_raw = field("action")?;
+    let action = ConsentAction::parse(&action_raw).ok_or_else(|| format!("consent: unknown action {action_raw}"))?;
+    let status = match field("status")?.as_str() {
+        "pending" => ConsentStatus::Pending,
+        "approved" => ConsentStatus::Approved,
+        "rejected" => ConsentStatus::Rejected,
+        "expired" => ConsentStatus::Expired,
+        other => return Err(format!("consent: unknown status {other}")),
+    };
+    Ok(PendingRequest {
+        id: field("id")?,
+        from: field("from")?,
+        to: field("to")?,
+        action,
+        summary: field("summary")?,
+        pin_hash: field("pinHash")?,
+        created_at: field("createdAt")?,
+        expires_at: field("expiresAt")?,
+        status,
+    })
+}
+
+fn consent_persist_status_135(path: &std::path::Path, value: &mut serde_json::Value, status: &str) -> Result<(), String> {
+    let object = value.as_object_mut().ok_or_else(|| "consent: pending request is not a JSON object".to_owned())?;
+    object.insert("status".to_owned(), serde_json::Value::String(status.to_owned()));
+    let bytes = serde_json::to_vec_pretty(value).map_err(|error| format!("consent: serialize pending request: {error}"))?;
+    std::fs::write(path, bytes).map_err(|error| format!("consent: write {}: {error}", path.display()))
+}
+
+fn consent_append_trust_135(entry: &TrustEntry) -> Result<(), String> {
+    let path = std::env::var_os("CONSENT_TRUST_FILE")
+        .map_or_else(|| maw_state_path(&current_xdg_env(), &["trust.json"]), std::path::PathBuf::from);
+    let mut root = std::fs::read_to_string(&path).ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .filter(serde_json::Value::is_object)
+        .unwrap_or_else(|| serde_json::json!({ "version": 1, "trust": {} }));
+    let approved_by = match entry.approved_by { ApprovedBy::Human => "human", ApprovedBy::Auto => "auto" };
+    let record = serde_json::json!({
+        "from": entry.from,
+        "to": entry.to,
+        "action": entry.action.as_str(),
+        "approvedAt": entry.approved_at,
+        "approvedBy": approved_by,
+        "requestId": entry.request_id,
+    });
+    let object = root.as_object_mut().ok_or_else(|| "consent: trust store is not a JSON object".to_owned())?;
+    let trust = object.entry("trust".to_owned()).or_insert_with(|| serde_json::json!({}));
+    let trust = trust.as_object_mut().ok_or_else(|| "consent: trust map is not a JSON object".to_owned())?;
+    trust.insert(trust_key(&entry.from, &entry.to, entry.action), record);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| format!("consent: create {}: {error}", parent.display()))?;
+    }
+    let bytes = serde_json::to_vec_pretty(&root).map_err(|error| format!("consent: serialize trust store: {error}"))?;
+    std::fs::write(&path, bytes).map_err(|error| format!("consent: write {}: {error}", path.display()))
+}
+
+fn consent_now_ms_135() -> Result<i64, String> {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| "consent: system clock before unix epoch".to_owned())?;
+    i64::try_from(now.as_millis()).map_err(|_| "consent: system clock overflow".to_owned())
 }
 
 fn consent_expect_no_extra_args_135(label: &str, argv: &[String], allowed: usize) -> Result<(), String> {
@@ -202,7 +317,7 @@ fn consent_help_135() -> String {
         "  maw consent trust <peer> [action]      pre-approve trust (default action=hey)",
         "  maw consent untrust <peer> [action]    revoke trust entry",
         "",
-        "actions: hey | team-invite | plugin-install",
+        "actions: hey | team-invite | plugin-install | fleet-recruit",
         "consent gating is opt-in via MAW_CONSENT=1 (Phase 1).",
     ].join("\n")
 }
