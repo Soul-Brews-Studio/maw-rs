@@ -308,17 +308,20 @@ fn oracle_scan_registry_with_progress(verbose: bool, show_progress: bool) -> (Or
 
 fn oracle_entry_from_repo(org: &str, path: &std::path::Path) -> Option<OracleEntry> {
     let repo = path.file_name()?.to_string_lossy().to_string();
-    if !native_repo_path_is_oracle(path, &repo) { return None; }
+    if !oracle_repo_path_is_oracle(path, &repo) { return None; }
     let name = repo.strip_suffix("-oracle").unwrap_or(&repo).to_owned();
-    Some(OracleEntry { org: org.to_owned(), repo, name, local_path: path.display().to_string(), has_psi: path.join("ψ").exists(), has_fleet_config: oracle_repo_has_fleet_config(path), detected_at: oracle_now_string(), ..OracleEntry::default() })
+    Some(OracleEntry { org: org.to_owned(), repo, name, local_path: path.display().to_string(), has_psi: oracle_repo_has_local_signal(path), has_fleet_config: oracle_repo_has_fleet_config(path), detected_at: oracle_now_string(), ..OracleEntry::default() })
 }
 
 fn oracle_entries_from_fleet(fleet: &OracleFleetEntry) -> Vec<OracleEntry> {
     let mut out = Vec::new();
     for window in &fleet.session.windows {
-        let Some(name) = native_fleet_window_oracle_name(window) else { continue; };
+        let Some(name) = oracle_fleet_window_oracle_name(window) else { continue; };
         let (org, repo) = oracle_split_repo(&window.repo, &name);
-        out.push(OracleEntry { org, repo, name, has_fleet_config: true, detected_at: oracle_now_string(), ..OracleEntry::default() });
+        let path = native_fleet_repo_path(&window.repo).filter(|path| path.is_dir());
+        let local_path = path.as_ref().map_or_else(String::new, |path| path.display().to_string());
+        let has_psi = path.as_ref().is_some_and(|path| oracle_repo_has_local_signal(path));
+        out.push(OracleEntry { org, repo, name, local_path, has_psi, has_fleet_config: true, detected_at: oracle_now_string(), ..OracleEntry::default() });
     }
     out
 }
@@ -412,9 +415,43 @@ fn oracle_parse_json_flag(argv: &[String], start: usize) -> Result<bool, String>
 fn oracle_required_value<'a>(argv: &'a [String], index: usize, flag: &str) -> Result<&'a String, String> { argv.get(index).filter(|value| !value.starts_with('-')).ok_or_else(|| format!("oracle: {flag} requires a value")) }
 fn oracle_validate_name(value: &str, label: &str) -> Result<(), String> { if value.is_empty() || value.trim() != value || value.starts_with('-') || value.contains('/') { Err(format!("oracle: invalid {label} '{value}'")) } else { Ok(()) } }
 fn oracle_validate_nickname(value: &str) -> Result<(), String> { if value.chars().any(|ch| ch == '\n' || ch == '\r') { Err("oracle: nickname must be one line".to_owned()) } else { Ok(()) } }
-fn oracle_split_repo(repo: &str, name: &str) -> (String, String) { repo.split_once('/').map_or(("(unknown)".to_owned(), format!("{name}-oracle")), |(org, repo)| (org.to_owned(), repo.to_owned())) }
+fn oracle_split_repo(repo: &str, name: &str) -> (String, String) {
+    let repo = repo.strip_prefix("github.com/").unwrap_or(repo);
+    repo.split_once('/').map_or(("(unknown)".to_owned(), format!("{name}-oracle")), |(org, repo)| (org.to_owned(), repo.to_owned()))
+}
 fn oracle_entry_haystack(entry: &OracleEntry) -> String { format!("{} {} {} {} {}", entry.name, entry.org, entry.repo, entry.budded_from.clone().unwrap_or_default(), entry.nickname.clone().unwrap_or_default()).to_lowercase() }
 fn oracle_repo_has_fleet_config(path: &std::path::Path) -> bool { let repo = path.file_name().and_then(std::ffi::OsStr::to_str).unwrap_or_default(); oracle_fleet_entries().iter().any(|fleet| fleet.session.windows.iter().any(|window| window.repo.ends_with(repo))) }
+fn oracle_repo_has_local_signal(path: &std::path::Path) -> bool { path.join("ψ").exists() }
+fn oracle_repo_path_is_oracle(path: &std::path::Path, repo: &str) -> bool { native_repo_path_is_oracle(path, repo) || repo.ends_with("-oracle") && oracle_repo_has_local_signal(path) }
+fn oracle_fleet_window_oracle_name(window: &NativeFleetWindow) -> Option<String> {
+    native_fleet_window_oracle_name(window).or_else(|| oracle_project_window_oracle_name(window))
+}
+fn oracle_project_window_oracle_name(window: &NativeFleetWindow) -> Option<String> {
+    if window.kind != Some(NativeRepoKind::Project) { return None; }
+    let repo_stem = oracle_repo_stem(&window.repo)?;
+    let path = native_fleet_repo_path(&window.repo)?;
+    if !oracle_repo_has_local_signal(&path) { return None; }
+    let source = if window.name.trim().is_empty() { repo_stem.as_str() } else { window.name.trim() };
+    let name = oracle_normalize_window_oracle_name(source)?;
+    (name == repo_stem).then_some(name)
+}
+fn oracle_repo_stem(repo: &str) -> Option<String> {
+    repo.strip_prefix("github.com/")
+        .unwrap_or(repo)
+        .rsplit('/')
+        .next()
+        .and_then(|repo| repo.strip_suffix("-oracle"))
+        .filter(|stem| !stem.is_empty())
+        .map(str::to_owned)
+}
+fn oracle_normalize_window_oracle_name(source: &str) -> Option<String> {
+    let without_slot = source
+        .split_once('-')
+        .filter(|(prefix, suffix)| !prefix.is_empty() && !suffix.is_empty() && prefix.chars().all(|ch| ch.is_ascii_digit()))
+        .map_or(source, |(_, suffix)| suffix);
+    let name = without_slot.strip_suffix("-oracle").unwrap_or(without_slot).trim();
+    (!name.is_empty()).then(|| name.to_owned())
+}
 fn oracle_registry_path() -> std::path::PathBuf { maw_cache_path(&current_xdg_env(), &["oracles.json"]) }
 fn oracle_legacy_registry_path() -> std::path::PathBuf { maw_config_path(&current_xdg_env(), &["oracles.json"]) }
 fn oracle_now_string() -> String { SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |duration| duration.as_secs()).to_string() }
@@ -537,18 +574,27 @@ mod oracle_tests {
 
         let root = oracle_temp_root("numeric-scan");
         let repo = root.join("ghq/github.com/laris-co/3e-infra-oracle");
-        let _ = std::fs::create_dir_all(&repo);
+        std::fs::create_dir_all(repo.join("ψ")).expect("repo psi");
+        std::fs::create_dir_all(root.join("config/fleet")).expect("fleet");
+        std::fs::write(
+            root.join("config/fleet/47-3e-infra.json"),
+            r#"{"auto_registered":true,"created_at":"2026-07-06T09:38:21.000Z","created_by":"maw wake","name":"47-3e-infra","windows":[{"kind":"project","name":"3e-infra","repo":"github.com/laris-co/3e-infra-oracle"}]}"#,
+        )
+        .expect("write fleet");
         std::env::set_var("HOME", root.join("home"));
         std::env::set_var("MAW_CONFIG_DIR", root.join("config"));
         std::env::set_var("MAW_STATE_DIR", root.join("state"));
         std::env::set_var("MAW_CACHE_DIR", root.join("cache"));
-        std::env::set_var("GHQ_ROOT", root.join("ghq"));
+        std::env::set_var("GHQ_ROOT", root.join("ghq/github.com"));
 
-        let registry = oracle_scan_registry();
+        let (registry, progress) = oracle_scan_registry_with_progress(true, true);
         let entry = registry.oracles.into_iter().find(|entry| entry.name == "3e-infra").expect("3e-infra entry");
         assert_eq!(entry.org, "laris-co");
         assert_eq!(entry.repo, "3e-infra-oracle");
         assert_eq!(entry.local_path, repo.display().to_string());
+        assert!(entry.has_psi);
+        assert!(entry.has_fleet_config);
+        assert!(progress.contains("3e-infra-oracle"), "{progress}");
     }
 
     #[test]
@@ -562,11 +608,11 @@ mod oracle_tests {
 
         let root = oracle_temp_root("numeric-register");
         let repo = root.join("ghq/github.com/laris-co/3e-infra-oracle");
-        let _ = std::fs::create_dir_all(&repo);
+        std::fs::create_dir_all(repo.join("ψ")).expect("repo psi");
         let _ = std::fs::create_dir_all(root.join("config/fleet"));
         std::fs::write(
             root.join("config/fleet/47-3e-infra.json"),
-            r#"{"name":"47-3e-infra","windows":[{"name":"47-3e-infra","repo":"laris-co/3e-infra-oracle","kind":"oracle"}]}"#, 
+            r#"{"auto_registered":true,"created_at":"2026-07-06T09:38:21.000Z","created_by":"maw wake","name":"47-3e-infra","windows":[{"kind":"project","name":"3e-infra","repo":"github.com/laris-co/3e-infra-oracle"}]}"#,
         )
         .expect("write fleet");
 
@@ -574,7 +620,7 @@ mod oracle_tests {
         std::env::set_var("MAW_CONFIG_DIR", root.join("config"));
         std::env::set_var("MAW_STATE_DIR", root.join("state"));
         std::env::set_var("MAW_CACHE_DIR", root.join("cache"));
-        std::env::set_var("GHQ_ROOT", root.join("ghq"));
+        std::env::set_var("GHQ_ROOT", root.join("ghq/github.com"));
 
         let mut tmux = OracleTmux::default();
         let output = oracle_register(&oracle_strings(&["register", "3e-infra"]), &mut tmux).expect("register");
@@ -585,6 +631,7 @@ mod oracle_tests {
         let entry = registry.oracles.iter().find(|entry| entry.name == "3e-infra").expect("registered entry");
         assert_eq!(entry.org, "laris-co");
         assert_eq!(entry.repo, "3e-infra-oracle");
-        assert!(entry.local_path.is_empty());
+        assert_eq!(entry.local_path, repo.display().to_string());
+        assert!(entry.has_psi);
     }
 }
