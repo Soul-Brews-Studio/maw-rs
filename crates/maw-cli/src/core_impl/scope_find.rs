@@ -25,6 +25,8 @@ struct NativeFleetSession {
     skip_command: Option<serde_json::Value>,
     #[serde(default, alias = "buddedFrom")]
     budded_from: Option<String>,
+    #[serde(default)]
+    members: Option<Vec<NativeFleetMember>>,
 }
 
 #[allow(dead_code)]
