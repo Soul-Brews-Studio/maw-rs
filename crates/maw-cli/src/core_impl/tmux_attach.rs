@@ -1,5 +1,7 @@
 const DISPATCH_305: &[DispatcherEntry] = &[
     DispatcherEntry { command: "send-enter", handler: Handler::Sync(run_send_enter_command) },
+    DispatcherEntry { command: "send-key", handler: Handler::Sync(run_send_key_command) },
+    DispatcherEntry { command: "send-escape", handler: Handler::Sync(run_send_escape_command) },
 ];
 
 fn run_attach_plan(argv: &[String]) -> CliOutput {
@@ -284,6 +286,128 @@ fn run_send_enter_command(argv: &[String]) -> CliOutput {
     }
 }
 
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SendKeyCommandArgs {
+    target: String,
+    key: &'static str,
+    dry_run: bool,
+    plan_json: bool,
+}
+
+fn run_send_escape_command(argv: &[String]) -> CliOutput {
+    let mut send_key_argv = Vec::with_capacity(argv.len() + 1);
+    send_key_argv.extend(argv.iter().cloned());
+    send_key_argv.push("escape".to_owned());
+    run_send_key_command(&send_key_argv)
+}
+
+fn run_send_key_command(argv: &[String]) -> CliOutput {
+    if wants_help(argv, &["--dry-run", "--plan", "--plan-json"]) {
+        return help_output(send_key_usage());
+    }
+    let options = match parse_send_key_command_args(argv) {
+        Ok(parsed) => parsed,
+        Err(message) => return send_key_usage_error(&message),
+    };
+    if options.dry_run || options.plan_json {
+        return send_key_plan_output(&options);
+    }
+    let mut client = TmuxClient::local();
+    let resolved = match resolve_local_tmux_command_target(&mut client, &options.target) {
+        Ok(target) => target,
+        Err(message) => return command_target_error("send-key", &message),
+    };
+    if let Err(error) = client.send_keys(&resolved, &[options.key.to_owned()]) {
+        return command_target_error("send-key", &format!("tmux send-keys failed: {error}"));
+    }
+    CliOutput {
+        code: 0,
+        stdout: format!("\x1b[32mdelivered\x1b[0m → {resolved}: {}\n", options.key),
+        stderr: String::new(),
+    }
+}
+
+fn parse_send_key_command_args(argv: &[String]) -> Result<SendKeyCommandArgs, String> {
+    let mut target = None;
+    let mut key = None;
+    let mut dry_run = false;
+    let mut plan_json = false;
+    for arg in argv {
+        match arg.as_str() {
+            "--dry-run" | "--plan" => dry_run = true,
+            "--plan-json" => plan_json = true,
+            value if value.starts_with('-') => {
+                return Err(format!("send-key: unknown argument {value}"));
+            }
+            value if target.is_none() => target = Some(value.to_owned()),
+            value if key.is_none() => key = Some(send_key_allowed_tmux_name(value)?),
+            _ => return Err("send-key: too many arguments".to_owned()),
+        }
+    }
+    let Some(target) = target else {
+        return Err(send_key_usage().to_owned());
+    };
+    let Some(key) = key else {
+        return Err(send_key_usage().to_owned());
+    };
+    Ok(SendKeyCommandArgs {
+        target,
+        key,
+        dry_run,
+        plan_json,
+    })
+}
+
+fn send_key_allowed_tmux_name(raw: &str) -> Result<&'static str, String> {
+    match raw.to_ascii_lowercase().as_str() {
+        "escape" => Ok("Escape"),
+        "up" => Ok("Up"),
+        "down" => Ok("Down"),
+        "left" => Ok("Left"),
+        "right" => Ok("Right"),
+        "tab" => Ok("Tab"),
+        "ctrl-c" => Ok("C-c"),
+        _ => Err(format!(
+            "send-key: unsupported key '{raw}' (allowed: escape, up, down, left, right, tab, ctrl-c)"
+        )),
+    }
+}
+
+fn send_key_plan_output(options: &SendKeyCommandArgs) -> CliOutput {
+    let args = ["-t".to_owned(), options.target.clone(), options.key.to_owned()];
+    let stdout = if options.plan_json {
+        format!(
+            "{{\"command\":\"send-key\",\"target\":{},\"key\":{},\"tmuxArgs\":{}}}\n",
+            json_string(&options.target),
+            json_string(options.key),
+            json_string_array(&args)
+        )
+    } else {
+        format!(
+            "[dry-run] tmux send-keys -t {} {}\n",
+            options.target, options.key
+        )
+    };
+    CliOutput {
+        code: 0,
+        stdout,
+        stderr: String::new(),
+    }
+}
+
+fn send_key_usage_error(message: &str) -> CliOutput {
+    CliOutput {
+        code: 2,
+        stdout: String::new(),
+        stderr: format!("{message}\n{}\n", send_key_usage()),
+    }
+}
+
+fn send_key_usage() -> &'static str {
+    "usage: maw-rs send-key <target> <escape|up|down|left|right|tab|ctrl-c> [--dry-run|--plan-json]\n       maw-rs send-escape <target> [--dry-run|--plan-json]"
+}
+
 fn parse_send_enter_command_args(argv: &[String]) -> Result<(String, usize), String> {
     let mut target = None;
     let mut count = 1usize;
@@ -350,4 +474,52 @@ fn send_enter_usage_error(message: &str) -> CliOutput {
 
 fn send_enter_usage() -> &'static str {
     "usage: maw-rs send-enter <target> [--N <count>]"
+}
+
+
+#[cfg(test)]
+mod tmux_attach_send_key_tests {
+    use super::*;
+
+    fn strings(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    #[test]
+    fn send_key_allowlist_maps_to_tmux_key_names() {
+        assert_eq!(
+            send_key_allowed_tmux_name("escape").expect("escape"),
+            "Escape"
+        );
+        assert_eq!(send_key_allowed_tmux_name("up").expect("up"), "Up");
+        assert_eq!(send_key_allowed_tmux_name("down").expect("down"), "Down");
+        assert_eq!(send_key_allowed_tmux_name("left").expect("left"), "Left");
+        assert_eq!(send_key_allowed_tmux_name("right").expect("right"), "Right");
+        assert_eq!(send_key_allowed_tmux_name("tab").expect("tab"), "Tab");
+        assert_eq!(
+            send_key_allowed_tmux_name("ctrl-c").expect("ctrl-c"),
+            "C-c"
+        );
+    }
+
+    #[test]
+    fn send_key_rejects_arbitrary_tmux_keys() {
+        let error = parse_send_key_command_args(&strings(&["pane", "C-z"])).expect_err("rejected");
+        assert!(error.contains("unsupported key 'C-z'"));
+    }
+
+    #[test]
+    fn send_key_dry_run_renders_tmux_plan_without_sending() {
+        let output = run_send_key_command(&strings(&["%7", "escape", "--dry-run"]));
+        assert_eq!(output.code, 0);
+        assert_eq!(output.stdout, "[dry-run] tmux send-keys -t %7 Escape\n");
+    }
+
+    #[test]
+    fn send_escape_alias_defaults_to_escape_key() {
+        let output = run_send_escape_command(&strings(&["%7", "--plan-json"]));
+        assert_eq!(output.code, 0);
+        assert!(output.stdout.contains("\"key\":\"Escape\""));
+        assert!(output.stdout.contains("\"tmuxArgs\":[\"-t\",\"%7\",\"Escape\"]"));
+    }
 }

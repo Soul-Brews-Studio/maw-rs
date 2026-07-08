@@ -344,6 +344,8 @@ fn usage_text() -> String {
         "  a|attach <target> [--print] [--readonly|-r]   attach to a tmux session\n",
         "  run <target> <cmd...>                         type text and press Enter\n",
         "  send-enter <target> [--N <count>]             send Enter to a tmux target\n",
+        "  send-key <target> <key>                       send an allowlisted key to a tmux target\n",
+        "  send-escape <target>                          send Escape to a tmux target\n",
         "  ls [--compact|-c] [--verbose|-v] [--json] [--watch[=secs]]  list live local sessions\n",
         "  plugin ls [-v|--verbose]                      list installed plugins\n",
         "  bring|b <oracle> [--to <session[:window]>]    plan a wake split target\n",
