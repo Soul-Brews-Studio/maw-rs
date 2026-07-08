@@ -245,8 +245,13 @@ mod async_dispatch_tests {
 
 #[cfg(test)]
 mod dispatcher_fragment_tests {
-    use super::{dispatcher_entries, dispatcher_status, run_cli, DispatchKind, MAW_RS_VERSION_STRING};
+    use super::{cli_dispatch_now_iso, current_xdg_env, env_test_lock};
+    use super::{
+        dispatcher_entries, dispatcher_status, run_cli, DispatchKind, MAW_RS_VERSION_STRING,
+    };
     use std::collections::BTreeSet;
+    use std::fs;
+    use std::path::PathBuf;
 
     const CORE_COMMANDS: &[&str] = &[
         "hey", "send", "serve", "health", "ls", "wake", "hub", "tmux", "init", "reply", "run",
@@ -288,6 +293,85 @@ mod dispatcher_fragment_tests {
         assert!(MAW_RS_VERSION_STRING.contains(env!("MAW_RS_GIT_HASH")));
         assert!(MAW_RS_VERSION_STRING.contains(" built "));
     }
+
+    #[test]
+    fn dispatch_logs_native_commands_to_audit_jsonl() {
+        let _guard = env_test_lock().lock().expect("env lock");
+        let (_state_root, _restores) = cli_dispatch_test_env();
+        let output = run_cli(&["version".to_owned()]);
+        assert_eq!(output.code, 0, "{output:?}");
+        let path = super::maw_state_path(&current_xdg_env(), &["audit.jsonl"]);
+        let text = fs::read_to_string(path).expect("audit log");
+        let rows: Vec<_> = text
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .collect();
+        assert!(!rows.is_empty(), "{text}");
+        let row: serde_json::Value = serde_json::from_str(rows.last().expect("row")).expect("json");
+        assert_eq!(row.get("cmd").and_then(serde_json::Value::as_str), Some("version"));
+        assert_eq!(
+            row.get("args").and_then(serde_json::Value::as_array).map(Vec::len),
+            Some(0)
+        );
+        assert_eq!(row.get("binary").and_then(serde_json::Value::as_str), Some("maw-rs"));
+        assert_eq!(
+            row.get("version").and_then(serde_json::Value::as_str),
+            Some(super::MAW_RS_BUILD_VERSION)
+        );
+    }
+
+    #[test]
+    fn dispatch_audit_write_errors_are_best_effort_for_native_commands() {
+        let _guard = env_test_lock().lock().expect("env lock");
+        let (_state_root, _restores) = cli_dispatch_test_env();
+        let blocked_root = _state_root.join("blocked");
+        fs::write(&blocked_root, b"blocked").expect("blocked state root");
+        let _state_restore = super::EnvVarRestore::capture("MAW_STATE_DIR");
+        std::env::set_var("MAW_STATE_DIR", &blocked_root);
+        let output = run_cli(&["version".to_owned()]);
+        assert_eq!(output.code, 0);
+        assert!(output.stderr.is_empty());
+        assert!(!blocked_root.join("audit.jsonl").exists());
+    }
+
+    #[test]
+    fn cli_dispatch_now_iso_uses_fixed_epoch_millis_when_present() {
+        let _guard = env_test_lock().lock().expect("env lock");
+        let _ = std::env::remove_var("MAW_AUDIT_TEST_NOW_MS");
+        std::env::set_var("MAW_AUDIT_TEST_NOW_MS", "0");
+        assert_eq!(cli_dispatch_now_iso(), "1970-01-01T00:00:00.000Z");
+        std::env::remove_var("MAW_AUDIT_TEST_NOW_MS");
+    }
+
+    fn cli_dispatch_test_env() -> (PathBuf, Vec<super::EnvVarRestore>) {
+        let root = std::env::temp_dir().join(format!(
+            "maw-rs-dispatch-audit-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_nanos())
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("state").join("maw")).expect("state dir");
+        let restores = [
+            "HOME",
+            "XDG_STATE_HOME",
+            "MAW_STATE_DIR",
+            "MAW_HOME",
+            "MAW_XDG",
+        ]
+        .into_iter()
+        .map(super::EnvVarRestore::capture)
+        .collect::<Vec<_>>();
+        let home = root.join("home");
+        let state = root.join("state");
+        std::env::set_var("HOME", &home);
+        std::env::set_var("XDG_STATE_HOME", &state);
+        std::env::set_var("MAW_XDG", "1");
+        let _ = std::env::remove_var("MAW_HOME");
+        let _ = std::env::remove_var("MAW_STATE_DIR");
+        (state, restores)
+    }
 }
 
 #[must_use]
@@ -328,7 +412,10 @@ pub fn run_cli(argv: &[String]) -> CliOutput {
     };
 
     match dispatcher_target(command) {
-        DispatchTarget::Native(handler) => handler(&argv[1..]),
+        DispatchTarget::Native(handler) => {
+            cli_dispatch_log_command(command, &argv[1..]);
+            handler(&argv[1..])
+        }
         DispatchTarget::AsyncNative(handler) => run_async_handler_blocking(handler, &argv[1..]),
         DispatchTarget::UnknownCommand => dispatch_cli_plugin_or_unknown(argv, command),
     }
@@ -346,10 +433,80 @@ pub async fn run_cli_async(argv: &[String]) -> CliOutput {
     };
 
     match dispatcher_target(command) {
-        DispatchTarget::Native(handler) => handler(&argv[1..]),
+        DispatchTarget::Native(handler) => {
+            cli_dispatch_log_command(command, &argv[1..]);
+            handler(&argv[1..])
+        }
         DispatchTarget::AsyncNative(handler) => handler(argv[1..].to_vec()).await,
         DispatchTarget::UnknownCommand => dispatch_cli_plugin_or_unknown(argv, command),
     }
+}
+
+fn cli_dispatch_log_command(command: &str, args: &[String]) {
+    let row = serde_json::json!({
+        "ts": cli_dispatch_now_iso(),
+        "cmd": command,
+        "args": args,
+        "binary": "maw-rs",
+        "version": MAW_RS_BUILD_VERSION,
+    });
+    let path = maw_state_path(&current_xdg_env(), &["audit.jsonl"]);
+    if let Some(parent) = path.parent() {
+        if std::fs::create_dir_all(parent).is_err() {
+            return;
+        }
+    } else {
+        return;
+    }
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .and_then(|mut file| {
+            use std::io::Write as _;
+            writeln!(file, "{row}")
+        });
+}
+
+fn cli_dispatch_now_iso() -> String {
+    let millis = std::env::var("MAW_AUDIT_TEST_NOW_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or_else(cli_dispatch_now_millis);
+    let secs = millis / 1000;
+    let millis = millis % 1000;
+    let days = i64::try_from(secs / 86_400).unwrap_or(i64::MAX);
+    let day_seconds = secs % 86_400;
+    let hour = day_seconds / 3600;
+    let minute = (day_seconds % 3600) / 60;
+    let second = day_seconds % 60;
+    let (year, month, day) = cli_dispatch_civil_from_days(days);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z"
+    )
+}
+
+fn cli_dispatch_now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
+}
+
+fn cli_dispatch_civil_from_days(days: i64) -> (i32, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = mp + if mp < 10 { 3 } else { -9 };
+    (
+        i32::try_from(y + i64::from(m <= 2)).unwrap_or(1970),
+        u32::try_from(m).unwrap_or(1),
+        u32::try_from(d).unwrap_or(1),
+    )
 }
 
 fn run_async_handler_blocking(handler: AsyncHandler, args: &[String]) -> CliOutput {
