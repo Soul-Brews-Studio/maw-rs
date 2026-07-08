@@ -182,6 +182,10 @@ fn fleet_parse_args(argv: &[String]) -> Result<FleetOptions, String> {
     if matches!(options.command, FleetCommand::Add) && options.target.is_none() {
         return Err("fleet add: missing session".to_owned());
     }
+    if matches!(options.command, FleetCommand::Wake | FleetCommand::Sleep) && options.target.is_none() && !options.all {
+        let action = if options.command == FleetCommand::Wake { "wake" } else { "sleep" };
+        return Err(format!("fleet {action}: specify a group, or --all to {action} every registered session on this node"));
+    }
     Ok(options)
 }
 
@@ -203,7 +207,7 @@ fn fleet_parse_positional(options: &mut FleetOptions, seen: &mut bool, value: &s
     if !*seen {
         return fleet_set_command(options, seen, value);
     }
-    if matches!(options.command, FleetCommand::Add) && options.target.is_none() {
+    if matches!(options.command, FleetCommand::Add | FleetCommand::Wake | FleetCommand::Sleep) && options.target.is_none() {
         fleet_validate_session_name(value)?;
         options.target = Some(value.to_owned());
         return Ok(());
@@ -223,7 +227,11 @@ fn fleet_set_command(options: &mut FleetOptions, seen: &mut bool, value: &str) -
         "consolidate" => FleetCommand::Consolidate,
         "resume" => FleetCommand::Resume,
         "sync" => FleetCommand::Sync,
-        "wake" | "wake-all" => FleetCommand::Wake,
+        "wake" => FleetCommand::Wake,
+        "wake-all" => {
+            options.all = true;
+            FleetCommand::Wake
+        }
         "sleep" => FleetCommand::Sleep,
         _ => return Err(format!("fleet: unknown subcommand {value}")),
     };
@@ -232,7 +240,7 @@ fn fleet_set_command(options: &mut FleetOptions, seen: &mut bool, value: &str) -
 }
 
 fn fleet_usage() -> String {
-    "usage: maw fleet [add <session>|create <group>|show <group>|status <group>|ls|doctor|health|gc|init|consolidate|resume|sync|wake|sleep|token <group> [ls|status]] [--json] [--dry-run] [--fix] [--reboot] [--all] [--kill] [--resume]".to_owned()
+    "usage: maw fleet [add <session>|create <group>|show <group>|status <group>|ls|doctor|health|gc|init|consolidate|resume|sync|wake <group|--all>|sleep <group|--all>|token <group> [ls|status]] [--json] [--dry-run] [--fix] [--reboot] [--all] [--kill] [--resume]".to_owned()
 }
 
 fn fleet_load_state_with(runtime: &mut impl FleetRuntime) -> Result<FleetState, String> {
@@ -719,7 +727,10 @@ fn fleet_json_gc_result(result: &FleetGcResult) -> serde_json::Value {
 }
 
 fn fleet_run_wake(state: &FleetState, options: &FleetOptions) -> Result<(i32, String), String> {
-    let sessions = fleet_wake_targets(state, options.all);
+    if let Some(group) = options.target.as_deref() {
+        return fleet_run_group_action(state, options, "wake", group);
+    }
+    let sessions = fleet_sweep_targets(state);
     if options.json { return Ok((0, fleet_json_action(state, "wake", &sessions, options)?)); }
     let mut out = String::new();
     let _ = writeln!(out, "🌅 Fleet wake plan node: {}", state.config.node);
@@ -730,13 +741,86 @@ fn fleet_run_wake(state: &FleetState, options: &FleetOptions) -> Result<(i32, St
     Ok((0, out))
 }
 
-fn fleet_wake_targets(state: &FleetState, all: bool) -> Vec<FleetSessionSummary> {
-    state.sessions.iter().filter(|session| all || !fleet_is_dormant_session(&session.name)).cloned().collect()
+// Squadron roster files (#291, `members` present) describe groups, not sessions — never sweep targets.
+fn fleet_sweep_targets(state: &FleetState) -> Vec<FleetSessionSummary> {
+    let rosters = state
+        .fleet_entries
+        .iter()
+        .filter(|entry| entry.session.members.is_some())
+        .map(|entry| entry.session.name.as_str())
+        .collect::<BTreeSet<_>>();
+    state.sessions.iter().filter(|session| !rosters.contains(session.name.as_str())).cloned().collect()
 }
 
-fn fleet_is_dormant_session(name: &str) -> bool {
-    let digits = name.chars().take_while(char::is_ascii_digit).collect::<String>();
-    digits.parse::<u32>().is_ok_and(|number| (20..99).contains(&number))
+fn fleet_run_group_action(
+    state: &FleetState,
+    options: &FleetOptions,
+    action: &str,
+    group: &str,
+) -> Result<(i32, String), String> {
+    if options.all {
+        return Err(format!("fleet {action}: pass a group or --all, not both"));
+    }
+    let entry = state
+        .fleet_entries
+        .iter()
+        .find(|entry| fleet_roster_entry_matches(entry, group))
+        .ok_or_else(|| format!("fleet {action}: no group named {group} — try: maw fleet create {group}"))?;
+    let members = entry.session.members.as_deref().unwrap_or_default();
+    if members.is_empty() {
+        return Err(format!("fleet {action}: group {group} has no members"));
+    }
+    let candidates = fleet_sweep_targets(state);
+    let mut resolved: Vec<(&str, &FleetSessionSummary)> = Vec::new();
+    let mut skipped: Vec<&str> = Vec::new();
+    for member in members {
+        match fleet_member_session(&member.handle, &candidates) {
+            Some(session) => resolved.push((member.handle.as_str(), session)),
+            None => skipped.push(member.handle.as_str()),
+        }
+    }
+    if options.json { return fleet_json_group_action(state, action, group, options, &resolved, &skipped); }
+    let mut out = String::new();
+    let icon = if action == "wake" { "🌅" } else { "🌙" };
+    let _ = writeln!(out, "{icon} Fleet {action} plan node: {}", state.config.node);
+    let _ = writeln!(out, "  group: {group} · members: {} · sessions: {} · skipped: {}", members.len(), resolved.len(), skipped.len());
+    for (handle, session) in &resolved { let _ = writeln!(out, "  - {handle} -> {}", session.name); }
+    for handle in &skipped { let _ = writeln!(out, "  - {handle} skipped: no session"); }
+    Ok((0, out))
+}
+
+// Registry resolution mirrors locate's hash-slot rules: `NN-` prefixes and `-oracle` suffixes are
+// stripped on both sides, and window names count (a member can live as a window of a shared session).
+fn fleet_member_session<'a>(handle: &str, sessions: &'a [FleetSessionSummary]) -> Option<&'a FleetSessionSummary> {
+    let wanted = locate_normalized_names(handle);
+    sessions.iter().find(|session| {
+        locate_normalized_names(&session.name).iter().any(|name| wanted.contains(name))
+            || session
+                .windows
+                .iter()
+                .any(|window| locate_normalized_names(&window.name).iter().any(|name| wanted.contains(name)))
+    })
+}
+
+fn fleet_json_group_action(
+    state: &FleetState,
+    action: &str,
+    group: &str,
+    options: &FleetOptions,
+    resolved: &[(&str, &FleetSessionSummary)],
+    skipped: &[&str],
+) -> Result<(i32, String), String> {
+    let value = serde_json::json!({
+        "node": state.config.node,
+        "action": action,
+        "dryRun": options.dry_run,
+        "group": group,
+        "sessionCount": resolved.len(),
+        "sessions": resolved.iter().map(|(_, session)| session.name.clone()).collect::<Vec<_>>(),
+        "members": resolved.iter().map(|(handle, session)| serde_json::json!({"handle": handle, "session": session.name})).collect::<Vec<_>>(),
+        "skipped": skipped.iter().map(|handle| serde_json::json!({"handle": handle, "reason": "no session"})).collect::<Vec<_>>(),
+    });
+    serde_json::to_string_pretty(&value).map(|text| (0, format!("{text}\n"))).map_err(|error| error.to_string())
 }
 
 fn fleet_write_session_plan(out: &mut String, sessions: &[FleetSessionSummary]) {
@@ -749,10 +833,14 @@ fn fleet_write_session_plan(out: &mut String, sessions: &[FleetSessionSummary]) 
 }
 
 fn fleet_run_sleep(state: &FleetState, options: &FleetOptions) -> Result<(i32, String), String> {
-    if options.json { return Ok((0, fleet_json_action(state, "sleep", &state.sessions, options)?)); }
+    if let Some(group) = options.target.as_deref() {
+        return fleet_run_group_action(state, options, "sleep", group);
+    }
+    let sessions = fleet_sweep_targets(state);
+    if options.json { return Ok((0, fleet_json_action(state, "sleep", &sessions, options)?)); }
     let mut out = String::new();
     let _ = writeln!(out, "🌙 Fleet sleep plan node: {}", state.config.node);
-    fleet_write_session_plan(&mut out, &state.sessions);
+    fleet_write_session_plan(&mut out, &sessions);
     Ok((0, out))
 }
 
@@ -1048,6 +1136,14 @@ mod fleet_tests {
         assert!(parsed.json && parsed.dry_run && parsed.all && parsed.kill && parsed.resume);
         assert!(fleet_parse_args(&fleet_strings(&["--", "wake"])).expect_err("separator guard").contains("unknown argument"));
         assert!(fleet_parse_args(&fleet_strings(&["-oProxyCommand=bad"])).expect_err("leading dash").contains("unknown argument"));
+        let scoped = fleet_parse_args(&fleet_strings(&["wake", "3e"])).expect("group target");
+        assert_eq!((scoped.command, scoped.target.as_deref()), (FleetCommand::Wake, Some("3e")));
+        let alias = fleet_parse_args(&fleet_strings(&["wake-all"])).expect("alias");
+        assert!(alias.all, "wake-all implies --all");
+        let bare = fleet_parse_args(&fleet_strings(&["wake"])).expect_err("bare wake");
+        assert!(bare.contains("specify a group, or --all to wake every registered session on this node"), "{bare}");
+        let sleep = fleet_parse_args(&fleet_strings(&["sleep", "--json"])).expect_err("bare sleep");
+        assert!(sleep.contains("fleet sleep: specify a group"), "{sleep}");
     }
 
     #[test]
@@ -1157,14 +1253,68 @@ mod fleet_tests {
         assert_eq!(json["windows"][0]["kind"], "oracle");
     }
 
+    const FLEET_SQUADRON_JSON: &str =
+        r#"{"name":"01-3e","groupName":"3e","windows":[],"members":[{"handle":"alpha"},{"handle":"drift"}]}"#;
+
     #[test]
-    fn fleet_wake_skips_dormant_without_real_tmux() {
-        fleet_with_fixture(|_| {
-            let output = run_fleet_command(&fleet_strings(&["wake", "--json", "--dry-run"]));
-            assert_eq!(output.code, 0);
-            assert!(output.stdout.contains("\"action\": \"wake\""));
-            assert!(output.stdout.contains("\"sessionCount\": 1"));
-            assert!(!output.stdout.contains("22-dormant"));
+    fn fleet_wake_bare_errors_and_all_sweep_excludes_roster_files() {
+        fleet_with_fixture(|root| {
+            std::fs::write(root.join("config/fleet/01-3e.json"), FLEET_SQUADRON_JSON).expect("roster");
+            let bare = run_fleet_command(&fleet_strings(&["wake"]));
+            assert_eq!(bare.code, 1);
+            assert!(bare.stderr.contains("specify a group, or --all"), "{}", bare.stderr);
+            let all = run_fleet_command(&fleet_strings(&["wake", "--all", "--json", "--dry-run"]));
+            assert_eq!(all.code, 0, "{}", all.stderr);
+            assert!(all.stdout.contains("\"action\": \"wake\"") && all.stdout.contains("\"sessionCount\": 1"), "{}", all.stdout);
+            assert!(all.stdout.contains("03-alpha") && !all.stdout.contains("01-3e"), "{}", all.stdout);
+            assert!(!all.stdout.contains("22-dormant"), "disabled entries stay skipped");
+            let alias = run_fleet_command(&fleet_strings(&["wake-all", "--dry-run"]));
+            assert_eq!(alias.code, 0, "{}", alias.stderr);
+            assert!(alias.stdout.contains("  - 03-alpha") && !alias.stdout.contains("01-3e"), "{}", alias.stdout);
+            let sleep = run_fleet_command(&fleet_strings(&["sleep", "--all", "--dry-run"]));
+            assert_eq!(sleep.code, 0, "{}", sleep.stderr);
+            assert!(sleep.stdout.contains("  - 03-alpha") && !sleep.stdout.contains("01-3e"), "{}", sleep.stdout);
+        });
+    }
+
+    #[test]
+    fn fleet_wake_group_scopes_plan_to_squadron_members() {
+        fleet_with_fixture(|root| {
+            std::fs::write(root.join("config/fleet/01-3e.json"), FLEET_SQUADRON_JSON).expect("roster");
+            let plan = run_fleet_command(&fleet_strings(&["wake", "3e", "--dry-run"]));
+            assert_eq!(plan.code, 0, "{}", plan.stderr);
+            assert!(plan.stdout.contains("group: 3e · members: 2 · sessions: 1 · skipped: 1"), "{}", plan.stdout);
+            assert!(plan.stdout.contains("  - alpha -> 03-alpha"), "{}", plan.stdout);
+            assert!(plan.stdout.contains("  - drift skipped: no session"), "{}", plan.stdout);
+            let json = run_fleet_command(&fleet_strings(&["sleep", "3e", "--json", "--dry-run"]));
+            assert_eq!(json.code, 0, "{}", json.stderr);
+            let value: serde_json::Value = serde_json::from_str(&json.stdout).expect("json");
+            assert_eq!(value["action"], "sleep");
+            assert_eq!(value["group"], "3e");
+            assert_eq!(value["dryRun"], true);
+            assert_eq!(value["sessions"], serde_json::json!(["03-alpha"]));
+            assert_eq!(value["members"][0]["handle"], "alpha");
+            assert_eq!(value["skipped"][0], serde_json::json!({"handle": "drift", "reason": "no session"}));
+        });
+    }
+
+    #[test]
+    fn fleet_wake_group_errors_for_missing_or_empty_squadron() {
+        fleet_with_fixture(|root| {
+            let missing = run_fleet_command(&fleet_strings(&["wake", "nope"]));
+            assert_eq!(missing.code, 1);
+            assert!(missing.stderr.contains("fleet wake: no group named nope"), "{}", missing.stderr);
+            std::fs::write(
+                root.join("config/fleet/02-empty.json"),
+                r#"{"name":"02-empty","groupName":"empty","windows":[],"members":[]}"#,
+            )
+            .expect("roster");
+            let empty = run_fleet_command(&fleet_strings(&["wake", "empty"]));
+            assert_eq!(empty.code, 1);
+            assert!(empty.stderr.contains("fleet wake: group empty has no members"), "{}", empty.stderr);
+            let both = run_fleet_command(&fleet_strings(&["wake", "empty", "--all"]));
+            assert_eq!(both.code, 1);
+            assert!(both.stderr.contains("pass a group or --all, not both"), "{}", both.stderr);
         });
     }
 
