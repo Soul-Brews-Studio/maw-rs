@@ -482,7 +482,8 @@ mod oracle_tests {
         let output = oracle_register(&oracle_strings(&["register", "3e-infra"]), &mut tmux).expect("register");
         let registry = oracle_read_registry();
 
-        assert!(output.contains("Registered 3e-infra"));
+        let plain = maw_tmux::strip_tmux_ansi(&output);
+        assert!(plain.contains("Registered 3e-infra"), "expected register output to name the discovered oracle, got: {output:?}");
         let entry = registry.oracles.iter().find(|entry| entry.name == "3e-infra").expect("registered entry");
         assert_eq!(entry.org, "laris-co");
         assert_eq!(entry.repo, "3e-infra-oracle");
