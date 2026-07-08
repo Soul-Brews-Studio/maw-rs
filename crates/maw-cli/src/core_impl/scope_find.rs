@@ -764,7 +764,14 @@ fn native_fleet_window_oracle_name(window: &NativeFleetWindow) -> Option<String>
     } else {
         window.name.trim()
     };
-    let name = source.strip_suffix("-oracle").unwrap_or(source).trim();
+    let without_slot = source
+        .split_once('-')
+        .filter(|(prefix, suffix)| {
+            !prefix.is_empty() && !suffix.is_empty() && prefix.chars().all(|ch| ch.is_ascii_digit())
+        })
+        .map(|(_, suffix)| suffix)
+        .unwrap_or(source);
+    let name = without_slot.strip_suffix("-oracle").unwrap_or(without_slot).trim();
     (!name.is_empty()).then(|| name.to_owned())
 }
 
@@ -884,6 +891,23 @@ mod native_fleet_loader_tests {
             assert_eq!(windows[2].kind, Some(NativeRepoKind::Oracle));
             assert_eq!(windows[3].kind, Some(NativeRepoKind::Project));
         });
+    }
+
+    #[test]
+    fn native_fleet_window_oracle_name_strips_numeric_session_prefix() {
+        let window = NativeFleetWindow {
+            name: "47-3e-infra-oracle".to_owned(),
+            repo: "laris-co/3e-infra-oracle".to_owned(),
+            kind: Some(NativeRepoKind::Oracle),
+        };
+        assert_eq!(native_fleet_window_oracle_name(&window), Some("3e-infra".to_owned()));
+
+        let fallback = NativeFleetWindow {
+            name: "3e-infra".to_owned(),
+            repo: "laris-co/3e-infra-oracle".to_owned(),
+            kind: Some(NativeRepoKind::Oracle),
+        };
+        assert_eq!(native_fleet_window_oracle_name(&fallback), Some("3e-infra".to_owned()));
     }
 }
 

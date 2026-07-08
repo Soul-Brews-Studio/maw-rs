@@ -427,4 +427,65 @@ mod oracle_tests {
 
         assert_eq!(entries.iter().map(|entry| entry.name.as_str()).collect::<Vec<_>>(), vec!["foo"]);
     }
+
+    #[test]
+    fn oracle_scan_registry_captures_numeric_leading_oracle_name() {
+        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _home = EnvVarRestore::capture("HOME");
+        let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
+        let _state = EnvVarRestore::capture("MAW_STATE_DIR");
+        let _cache = EnvVarRestore::capture("MAW_CACHE_DIR");
+        let _ghq = EnvVarRestore::capture("GHQ_ROOT");
+
+        let root = oracle_temp_root("numeric-scan");
+        let repo = root.join("ghq/github.com/laris-co/3e-infra-oracle");
+        let _ = std::fs::create_dir_all(&repo);
+        std::env::set_var("HOME", root.join("home"));
+        std::env::set_var("MAW_CONFIG_DIR", root.join("config"));
+        std::env::set_var("MAW_STATE_DIR", root.join("state"));
+        std::env::set_var("MAW_CACHE_DIR", root.join("cache"));
+        std::env::set_var("GHQ_ROOT", root.join("ghq"));
+
+        let registry = oracle_scan_registry();
+        let entry = registry.oracles.into_iter().find(|entry| entry.name == "3e-infra").expect("3e-infra entry");
+        assert_eq!(entry.org, "laris-co");
+        assert_eq!(entry.repo, "3e-infra-oracle");
+        assert_eq!(entry.local_path, repo.display().to_string());
+    }
+
+    #[test]
+    fn oracle_register_discovers_numeric_slot_prefixed_fleet_window_name() {
+        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _home = EnvVarRestore::capture("HOME");
+        let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
+        let _state = EnvVarRestore::capture("MAW_STATE_DIR");
+        let _cache = EnvVarRestore::capture("MAW_CACHE_DIR");
+        let _ghq = EnvVarRestore::capture("GHQ_ROOT");
+
+        let root = oracle_temp_root("numeric-register");
+        let repo = root.join("ghq/github.com/laris-co/3e-infra-oracle");
+        let _ = std::fs::create_dir_all(&repo);
+        let _ = std::fs::create_dir_all(root.join("config/fleet"));
+        std::fs::write(
+            root.join("config/fleet/47-3e-infra.json"),
+            r#"{"name":"47-3e-infra","windows":[{"name":"47-3e-infra","repo":"laris-co/3e-infra-oracle","kind":"oracle"}]}"#, 
+        )
+        .expect("write fleet");
+
+        std::env::set_var("HOME", root.join("home"));
+        std::env::set_var("MAW_CONFIG_DIR", root.join("config"));
+        std::env::set_var("MAW_STATE_DIR", root.join("state"));
+        std::env::set_var("MAW_CACHE_DIR", root.join("cache"));
+        std::env::set_var("GHQ_ROOT", root.join("ghq"));
+
+        let mut tmux = OracleTmux::default();
+        let output = oracle_register(&oracle_strings(&["register", "3e-infra"]), &mut tmux).expect("register");
+        let registry = oracle_read_registry();
+
+        assert!(output.contains("Registered 3e-infra"));
+        let entry = registry.oracles.iter().find(|entry| entry.name == "3e-infra").expect("registered entry");
+        assert_eq!(entry.org, "laris-co");
+        assert_eq!(entry.repo, "3e-infra-oracle");
+        assert!(entry.local_path.is_empty());
+    }
 }

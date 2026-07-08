@@ -15,6 +15,7 @@ struct LocateOptions {
 #[serde(rename_all = "camelCase")]
 struct LocateResult {
     name: String,
+    handle: String,
     repo_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     site: Option<String>,
@@ -197,18 +198,25 @@ fn locate_gather_info(
     sessions: &[TmuxSession],
 ) -> Result<LocateResult, String> {
     locate_validate_name(oracle)?;
-    let repo_path = locate_find_oracle_repo_path(oracle);
+    let aliases = locate_lookup_aliases(oracle);
+    let repo_path = locate_find_oracle_path_with_aliases(&aliases);
+    let (session_name, window_count) = locate_resolve_session_with_aliases(&aliases, sessions)
+        .map_or((None, 0), |session| (Some(session.name.clone()), session.windows.len()));
+    let fleet_config_path = aliases
+        .iter()
+        .find_map(|alias| locate_find_fleet_config_path(alias, session_name.as_deref()));
     let has_psi = repo_path
         .as_deref()
         .is_some_and(|path| std::path::Path::new(path).join("ψ").exists());
-    let (session_name, window_count) = locate_resolve_session(oracle, sessions)
-        .map_or((None, 0), |session| (Some(session.name.clone()), session.windows.len()));
-    let fleet_config_path = locate_find_fleet_config_path(oracle, session_name.as_deref());
-    let manifest_entry = locate_lookup_manifest_entry(oracle);
+    let manifest_entry = aliases
+        .iter()
+        .find_map(|alias| locate_lookup_manifest_entry(alias));
     let config = locate_load_config();
-    let in_agents_config = config.agents.contains_key(oracle);
+    let in_agents_config = aliases.iter().any(|alias| config.agents.contains_key(alias.as_str()));
     let federation_node = if in_agents_config {
-        config.agents.get(oracle).cloned()
+        aliases
+            .iter()
+            .find_map(|alias| config.agents.get(alias.as_str()).cloned())
     } else if session_name.is_some() {
         Some(config.node.unwrap_or_else(|| "local".to_owned()))
     } else {
@@ -226,7 +234,14 @@ fn locate_gather_info(
     let (site, site_source) = locate_resolve_site(manifest_entry.as_ref(), result_repo_path.as_deref());
 
     Ok(LocateResult {
-        name: oracle.to_owned(),
+        name: aliases
+            .last()
+            .cloned()
+            .unwrap_or_else(|| oracle.to_owned()),
+        handle: aliases
+            .last()
+            .cloned()
+            .unwrap_or_else(|| oracle.to_owned()),
         repo_path: result_repo_path,
         site,
         site_source,
@@ -286,8 +301,28 @@ fn locate_ghq_find(suffix: &str) -> Option<String> {
 
 fn locate_find_oracle_repo_path(oracle: &str) -> Option<String> {
     locate_declared_oracle_repo_path(oracle)
-        .or_else(|| locate_ghq_find_oracle_suffix(oracle))
-        .or_else(|| locate_ghq_find(&format!("/{oracle}")).filter(|path| native_repo_path_is_oracle(std::path::Path::new(path), oracle)))
+    .or_else(|| locate_ghq_find_oracle_suffix(oracle))
+    .or_else(|| locate_ghq_find(&format!("/{oracle}")).filter(|path| native_repo_path_is_oracle(std::path::Path::new(path), oracle)))
+}
+
+fn locate_lookup_aliases(oracle: &str) -> Vec<String> {
+    let parsed = maw_identity::parse_session_name(oracle);
+    let mut aliases = vec![oracle.to_owned()];
+    if parsed.stem != oracle && !aliases.contains(&parsed.stem) {
+        aliases.push(parsed.stem);
+    }
+    aliases
+}
+
+fn locate_find_oracle_path_with_aliases(aliases: &[String]) -> Option<String> {
+    aliases.iter().find_map(|alias| locate_find_oracle_repo_path(alias.as_str()))
+}
+
+fn locate_resolve_session_with_aliases<'a>(
+    aliases: &[String],
+    sessions: &'a [TmuxSession],
+) -> Option<&'a TmuxSession> {
+    aliases.iter().find_map(|alias| locate_resolve_session(alias, sessions))
 }
 
 fn locate_declared_oracle_repo_path(oracle: &str) -> Option<String> {
@@ -896,5 +931,29 @@ mod locate_tests {
         assert!(locate_parse_args(&["--json".to_owned(), "-bad".to_owned()]).is_err());
         assert!(locate_parse_args(&["../bad".to_owned()]).is_err());
         assert!(locate_validate_name("good-oracle").is_ok());
+    }
+
+    #[test]
+    fn locate_prefixed_names_resolve_with_stripped_stem() {
+        let _guard = env_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let env = LocateHermeticEnv::new("prefixed");
+        let repo = env.ghq.join("github.com/acme/track-oracle");
+        std::fs::create_dir_all(&repo).expect("repo");
+        locate_write(
+            &env.maw_config_path(&["fleet", "99-track.json"]),
+            r#"{"name":"99-track","windows":[{"name":"track-oracle","repo":"acme/track-oracle"}]}"#,
+        );
+        let options = LocateOptions { path: true, json: false };
+        assert_eq!(
+            locate_cmd_with_sessions("99-track", &options, &[]).expect("track path"),
+            format!("{}\n", repo.display())
+        );
+        let info = locate_gather_info("99-track", true, &[]).expect("prefixed locate info");
+        let info_plain = locate_gather_info("track", true, &[]).expect("plain locate info");
+        assert_eq!(info.repo_path, info_plain.repo_path);
+        assert_eq!(info.name, info_plain.name);
+        assert_eq!(info.handle, "track");
+        assert_eq!(info.session_name, info_plain.session_name);
+        assert_eq!(info.fleet_config_path, info_plain.fleet_config_path);
     }
 }

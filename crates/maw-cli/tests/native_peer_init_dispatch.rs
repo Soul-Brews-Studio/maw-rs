@@ -43,7 +43,12 @@ fn spawn_info_server() -> (String, mpsc::Receiver<String>) {
         let n = socket.read(&mut buf).expect("read request");
         let request = String::from_utf8_lossy(&buf[..n]).to_string();
         let body = r#"{"node":"live-node","maw":{"schema":"1"}}"#;
-        write!(socket, "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}", body.len()).expect("write response");
+        write!(
+            socket,
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .expect("write response");
         let _ = tx.send(request);
     });
     (url, rx)
@@ -112,22 +117,55 @@ fn peers_probe_and_probe_all_request_info_endpoint() {
     let home = root.join("home");
     let (url, _) = spawn_info_server();
     let add = run(&["peers", "add", "live", &url], &root, &home);
-    assert!(add.status.success(), "stderr={}", String::from_utf8_lossy(&add.stderr));
+    assert!(
+        add.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&add.stderr)
+    );
 
     let (url, rx) = spawn_info_server();
-    let add = run(&["peers", "add", "live", &url, "--allow-unreachable"], &root, &home);
-    assert!(add.status.success(), "stderr={}", String::from_utf8_lossy(&add.stderr));
+    let add = run(
+        &["peers", "add", "live", &url, "--allow-unreachable"],
+        &root,
+        &home,
+    );
+    assert!(
+        add.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&add.stderr)
+    );
     let probe = run(&["peers", "probe", "live"], &root, &home);
-    assert!(probe.status.success(), "stderr={}", String::from_utf8_lossy(&probe.stderr));
+    assert!(
+        probe.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&probe.stderr)
+    );
     assert!(rx.recv().expect("probe request").starts_with("GET /info "));
 
     let (url, rx) = spawn_info_server();
-    let add = run(&["peers", "add", "live", &url, "--allow-unreachable"], &root, &home);
-    assert!(add.status.success(), "stderr={}", String::from_utf8_lossy(&add.stderr));
+    let add = run(
+        &["peers", "add", "live", &url, "--allow-unreachable"],
+        &root,
+        &home,
+    );
+    assert!(
+        add.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&add.stderr)
+    );
     let all = run(&["peers", "probe-all"], &root, &home);
-    assert!(all.status.success(), "stderr={}", String::from_utf8_lossy(&all.stderr));
-    assert!(String::from_utf8(all.stdout).expect("stdout").contains("OK"));
-    assert!(rx.recv().expect("probe-all request").starts_with("GET /info "));
+    assert!(
+        all.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&all.stderr)
+    );
+    assert!(String::from_utf8(all.stdout)
+        .expect("stdout")
+        .contains("OK"));
+    assert!(rx
+        .recv()
+        .expect("probe-all request")
+        .starts_with("GET /info "));
 }
 
 #[test]
