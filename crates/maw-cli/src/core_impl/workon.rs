@@ -761,18 +761,31 @@ fn workon_list_sessions<R: maw_tmux::TmuxRunner>(runner: &mut R) -> Vec<String> 
 fn workon_build_command_in_dir(agent_name: &str, cwd: &std::path::Path, engine: Option<&str>) -> String {
     let config = merged_config_value_in_dir(cwd);
     let commands = config.get("commands");
-    if let Some(engine) = engine {
-        return commands
+    let command = if let Some(engine) = engine {
+        commands
             .and_then(|commands| commands.get(engine))
             .and_then(serde_json::Value::as_str)
-            .map_or_else(|| engine.to_owned(), str::to_owned);
-    }
-    commands
-        .and_then(|commands| {
-            commands.get(agent_name).and_then(serde_json::Value::as_str)
-                .or_else(|| commands.get("default").and_then(serde_json::Value::as_str))
-        })
-        .map_or_else(|| "claude".to_owned(), str::to_owned)
+            .map_or_else(|| engine.to_owned(), str::to_owned)
+    } else {
+        commands
+            .and_then(|commands| {
+                commands.get(agent_name).and_then(serde_json::Value::as_str)
+                    .or_else(|| commands.get("default").and_then(serde_json::Value::as_str))
+            })
+            .map_or_else(|| "claude".to_owned(), str::to_owned)
+    };
+    workon_prefix_zai_pool(&config, command)
+}
+
+/// Fleet token-pool spawn wiring (#293): when merged config names a fleet
+/// group under `zaiPool`, export `MAW_ZAI_POOL=<group>` into the member
+/// command so `maw zai status`/`maw fleet token` inside the pane resolve
+/// `tokenPool.<group>` before the global pool. Group names are validated to
+/// stay shell-safe; anything else keeps the command untouched.
+fn workon_prefix_zai_pool(config: &serde_json::Value, command: String) -> String {
+    let Some(group) = config.get("zaiPool").and_then(serde_json::Value::as_str) else { return command; };
+    if !zai_safe_group(group) || command.starts_with("MAW_ZAI_POOL=") { return command; }
+    format!("MAW_ZAI_POOL={group} {command}")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -865,6 +878,16 @@ mod workon_tests {
     }
 
     fn workon_strings(values: &[&str]) -> Vec<String> { values.iter().map(|value| (*value).to_owned()).collect() }
+
+    #[test]
+    fn workon_prefix_zai_pool_exports_group_only_when_safe() {
+        let scoped = serde_json::json!({"zaiPool": "3e"});
+        assert_eq!(workon_prefix_zai_pool(&scoped, "codex".to_owned()), "MAW_ZAI_POOL=3e codex");
+        assert_eq!(workon_prefix_zai_pool(&scoped, "MAW_ZAI_POOL=zai codex".to_owned()), "MAW_ZAI_POOL=zai codex");
+        let unsafe_group = serde_json::json!({"zaiPool": "3e; rm -rf"});
+        assert_eq!(workon_prefix_zai_pool(&unsafe_group, "codex".to_owned()), "codex");
+        assert_eq!(workon_prefix_zai_pool(&serde_json::json!({}), "codex".to_owned()), "codex");
+    }
 
     fn workon_test_options(repo: &str, task: Option<&str>) -> WorkonOptions {
         WorkonOptions {

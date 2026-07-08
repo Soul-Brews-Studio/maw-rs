@@ -128,6 +128,9 @@ impl FleetRuntime for FleetSystemRuntime {
 }
 
 fn run_fleet_command(argv: &[String]) -> CliOutput {
+    if argv.first().is_some_and(|arg| arg == "token") {
+        return zai_fleet_token(&argv[1..]);
+    }
     match fleet_run(argv) {
         Ok((code, stdout)) => CliOutput { code, stdout, stderr: String::new() },
         Err(message) => CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") },
@@ -229,7 +232,7 @@ fn fleet_set_command(options: &mut FleetOptions, seen: &mut bool, value: &str) -
 }
 
 fn fleet_usage() -> String {
-    "usage: maw fleet [add <session>|create <group>|show <group>|status <group>|ls|doctor|health|gc|init|consolidate|resume|sync|wake|sleep] [--json] [--dry-run] [--fix] [--reboot] [--all] [--kill] [--resume]".to_owned()
+    "usage: maw fleet [add <session>|create <group>|show <group>|status <group>|ls|doctor|health|gc|init|consolidate|resume|sync|wake|sleep|token <group> [ls|status]] [--json] [--dry-run] [--fix] [--reboot] [--all] [--kill] [--resume]".to_owned()
 }
 
 fn fleet_load_state_with(runtime: &mut impl FleetRuntime) -> Result<FleetState, String> {

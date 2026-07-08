@@ -1,6 +1,8 @@
 const DISPATCH_327: &[DispatcherEntry] = &[DispatcherEntry { command: "zai", handler: Handler::Async(zai_run_async) }];
 
-const ZAI_USAGE: &str = "usage: maw zai <status|mon|test>\n  status  show configured Z.AI token pool (redacted)\n  mon     monitor snapshot (status + next action)\n  test    probe each configured key with a tiny chat completion\n";
+const ZAI_USAGE: &str = "usage: maw zai <status|mon|test> [--fleet <group>]\n  status  show configured Z.AI token pool (redacted)\n  mon     monitor snapshot (status + next action)\n  test    probe each configured key with a tiny chat completion\n  --fleet <group>  read tokenPool.<group> first, falling back to tokenPool.zai\n                   (default scope comes from $MAW_ZAI_POOL when set)\n";
+
+const ZAI_FLEET_TOKEN_USAGE: &str = "usage: maw fleet token <group> [ls|status]";
 
 #[derive(Clone)]
 struct ZaiKey { index: usize, label: String, source: String, base_url: String, token: Option<String>, status: String, error: String }
@@ -10,13 +12,59 @@ fn zai_run_async(args: Vec<String>) -> std::pin::Pin<Box<dyn std::future::Future
 }
 
 async fn zai_dispatch(args: &[String]) -> CliOutput {
-    match args.first().map_or("status", String::as_str) {
+    let (fleet, rest) = match zai_split_fleet(args) { Ok(parts) => parts, Err(e) => return zai_err(&e) };
+    let fleet = zai_fleet_scope(fleet);
+    match rest.first().map_or("status", String::as_str) {
         "help" | "--help" | "-h" => zai_ok(ZAI_USAGE.to_owned()),
-        "status" | "ls" | "list" => match zai_load_pool() { Ok((_, keys)) => zai_ok(zai_format_status(&keys)), Err(e) => zai_err(&e) },
-        "mon" => match zai_load_pool() { Ok((_, keys)) => zai_ok(zai_format_mon(&keys)), Err(e) => zai_err(&e) },
+        "status" | "ls" | "list" => match zai_load_pool(fleet.as_deref()) { Ok((_, keys)) => zai_ok(zai_format_status(&keys)), Err(e) => zai_err(&e) },
+        "mon" => match zai_load_pool(fleet.as_deref()) { Ok((_, keys)) => zai_ok(zai_format_mon(&keys)), Err(e) => zai_err(&e) },
         "test" => match zai_test_pool().await { Ok(out) => out, Err(e) => zai_err(&e) },
         _ => zai_err(ZAI_USAGE),
     }
+}
+
+/// `maw fleet token <group> [ls|status]` — thin alias over fleet-scoped zai status.
+fn zai_fleet_token(args: &[String]) -> CliOutput {
+    let Some(group) = args.first().filter(|value| !value.starts_with('-')) else { return zai_err(ZAI_FLEET_TOKEN_USAGE); };
+    if !zai_safe_group(group) { return zai_err(&format!("fleet token: invalid group name {group}")); }
+    match args.get(1).map_or("status", String::as_str) {
+        "status" | "ls" | "list" => match zai_load_pool(Some(group)) { Ok((_, keys)) => zai_ok(zai_format_status(&keys)), Err(e) => zai_err(&e) },
+        _ => zai_err(ZAI_FLEET_TOKEN_USAGE),
+    }
+}
+
+fn zai_split_fleet(args: &[String]) -> Result<(Option<String>, Vec<String>), String> {
+    let mut fleet = None;
+    let mut rest = Vec::new();
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--fleet" {
+            let value = iter.next().ok_or_else(|| "zai: --fleet needs a group name".to_owned())?;
+            if !zai_safe_group(value) { return Err(format!("zai: invalid fleet group name {value}")); }
+            fleet = Some(value.clone());
+        } else {
+            rest.push(arg.clone());
+        }
+    }
+    Ok((fleet, rest))
+}
+
+/// Scope precedence: explicit `--fleet` flag → `$MAW_ZAI_POOL` (spawn wiring) → unscoped.
+fn zai_fleet_scope(cli: Option<String>) -> Option<String> {
+    cli.or_else(|| std::env::var("MAW_ZAI_POOL").ok()).filter(|group| zai_safe_group(group))
+}
+
+fn zai_safe_group(group: &str) -> bool {
+    !group.is_empty() && group.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+}
+
+/// Pure lookup order: fleet pool (when a group is known) → global zai pool → hermes legacy pool.
+fn zai_pool_pointers(fleet: Option<&str>) -> Vec<String> {
+    let mut pointers = Vec::new();
+    if let Some(group) = fleet.filter(|group| *group != "zai") { pointers.push(format!("/tokenPool/{group}")); }
+    pointers.push("/tokenPool/zai".to_owned());
+    pointers.push("/credential_pool/zai".to_owned());
+    pointers
 }
 
 fn zai_ok(stdout: String) -> CliOutput { CliOutput { code: 0, stdout, stderr: String::new() } }
@@ -32,18 +80,19 @@ fn zai_auth_paths() -> Vec<std::path::PathBuf> {
     vec![home.join(".config/maw/maw.config.json"), home.join(".hermes/auth.json")]
 }
 
-fn zai_load_pool() -> Result<(std::path::PathBuf, Vec<ZaiKey>), String> {
+fn zai_load_pool(fleet: Option<&str>) -> Result<(std::path::PathBuf, Vec<ZaiKey>), String> {
     let mut last = String::new();
     for path in zai_auth_paths() {
-        match zai_load_pool_at(&path) { Ok(keys) => return Ok((path, keys)), Err(e) => last = e }
+        match zai_load_pool_at(&path, fleet) { Ok(keys) => return Ok((path, keys)), Err(e) => last = e }
     }
     Err(if last.is_empty() { "zai: no token pool found".to_owned() } else { last })
 }
 
-fn zai_load_pool_at(path: &std::path::Path) -> Result<Vec<ZaiKey>, String> {
+fn zai_load_pool_at(path: &std::path::Path, fleet: Option<&str>) -> Result<Vec<ZaiKey>, String> {
     let raw = std::fs::read_to_string(path).map_err(|_| format!("zai: no token pool at {}", path.display()))?;
     let json: serde_json::Value = serde_json::from_str(&raw).map_err(|_| format!("zai: invalid json at {}", path.display()))?;
-    let pool = json.pointer("/tokenPool/zai").or_else(|| json.pointer("/credential_pool/zai")).and_then(serde_json::Value::as_array).ok_or_else(|| format!("zai: missing tokenPool.zai or credential_pool.zai in {}", path.display()))?;
+    let pointers = zai_pool_pointers(fleet);
+    let pool = pointers.iter().find_map(|pointer| json.pointer(pointer).and_then(serde_json::Value::as_array)).ok_or_else(|| format!("zai: missing tokenPool.zai or credential_pool.zai in {}", path.display()))?;
     let mut keys = Vec::new();
     for (i, entry) in pool.iter().enumerate() {
         let label = entry.get("label").and_then(serde_json::Value::as_str).unwrap_or("key").to_owned();
@@ -83,7 +132,7 @@ fn zai_format_mon(keys: &[ZaiKey]) -> String {
 }
 
 async fn zai_test_pool() -> Result<CliOutput, String> {
-    let (path, keys) = zai_load_pool()?;
+    let (path, keys) = zai_load_pool(None)?;
     let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(20)).build().map_err(|e| format!("zai: http client: {e}"))?;
     let mut ok = 0usize;
     let mut out = String::from("zai test:\n");
@@ -142,5 +191,46 @@ mod zai_tests {
         let out = zai_format_status(&keys);
         assert!(out.contains("ready"));
         assert!(!out.contains("SECRET"));
+    }
+
+    #[test]
+    fn zai_pool_pointer_order_puts_fleet_scope_first() {
+        assert_eq!(zai_pool_pointers(Some("3e")), vec!["/tokenPool/3e", "/tokenPool/zai", "/credential_pool/zai"]);
+        assert_eq!(zai_pool_pointers(None), vec!["/tokenPool/zai", "/credential_pool/zai"]);
+        assert_eq!(zai_pool_pointers(Some("zai")), vec!["/tokenPool/zai", "/credential_pool/zai"]);
+    }
+
+    #[test]
+    fn zai_scoped_pool_reads_fleet_group_and_falls_back_to_global() {
+        let dir = std::env::temp_dir().join(format!("maw-rs-zai-293-scoped-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("maw.config.json");
+        let key = |label: &str| serde_json::json!({"label": label, "access_token": format!("tok-{label}")});
+        let json = serde_json::json!({"tokenPool": {"3e": [key("a"), key("b")], "zai": [key("c"), key("d"), key("e"), key("f")]}});
+        std::fs::write(&path, json.to_string()).unwrap();
+        assert_eq!(zai_load_pool_at(&path, Some("3e")).unwrap().len(), 2);
+        assert_eq!(zai_load_pool_at(&path, None).unwrap().len(), 4);
+        assert_eq!(zai_load_pool_at(&path, Some("missing-group")).unwrap().len(), 4);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn zai_split_fleet_extracts_flag_and_rejects_unsafe_groups() {
+        let args = vec!["status".to_owned(), "--fleet".to_owned(), "3e".to_owned()];
+        let (fleet, rest) = zai_split_fleet(&args).unwrap();
+        assert_eq!(fleet.as_deref(), Some("3e"));
+        assert_eq!(rest, vec!["status".to_owned()]);
+        assert!(zai_split_fleet(&["--fleet".to_owned(), "a/b".to_owned()]).is_err());
+        assert!(zai_split_fleet(&["--fleet".to_owned()]).is_err());
+    }
+
+    #[test]
+    fn zai_fleet_token_requires_group() {
+        let out = zai_fleet_token(&[]);
+        assert_eq!(out.code, 1);
+        assert!(out.stderr.contains("usage: maw fleet token"));
+        let bad = zai_fleet_token(&["a;b".to_owned()]);
+        assert_eq!(bad.code, 1);
+        assert!(bad.stderr.contains("invalid group"));
     }
 }

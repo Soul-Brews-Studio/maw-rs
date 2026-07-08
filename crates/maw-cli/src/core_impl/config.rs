@@ -442,8 +442,18 @@ fn config_validate_port(raw: &str) -> Result<u16, String> {
 #[cfg(test)]
 mod config_tests {
     use super::{
-        config_dispatch, config_target_path, dispatcher_status, DispatchKind, EnvVarRestore,
+        config_dispatch, config_redact_value, config_target_path, dispatcher_status, DispatchKind,
+        EnvVarRestore,
     };
+
+    #[test]
+    fn config_redact_masks_named_token_pool_groups() {
+        let mut value = serde_json::json!({"tokenPool": {"3e": [{"access_token": "secret-3e-key"}], "zai": [{"access_token": "secret-zai-key"}]}});
+        config_redact_value(&mut value);
+        let body = value.to_string();
+        assert!(!body.contains("secret-3e-key"));
+        assert!(!body.contains("secret-zai-key"));
+    }
 
     #[test]
     fn config_dispatch_registers_native() {

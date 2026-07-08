@@ -549,16 +549,17 @@ fn wake_sanitize_branch(value: &str) -> String {
 /// command; real binaries (codex/claude) fall through to the literal name.
 /// Fixes the fleet codex-team recipe (omx-N) that previously ran a bare `omx-1`.
 fn wake_resolve_engine_command(engine: &str) -> String {
-    merged_config_value()
+    let config = merged_config_value();
+    let command = config
         .get("commands")
-        .cloned()
         .and_then(|commands| {
             commands
                 .get(engine)
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_owned)
         })
-        .unwrap_or_else(|| engine.to_owned())
+        .unwrap_or_else(|| engine.to_owned());
+    workon_prefix_zai_pool(&config, command)
 }
 
 fn wake_default_engine(options: &WakeOptionsNative) -> String {
