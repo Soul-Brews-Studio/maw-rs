@@ -323,8 +323,8 @@ mod dispatcher_fragment_tests {
     #[test]
     fn dispatch_audit_write_errors_are_best_effort_for_native_commands() {
         let _guard = env_test_lock().lock().expect("env lock");
-        let (_state_root, _restores) = cli_dispatch_test_env();
-        let blocked_root = _state_root.join("blocked");
+        let (state_root, _restores) = cli_dispatch_test_env();
+        let blocked_root = state_root.join("blocked");
         fs::write(&blocked_root, b"blocked").expect("blocked state root");
         let _state_restore = super::EnvVarRestore::capture("MAW_STATE_DIR");
         std::env::set_var("MAW_STATE_DIR", &blocked_root);
@@ -337,7 +337,7 @@ mod dispatcher_fragment_tests {
     #[test]
     fn cli_dispatch_now_iso_uses_fixed_epoch_millis_when_present() {
         let _guard = env_test_lock().lock().expect("env lock");
-        let _ = std::env::remove_var("MAW_AUDIT_TEST_NOW_MS");
+        std::env::remove_var("MAW_AUDIT_TEST_NOW_MS");
         std::env::set_var("MAW_AUDIT_TEST_NOW_MS", "0");
         assert_eq!(cli_dispatch_now_iso(), "1970-01-01T00:00:00.000Z");
         std::env::remove_var("MAW_AUDIT_TEST_NOW_MS");
@@ -368,8 +368,8 @@ mod dispatcher_fragment_tests {
         std::env::set_var("HOME", &home);
         std::env::set_var("XDG_STATE_HOME", &state);
         std::env::set_var("MAW_XDG", "1");
-        let _ = std::env::remove_var("MAW_HOME");
-        let _ = std::env::remove_var("MAW_STATE_DIR");
+        std::env::remove_var("MAW_HOME");
+        std::env::remove_var("MAW_STATE_DIR");
         (state, restores)
     }
 }

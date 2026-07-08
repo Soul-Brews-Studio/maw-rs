@@ -769,8 +769,7 @@ fn native_fleet_window_oracle_name(window: &NativeFleetWindow) -> Option<String>
         .filter(|(prefix, suffix)| {
             !prefix.is_empty() && !suffix.is_empty() && prefix.chars().all(|ch| ch.is_ascii_digit())
         })
-        .map(|(_, suffix)| suffix)
-        .unwrap_or(source);
+        .map_or(source, |(_, suffix)| suffix);
     let name = without_slot.strip_suffix("-oracle").unwrap_or(without_slot).trim();
     (!name.is_empty()).then(|| name.to_owned())
 }
