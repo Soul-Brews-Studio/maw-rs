@@ -893,25 +893,28 @@ fn fleet_registry_upsert_session_for_env(
         windows_by_repo.insert(fleet_repo_canonical_key(&window.repo));
     }
     let target_stem = fleet_session_stem(session);
-    let write_label = format!("{session}.json");
-    let path = fleet_load_entries_result_for_env(env, "fleet")?
-        .into_iter()
-        .find_map(|entry| {
-            if entry.session.name == session {
-                return Some(entry.path);
-            }
-            if fleet_session_stem(&entry.session.name) == target_stem
-                && entry
-                    .session
-                    .windows
-                    .iter()
-                    .any(|window| windows_by_repo.contains(&fleet_repo_canonical_key(&window.repo)))
-            {
-                return Some(entry.path);
-            }
-            None
+    // Duplicate guard (#299): an entry that already owns this exact session
+    // name always wins — a session revived from the registry by `maw wake`
+    // (#312) must update its own file, never merge into a same-stem sibling.
+    // Only when no exact entry exists does the write fold into a same-stem
+    // entry whose windows overlap on canonical repo path. Loading is
+    // best-effort (non-strict): a corrupt unrelated registry file must not
+    // fail wake/fleet-add registration.
+    let entries = fleet_load_entries_for_env(env);
+    let path = entries
+        .iter()
+        .find(|entry| entry.session.name == session)
+        .or_else(|| {
+            entries.iter().find(|entry| {
+                fleet_session_stem(&entry.session.name) == target_stem
+                    && entry
+                        .session
+                        .windows
+                        .iter()
+                        .any(|window| windows_by_repo.contains(&fleet_repo_canonical_key(&window.repo)))
+            })
         })
-        .unwrap_or_else(|| dir.join(write_label));
+        .map_or_else(|| dir.join(format!("{session}.json")), |entry| entry.path.clone());
 
     let (created, mut value) = fleet_registry_read_value(&path)?;
     {
@@ -953,10 +956,16 @@ fn fleet_session_stem(value: &str) -> &str {
 }
 
 fn fleet_repo_canonical_key(repo: &str) -> String {
-    native_fleet_repo_path(repo)
-        .and_then(|path| path.canonicalize().ok())
-        .map(|path| path.to_string_lossy().to_string())
-        .unwrap_or_else(|| repo.to_owned())
+    // Canonicalize when the repo is cloned (resolves symlinked checkouts);
+    // otherwise fall back to the ghq path so `acme/x` and `github.com/acme/x`
+    // still hash to the same key.
+    native_fleet_repo_path(repo).map_or_else(
+        || repo.to_owned(),
+        |path| {
+            let path = path.canonicalize().unwrap_or(path);
+            path.to_string_lossy().to_string()
+        },
+    )
 }
 
 fn fleet_registry_object(value: &mut serde_json::Value) -> &mut serde_json::Map<String, serde_json::Value> {
@@ -1456,6 +1465,62 @@ mod fleet_tests {
         assert_eq!(merged["name"], "158-homelab");
         assert_eq!(merged["windows"].as_array().expect("windows").len(), 1);
         assert_eq!(merged["windows"][0]["repo"], "github.com/acme/homelab");
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn fleet_upsert_prefers_exact_name_entry_over_stem_sibling_for_revived_session() {
+        // #312 revives session names from the registry; when that session
+        // re-registers itself the upsert must update its own entry in place —
+        // not get treated as a duplicate of an earlier-sorting same-stem
+        // sibling (which would mint a second entry with the same name).
+        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _home = EnvVarRestore::capture("HOME");
+        let _xdg = EnvVarRestore::capture("XDG_CONFIG_HOME");
+        let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
+        let _maw_home = EnvVarRestore::capture("MAW_HOME");
+        let _state = EnvVarRestore::capture("MAW_STATE_DIR");
+        let _ghq = EnvVarRestore::capture("GHQ_ROOT");
+
+        let root = fleet_temp_root("upsert-revive-exact");
+        std::env::remove_var("MAW_HOME");
+        std::fs::create_dir_all(root.join("config/fleet")).expect("config fleet dir");
+        std::fs::write(
+            root.join("config/fleet/63-mother.json"),
+            r#"{"name":"63-mother","windows":[{"name":"main","repo":"github.com/laris-co/mother-oracle","kind":"oracle"}]}"#,
+        )
+        .expect("stale sibling fixture");
+        std::fs::write(
+            root.join("config/fleet/99-mother.json"),
+            r#"{"name":"99-mother","windows":[{"name":"main","repo":"github.com/laris-co/mother-oracle","kind":"oracle"}]}"#,
+        )
+        .expect("revived fixture");
+
+        std::env::set_var("HOME", root.join("home"));
+        std::env::set_var("XDG_CONFIG_HOME", root.join("xdg-config"));
+        std::env::set_var("MAW_CONFIG_DIR", root.join("config"));
+        std::env::set_var("MAW_STATE_DIR", root.join("state"));
+        std::env::set_var("GHQ_ROOT", root.join("ghq/github.com"));
+
+        let windows = vec![FleetWindowSummary {
+            name: "main".to_owned(),
+            repo: "github.com/laris-co/mother-oracle".to_owned(),
+            kind: None,
+        }];
+        let written = fleet_registry_upsert_session_for_env(&current_xdg_env(), "99-mother", &windows, "maw wake").expect("upsert");
+
+        assert_eq!(written.path, root.join("config/fleet/99-mother.json"));
+        assert!(!written.created);
+        let revived = serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(&written.path).expect("registry")).expect("json");
+        assert_eq!(revived["name"], "99-mother");
+        assert_eq!(revived["windows"].as_array().expect("windows").len(), 1);
+        let sibling = serde_json::from_str::<serde_json::Value>(
+            &std::fs::read_to_string(root.join("config/fleet/63-mother.json")).expect("sibling"),
+        )
+        .expect("sibling json");
+        assert_eq!(sibling["name"], "63-mother");
+        assert!(!root.join("home/.maw/fleet/99-mother.json").exists());
 
         let _ = std::fs::remove_dir_all(root);
     }

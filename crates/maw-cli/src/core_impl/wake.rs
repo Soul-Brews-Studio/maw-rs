@@ -840,6 +840,8 @@ mod wake_tests {
         let _home = EnvVarRestore::capture("HOME");
         let _xdg = EnvVarRestore::capture("XDG_CONFIG_HOME");
         let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
+        let _maw_home = EnvVarRestore::capture("MAW_HOME");
+        let _state = EnvVarRestore::capture("MAW_STATE_DIR");
         let _ghq = EnvVarRestore::capture("GHQ_ROOT");
         let _tmux = EnvVarRestore::capture("TMUX");
         let root = wake_temp_root("fixture");
@@ -848,6 +850,8 @@ mod wake_tests {
         std::env::set_var("HOME", root.join("home"));
         std::env::set_var("XDG_CONFIG_HOME", root.join("xdg-config"));
         std::env::set_var("MAW_CONFIG_DIR", root.join("config"));
+        std::env::remove_var("MAW_HOME");
+        std::env::set_var("MAW_STATE_DIR", root.join("state"));
         std::env::set_var("GHQ_ROOT", root.join("ghq/github.com"));
         std::env::remove_var("TMUX");
         test(&root);
@@ -1043,6 +1047,34 @@ mod wake_tests {
             assert_eq!(code, 0, "{stdout}");
             assert!(tmux.actions.iter().any(|action| action.starts_with(&format!("new-session {session}"))), "{stdout}");
             assert!(stdout.contains(&format!("created session '{session}'")));
+        });
+    }
+
+    #[test]
+    fn wake_revived_session_reregisters_into_its_own_registry_entry() {
+        // #312 revive + #299 upsert guard interaction: the entry that named
+        // the revived session lives in the config fleet dir, not the default
+        // ~/.maw/fleet write dir. Re-registration after the wake must update
+        // that entry in place instead of minting a duplicate file.
+        wake_with_fixture(|root| {
+            let session = "99-mother";
+            let repo = root.join("ghq/github.com/laris-co/mother-oracle");
+            std::fs::create_dir_all(&repo).expect("repo");
+            let entry = root.join("config/fleet").join(format!("{session}.json"));
+            std::fs::write(
+                &entry,
+                r#"{"name":"99-mother","windows":[{"name":"mother","repo":"github.com/laris-co/mother-oracle"}]}"#,
+            )
+            .expect("write");
+
+            let mut tmux = WakeMockTmux::default();
+            let (code, stdout) = wake_run(&wake_strings(&["mother", "--no-attach"]), &mut tmux).expect("run");
+            assert_eq!(code, 0, "{stdout}");
+            assert!(stdout.contains(&format!("created session '{session}'")));
+            assert!(!root.join("home/.maw/fleet").join(format!("{session}.json")).exists(), "duplicate entry minted: {stdout}");
+            let value = serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(&entry).expect("entry")).expect("json");
+            assert_eq!(value["name"], "99-mother");
+            assert_eq!(value["created_by"], "maw wake");
         });
     }
 
