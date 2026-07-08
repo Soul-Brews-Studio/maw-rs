@@ -19,6 +19,7 @@ struct WakeOptionsNative {
     engine: Option<String>,
     name: Option<String>,
     repo_path: Option<std::path::PathBuf>,
+    on_ready: Vec<String>,
     all: bool,
     all_local: bool,
     attach: bool,
@@ -178,7 +179,7 @@ fn wake_default_options() -> WakeOptionsNative {
     WakeOptionsNative {
         target: String::new(), task: None, wt: None, prompt: None, repo: None, issue: None, pr: None,
         incubate: None, parent: None, peer: None, layout: None, from: None, snapshot: None, engine: None,
-        name: None, repo_path: None, all: false, all_local: false, attach: true, dry_run: false, fresh: false,
+        name: None, repo_path: None, on_ready: Vec::new(), all: false, all_local: false, attach: true, dry_run: false, fresh: false,
         from_snapshot: false, kill: false, list: false, main: false, new_window: false, no_attach: false,
         pick: false, resume: false, solo: false, split: false, bud: false, channels: false, wait: false,
     }
@@ -201,6 +202,7 @@ fn wake_parse_value_arg(argv: &[String], index: usize, options: &mut WakeOptions
         "-e" | "--engine" => { options.engine = Some(wake_take_value(argv, index, arg, wake_validate_target_value)?); 2 }
         "--name" => { options.name = Some(wake_take_value(argv, index, "--name", wake_validate_slug)?); 2 }
         "--repo-path" => { options.repo_path = Some(std::path::PathBuf::from(wake_take_value(argv, index, "--repo-path", wake_validate_target_value)?)); 2 }
+        "--on-ready" => { options.on_ready.push(wake_take_text(argv, index, "--on-ready")?); 2 }
         _ => return wake_parse_equals_arg(arg, options),
     };
     Ok(Some(consumed))
@@ -232,6 +234,7 @@ fn wake_equals_setters() -> Vec<(&'static str, WakeEqualsSetter)> {
         ("--snapshot=", |o, v| { wake_validate_target_value(v, "--snapshot")?; o.snapshot = Some(v.to_owned()); Ok(()) }),
         ("--engine=", |o, v| { wake_validate_target_value(v, "--engine")?; o.engine = Some(v.to_owned()); Ok(()) }),
         ("--name=", |o, v| { wake_validate_slug(v, "--name")?; o.name = Some(v.to_owned()); Ok(()) }),
+        ("--on-ready=", |o, v| { wake_validate_text(v, "--on-ready")?; o.on_ready.push(v.to_owned()); Ok(()) }),
     ]
 }
 
@@ -291,7 +294,7 @@ fn wake_finalize_options(mut options: WakeOptionsNative, positionals: &[String])
 }
 
 fn wake_usage() -> String {
-    "usage: maw wake <target|all> [--task <slug>|--wt <slug>] [--repo <org/repo>] [--prompt <text>] [--all --all-local --attach|-a --no-attach --dry-run --fresh --from-snapshot --kill --layout <nested|legacy> --list --main --new --parent <session> --peer <node> --pick --resume --snapshot <id> --solo --split]".to_owned()
+    "usage: maw wake <target|all> [--task <slug>|--wt <slug>] [--repo <org/repo>] [--prompt <text>] [--on-ready <cmd>] [--all --all-local --attach|-a --no-attach --dry-run --fresh --from-snapshot --kill --layout <nested|legacy> --list --main --new --parent <session> --peer <node> --pick --resume --snapshot <id> --solo --split]".to_owned()
 }
 
 fn wake_help_value_flags() -> &'static [&'static str] {
@@ -313,6 +316,7 @@ fn wake_help_value_flags() -> &'static [&'static str] {
         "--engine",
         "--name",
         "--repo-path",
+        "--on-ready",
     ]
 }
 
@@ -701,8 +705,45 @@ fn wake_apply(
     let session_exists = tmux.wake_has_session(&resolved.session);
     if session_exists { wake_create_or_reuse_window(options, resolved, tmux, out)?; } else { wake_create_session(resolved, tmux, out)?; }
     wake_register_fleet_session(resolved, tmux)?;
+    let hooks = wake_post_wake_hooks(options);
+    wake_run_post_wake_hooks(&resolved.oracle, &resolved.session, &resolved.window, &hooks);
     if options.attach { tmux.wake_select_window(&resolved.target)?; }
     Ok(())
+}
+
+
+fn wake_post_wake_hooks(options: &WakeOptionsNative) -> Vec<String> {
+    let mut hooks = wake_config_post_wake_hooks();
+    hooks.extend(options.on_ready.iter().cloned());
+    hooks
+}
+
+fn wake_config_post_wake_hooks() -> Vec<String> {
+    let config = merged_config_value();
+    config
+        .pointer("/hooks/postWake")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn wake_run_post_wake_hooks(oracle: &str, session: &str, window: &str, hooks: &[String]) {
+    for hook in hooks.iter().map(String::as_str).map(str::trim).filter(|hook| !hook.is_empty()) {
+        let _ = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(hook)
+            .env("MAW_ORACLE", oracle)
+            .env("MAW_SESSION", session)
+            .env("MAW_WINDOW", window)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
 }
 
 fn wake_create_session(resolved: &WakeResolvedNative, tmux: &mut impl WakeTmuxNative, out: &mut String) -> Result<(), String> {
@@ -866,6 +907,42 @@ mod wake_tests {
         assert!(wake_parse_args(&wake_strings(&["neo", "-a"])).expect("parse -a").attach);
         assert!(wake_parse_args(&wake_strings(&["--", "neo"])).expect_err("separator guard").contains("unknown argument"));
         assert!(wake_parse_args(&wake_strings(&["neo", "--task", "-bad"])).expect_err("value guard").contains("must not start"));
+    }
+
+    #[test]
+    fn wake_post_wake_hooks_write_marker_env() {
+        wake_with_fixture(|root| {
+            let session = wake_session_name("neo", &[]);
+            let expected = format!("neo|{session}|neo");
+            let cli_marker = root.join("cli-ready.txt");
+            let cli_hook = format!(
+                "printf '%s|%s|%s' \"$MAW_ORACLE\" \"$MAW_SESSION\" \"$MAW_WINDOW\" > {}",
+                wake_shell_quote(&cli_marker.display().to_string())
+            );
+            let mut tmux = WakeMockTmux::default();
+            let (code, _stdout) = wake_run(
+                &wake_strings(&["neo", "--no-attach", "--on-ready", "false", "--on-ready", &cli_hook]),
+                &mut tmux,
+            )
+            .expect("wake with cli hooks");
+            assert_eq!(code, 0);
+            assert_eq!(std::fs::read_to_string(&cli_marker).expect("cli marker"), expected);
+
+            let config_marker = root.join("config-ready.txt");
+            let config_hook = format!(
+                "printf '%s|%s|%s' \"$MAW_ORACLE\" \"$MAW_SESSION\" \"$MAW_WINDOW\" > {}",
+                wake_shell_quote(&config_marker.display().to_string())
+            );
+            std::fs::write(
+                root.join("config/maw.config.50.json"),
+                serde_json::to_string(&serde_json::json!({"hooks":{"postWake":[config_hook]}})).expect("json"),
+            )
+            .expect("write config hook");
+            let mut tmux = WakeMockTmux { sessions: tmux.sessions, actions: Vec::new() };
+            let (code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("wake with config hook");
+            assert_eq!(code, 0);
+            assert_eq!(std::fs::read_to_string(&config_marker).expect("config marker"), expected);
+        });
     }
 
     #[test]

@@ -915,6 +915,9 @@ fn fleet_run_group_action(
             None => skipped.push(member.handle.as_str()),
         }
     }
+    if action == "wake" && !options.dry_run {
+        fleet_run_group_post_wake_hooks(&resolved);
+    }
     if options.json { return fleet_json_group_action(state, action, group, options, &resolved, &skipped); }
     let mut out = String::new();
     let icon = if action == "wake" { "🌅" } else { "🌙" };
@@ -927,6 +930,28 @@ fn fleet_run_group_action(
 
 // Registry resolution mirrors locate's hash-slot rules: `NN-` prefixes and `-oracle` suffixes are
 // stripped on both sides, and window names count (a member can live as a window of a shared session).
+
+fn fleet_run_group_post_wake_hooks(resolved: &[(&str, &FleetSessionSummary)]) {
+    let hooks = wake_config_post_wake_hooks();
+    if hooks.is_empty() {
+        return;
+    }
+    for (handle, session) in resolved {
+        let window = fleet_member_hook_window(handle, session);
+        wake_run_post_wake_hooks(handle, &session.name, &window, &hooks);
+    }
+}
+
+fn fleet_member_hook_window(handle: &str, session: &FleetSessionSummary) -> String {
+    let wanted = locate_normalized_names(handle);
+    session
+        .windows
+        .iter()
+        .find(|window| locate_normalized_names(&window.name).iter().any(|name| wanted.contains(name)))
+        .or_else(|| session.windows.first())
+        .map_or_else(|| session.name.clone(), |window| window.name.clone())
+}
+
 fn fleet_member_session<'a>(handle: &str, sessions: &'a [FleetSessionSummary]) -> Option<&'a FleetSessionSummary> {
     let wanted = locate_normalized_names(handle);
     sessions.iter().find(|session| {
@@ -1513,6 +1538,33 @@ mod fleet_tests {
             assert_eq!(value["sessions"], serde_json::json!(["03-alpha"]));
             assert_eq!(value["members"][0]["handle"], "alpha");
             assert_eq!(value["skipped"][0], serde_json::json!({"handle": "drift", "reason": "no session"}));
+        });
+    }
+
+    #[test]
+    fn fleet_wake_group_runs_config_post_wake_hook_per_member() {
+        fleet_with_fixture(|root| {
+            let marker = root.join("fleet-ready.txt");
+            let hook = format!(
+                "printf '%s|%s|%s\\n' \"$MAW_ORACLE\" \"$MAW_SESSION\" \"$MAW_WINDOW\" >> {}",
+                wake_shell_quote(&marker.display().to_string())
+            );
+            std::fs::write(
+                root.join("config/maw.config.json"),
+                serde_json::to_string(&serde_json::json!({"node":"alpha","hooks":{"postWake":[hook]}})).expect("json"),
+            )
+            .expect("write config hook");
+            std::fs::write(
+                root.join("config/fleet/01-hooks.json"),
+                r#"{"name":"01-hooks","groupName":"hooks","windows":[],"members":[{"handle":"maw"},{"handle":"ghost"}]}"#,
+            )
+            .expect("roster");
+
+            let output = run_fleet_command(&fleet_strings(&["wake", "hooks"]));
+
+            assert_eq!(output.code, 0, "{}", output.stderr);
+            let lines = std::fs::read_to_string(&marker).expect("marker");
+            assert_eq!(lines.lines().collect::<Vec<_>>(), vec!["maw|03-alpha|maw", "ghost|03-alpha|ghost"]);
         });
     }
 
