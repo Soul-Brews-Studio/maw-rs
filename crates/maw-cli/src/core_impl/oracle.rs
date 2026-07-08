@@ -69,6 +69,7 @@ fn oracle_run(argv: &[String], tmux: &mut OracleTmux) -> Result<String, String> 
         "stale" => Ok(oracle_stale(oracle_parse_json_flag(argv, 1)?)),
         "prune" => oracle_prune(argv, tmux),
         "register" => oracle_register(argv, tmux),
+        "recruit" => oracle_recruit_run(&argv[1..]),
         "search" | "find" => oracle_search(argv, tmux),
         "about" => oracle_about(argv, tmux),
         "set-nickname" | "nickname" => oracle_set_nickname(argv),

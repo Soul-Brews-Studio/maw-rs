@@ -16,7 +16,11 @@ struct FleetRosterMemberView { member: NativeFleetMember, node: Option<String>, 
 
 fn fleet_roster_intercept(argv: &[String]) -> Option<Result<(i32, String), String>> {
     let sub = argv.iter().find(|arg| !arg.starts_with('-'))?;
-    matches!(sub.as_str(), "create" | "show" | "status").then(|| fleet_roster_run(argv))
+    match sub.as_str() {
+        "create" | "show" | "status" => Some(fleet_roster_run(argv)),
+        "join" => Some(fleet_join_run(argv)),
+        _ => None,
+    }
 }
 
 fn fleet_roster_run(argv: &[String]) -> Result<(i32, String), String> {
