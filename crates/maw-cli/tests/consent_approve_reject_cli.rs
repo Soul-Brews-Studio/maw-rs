@@ -16,8 +16,14 @@ fn args(values: &[&str]) -> Vec<String> {
 /// Seed one pending request (id `req-1`, pin `ABC234`) in a fresh tempdir and
 /// point `CONSENT_PENDING_DIR` / `CONSENT_TRUST_FILE` at it (caller holds the lock).
 fn seed(label: &str, action: &str, expires_at: &str) -> (PathBuf, PathBuf) {
-    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).expect("time").as_nanos();
-    let root = std::env::temp_dir().join(format!("maw-rs-consent-native-{label}-{}-{nonce}", std::process::id()));
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "maw-rs-consent-native-{label}-{}-{nonce}",
+        std::process::id()
+    ));
     let pending_dir = root.join("consent-pending");
     std::fs::create_dir_all(&pending_dir).expect("pending dir");
     let pin_hash = maw_auth::hash_consent_pin("ABC234");
@@ -45,7 +51,11 @@ fn consent_approve_verifies_pin_writes_trust_entry_and_marks_approved() {
 
     let output = run_cli(&args(&["consent", "approve", "req-1", "ABC234"]));
     assert_eq!(output.code, 0, "{}", output.stderr);
-    assert!(output.stdout.contains("approved req-1"), "{}", output.stdout);
+    assert!(
+        output.stdout.contains("approved req-1"),
+        "{}",
+        output.stdout
+    );
     assert_eq!(read_json(&pending_file)["status"], "approved");
     let entry = &read_json(&root.join("trust.json"))["trust"]["alpha→local-node:fleet-recruit"];
     assert_eq!(entry["action"], "fleet-recruit");

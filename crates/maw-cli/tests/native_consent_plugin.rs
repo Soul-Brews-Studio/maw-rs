@@ -290,6 +290,10 @@ fn consent_mutating_subcommands_are_refused_without_delegation() {
 
     let trust = run_cli(&args(&["consent", "trust", "peer"]));
     assert_ne!(trust.code, 0);
-    assert!(trust.stderr.contains("not native in maw-rs ZERO-BUN B2"), "{}", trust.stderr);
+    assert!(
+        trust.stderr.contains("not native in maw-rs ZERO-BUN B2"),
+        "{}",
+        trust.stderr
+    );
     let _ = std::fs::remove_dir_all(root);
 }

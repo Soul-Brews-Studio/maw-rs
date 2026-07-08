@@ -84,7 +84,12 @@ pub(super) fn emit_status_table(
     }
 }
 
-pub(super) fn emit_status_detail(env: &DiscordEnv, row: &BotRow, redact: bool, log: &mut Vec<String>) {
+pub(super) fn emit_status_detail(
+    env: &DiscordEnv,
+    row: &BotRow,
+    redact: bool,
+    log: &mut Vec<String>,
+) {
     let (sev, reason) = classify(row);
     let host = short_host(env);
     log.push(format!(

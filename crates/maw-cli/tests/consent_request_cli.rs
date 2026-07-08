@@ -66,7 +66,10 @@ fn consent_request_plan_models_peer_http_failure_with_redacted_body() {
 #[test]
 fn consent_request_plan_round_trips_fleet_recruit_action() {
     let mut args = base_args();
-    let action = args.iter().position(|arg| arg == "hey").expect("action arg");
+    let action = args
+        .iter()
+        .position(|arg| arg == "hey")
+        .expect("action arg");
     args[action] = "fleet-recruit".to_owned();
     let json = json(&args);
     assert_eq!(json["ok"], true);

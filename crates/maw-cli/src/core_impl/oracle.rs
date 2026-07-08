@@ -479,7 +479,7 @@ mod oracle_tests {
         std::env::set_var("GHQ_ROOT", root.join("ghq"));
 
         let mut tmux = OracleTmux::default();
-        let output = oracle_register(&oracle_strings(&["oracle", "register", "3e-infra"]), &mut tmux).expect("register");
+        let output = oracle_register(&oracle_strings(&["register", "3e-infra"]), &mut tmux).expect("register");
         let registry = oracle_read_registry();
 
         assert!(output.contains("Registered 3e-infra"));
