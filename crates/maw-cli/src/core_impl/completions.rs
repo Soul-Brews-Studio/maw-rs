@@ -3,22 +3,15 @@ const DISPATCH_99: &[DispatcherEntry] = &[DispatcherEntry {
     handler: Handler::Sync(completions_run_command),
 }];
 
-const COMPLETIONS_HELP: &str = "usage: maw completions <commands|fleet|oracle|groups|oracles|windows|zsh|bash|fish>\n\nGenerate maw shell completions or dynamic completion data.\n\nInstall examples:\n  zsh:  mkdir -p ~/.zsh/completions && maw completions zsh > ~/.zsh/completions/_maw\n        add to ~/.zshrc before compinit: fpath=(~/.zsh/completions $fpath)\n  bash: maw completions bash > ~/.maw-completion.bash\n        add to ~/.bashrc: source ~/.maw-completion.bash\n  fish: mkdir -p ~/.config/fish/completions && maw completions fish > ~/.config/fish/completions/maw.fish\n\nData subcommands:\n  commands   command names for first-position completion\n  fleet      fleet subcommand names\n  oracle     oracle subcommand names\n  groups     squadron group names from fleet roster files\n  oracles    oracle names from fleet configs\n  windows    tmux window/session names from fleet configs";
-
-const COMPLETIONS_FLEET_SUBCOMMANDS: &[&str] = &[
-    "add", "create", "show", "status", "join", "token", "ls", "doctor", "health", "gc", "init",
-    "consolidate", "resume", "sync", "wake", "sleep",
-];
-
-const COMPLETIONS_ORACLE_SUBCOMMANDS: &[&str] =
-    &["ls", "scan", "search", "recruit", "about", "set-nickname", "get-nickname", "prune", "register"];
+const COMPLETIONS_HELP: &str = "usage: maw completions <commands [--describe]|subs <command>|fleet|oracle|groups|oracles|windows|zsh|bash|fish>\n\nGenerate shell completion scripts and dynamic completion data for maw.\n\nInstall examples:\n  zsh:  mkdir -p ~/.zsh/completions && maw completions zsh > ~/.zsh/completions/_maw\n        add to ~/.zshrc before compinit: fpath=(~/.zsh/completions $fpath)\n  bash: maw completions bash > ~/.maw-completion.bash\n        add to ~/.bashrc: source ~/.maw-completion.bash\n  fish: mkdir -p ~/.config/fish/completions && maw completions fish > ~/.config/fish/completions/maw.fish\n\nData subcommands:\n  commands             command names for first-position completion\n  commands --describe  one name<TAB>description line per command, sourced from usage strings\n  subs <command>       second-position words for <command>, derived from its usage string\n  fleet                fleet subcommand names (alias for: subs fleet)\n  oracle               oracle subcommand names (alias for: subs oracle)\n  groups               squadron group names from fleet roster files\n  oracles              oracle names from fleet configs\n  windows              tmux window/session names from fleet configs";
 
 const COMPLETIONS_ZSH: &str = r#"#compdef maw
 
-_maw_dynamic_words() {
-  local out
-  out=(${(f)"$(maw completions "$1" 2>/dev/null)"})
-  print -l -- ${out[@]}
+_maw_subs() {
+  local -a subs
+  subs=(${(f)"$(maw completions subs "$1" 2>/dev/null)"})
+  (( ${#subs} )) || return 1
+  compadd -- ${subs[@]}
 }
 
 _maw_oracles() {
@@ -39,9 +32,36 @@ _maw_groups() {
   _describe 'fleet group' groups
 }
 
+_maw_commands() {
+  local line
+  local -a lines commands oracles
+  lines=(${(f)"$(maw completions commands --describe 2>/dev/null)"})
+  for line in ${lines[@]}; do
+    [[ -n $line ]] || continue
+    if [[ $line == *$'\t'* ]]; then
+      commands+=("${line%%$'\t'*}:${line#*$'\t'}")
+    else
+      commands+=("$line")
+    fi
+  done
+  for line in ${(f)"$(maw completions oracles 2>/dev/null)"}; do
+    [[ -n $line ]] && oracles+=("${line}:Oracle (peek/send shorthand)")
+  done
+  _describe -t oracle-shorthand 'oracle shorthand' oracles
+  _describe -t maw-commands 'maw commands' commands
+}
+
 _maw() {
   local curcontext="$curcontext" state line
   typeset -A opt_args
+
+  # Labeled groups (oracle shorthand vs maw commands) need group-name + format
+  # styles; add maw-scoped defaults only when the user has none of their own.
+  local _maw_style
+  zstyle -s ":completion:${curcontext}:descriptions" format _maw_style ||
+    zstyle ':completion:*:*:maw:*:descriptions' format '%B%d%b'
+  zstyle -s ":completion:${curcontext}:" group-name _maw_style ||
+    zstyle ':completion:*:*:maw:*' group-name ''
 
   _arguments -C \
     '1:command:->cmd' \
@@ -49,12 +69,7 @@ _maw() {
 
   case $state in
     cmd)
-      local -a commands oracles all
-      commands=(${(f)"$(maw completions commands 2>/dev/null)"})
-      oracles=(${(f)"$(maw completions oracles 2>/dev/null)"})
-      all=(${commands[@]})
-      for o in ${oracles[@]}; do all+=("$o:Oracle (peek/send shorthand)"); done
-      _describe 'command' all
+      _maw_commands
       ;;
     args)
       case $line[1] in
@@ -66,7 +81,7 @@ _maw() {
           ;;
         fleet)
           if (( CURRENT == 2 )); then
-            compadd -- ${(f)"$(maw completions fleet 2>/dev/null)"}
+            _maw_subs fleet
           elif (( CURRENT == 3 )); then
             case $words[2] in
               show|status|wake|sleep|token) _maw_groups ;;
@@ -75,26 +90,21 @@ _maw() {
           ;;
         oracle)
           if (( CURRENT == 2 )); then
-            compadd -- ${(f)"$(maw completions oracle 2>/dev/null)"}
+            _maw_subs oracle
           elif [[ $words[2] == recruit ]]; then
             (( CURRENT == 3 )) && _maw_groups
             (( CURRENT == 4 )) && _maw_oracles
           fi
           ;;
-        completions)
-          _values 'completion mode' commands fleet oracle groups oracles windows zsh bash fish --help
-          ;;
-        plugin|plugins)
-          _values 'plugin action' ls list enable disable info standard full lean nuke
-          ;;
-        team|t)
-          _values 'team action' create new plan preflight load spawn-from spawn bring send msg shutdown down resume lives list ls status add tasks done assign delete rm invite oracle-invite oracle-remove members enter
-          ;;
         serve)
           _message 'port (default: 3456)'
           ;;
         *)
-          _message 'argument'
+          if (( CURRENT == 2 )); then
+            _maw_subs "$line[1]" || _message 'argument'
+          else
+            _message 'argument'
+          fi
           ;;
       esac
       ;;
@@ -125,7 +135,7 @@ _maw_complete() {
       ;;
     fleet)
       if [[ $COMP_CWORD -eq 2 ]]; then
-        words="$(maw completions fleet 2>/dev/null)"
+        words="$(maw completions subs fleet 2>/dev/null)"
       elif [[ $COMP_CWORD -eq 3 ]]; then
         case "${COMP_WORDS[2]}" in
           show|status|wake|sleep|token) words="$(maw completions groups 2>/dev/null)" ;;
@@ -134,24 +144,18 @@ _maw_complete() {
       ;;
     oracle)
       if [[ $COMP_CWORD -eq 2 ]]; then
-        words="$(maw completions oracle 2>/dev/null)"
+        words="$(maw completions subs oracle 2>/dev/null)"
       elif [[ ${COMP_WORDS[2]} == recruit && $COMP_CWORD -eq 3 ]]; then
         words="$(maw completions groups 2>/dev/null)"
       elif [[ ${COMP_WORDS[2]} == recruit && $COMP_CWORD -eq 4 ]]; then
         words="$(maw completions oracles 2>/dev/null)"
       fi
       ;;
-    completions)
-      words="commands fleet oracle groups oracles windows zsh bash fish --help"
-      ;;
-    plugin|plugins)
-      words="ls list enable disable info standard full lean nuke"
-      ;;
-    team|t)
-      words="create new plan preflight load spawn-from spawn bring send msg shutdown down resume lives list ls status add tasks done assign delete rm invite oracle-invite oracle-remove members enter"
-      ;;
     *)
       words=""
+      if [[ $COMP_CWORD -eq 2 ]]; then
+        words="$(maw completions subs "$cmd" 2>/dev/null)"
+      fi
       ;;
   esac
   COMPREPLY=( $(compgen -W "$words" -- "$cur") )
@@ -159,31 +163,55 @@ _maw_complete() {
 complete -F _maw_complete maw"#;
 
 const COMPLETIONS_FISH: &str = r"# maw fish completion
-complete -c maw -f -n '__fish_use_subcommand' -a '(maw completions commands 2>/dev/null)'
+complete -c maw -f -n '__fish_use_subcommand' -a '(maw completions commands --describe 2>/dev/null)'
+complete -c maw -f -n '__fish_use_subcommand' -a '(maw completions oracles 2>/dev/null)' -d 'Oracle (peek/send shorthand)'
 complete -c maw -f -n '__fish_seen_subcommand_from wake about info' -a '(maw completions oracles 2>/dev/null)'
 complete -c maw -f -n '__fish_seen_subcommand_from peek see a attach bring b hey send tell done finish' -a '(maw completions windows 2>/dev/null)'
-complete -c maw -f -n '__fish_seen_subcommand_from completions' -a 'commands fleet oracle groups oracles windows zsh bash fish --help'
-complete -c maw -f -n '__fish_seen_subcommand_from team t' -a 'create new plan preflight load spawn-from spawn bring send msg shutdown down resume lives list ls status add tasks done assign delete rm invite oracle-invite oracle-remove members enter'
-complete -c maw -f -n 'test (count (commandline -opc)) -eq 2; and contains -- (commandline -opc)[2] fleet' -a '(maw completions fleet 2>/dev/null)'
-complete -c maw -f -n 'test (count (commandline -opc)) -eq 2; and contains -- (commandline -opc)[2] oracle' -a '(maw completions oracle 2>/dev/null)'
+complete -c maw -f -n 'test (count (commandline -opc)) -eq 2' -a '(maw completions subs (commandline -opc)[2] 2>/dev/null)'
 complete -c maw -f -n 'test (count (commandline -opc)) -eq 3; and contains -- (commandline -opc)[2] fleet; and contains -- (commandline -opc)[3] show status wake sleep token' -a '(maw completions groups 2>/dev/null)'
 complete -c maw -f -n 'test (count (commandline -opc)) -eq 3; and contains -- (commandline -opc)[2] oracle; and contains -- (commandline -opc)[3] recruit' -a '(maw completions groups 2>/dev/null)'
 complete -c maw -f -n 'test (count (commandline -opc)) -eq 4; and contains -- (commandline -opc)[2] oracle; and contains -- (commandline -opc)[3] recruit' -a '(maw completions oracles 2>/dev/null)'";
 
 fn completions_run_command(argv: &[String]) -> CliOutput {
-    match completions_parse_mode(argv).and_then(completions_render_mode) {
+    match completions_parse_request(argv).and_then(completions_render_request) {
         Ok(stdout) => completions_ok(&stdout),
         Err(message) if message.is_empty() => completions_ok(COMPLETIONS_HELP),
         Err(message) => CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") },
     }
 }
 
-fn completions_parse_mode(argv: &[String]) -> Result<&str, String> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompletionsRequest<'a> {
+    Mode(&'a str),
+    CommandsDescribed,
+    Subs(&'a str),
+}
+
+fn completions_parse_request(argv: &[String]) -> Result<CompletionsRequest<'_>, String> {
     let Some(mode) = argv.first().map(String::as_str) else { return Err(String::new()); };
+    match (mode, argv.get(1).map(String::as_str)) {
+        ("commands", Some("--describe")) if argv.len() == 2 => return Ok(CompletionsRequest::CommandsDescribed),
+        ("subs", Some(command)) if argv.len() == 2 => {
+            if !completions_is_safe_target(command) {
+                return Err(format!("completions: invalid command name: {command}"));
+            }
+            return Ok(CompletionsRequest::Subs(command));
+        }
+        ("subs", None) => return Err("completions: subs expects exactly one command name".to_owned()),
+        _ => {}
+    }
     if argv.len() > 1 { return Err("completions: expected exactly one subcommand".to_owned()); }
     if matches!(mode, "--help" | "-h" | "help") { return Err(String::new()); }
     if mode == "--" || mode.starts_with('-') { return Err("completions: subcommand must not start with '-' or be '--'".to_owned()); }
-    Ok(mode)
+    Ok(CompletionsRequest::Mode(mode))
+}
+
+fn completions_render_request(request: CompletionsRequest<'_>) -> Result<String, String> {
+    match request {
+        CompletionsRequest::CommandsDescribed => Ok(completions_commands_described().join("\n")),
+        CompletionsRequest::Subs(command) => Ok(completions_subs(command).join("\n")),
+        CompletionsRequest::Mode(mode) => completions_render_mode(mode),
+    }
 }
 
 fn completions_render_mode(mode: &str) -> Result<String, String> {
@@ -193,8 +221,8 @@ fn completions_render_mode(mode: &str) -> Result<String, String> {
         "oracles" => Ok(completions_targets(CompletionsTargetKind::Oracles).join("\n")),
         "windows" => Ok(completions_targets(CompletionsTargetKind::Windows).join("\n")),
         "groups" => Ok(completions_groups().join("\n")),
-        "fleet" => Ok(COMPLETIONS_FLEET_SUBCOMMANDS.join("\n")),
-        "oracle" => Ok(COMPLETIONS_ORACLE_SUBCOMMANDS.join("\n")),
+        "fleet" => Ok(completions_subs("fleet").join("\n")),
+        "oracle" => Ok(completions_subs("oracle").join("\n")),
         "pulse" => Ok("add ls list".to_owned()),
         "zsh" => Ok(COMPLETIONS_ZSH.to_owned()),
         "bash" => Ok(COMPLETIONS_BASH.to_owned()),
@@ -215,6 +243,221 @@ fn completions_commands() -> Vec<&'static str> {
 
 fn completions_is_public_command(command: &str) -> bool {
     !command.is_empty() && !command.starts_with('-') && !command.starts_with("__")
+}
+
+// ---- usage-derived completion data (#309) ----
+//
+// One registry maps dispatcher commands to the usage strings the commands
+// themselves print. Descriptions and second-position words are *derived* from
+// those strings, so completion data cannot drift from the documented surface;
+// commands without an entry simply fall back to name-only completion.
+
+fn completions_usage_sources() -> Vec<(&'static str, String)> {
+    vec![
+        ("absorb", ABSORB_USAGE.to_owned()),
+        ("activity", ACTIVITY_USAGE.to_owned()),
+        ("art", ARTIFACTMGR_USAGE.to_owned()),
+        ("audit", AUDIT_USAGE.to_owned()),
+        ("awake", AWAKE_USAGE.to_owned()),
+        ("codex", CODEX_USAGE_273.to_owned()),
+        ("completions", COMPLETIONS_HELP.to_owned()),
+        ("consent", consent_help_135()),
+        ("done", DONE_USAGE.to_owned()),
+        ("dream", DREAM_USAGE.to_owned()),
+        ("fleet", fleet_usage()),
+        ("follow", FOLLOW_USAGE.to_owned()),
+        ("inbox", INBOX_USAGE.to_owned()),
+        ("join", JOIN_USAGE.to_owned()),
+        ("kill", KILL_USAGE.to_owned()),
+        ("layout", LAYOUT_USAGE.to_owned()),
+        ("more", MORE_USAGE.to_owned()),
+        ("new", NEW_USAGE.to_owned()),
+        ("notify", NOTIFY_USAGE.to_owned()),
+        ("oracle", ORACLE_USAGE.to_owned()),
+        ("oracle-workon", ORACLEWORKON_USAGE.to_owned()),
+        ("plugin", PLUGIN_USAGE.to_owned()),
+        ("plugin-artifact", PLUGINARTIFACT_USAGE.to_owned()),
+        ("plugin-policy", POLICY_USAGE.to_owned()),
+        ("plugins", PLUGINS_USAGE.to_owned()),
+        ("policy", POLICY_USAGE.to_owned()),
+        ("preflight", PREFLIGHT_USAGE.to_owned()),
+        ("promote", PROMOTE_USAGE.to_owned()),
+        ("scaffold", SCAFFOLD_USAGE.to_owned()),
+        ("setup", SETUP_USAGE.to_owned()),
+        ("snapshots", SNAPSHOTS_USAGE.to_owned()),
+        ("soul-sync", SOULSYNC_USAGE.to_owned()),
+        ("split", SPLIT_USAGE.to_owned()),
+        ("stop", STOP_USAGE.to_owned()),
+        ("stream", STREAM_USAGE.to_owned()),
+        ("t", TEAM_USAGE.to_owned()),
+        ("talk-to", TALKTO_USAGE.to_owned()),
+        ("team", TEAM_USAGE.to_owned()),
+        ("tile", TILE_USAGE.to_owned()),
+        ("user-setup", USERSETUP_USAGE.to_owned()),
+        ("wave", WAVE_USAGE.to_owned()),
+        ("zai", ZAI_USAGE.to_owned()),
+    ]
+}
+
+fn completions_usage_for(command: &str) -> Option<String> {
+    completions_usage_sources()
+        .into_iter()
+        .find_map(|(name, usage)| (name == command).then_some(usage))
+}
+
+/// `commands --describe` payload: `name<TAB>description` per command, where the
+/// description is the command's usage synopsis line; name-only when unknown.
+fn completions_commands_described() -> Vec<String> {
+    completions_commands()
+        .into_iter()
+        .map(|command| {
+            match completions_usage_for(command).map(|usage| completions_usage_description(&usage)) {
+                Some(description) if !description.is_empty() => format!("{command}\t{description}"),
+                _ => command.to_owned(),
+            }
+        })
+        .collect()
+}
+
+/// First non-empty usage line with any `usage:` prefix dropped and inner
+/// whitespace collapsed.
+fn completions_usage_description(usage: &str) -> String {
+    usage
+        .lines()
+        .map(|line| {
+            line.trim_start_matches("usage:")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .find(|line| !line.is_empty())
+        .unwrap_or_default()
+}
+
+/// Second-position completion words for `command`, derived from its usage
+/// string: for every synopsis line (`maw <command> ...` / `maw-rs <command> ...`)
+/// take the token group right after the command name — bare words become
+/// candidates directly, `<a|b|...>` / `[a|b|...]` groups contribute the first
+/// word of each alternative.
+fn completions_subs(command: &str) -> Vec<String> {
+    let Some(usage) = completions_usage_for(command) else { return Vec::new(); };
+    let mut words = std::collections::BTreeSet::new();
+    for line in usage.lines() {
+        if let Some(remainder) = completions_synopsis_remainder(line) {
+            completions_collect_synopsis_words(remainder, &mut words);
+        }
+    }
+    words.into_iter().collect()
+}
+
+/// Text after the first word-boundary `maw <word> ` / `maw-rs <word> ` on the line.
+fn completions_synopsis_remainder(line: &str) -> Option<&str> {
+    for (index, _) in line.match_indices("maw") {
+        let at_boundary = index == 0 || line[..index].chars().next_back().is_some_and(char::is_whitespace);
+        if !at_boundary { continue; }
+        let rest = &line[index + 3..];
+        let rest = rest.strip_prefix("-rs").unwrap_or(rest);
+        let Some(rest) = rest.strip_prefix(' ') else { continue; };
+        let rest = rest.trim_start();
+        return rest
+            .find(char::is_whitespace)
+            .map(|position| rest[position..].trim_start())
+            .filter(|value| !value.is_empty());
+    }
+    None
+}
+
+fn completions_collect_synopsis_words(remainder: &str, words: &mut std::collections::BTreeSet<String>) {
+    for alternative in completions_split_alternatives(remainder) {
+        let alternative = completions_strip_binary_prefix(alternative.trim());
+        let Some(chunk) = completions_first_chunk(alternative) else { continue; };
+        if let Some(inner) = completions_bracket_inner(chunk) {
+            let inner_alternatives = completions_split_alternatives(inner);
+            if inner_alternatives.len() < 2 { continue; }
+            for inner_alternative in inner_alternatives {
+                if let Some(word) = completions_leading_word(inner_alternative) {
+                    words.insert(word);
+                }
+            }
+        } else if let Some(word) = completions_leading_word(alternative) {
+            words.insert(word);
+        }
+    }
+}
+
+/// Split on `|` and standalone ` or ` at bracket depth 0.
+fn completions_split_alternatives(text: &str) -> Vec<&str> {
+    let mut pieces = Vec::new();
+    let mut depth = 0_usize;
+    let mut start = 0_usize;
+    for (index, ch) in text.char_indices() {
+        match ch {
+            '<' | '[' => depth += 1,
+            '>' | ']' => depth = depth.saturating_sub(1),
+            '|' if depth == 0 && index >= start => {
+                pieces.push(&text[start..index]);
+                start = index + 1;
+            }
+            ' ' if depth == 0 && index >= start && text[index..].starts_with(" or ") => {
+                pieces.push(&text[start..index]);
+                start = index + 4;
+            }
+            _ => {}
+        }
+    }
+    pieces.push(&text[start..]);
+    pieces
+}
+
+/// Drop a leading `maw <command> ` / `maw-rs <command> ` repeated inside an alternative.
+fn completions_strip_binary_prefix(alternative: &str) -> &str {
+    let trimmed = alternative.trim_start();
+    let Some(rest) = trimmed.strip_prefix("maw-rs ").or_else(|| trimmed.strip_prefix("maw ")) else {
+        return alternative;
+    };
+    let rest = rest.trim_start();
+    rest.find(char::is_whitespace)
+        .map_or("", |position| rest[position..].trim_start())
+}
+
+/// First bracket-balanced group (`<...>` / `[...]`) or whitespace token.
+fn completions_first_chunk(alternative: &str) -> Option<&str> {
+    let alternative = alternative.trim_start();
+    if alternative.starts_with('<') || alternative.starts_with('[') {
+        completions_balanced_group(alternative)
+    } else {
+        alternative.split_whitespace().next()
+    }
+}
+
+fn completions_balanced_group(text: &str) -> Option<&str> {
+    let mut depth = 0_usize;
+    for (index, ch) in text.char_indices() {
+        match ch {
+            '<' | '[' => depth += 1,
+            '>' | ']' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 { return Some(&text[..=index]); }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn completions_bracket_inner(chunk: &str) -> Option<&str> {
+    (chunk.len() >= 2 && (chunk.starts_with('<') || chunk.starts_with('['))).then(|| &chunk[1..chunk.len() - 1])
+}
+
+/// First whitespace token when it is a plain word or `--flag`; placeholders and
+/// punctuation yield nothing.
+fn completions_leading_word(alternative: &str) -> Option<String> {
+    let token = alternative.split_whitespace().next()?;
+    let word = token.strip_prefix("--").unwrap_or(token);
+    let valid = !word.is_empty()
+        && !word.starts_with('-')
+        && word.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_');
+    valid.then(|| token.to_owned())
 }
 
 // Squadron group names from fleet roster files — reuses the #291 roster parsing
@@ -268,9 +511,10 @@ fn completions_ok(body: &str) -> CliOutput {
 #[cfg(test)]
 mod completions_tests {
     use super::{
-        completions_commands, completions_is_safe_target, completions_run_command, env_test_lock,
-        fleet_default_options, fleet_roster_intercept, fleet_set_command, EnvVarRestore, DISPATCH_99,
-        COMPLETIONS_FLEET_SUBCOMMANDS, COMPLETIONS_ORACLE_SUBCOMMANDS, ORACLE_USAGE,
+        completions_commands, completions_commands_described, completions_is_safe_target,
+        completions_run_command, completions_subs, completions_usage_sources, env_test_lock,
+        fleet_default_options, fleet_roster_intercept, fleet_set_command, native_dispatch_commands,
+        EnvVarRestore, DISPATCH_99, ORACLE_USAGE,
     };
 
     fn completions_args(values: &[&str]) -> Vec<String> { values.iter().map(|value| (*value).to_owned()).collect() }
@@ -288,8 +532,9 @@ mod completions_tests {
         assert!(output.stderr.is_empty());
         assert!(output.stdout.starts_with("# maw bash completion\n"));
         assert!(output.stdout.contains("maw completions commands 2>/dev/null"));
-        assert!(output.stdout.contains("maw completions fleet 2>/dev/null"));
-        assert!(output.stdout.contains("maw completions oracle 2>/dev/null"));
+        assert!(output.stdout.contains("maw completions subs fleet 2>/dev/null"));
+        assert!(output.stdout.contains("maw completions subs oracle 2>/dev/null"));
+        assert!(output.stdout.contains("maw completions subs \"$cmd\" 2>/dev/null"));
         assert!(output.stdout.contains("maw completions groups 2>/dev/null"));
         assert!(output.stdout.contains("show|status|wake|sleep|token"));
         assert!(output.stdout.contains("complete -F _maw_complete maw\n"));
@@ -301,12 +546,16 @@ mod completions_tests {
         let zsh = completions_run_command(&completions_args(&["zsh"]));
         assert!(fish.stdout.contains("# maw fish completion"));
         assert!(fish.stdout.contains("__fish_use_subcommand"));
-        assert!(fish.stdout.contains("maw completions fleet 2>/dev/null"));
+        assert!(fish.stdout.contains("maw completions commands --describe 2>/dev/null"));
+        assert!(fish.stdout.contains("maw completions subs (commandline -opc)[2] 2>/dev/null"));
         assert!(fish.stdout.contains("maw completions groups 2>/dev/null"));
+        assert!(fish.stdout.contains("-d 'Oracle (peek/send shorthand)'"));
         assert!(zsh.stdout.contains("#compdef maw"));
-        assert!(zsh.stdout.contains("_maw_oracles"));
+        assert!(zsh.stdout.contains("maw completions commands --describe 2>/dev/null"));
+        assert!(zsh.stdout.contains("_maw_subs"));
+        assert!(zsh.stdout.contains("'oracle shorthand'"));
+        assert!(zsh.stdout.contains("'maw commands'"));
         assert!(zsh.stdout.contains("_maw_groups"));
-        assert!(zsh.stdout.contains("maw completions oracle 2>/dev/null"));
     }
 
     #[test]
@@ -324,8 +573,21 @@ mod completions_tests {
     }
 
     #[test]
+    fn completions_usage_registry_commands_stay_dispatchable() {
+        let commands = native_dispatch_commands();
+        for (name, usage) in completions_usage_sources() {
+            assert!(commands.contains(&name), "usage registry names unknown command: {name}");
+            assert!(!usage.is_empty(), "usage registry has empty usage for: {name}");
+        }
+    }
+
+    #[test]
     fn completions_fleet_and_oracle_subcommands_stay_dispatchable() {
-        for &word in COMPLETIONS_FLEET_SUBCOMMANDS {
+        let fleet_words = completions_subs("fleet");
+        for probe in ["add", "create", "join", "token", "wake", "sleep", "consolidate"] {
+            assert!(fleet_words.contains(&probe.to_owned()), "fleet usage lost {probe}");
+        }
+        for word in &fleet_words {
             let mut options = fleet_default_options();
             let mut seen = false;
             let parsed = fleet_set_command(&mut options, &mut seen, word).is_ok();
@@ -333,13 +595,72 @@ mod completions_tests {
             // "token" is routed before fleet_parse_args (see run_fleet_command).
             assert!(parsed || intercepted || word == "token", "fleet completion {word} is not dispatchable");
         }
-        for &word in COMPLETIONS_ORACLE_SUBCOMMANDS {
-            assert!(ORACLE_USAGE.contains(word), "oracle completion {word} missing from ORACLE_USAGE");
+        let oracle_words = completions_subs("oracle");
+        assert_eq!(
+            oracle_words,
+            ["about", "get-nickname", "ls", "prune", "recruit", "register", "scan", "search", "set-nickname"],
+            "oracle words must track ORACLE_USAGE"
+        );
+        for word in &oracle_words {
+            assert!(ORACLE_USAGE.contains(word.as_str()), "oracle completion {word} missing from ORACLE_USAGE");
         }
         let fleet = completions_run_command(&completions_args(&["fleet"]));
-        assert_eq!(fleet.stdout, format!("{}\n", COMPLETIONS_FLEET_SUBCOMMANDS.join("\n")));
+        assert_eq!(fleet.stdout, format!("{}\n", fleet_words.join("\n")));
         let oracle = completions_run_command(&completions_args(&["oracle"]));
-        assert_eq!(oracle.stdout, format!("{}\n", COMPLETIONS_ORACLE_SUBCOMMANDS.join("\n")));
+        assert_eq!(oracle.stdout, format!("{}\n", oracle_words.join("\n")));
+        let subs_fleet = completions_run_command(&completions_args(&["subs", "fleet"]));
+        assert_eq!(subs_fleet.stdout, fleet.stdout, "subs fleet is the same data as the fleet mode");
+    }
+
+    #[test]
+    fn completions_subs_derives_second_level_words_from_usage_strings() {
+        assert_eq!(completions_subs("zai"), ["mon", "status", "test"]);
+        assert_eq!(completions_subs("codex"), ["accounts"]);
+        assert_eq!(completions_subs("policy"), ["--constants", "--default-active", "--weight", "constants"]);
+        assert_eq!(completions_subs("consent"), ["approve", "list", "list-trust", "reject", "trust", "untrust"]);
+        assert_eq!(completions_subs("art"), ["attach", "get", "init", "ls", "write"]);
+        assert_eq!(completions_subs("more"), ["codex", "status"]);
+        assert_eq!(completions_subs("user-setup"), ["projects"]);
+        let team = completions_subs("team");
+        for probe in ["create", "status", "spawn", "spawn-from", "resume", "shutdown", "tasks", "invite"] {
+            assert!(team.contains(&probe.to_owned()), "team usage lost {probe}");
+        }
+        assert_eq!(completions_subs("t"), team, "t alias derives the same team words");
+        let plugin = completions_subs("plugin");
+        for probe in ["ls", "install", "build", "dev", "init"] {
+            assert!(plugin.contains(&probe.to_owned()), "plugin usage lost {probe}");
+        }
+        let own = completions_subs("completions");
+        for probe in ["commands", "subs", "fleet", "oracle", "groups", "zsh", "bash", "fish"] {
+            assert!(own.contains(&probe.to_owned()), "completions usage lost {probe}");
+        }
+        // Placeholder-only synopses contribute nothing; uncovered commands are empty.
+        assert!(completions_subs("kill").is_empty(), "kill has no literal subcommands");
+        assert!(completions_subs("hey").is_empty(), "uncovered commands yield no subs");
+        let output = completions_run_command(&completions_args(&["subs", "policy"]));
+        assert_eq!(output.code, 0, "{}", output.stderr);
+        assert_eq!(output.stdout, "--constants\n--default-active\n--weight\nconstants\n");
+    }
+
+    #[test]
+    fn completions_commands_describe_emits_tab_separated_usage_lines() {
+        let described = completions_commands_described();
+        let commands = completions_commands();
+        assert_eq!(described.len(), commands.len());
+        for (line, command) in described.iter().zip(&commands) {
+            assert!(
+                line == command || line.starts_with(&format!("{command}\t")),
+                "describe line must be `name` or `name<TAB>description`: {line}"
+            );
+            assert!(line.matches('\t').count() <= 1, "single tab separator only: {line}");
+        }
+        assert!(described.contains(&"codex\tmaw codex accounts [--json] [--free] [--slots N]".to_owned()));
+        let consent = described.iter().find(|line| line.starts_with("consent\t")).expect("consent is described");
+        assert!(consent.contains("list pending requests"), "consent description from first non-empty usage line");
+        let hey = described.iter().find(|line| *line == "hey").expect("uncovered commands stay name-only");
+        assert_eq!(hey, "hey");
+        let output = completions_run_command(&completions_args(&["commands", "--describe"]));
+        assert_eq!(output.stdout, format!("{}\n", described.join("\n")));
     }
 
     #[test]
@@ -370,6 +691,18 @@ mod completions_tests {
         let flag = completions_run_command(&completions_args(&["--", "bash"]));
         assert_eq!(flag.code, 1);
         assert!(flag.stderr.contains("expected exactly one subcommand"));
+        let missing = completions_run_command(&completions_args(&["subs"]));
+        assert_eq!(missing.code, 1);
+        assert!(missing.stderr.contains("subs expects exactly one command name"));
+        let injected = completions_run_command(&completions_args(&["subs", "--describe"]));
+        assert_eq!(injected.code, 1);
+        assert!(injected.stderr.contains("invalid command name"));
+        let extra = completions_run_command(&completions_args(&["subs", "team", "x"]));
+        assert_eq!(extra.code, 1);
+        assert!(extra.stderr.contains("expected exactly one subcommand"));
+        let described_typo = completions_run_command(&completions_args(&["commands", "--nope"]));
+        assert_eq!(described_typo.code, 1);
+        assert!(described_typo.stderr.contains("expected exactly one subcommand"));
         assert!(!completions_is_safe_target("-bad"));
         assert!(!completions_is_safe_target("bad target"));
     }

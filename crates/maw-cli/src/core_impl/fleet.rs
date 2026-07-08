@@ -240,7 +240,7 @@ fn fleet_set_command(options: &mut FleetOptions, seen: &mut bool, value: &str) -
 }
 
 fn fleet_usage() -> String {
-    "usage: maw fleet [add <session>|create <group>|show <group>|status <group>|ls|doctor|health|gc|init|consolidate|resume|sync|wake <group|--all>|sleep <group|--all>|token <group> [ls|status]] [--json] [--dry-run] [--fix] [--reboot] [--all] [--kill] [--resume]".to_owned()
+    "usage: maw fleet [add <session>|create <group>|show <group>|status <group>|join <fleet> --code <code>|ls|doctor|health|gc|init|consolidate|resume|sync|wake <group|--all>|sleep <group|--all>|token <group> [ls|status]] [--json] [--dry-run] [--fix] [--reboot] [--all] [--kill] [--resume]".to_owned()
 }
 
 fn fleet_load_state_with(runtime: &mut impl FleetRuntime) -> Result<FleetState, String> {
