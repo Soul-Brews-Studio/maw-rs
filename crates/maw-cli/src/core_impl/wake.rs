@@ -65,6 +65,27 @@ struct WakeRepoCandidate {
     path: std::path::PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WakeTypedRegistryCandidate {
+    candidate: maw_matcher::ResolveTypedCandidate,
+    oracle: String,
+    session: String,
+    repo_path: std::path::PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WakeTypedRepoCandidate {
+    candidate: maw_matcher::ResolveTypedCandidate,
+    path: std::path::PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WakeTypedResolution {
+    oracle: String,
+    repo: WakeRepoResolution,
+    session_hint: Option<String>,
+}
+
 impl maw_matcher::Named for WakeRepoCandidate {
     fn name(&self) -> &str { &self.name }
 }
@@ -398,13 +419,17 @@ fn wake_label(options: &WakeOptionsNative) -> String {
 }
 
 fn wake_resolve(options: &WakeOptionsNative, sessions: &[TmuxSession]) -> Result<WakeResolvedNative, String> {
-    let oracle = wake_oracle(options)?;
-    let repo = wake_repo_path(options, &oracle)?;
+    let initial_oracle = wake_oracle(options)?;
+    let typed = wake_typed_resolution(options, &initial_oracle)?;
+    let oracle = typed.as_ref().map_or_else(|| initial_oracle.clone(), |resolution| resolution.oracle.clone());
+    let repo = typed.map_or_else(|| wake_repo_path(options, &oracle), |resolution| Ok(resolution.repo))?;
     let repo_path = repo.path;
+    let session_hint = wake_registry_session_hint(&initial_oracle, &repo_path);
     let session = options
         .parent
         .clone()
         .or_else(|| wake_detect_session(&oracle, sessions))
+        .or(session_hint)
         .or_else(|| wake_detect_session_from_fleet_registry(&oracle, &repo_path))
         .unwrap_or_else(|| wake_session_name(&oracle, sessions));
     let window = wake_window_name(options, &oracle);
@@ -425,6 +450,22 @@ fn wake_oracle(options: &WakeOptionsNative) -> Result<String, String> {
     let oracle = raw.strip_suffix("-oracle").unwrap_or(raw).trim();
     wake_validate_slug(oracle, "oracle")?;
     Ok(oracle.to_owned())
+}
+
+fn wake_typed_resolution(options: &WakeOptionsNative, oracle: &str) -> Result<Option<WakeTypedResolution>, String> {
+    if wake_should_bypass_typed_resolution(options) { return Ok(None); }
+    if let Some(resolution) = wake_resolve_registry_target(&options.target)? { return Ok(Some(resolution)); }
+    wake_resolve_repo_target(oracle).map(Some)
+}
+
+fn wake_should_bypass_typed_resolution(options: &WakeOptionsNative) -> bool {
+    options.repo_path.is_some()
+        || options.repo.is_some()
+        || options.incubate.is_some()
+        || workon_github_slug(&options.target).is_some()
+        || options.target == "."
+        || options.target.starts_with("./")
+        || options.target.starts_with('/')
 }
 
 fn wake_repo_path(options: &WakeOptionsNative, oracle: &str) -> Result<WakeRepoResolution, String> {
@@ -469,30 +510,56 @@ fn wake_resolve_workon_repo(input: &str) -> Result<WakeRepoResolution, String> {
 
 fn wake_find_repo(oracle: &str) -> Result<WakeRepoResolution, String> {
     if let Some(path) = wake_registry_repo_for_oracle(oracle) {
-        if path.is_dir() {
-            return Ok(wake_exact_repo_resolution(path));
-        }
-        return Err(format!(
-            "wake: registry entry for {oracle} references {} (not cloned under {})",
-            path.display(),
-            wake_ghq_root().display()
-        ));
+        if path.is_dir() { return Ok(wake_exact_repo_resolution(path)); }
+        return Err(wake_registry_missing_repo_message(oracle, &path));
     }
+    wake_resolve_repo_target(oracle).map(|resolution| resolution.repo)
+}
 
-    let candidates = wake_repo_candidates();
-    if let Some(candidate) = candidates.iter().find(|candidate| wake_repo_name_matches(&candidate.name, oracle)) {
-        return Ok(wake_exact_repo_resolution(candidate.path.clone()));
-    }
-
-    match maw_matcher::resolve_by_name(oracle, &candidates, maw_matcher::ResolveOptions::default()) {
-        maw_matcher::ResolveResult::Exact { matched } | maw_matcher::ResolveResult::Fuzzy { matched } => {
-            Ok(WakeRepoResolution { path: matched.path, fuzzy_match: Some(matched.name) })
+fn wake_resolve_registry_target(target: &str) -> Result<Option<WakeTypedResolution>, String> {
+    let candidates = wake_typed_registry_candidates();
+    let typed = candidates.iter().map(|candidate| candidate.candidate.clone()).collect::<Vec<_>>();
+    match maw_matcher::resolve_typed_target(target, &typed) {
+        maw_matcher::ResolveTypedResult::None => Ok(None),
+        maw_matcher::ResolveTypedResult::Match { matched } => {
+            let candidate = candidates
+                .into_iter()
+                .find(|candidate| candidate.candidate == matched.candidate)
+                .ok_or_else(|| format!("wake: internal resolver mismatch for {target}"))?;
+            if !candidate.repo_path.is_dir() {
+                return Err(wake_registry_missing_repo_message(&candidate.session, &candidate.repo_path));
+            }
+            Ok(Some(WakeTypedResolution {
+                oracle: candidate.oracle,
+                repo: WakeRepoResolution { path: candidate.repo_path, fuzzy_match: None },
+                session_hint: Some(candidate.session),
+            }))
         }
-        maw_matcher::ResolveResult::Ambiguous { candidates } => Err(format!(
-            "wake: ambiguous fuzzy repo for {oracle}: {}",
-            candidates.into_iter().map(|candidate| candidate.name).collect::<Vec<_>>().join(", ")
+        maw_matcher::ResolveTypedResult::Ambiguous { candidates } => Err(format!(
+            "wake: ambiguous registry target for {target}: {}",
+            candidates.into_iter().map(|candidate| candidate.candidate.name).collect::<Vec<_>>().join(", ")
         )),
-        maw_matcher::ResolveResult::None { .. } => Err(format!("wake: repo not found for {oracle}")),
+    }
+}
+
+fn wake_resolve_repo_target(oracle: &str) -> Result<WakeTypedResolution, String> {
+    let candidates = wake_typed_repo_candidates();
+    let typed = candidates.iter().map(|candidate| candidate.candidate.clone()).collect::<Vec<_>>();
+    match maw_matcher::resolve_typed_target(oracle, &typed) {
+        maw_matcher::ResolveTypedResult::Match { matched } => {
+            let candidate = candidates
+                .into_iter()
+                .find(|candidate| candidate.candidate == matched.candidate)
+                .ok_or_else(|| format!("wake: internal resolver mismatch for {oracle}"))?;
+            let fuzzy_match = (matched.rank == maw_matcher::ResolveMatchRank::Fuzzy).then_some(candidate.candidate.name);
+            let oracle = wake_oracle_from_repo_path(&candidate.path).unwrap_or_else(|| oracle.to_owned());
+            Ok(WakeTypedResolution { oracle, repo: WakeRepoResolution { path: candidate.path, fuzzy_match }, session_hint: None })
+        }
+        maw_matcher::ResolveTypedResult::Ambiguous { candidates } => Err(format!(
+            "wake: ambiguous fuzzy repo for {oracle}: {}",
+            candidates.into_iter().map(|candidate| candidate.candidate.name).collect::<Vec<_>>().join(", ")
+        )),
+        maw_matcher::ResolveTypedResult::None => Err(format!("wake: repo not found for {oracle}")),
     }
 }
 
@@ -514,6 +581,60 @@ fn wake_registry_repo_for_oracle(oracle: &str) -> Option<std::path::PathBuf> {
     } else {
         None
     }
+}
+
+fn wake_registry_session_hint(oracle: &str, repo_path: &std::path::Path) -> Option<String> {
+    wake_resolve_registry_target(oracle)
+        .ok()
+        .flatten()
+        .filter(|resolution| wake_canonicalize_path(&resolution.repo.path) == wake_canonicalize_path(repo_path))
+        .and_then(|resolution| resolution.session_hint)
+}
+
+fn wake_typed_registry_candidates() -> Vec<WakeTypedRegistryCandidate> {
+    let mut candidates = Vec::new();
+    let mut seen = BTreeSet::new();
+    for entry in fleet_load_entries() {
+        for window in &entry.session.windows {
+            let Some(path) = native_fleet_repo_path(&window.repo) else { continue; };
+            let oracle = wake_oracle_from_repo_slug(&window.repo).unwrap_or_else(|| window.name.clone());
+            let name = format!("{}:{}", entry.session.name, window.name);
+            if !seen.insert((name.clone(), path.clone())) { continue; }
+            candidates.push(WakeTypedRegistryCandidate {
+                candidate: maw_matcher::ResolveTypedCandidate {
+                    kind: maw_matcher::ResolveCandidateKind::SleepingRegistry,
+                    name,
+                    aliases: wake_registry_aliases(&entry, window, &oracle),
+                },
+                oracle,
+                session: entry.session.name.clone(),
+                repo_path: path,
+            });
+        }
+    }
+    candidates
+}
+
+fn wake_registry_aliases(entry: &NativeFleetEntry, window: &NativeFleetWindow, oracle: &str) -> Vec<String> {
+    let mut aliases = vec![entry.session.name.clone(), entry.file.clone(), window.name.clone(), oracle.to_owned()];
+    if let Some(repo_name) = window.repo.rsplit('/').next().filter(|name| !name.is_empty()) { aliases.push(repo_name.to_owned()); }
+    aliases.sort();
+    aliases.dedup();
+    aliases
+}
+
+fn wake_typed_repo_candidates() -> Vec<WakeTypedRepoCandidate> {
+    wake_repo_candidates()
+        .into_iter()
+        .map(|candidate| WakeTypedRepoCandidate {
+            candidate: maw_matcher::ResolveTypedCandidate {
+                kind: maw_matcher::ResolveCandidateKind::Repo,
+                name: candidate.name,
+                aliases: Vec::new(),
+            },
+            path: candidate.path,
+        })
+        .collect()
 }
 
 fn wake_repo_candidates() -> Vec<WakeRepoCandidate> {
@@ -557,6 +678,25 @@ fn wake_push_repo_candidate(
 
 fn wake_repo_name_matches(name: &str, oracle: &str) -> bool {
     name == oracle || name == format!("{oracle}-oracle") || name.trim_end_matches("-oracle") == oracle
+}
+
+fn wake_oracle_from_repo_slug(repo: &str) -> Option<String> {
+    let name = repo.rsplit('/').next()?.trim();
+    (!name.is_empty()).then(|| name.strip_suffix("-oracle").unwrap_or(name).to_owned())
+}
+
+fn wake_oracle_from_repo_path(path: &std::path::Path) -> Option<String> {
+    path.file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .and_then(|name| (!name.is_empty()).then(|| name.strip_suffix("-oracle").unwrap_or(name).to_owned()))
+}
+
+fn wake_registry_missing_repo_message(name: &str, path: &std::path::Path) -> String {
+    format!(
+        "wake: registry entry for {name} exists, but its repo is not cloned under {}; probed {}",
+        wake_ghq_root().display(),
+        path.display()
+    )
 }
 
 fn wake_detect_session(oracle: &str, sessions: &[TmuxSession]) -> Option<String> {
@@ -808,7 +948,7 @@ fn wake_registry_windows(
 mod wake_tests {
     use super::*;
 
-    #[derive(Default)]
+    #[derive(Debug, Default)]
     struct WakeMockTmux {
         sessions: Vec<TmuxSession>,
         actions: Vec<String>,
@@ -1128,6 +1268,37 @@ mod wake_tests {
     }
 
     #[test]
+    fn wake_full_numeric_registry_name_resolves_via_typed_resolver() {
+        wake_with_fixture(|root| {
+            let session = "41-arra-oracle-v3";
+            let repo = root.join("ghq/github.com/laris-co/arra-oracle-v3");
+            std::fs::create_dir_all(&repo).expect("repo");
+            std::fs::write(
+                root.join("config/fleet").join(format!("{session}.json")),
+                r#"{"name":"41-arra-oracle-v3","windows":[{"name":"arra-oracle-v3","repo":"github.com/laris-co/arra-oracle-v3"}]}"#,
+            )
+            .expect("write registry");
+
+            let mut tmux = WakeMockTmux::default();
+            let (code, stdout) = wake_run(&wake_strings(&[session, "--no-attach"]), &mut tmux).expect("run");
+            assert_eq!(code, 0, "{stdout}");
+            assert!(stdout.contains(&format!("created session '{session}'")), "{stdout}");
+            assert!(tmux.actions.iter().any(|action| action.starts_with(&format!("new-session {session} arra-oracle-v3"))), "{tmux:?}");
+            assert!(tmux.actions.iter().any(|action| action.contains(&repo.display().to_string())), "{tmux:?}");
+        });
+    }
+
+    #[test]
+    fn wake_unknown_name_reports_not_found_without_tmux_mutation() {
+        wake_with_fixture(|_| {
+            let mut tmux = WakeMockTmux::default();
+            let err = wake_run(&wake_strings(&["does-not-exist", "--no-attach"]), &mut tmux).expect_err("not found");
+            assert!(err.contains("wake: repo not found for does-not-exist"), "{err}");
+            assert!(tmux.actions.is_empty());
+        });
+    }
+
+    #[test]
     fn wake_revived_session_reregisters_into_its_own_registry_entry() {
         // #312 revive + #299 upsert guard interaction: the entry that named
         // the revived session lives in the config fleet dir, not the default
@@ -1191,9 +1362,31 @@ mod wake_tests {
 
             let mut tmux = WakeMockTmux::default();
             let err = wake_run(&wake_strings(&["mother", "--no-attach"]), &mut tmux).expect_err("not found");
-            assert!(err.contains("registry entry for mother references"));
-            assert!(err.contains(&wake_ghq_root().display().to_string()));
-            assert!(err.contains("not cloned under"));
+            assert!(err.contains("registry entry for 88-mother exists"), "{err}");
+            assert!(err.contains("not cloned under"), "{err}");
+            assert!(err.contains("probed"), "{err}");
+            assert!(err.contains(&wake_ghq_root().display().to_string()), "{err}");
+            assert!(err.contains(&root.join("ghq/github.com/laris-co/mother-oracle").display().to_string()), "{err}");
+            assert!(tmux.actions.is_empty());
+        });
+    }
+
+    #[test]
+    fn wake_full_registry_name_reports_missing_clone_path() {
+        wake_with_fixture(|root| {
+            let session = "41-arra-oracle-v3";
+            let probed = root.join("ghq/github.com/laris-co/arra-oracle-v3");
+            std::fs::write(
+                root.join("config/fleet").join(format!("{session}.json")),
+                r#"{"name":"41-arra-oracle-v3","windows":[{"name":"arra-oracle-v3","repo":"github.com/laris-co/arra-oracle-v3"}]}"#,
+            )
+            .expect("write registry");
+
+            let mut tmux = WakeMockTmux::default();
+            let err = wake_run(&wake_strings(&[session, "--no-attach"]), &mut tmux).expect_err("missing clone");
+            assert!(err.contains(&format!("registry entry for {session} exists")), "{err}");
+            assert!(err.contains(&format!("probed {}", probed.display())), "{err}");
+            assert!(!err.contains("repo not found for"), "{err}");
             assert!(tmux.actions.is_empty());
         });
     }
