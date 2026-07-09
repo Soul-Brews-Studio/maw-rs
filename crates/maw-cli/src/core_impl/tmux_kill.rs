@@ -142,19 +142,7 @@ fn tmux_kill_resolve_session(target: &str, sessions: &[String]) -> Result<String
     if let Some(exact) = sessions.iter().find(|session| session.as_str() == target) {
         return Ok(exact.clone());
     }
-    let matches = sessions
-        .iter()
-        .filter(|session| session.to_lowercase().contains(&target.to_lowercase()))
-        .cloned()
-        .collect::<Vec<_>>();
-    match matches.as_slice() {
-        [single] => Ok(single.clone()),
-        [] => Err(format!("session '{target}' not found")),
-        many => Err(format!(
-            "session '{target}' is ambiguous — matches: {}",
-            many.join(", ")
-        )),
-    }
+    Err(format!("session '{target}' not found"))
 }
 
 fn tmux_kill_parse_panes(raw: &str) -> Vec<TmuxKillPane> {
@@ -381,7 +369,7 @@ mod tmux_kill_tests {
             sessions: "07-demo\n".to_owned(),
             ..TmuxKillFakeRunner::default()
         };
-        let error = tmux_kill_run_with(&fake_args(&["demo", "--session"]), &mut runner)
+        let error = tmux_kill_run_with(&fake_args(&["07-demo", "--session"]), &mut runner)
             .expect_err("protected session refused");
         assert!(error.contains("protected fleet/view session"));
         assert_eq!(runner.calls.len(), 1);
@@ -397,7 +385,7 @@ mod tmux_kill_tests {
             sessions: "07-demo\n".to_owned(),
             ..TmuxKillFakeRunner::default()
         };
-        let output = tmux_kill_run_with(&fake_args(&["demo", "--session", "--force"]), &mut runner)
+        let output = tmux_kill_run_with(&fake_args(&["07-demo", "--session", "--force"]), &mut runner)
             .expect("forced kill session");
         assert!(output.contains("killed session 07-demo"));
         assert_eq!(runner.calls[1].subcommand, "kill-session");
@@ -441,9 +429,43 @@ mod tmux_kill_tests {
             ..TmuxKillFakeRunner::default()
         };
         let error = tmux_kill_run_with(&fake_args(&["bar", "--session"]), &mut runner)
-            .expect_err("ambiguous session rejected");
-        assert!(error.contains("ambiguous"));
+            .expect_err("partial session rejected");
+        assert!(error.contains("session 'bar' not found"));
         assert_eq!(runner.calls.len(), 1);
+    }
+
+    #[test]
+    fn tmux_kill_session_is_exact_only_for_destructive_targets() {
+        let mut runner = TmuxKillFakeRunner {
+            sessions: "ftkzz-a\nftkzz-b\n".to_owned(),
+            ..TmuxKillFakeRunner::default()
+        };
+        let partial = tmux_kill_run_with(&fake_args(&["ftkzz", "--session"]), &mut runner)
+            .expect_err("partial must not kill");
+        assert!(partial.contains("session 'ftkzz' not found"));
+        assert!(!runner.calls.iter().any(|call| call.subcommand == "kill-session"));
+        let alive = tmux_kill_list_sessions(&mut runner).expect("sessions still list");
+        assert_eq!(alive, ["ftkzz-a", "ftkzz-b"]);
+
+        let mut runner = TmuxKillFakeRunner {
+            sessions: "ftkzz-solo\n".to_owned(),
+            ..TmuxKillFakeRunner::default()
+        };
+        let partial = tmux_kill_run_with(&fake_args(&["ftkzz", "--session"]), &mut runner)
+            .expect_err("unique partial must not kill");
+        assert!(partial.contains("session 'ftkzz' not found"));
+        assert!(!runner.calls.iter().any(|call| call.subcommand == "kill-session"));
+        let alive = tmux_kill_list_sessions(&mut runner).expect("solo still lists");
+        assert_eq!(alive, ["ftkzz-solo"]);
+
+        let mut runner = TmuxKillFakeRunner {
+            sessions: "ftkzz-solo\n".to_owned(),
+            ..TmuxKillFakeRunner::default()
+        };
+        let exact = tmux_kill_run_with(&fake_args(&["ftkzz-solo", "--session"]), &mut runner)
+            .expect("exact kill");
+        assert!(exact.contains("killed session ftkzz-solo"));
+        assert_eq!(runner.calls[1].subcommand, "kill-session");
     }
 
     #[test]
