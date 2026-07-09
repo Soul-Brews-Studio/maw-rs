@@ -527,9 +527,13 @@ fn kill_resolve_and_apply(
         .map(|session| session.name.clone())
         .collect::<Vec<_>>();
     match resolve_session_target(raw_session, &names) {
-        ResolveResult::Exact { matched } | ResolveResult::Fuzzy { matched } => {
+        ResolveResult::Exact { matched } => {
             let session = kill_find_session(sessions, &matched)?;
             kill_apply_resolved(tmux, session, raw_window, options)
+        }
+        ResolveResult::Fuzzy { matched } => {
+            let hints = kill_sessions_for_names(sessions, &[matched]);
+            Err(kill_missing_session(raw_session, Some(&hints)))
         }
         ResolveResult::Ambiguous { candidates } => Err(kill_ambiguous_session(
             raw_session,
@@ -1043,7 +1047,7 @@ mod kill_tests {
     #[test]
     fn kill_session_resolves_and_validates_before_destructive_call() {
         let mut tmux = kill_fake("07-demo|||0|||main|||1|||/tmp\n");
-        let output = kill_run_fake(&kill_strings(&["demo"]), &mut tmux);
+        let output = kill_run_fake(&kill_strings(&["07-demo"]), &mut tmux);
         assert_eq!(output.code, 0);
         assert_eq!(output.stdout, "  \x1b[32m✓\x1b[0m killed session 07-demo\n");
         assert_eq!(tmux.calls[0].0, "list-windows");
@@ -1063,15 +1067,15 @@ mod kill_tests {
     }
 
     #[test]
-    fn kill_refuses_invalid_resolved_session_before_destructive_call() {
+    fn kill_refuses_partial_resolved_session_before_destructive_call() {
         let mut tmux = kill_fake("-Sbad-demo|||0|||main|||1|||/tmp\n");
         let output = kill_run_fake(&kill_strings(&["demo"]), &mut tmux);
         assert_eq!(output.code, 1);
-        assert!(output.stderr.contains("target/session"));
+        assert!(output.stderr.contains("session 'demo' not found"));
         assert_eq!(
             tmux.calls.len(),
             1,
-            "listed before refusing resolved kill target"
+            "listed before refusing partial kill target"
         );
     }
 
@@ -1104,7 +1108,7 @@ mod kill_tests {
     fn kill_pane_lists_valid_indexes_before_kill_pane() {
         let mut tmux = kill_fake("07-demo|||1|||main|||1|||/tmp\n");
         tmux.pane_indexes_raw = "0\n2\n".to_owned();
-        let output = kill_run_fake(&kill_strings(&["demo:1", "--pane", "2"]), &mut tmux);
+        let output = kill_run_fake(&kill_strings(&["07-demo:1", "--pane", "2"]), &mut tmux);
         assert_eq!(output.code, 0);
         assert_eq!(
             output.stdout,
@@ -1127,7 +1131,7 @@ mod kill_tests {
     fn kill_pane_rejects_missing_pane_without_kill() {
         let mut tmux = kill_fake("07-demo|||1|||main|||1|||/tmp\n");
         tmux.pane_indexes_raw = "0\n".to_owned();
-        let output = kill_run_fake(&kill_strings(&["demo:1", "--pane=2"]), &mut tmux);
+        let output = kill_run_fake(&kill_strings(&["07-demo:1", "--pane=2"]), &mut tmux);
         assert_eq!(output.code, 1);
         assert!(output.stderr.contains("pane 2 does not exist"));
         assert!(!tmux.calls.iter().any(|call| call.0 == "kill-pane"));
@@ -1157,7 +1161,42 @@ mod kill_tests {
         assert!(!tmux.calls.iter().any(|call| call.0.starts_with("kill-")));
     }
 
+    #[test]
+    fn kill_session_is_exact_only_for_destructive_targets() {
+        let mut tmux =
+            kill_fake("ftkzz-a|||0|||main|||1|||/tmp\nftkzz-b|||0|||main|||1|||/tmp\n");
+        let partial = kill_run_fake(&kill_strings(&["ftkzz"]), &mut tmux);
+        assert_eq!(partial.code, 1);
+        assert!(!tmux.calls.iter().any(|call| call.0 == "kill-session"));
+        let alive = tmux.kill_list_sessions().expect("sessions still alive");
+        assert_eq!(
+            alive
+                .iter()
+                .map(|session| session.name.as_str())
+                .collect::<Vec<_>>(),
+            ["ftkzz-a", "ftkzz-b"]
+        );
 
+        let mut tmux = kill_fake("ftkzz-solo|||0|||main|||1|||/tmp\n");
+        let partial = kill_run_fake(&kill_strings(&["ftkzz"]), &mut tmux);
+        assert_eq!(partial.code, 1);
+        assert!(partial.stderr.contains("session 'ftkzz' not found"));
+        assert!(!tmux.calls.iter().any(|call| call.0 == "kill-session"));
+        let alive = tmux.kill_list_sessions().expect("solo still alive");
+        assert_eq!(alive[0].name, "ftkzz-solo");
+
+        let mut tmux = kill_fake("ftkzz-solo|||0|||main|||1|||/tmp\n");
+        let exact = kill_run_fake(&kill_strings(&["ftkzz-solo"]), &mut tmux);
+        assert_eq!(exact.code, 0);
+        assert!(exact.stdout.contains("killed session ftkzz-solo"));
+        assert_eq!(
+            tmux.calls[1],
+            (
+                "kill-session".to_owned(),
+                kill_strings(&["-t", "ftkzz-solo"])
+            )
+        );
+    }
 
     #[test]
     fn kill_peer_forward_posts_signed_body_and_skips_local_tmux() {
@@ -1271,7 +1310,7 @@ mod kill_tests {
     fn kill_rejects_bad_flag_combinations_before_kill() {
         let mut tmux = kill_fake("07-demo|||0|||main|||1|||/tmp\n");
         let output = kill_run_fake(
-            &kill_strings(&["demo:main", "--all", "--pane", "0"]),
+            &kill_strings(&["07-demo:main", "--all", "--pane", "0"]),
             &mut tmux,
         );
         assert_eq!(output.code, 1);
