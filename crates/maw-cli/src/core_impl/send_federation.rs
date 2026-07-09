@@ -51,12 +51,13 @@ async fn run_send_like_async_impl(command: &str, raw_args: &[String]) -> CliOutp
         Ok(parsed) => parsed,
         Err(message) => return send_usage_error(command, &message),
     };
-    run_send_like_async_with_args(command, send_args, false).await
+    let audit_args = send_audit_args(command, raw_args);
+    run_send_like_async_with_args(command, send_args, false, audit_args).await
 }
 
 async fn run_hey_in_process(query: &str, message: &str, acl_bypass: bool) -> CliOutput {
     let send_args = send_args_for_inbox_hey(query, message);
-    run_send_like_async_with_args("hey", send_args, acl_bypass).await
+    run_send_like_async_with_args("hey", send_args, acl_bypass, vec!["hey".to_owned(), query.to_owned(), message.to_owned()]).await
 }
 
 fn send_args_for_inbox_hey(query: &str, message: &str) -> SendArgs {
@@ -75,6 +76,7 @@ async fn run_send_like_async_with_args(
     command: &str,
     send_args: SendArgs,
     acl_bypass: bool,
+    audit_args: Vec<String>,
 ) -> CliOutput {
     let config = load_hey_config();
     let sender_oracle = resolve_hey_sender_oracle_for_from(&config, send_args.from.as_deref());
@@ -94,27 +96,31 @@ async fn run_send_like_async_with_args(
         return send_dry_run_output(command, &send_args, &result);
     }
     match result {
-        RouteResult::Local { target } | RouteResult::SelfNode { target } => send_local_message(
+        RouteResult::Local { target } | RouteResult::SelfNode { target } => send_local_message_with_audit(
             command,
             &mut tmux,
             &target,
+            &send_args.target,
             &send_args.text,
             &config,
             &sender_oracle,
             send_args.from.as_deref(),
+            &audit_args,
         ),
         RouteResult::Peer {
             peer_url,
             target,
-            node: _,
+            node,
         } => {
-            gated_send_peer_message(
+            gated_send_peer_message_with_audit(
                 command,
                 &peer_url,
                 &target,
+                &node,
                 &send_args,
                 &config,
                 &sender_oracle,
+                &audit_args,
                 acl_bypass,
             )
             .await
@@ -147,15 +153,32 @@ async fn gated_send_peer_message(
     sender_oracle: &str,
     acl_bypass: bool,
 ) -> CliOutput {
+    gated_send_peer_message_with_audit(command, peer_url, target, "", args, config, sender_oracle, &[], acl_bypass).await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn gated_send_peer_message_with_audit(
+    command: &str,
+    peer_url: &str,
+    target: &str,
+    node: &str,
+    args: &SendArgs,
+    config: &HeyConfig,
+    sender_oracle: &str,
+    audit_args: &[String],
+    acl_bypass: bool,
+) -> CliOutput {
     match send_acl_gate_peer(command, target, args, sender_oracle, acl_bypass) {
         SendAclGateResult::Proceed { stderr_prefix } => {
-            send_acl_deliver_peer_message(
+            send_acl_deliver_peer_message_with_audit(
                 command,
                 peer_url,
                 target,
+                node,
                 args,
                 config,
                 sender_oracle,
+                audit_args,
                 stderr_prefix,
             )
             .await
@@ -173,8 +196,23 @@ async fn send_acl_deliver_peer_message(
     sender_oracle: &str,
     stderr_prefix: String,
 ) -> CliOutput {
+    send_acl_deliver_peer_message_with_audit(command, peer_url, target, "", args, config, sender_oracle, &[], stderr_prefix).await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn send_acl_deliver_peer_message_with_audit(
+    command: &str,
+    peer_url: &str,
+    target: &str,
+    node: &str,
+    args: &SendArgs,
+    config: &HeyConfig,
+    sender_oracle: &str,
+    audit_args: &[String],
+    stderr_prefix: String,
+) -> CliOutput {
     send_acl_apply_proceed_stderr(
-        send_peer_message(command, peer_url, target, args, config, sender_oracle).await,
+        send_peer_message(command, peer_url, target, node, args, config, sender_oracle, audit_args).await,
         &stderr_prefix,
     )
 }
@@ -411,6 +449,10 @@ fn parse_send_args(command: &str, argv: &[String]) -> Result<SendArgs, String> {
     })
 }
 
+fn send_audit_args(command: &str, raw_args: &[String]) -> Vec<String> {
+    std::iter::once(command.to_owned()).chain(raw_args.iter().cloned()).collect()
+}
+
 fn send_usage_error(command: &str, message: &str) -> CliOutput {
     CliOutput {
         code: 2,
@@ -528,6 +570,21 @@ fn send_local_message(
     sender_oracle: &str,
     from: Option<&str>,
 ) -> CliOutput {
+    send_local_message_with_audit(command, tmux, target, target, text, config, sender_oracle, from, &[])
+}
+
+#[allow(clippy::too_many_arguments)]
+fn send_local_message_with_audit(
+    command: &str,
+    tmux: &mut TmuxClient<maw_tmux::CommandTmuxRunner>,
+    target: &str,
+    query: &str,
+    text: &str,
+    config: &HeyConfig,
+    sender_oracle: &str,
+    from: Option<&str>,
+    audit_args: &[String],
+) -> CliOutput {
     let outbound = format_local_hey_message(text, config, sender_oracle, from);
     if let Err(error) = tmux.send_text(target, &outbound) {
         return CliOutput {
@@ -536,6 +593,7 @@ fn send_local_message(
             stderr: format!("{command}: tmux send-text failed: {error}\n"),
         };
     }
+    send_record_success(command, audit_args, config, sender_oracle, from, query, &outbound, "local");
     CliOutput {
         code: 0,
         stdout: format!("delivered {target}\n"),
@@ -543,13 +601,16 @@ fn send_local_message(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn send_peer_message(
     command: &str,
     peer_url: &str,
     target: &str,
+    node: &str,
     args: &SendArgs,
     config: &HeyConfig,
     sender_oracle: &str,
+    audit_args: &[String],
 ) -> CliOutput {
     let from = match resolve_hey_wire_from(args.from.as_deref(), config, sender_oracle) {
         Ok(from) => from,
@@ -602,14 +663,18 @@ async fn send_peer_message(
         timestamp: i64::try_from(current_epoch_seconds()).unwrap_or(i64::MAX),
     };
     match client.send_peer(&request).await {
-        Ok(response) => CliOutput {
-            code: 0,
-            stdout: format!(
-                "{} {}\n",
-                response.state.as_deref().unwrap_or("queued"),
-                response.target.as_deref().unwrap_or(target)
-            ),
-            stderr: String::new(),
+        Ok(response) => {
+            let outbound = format_local_hey_message(&args.text, config, sender_oracle, args.from.as_deref());
+            send_record_success(command, audit_args, config, sender_oracle, args.from.as_deref(), &args.target, &outbound, &format!("peer:{node}"));
+            CliOutput {
+                code: 0,
+                stdout: format!(
+                    "{} {}\n",
+                    response.state.as_deref().unwrap_or("queued"),
+                    response.target.as_deref().unwrap_or(target)
+                ),
+                stderr: String::new(),
+            }
         },
         Err(message) => CliOutput {
             code: 1,
@@ -617,6 +682,84 @@ async fn send_peer_message(
             stderr: format!("{command}: {message}\n"),
         },
     }
+}
+
+
+#[allow(clippy::too_many_arguments)]
+fn send_record_success(
+    command: &str,
+    audit_args: &[String],
+    config: &HeyConfig,
+    sender_oracle: &str,
+    from: Option<&str>,
+    to: &str,
+    msg: &str,
+    route: &str,
+) {
+    if audit_args.is_empty() {
+        return;
+    }
+    send_write_js_audit_record(command, audit_args);
+    let normalized_from = from
+        .map(ToOwned::to_owned)
+        .or_else(|| config.node.as_deref().map(|node| format!("{node}:{sender_oracle}")));
+    if let Some(normalized_from) = normalized_from {
+        send_write_js_maw_log_record(&normalized_from, to, msg, route);
+    }
+}
+
+fn send_write_js_audit_record(command: &str, audit_args: &[String]) {
+    let row = serde_json::json!({
+        "ts": cli_dispatch_now_iso(),
+        "cmd": command,
+        "args": audit_args,
+        "user": send_audit_user(),
+        "pid": std::process::id(),
+    });
+    send_append_jsonl(&maw_state_path(&real_xdg_env(), &["audit.jsonl"]), &row);
+}
+
+fn send_write_js_maw_log_record(from: &str, to: &str, msg: &str, route: &str) {
+    let row = serde_json::json!({
+        "ts": cli_dispatch_now_iso(),
+        "from": from,
+        "to": to,
+        "msg": msg.chars().take(500).collect::<String>(),
+        "host": send_hostname(),
+        "route": route,
+    });
+    send_append_jsonl(&maw_data_path(&real_xdg_env(), &["maw-log.jsonl"]), &row);
+}
+
+fn send_append_jsonl(path: &std::path::Path, row: &serde_json::Value) {
+    if let Some(parent) = path.parent() {
+        if std::fs::create_dir_all(parent).is_err() { return; }
+    } else {
+        return;
+    }
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .and_then(|mut file| {
+            use std::io::Write as _;
+            let line = format!("{row}\n");
+            file.write(line.as_bytes()).and_then(|written| {
+                if written == line.len() {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::new(std::io::ErrorKind::WriteZero, "short jsonl append"))
+                }
+            })
+        });
+}
+
+fn send_audit_user() -> String {
+    std::env::var("USER").or_else(|_| std::env::var("LOGNAME")).unwrap_or_else(|_| "unknown".to_owned())
+}
+
+fn send_hostname() -> String {
+    std::env::var("HOSTNAME").ok().filter(|value| !value.is_empty()).unwrap_or_else(|| "unknown".to_owned())
 }
 
 
@@ -1322,6 +1465,20 @@ mod send_acl_hotpath_tests {
         HeyConfig { node: Some("node-a".to_owned()), oracle: Some(oracle.to_owned()), route: RouteConfig::default() }
     }
 
+    fn send_audit_test_env(name: &str) -> (std::path::PathBuf, [EnvVarRestore; 9]) {
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+        let root = std::env::temp_dir().join(format!("maw-send-audit-{name}-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(root.join("maw/config")).expect("config");
+        let restores = ["HOME", "MAW_HOME", "MAW_CONFIG_DIR", "MAW_DATA_DIR", "MAW_STATE_DIR", "USER", "LOGNAME", "HOSTNAME", "MAW_AUDIT_TEST_NOW_MS"].map(EnvVarRestore::capture);
+        std::env::set_var("HOME", root.join("home"));
+        std::env::set_var("MAW_HOME", root.join("maw"));
+        for key in ["MAW_CONFIG_DIR", "MAW_DATA_DIR", "MAW_STATE_DIR", "LOGNAME"] { std::env::remove_var(key); }
+        std::env::set_var("USER", "nat");
+        std::env::set_var("HOSTNAME", "m5");
+        std::env::set_var("MAW_AUDIT_TEST_NOW_MS", "1783565423347");
+        (root, restores)
+    }
+
     fn send_acl_args(target: &str, text: &str) -> SendArgs {
         SendArgs { target: target.to_owned(), text: text.to_owned(), inbox: None, from: None, approve: false, trust: false, dry_run: false }
     }
@@ -1472,6 +1629,61 @@ mod send_acl_hotpath_tests {
             format_local_hey_message("[pretagged] hello", &config, "maw-rs", None),
             "[pretagged] hello"
         );
+    }
+
+    #[test]
+    fn send_success_writes_sane_audit_records() {
+        let _lock = env_test_lock().lock().unwrap();
+        let (root, _restores) = send_audit_test_env("schema");
+        let config = HeyConfig { node: Some("m5".to_owned()), oracle: Some("atlas".to_owned()), route: RouteConfig::default() };
+        let args = send_audit_args("hey", &send_acl_vec(&["agent", "hello"]));
+
+        send_record_success("hey", &args, &config, "atlas", None, "agent", "[m5:atlas] hello", "local");
+
+        let audit: serde_json::Value = serde_json::from_str(std::fs::read_to_string(root.join("maw/audit.jsonl")).unwrap().trim()).unwrap();
+        assert_eq!(audit["cmd"], "hey");
+        assert_eq!(audit["args"], serde_json::json!(["hey", "agent", "hello"]));
+        assert_eq!(audit["user"], "nat");
+        assert!(audit["pid"].as_u64().is_some());
+
+        let log: serde_json::Value = serde_json::from_str(std::fs::read_to_string(root.join("maw/maw-log.jsonl")).unwrap().trim()).unwrap();
+        assert_eq!(log["from"], "m5:atlas");
+        assert_eq!(log["to"], "agent");
+        assert_eq!(log["msg"], "[m5:atlas] hello");
+        assert_eq!(log["host"], "m5");
+        assert_eq!(log["route"], "local");
+    }
+
+    #[test]
+    fn concurrent_send_audit_appends_remain_parseable_jsonl() {
+        let _lock = env_test_lock().lock().unwrap();
+        let (root, _restores) = send_audit_test_env("concurrent");
+        let config = HeyConfig { node: Some("m5".to_owned()), oracle: Some("atlas".to_owned()), route: RouteConfig::default() };
+        let workers = 64;
+
+        std::thread::scope(|scope| {
+            for index in 0..workers {
+                let config = config.clone();
+                scope.spawn(move || {
+                    let raw_args = vec!["agent".to_owned(), format!("canary-{index}")];
+                    let args = send_audit_args("hey", &raw_args);
+                    send_record_success("hey", &args, &config, "atlas", None, "agent", &format!("[m5:atlas] canary-{index}"), "local");
+                });
+            }
+        });
+
+        assert_parseable_jsonl_count(&root.join("maw/audit.jsonl"), workers);
+        assert_parseable_jsonl_count(&root.join("maw/maw-log.jsonl"), workers);
+    }
+
+    fn assert_parseable_jsonl_count(path: &std::path::Path, expected: usize) {
+        let text = std::fs::read_to_string(path).expect("jsonl");
+        let lines = text.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), expected, "{text}");
+        for line in lines {
+            let value: serde_json::Value = serde_json::from_str(line).unwrap_or_else(|error| panic!("invalid jsonl line: {error}: {line:?}"));
+            assert!(value.as_object().is_some(), "{value}");
+        }
     }
 
     #[test]
