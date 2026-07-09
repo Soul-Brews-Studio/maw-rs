@@ -256,6 +256,7 @@ const DISPATCH_01: &[DispatcherEntry] = &[
     DispatcherEntry { command: "version", handler: Handler::Sync(version_handler) },
     DispatcherEntry { command: "auto-wake", handler: Handler::Sync(run_auto_wake_plan) },
     DispatcherEntry { command: "discord", handler: Handler::Async(run_discord_async) },
+    DispatcherEntry { command: "discord-channel", handler: Handler::Async(run_discord_async) },
     #[cfg(test)]
     DispatcherEntry { command: "__async-dispatch-test", handler: Handler::Async(run_async_dispatch_test) },
 ];

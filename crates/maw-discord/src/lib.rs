@@ -28,6 +28,7 @@ mod pair_route;
 mod rest_commands;
 mod rest_helpers;
 mod serve;
+mod state_dir;
 mod status;
 mod status_emit;
 mod tokens;
@@ -42,7 +43,7 @@ pub use self::discord_state_helpers::is_numeric_snowflake;
 use self::{
     access_core::*, access_read::*, access_write::*, bind::*, discord_runtime::*,
     discord_state_helpers::*, pair_route::*, rest_commands::*, rest_helpers::*, serve::*,
-    status::*, status_emit::*, tokens::*, validation::*,
+    state_dir::*, status::*, status_emit::*, tokens::*, validation::*,
 };
 
 #[cfg(test)]
