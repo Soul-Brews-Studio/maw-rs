@@ -610,6 +610,7 @@ fn fleet_load_entries_impl(dirs: Vec<std::path::PathBuf>, strict: bool, label: &
     let mut entries = Vec::new();
     let mut seen_prior_dirs = BTreeSet::new();
     for dir in dirs {
+        fleet_migrate_group_files(&dir, strict, label)?;
         let mut seen_this_dir = BTreeSet::new();
         let mut files = match std::fs::read_dir(&dir) {
             Ok(values) => values
@@ -621,6 +622,9 @@ fn fleet_load_entries_impl(dirs: Vec<std::path::PathBuf>, strict: bool, label: &
             Err(error) if strict => return Err(format!("{label}: read {}: {error}", dir.display())),
             Err(_) => Vec::new(),
         };
+        if let Ok(groups) = std::fs::read_dir(dir.join("groups")) {
+            files.extend(groups.flatten().map(|entry| entry.path().join("group.json")).filter(|path| path.is_file()));
+        }
         files.sort();
         for path in files {
             let Some(entry) = fleet_parse_entry(&path, strict, label)? else { continue; };
@@ -632,6 +636,29 @@ fn fleet_load_entries_impl(dirs: Vec<std::path::PathBuf>, strict: bool, label: &
         seen_prior_dirs.extend(seen_this_dir);
     }
     Ok(entries)
+}
+
+fn fleet_migrate_group_files(dir: &std::path::Path, strict: bool, label: &str) -> Result<(), String> {
+    let files = match std::fs::read_dir(dir) {
+        Ok(values) => values.flatten().map(|entry| entry.path()).filter(|path| fleet_is_json_file(path)).collect::<Vec<_>>(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if strict => return Err(format!("{label}: read {}: {error}", dir.display())),
+        Err(_) => return Ok(()),
+    };
+    for path in files {
+        let Ok(text) = std::fs::read_to_string(&path) else { continue };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
+        if !value.get("members").is_some_and(serde_json::Value::is_array) {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(std::ffi::OsStr::to_str) else { continue };
+        let target_dir = dir.join("groups").join(stem);
+        let target = target_dir.join("group.json");
+        std::fs::create_dir_all(&target_dir).map_err(|error| format!("{label}: create {}: {error}", target_dir.display()))?;
+        std::fs::rename(&path, &target).map_err(|error| format!("{label}: move {} to {}: {error}", path.display(), target.display()))?;
+        eprintln!("fleet: migrated group roster {} -> {}", path.display(), target.display());
+    }
+    Ok(())
 }
 
 fn fleet_parse_entry(path: &std::path::Path, strict: bool, label: &str) -> Result<Option<NativeFleetEntry>, String> {
@@ -649,7 +676,14 @@ fn fleet_parse_entry(path: &std::path::Path, strict: bool, label: &str) -> Resul
         return Ok(None);
     }
     native_fleet_apply_role_markers(&mut session);
-    let file = path.file_name().and_then(std::ffi::OsStr::to_str).unwrap_or_default().to_owned();
+    let file = if path.file_name().and_then(std::ffi::OsStr::to_str) == Some("group.json") {
+        path.parent()
+            .and_then(std::path::Path::file_name)
+            .and_then(std::ffi::OsStr::to_str)
+            .map_or_else(|| "group".to_owned(), str::to_owned)
+    } else {
+        path.file_name().and_then(std::ffi::OsStr::to_str).unwrap_or_default().to_owned()
+    };
     Ok(Some(NativeFleetEntry { file, path: path.to_path_buf(), session }))
 }
 
