@@ -194,7 +194,10 @@ fn doctor_collect_checks(options: &DoctorOptions) -> Vec<DoctorCheckNative> {
     if doctor_should_run(only, &["version", "all"]) { checks.push(doctor_check_version(options)); }
     if doctor_should_run(only, &["plugins"]) { checks.push(doctor_check_plugins()); }
     if doctor_should_run(only, &["peers", "all"]) { checks.push(doctor_check_peer_duplicates()); checks.push(doctor_check_stale_peers()); }
-    if doctor_should_run(only, &["hub"]) { checks.push(doctor_check_hub()); }
+    if doctor_should_run(only, &["hub", "all"]) { checks.push(doctor_check_hub()); }
+    if doctor_should_run(only, &["hub", "all"]) {
+        if let Some(check) = doctor_check_config_shadow() { checks.push(check); }
+    }
     if doctor_should_run(only, &["scout"]) { checks.push(doctor_ok("scout", "scout check is native-noop on maw-rs")); }
     if doctor_should_run(only, &["federation"]) { checks.push(doctor_ok("federation", "federation reachability skipped without configured peers")); }
     if doctor_should_run(only, &["disk"]) { checks.push(doctor_check_disk()); }
@@ -279,6 +282,65 @@ fn doctor_check_hub() -> DoctorCheckNative {
         doctor_info("hub", &format!("config readable at {}", cfg.display()))
     } else {
         doctor_warn("hub", &format!("config missing at {}", cfg.display()), &["maw init"])
+    }
+}
+
+fn doctor_check_config_shadow() -> Option<DoctorCheckNative> {
+    let env = doctor_xdg_env();
+    let config_dir = maw_config_dir(&env);
+    let legacy = config_dir.join("maw.config.json");
+    if !legacy.exists() || !doctor_has_weighted_config_layer(&config_dir) {
+        return None;
+    }
+    let raw = std::fs::read_to_string(&legacy).ok()?;
+    let parsed = serde_json::from_str::<serde_json::Value>(&raw).ok()?;
+    let mut keys = Vec::new();
+    doctor_collect_json_key_paths("", &parsed, &mut keys);
+    if keys.is_empty() {
+        return None;
+    }
+    keys.sort_unstable();
+    Some(doctor_warn(
+        "config:legacy-shadow",
+        &format!(
+            "legacy maw.config.json is ignored (weighted layers present); keys found there: {}",
+            keys.join(", ")
+        ),
+        &["move those keys into a weighted maw.config.<N>.json layer"],
+    ))
+}
+
+fn doctor_has_weighted_config_layer(config_dir: &std::path::Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(config_dir) else {
+        return false;
+    };
+    entries
+        .flatten()
+        .any(|entry| entry.file_name().to_str().is_some_and(doctor_is_weighted_config_name))
+}
+
+fn doctor_is_weighted_config_name(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("maw.config.") else {
+        return false;
+    };
+    let Some(digits) = rest
+        .strip_suffix(".local.json")
+        .or_else(|| rest.strip_suffix(".json")) else {
+        return false;
+    };
+    !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn doctor_collect_json_key_paths(prefix: &str, value: &serde_json::Value, out: &mut Vec<String>) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, child) in map {
+                let next = if prefix.is_empty() { key.clone() } else { format!("{prefix}.{key}") };
+                doctor_collect_json_key_paths(&next, child, out);
+            }
+        }
+        _ if !prefix.is_empty() => out.push(prefix.to_owned()),
+        _ => {}
     }
 }
 
@@ -640,6 +702,30 @@ mod doctor_tests {
         assert_eq!(parsed["ok"], true);
         assert_eq!(parsed["checks"][0]["name"], "xdg");
         assert!(parsed["checks"][0]["message"].as_str().expect("message").contains("json-xdg"));
+    }
+
+    #[test]
+    fn doctor_warns_when_weighted_config_shadows_legacy_keys() {
+        let (_lock, temp, _restore) = doctor_seed_env("config-shadow");
+        let config = temp.join("config-shadow/xdg-config/maw");
+        fs::write(config.join("maw.config.json"), r#"{"hooks":{"postWake":["echo hi"]},"node":"legacy"}"#).expect("legacy");
+        fs::write(config.join("maw.config.50.json"), r#"{"commands":{"default":"codex"}}"#).expect("weighted");
+
+        let output = run_doctor_command(&doctor_strings(&["--json", "hub"]));
+
+        assert_eq!(output.stderr, "");
+        assert_eq!(output.code, 1);
+        let parsed: serde_json::Value = serde_json::from_str(&output.stdout).expect("json");
+        let checks = parsed["checks"].as_array().expect("checks");
+        let shadow = checks
+            .iter()
+            .find(|check| check["name"] == "config:legacy-shadow")
+            .expect("legacy shadow warning");
+        assert_eq!(shadow["severity"], "warn");
+        assert_eq!(
+            shadow["message"],
+            "legacy maw.config.json is ignored (weighted layers present); keys found there: hooks.postWake, node"
+        );
     }
 
     #[test]
