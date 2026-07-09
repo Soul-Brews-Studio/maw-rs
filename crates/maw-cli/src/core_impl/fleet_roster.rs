@@ -1,7 +1,7 @@
 // maw fleet roster — squadron members[] on fleet squad files (#291). Pure roster (de)serialization
 // stays deterministic and I/O-free; commands compose it with fleet read dirs + oracles.json cache.
 
-const FLEET_ROSTER_USAGE: &str = "usage: maw fleet create <squad> | maw fleet show <squad> [--json] | maw fleet status <squad> [--json]";
+const FLEET_ROSTER_USAGE: &str = "usage: maw fleet create <squad> | maw fleet show <squad> [--json] | maw fleet status <squad> [--json] | maw fleet remove <squad> <handle> | maw fleet leave <squad>";
 
 #[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
 struct NativeFleetMember {
@@ -18,9 +18,79 @@ fn fleet_roster_intercept(argv: &[String]) -> Option<Result<(i32, String), Strin
     let sub = argv.iter().find(|arg| !arg.starts_with('-'))?;
     match sub.as_str() {
         "create" | "show" | "status" => Some(fleet_roster_run(argv)),
+        "remove" => Some(fleet_roster_remove_run(argv)),
+        "leave" => Some(fleet_roster_leave_run(argv)),
         "join" => Some(fleet_join_run(argv)),
         _ => None,
     }
+}
+
+
+fn fleet_roster_remove_run(argv: &[String]) -> Result<(i32, String), String> {
+    let positional = fleet_roster_positionals(argv, "remove")?;
+    let (Some(group), Some(handle), None) = (positional.get(1), positional.get(2), positional.get(3)) else {
+        return Err(FLEET_ROSTER_USAGE.to_owned());
+    };
+    fleet_validate_session_name(group)?;
+    fleet_validate_session_name(handle)?;
+    fleet_roster_remove_member(&current_xdg_env(), group, handle, "remove")
+}
+
+fn fleet_roster_leave_run(argv: &[String]) -> Result<(i32, String), String> {
+    let positional = fleet_roster_positionals(argv, "leave")?;
+    let (Some(group), None) = (positional.get(1), positional.get(2)) else {
+        return Err(FLEET_ROSTER_USAGE.to_owned());
+    };
+    fleet_validate_session_name(group)?;
+    let handle = fleet_roster_self_handle()?;
+    fleet_roster_remove_member(&current_xdg_env(), group, &handle, "leave")
+}
+
+fn fleet_roster_positionals(argv: &[String], command: &str) -> Result<Vec<String>, String> {
+    let mut positional = Vec::new();
+    for arg in argv {
+        if arg.starts_with('-') {
+            return Err(format!("fleet {command}: unknown argument {arg}\n{FLEET_ROSTER_USAGE}"));
+        }
+        positional.push(arg.clone());
+    }
+    Ok(positional)
+}
+
+fn fleet_roster_self_handle() -> Result<String, String> {
+    if let Ok(value) = std::env::var("MAW_ORACLE") {
+        let value = value.trim();
+        if !value.is_empty() { return Ok(value.trim_end_matches("-oracle").to_owned()); }
+    }
+    if let Ok(value) = std::env::var("MAW_SESSION_WINDOW") {
+        let session = value.split(':').next().unwrap_or_default().trim();
+        if !session.is_empty() { return Ok(fleet_session_stem(session).trim_end_matches("-oracle").to_owned()); }
+    }
+    Err("fleet leave: cannot infer self handle; set MAW_ORACLE".to_owned())
+}
+
+fn fleet_roster_remove_member(env: &MawXdgEnv, group: &str, handle: &str, verb: &str) -> Result<(i32, String), String> {
+    let entry = fleet_roster_find_entry(env, group, verb)?;
+    let text = std::fs::read_to_string(&entry.path).map_err(|error| format!("fleet {verb}: read {}: {error}", entry.path.display()))?;
+    let mut value: serde_json::Value = serde_json::from_str(&text).map_err(|error| format!("fleet {verb}: parse {}: {error}", entry.path.display()))?;
+    let object = value.as_object_mut().ok_or_else(|| format!("fleet {verb}: fleet file is not a JSON object"))?;
+    let members = object.get_mut("members").and_then(serde_json::Value::as_array_mut).ok_or_else(|| format!("fleet {verb}: squad {group} has no members roster"))?;
+    let before = members.len();
+    members.retain(|member| member.get("handle").and_then(serde_json::Value::as_str) != Some(handle));
+    if members.len() == before {
+        return Err(format!("fleet {verb}: unknown member {handle} in {group}"));
+    }
+    let count = members.len();
+    let body = serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?;
+    std::fs::write(&entry.path, format!("{body}\n")).map_err(|error| format!("fleet {verb}: write {}: {error}", entry.path.display()))?;
+    Ok((0, format!("fleet {verb} {group}: {handle} removed ({count} members)\n")))
+}
+
+fn fleet_roster_find_entry(env: &MawXdgEnv, group: &str, verb: &str) -> Result<NativeFleetEntry, String> {
+    fleet_load_entries_result_for_env(env, &format!("fleet {verb}"))?
+        .into_iter()
+        .find(|entry| fleet_roster_entry_matches(entry, group))
+        .ok_or_else(|| format!("fleet {verb}: no squad named {group} — try: maw fleet create {group}"))
 }
 
 fn fleet_roster_run(argv: &[String]) -> Result<(i32, String), String> {
@@ -149,7 +219,7 @@ fn fleet_roster_member_view(member: NativeFleetMember, cache: Option<&LocateRegi
 
 fn fleet_roster_json(group: &str, entry: &NativeFleetEntry, members: &[FleetRosterMemberView]) -> Result<(i32, String), String> {
     let value = serde_json::json!({
-        "group": group,
+        "squad": group,
         "name": entry.session.name,
         "path": entry.path,
         "legacy": entry.session.members.is_none(),
@@ -185,7 +255,7 @@ mod fleet_roster_tests {
     use super::*;
 
     const ROSTER_LEGACY_FIXTURE: &str = include_str!("../../tests/fixtures/native-fleet-roster/legacy-03-alpha.json");
-    const ROSTER_GROUP_FIXTURE: &str = include_str!("../../tests/fixtures/native-fleet-roster/squads/01-3e/squad.json");
+    const ROSTER_SQUAD_FIXTURE: &str = include_str!("../../tests/fixtures/native-fleet-roster/squads/01-3e/squad.json");
 
     fn roster_args(values: &[&str]) -> Vec<String> { values.iter().map(|value| (*value).to_owned()).collect() }
 
@@ -262,7 +332,7 @@ mod fleet_roster_tests {
         let (root, _env) = roster_env("migration");
         let fleet_dir = root.join("state/fleet");
         std::fs::create_dir_all(fleet_dir.join("groups/01-3e")).expect("squad dir");
-        std::fs::write(fleet_dir.join("groups/01-3e/group.json"), ROSTER_GROUP_FIXTURE).expect("legacy group fixture");
+        std::fs::write(fleet_dir.join("groups/01-3e/group.json"), ROSTER_SQUAD_FIXTURE).expect("legacy group fixture");
         std::fs::write(fleet_dir.join("01-3e.json"), r#"{"name":"01-3e","groupName":"3e","windows":[],"members":[]}"#).expect("duplicate flat roster");
         let shown: serde_json::Value = serde_json::from_str(&run_fleet_command(&roster_args(&["show", "3e", "--json"])).stdout).expect("json");
         assert_eq!(shown["memberCount"], 5);
@@ -279,6 +349,36 @@ mod fleet_roster_tests {
         assert!(migrated_file.contains(r#""squadName": "flat""#), "{migrated_file}");
         assert!(!migrated_file.contains("groupName"), "{migrated_file}");
         assert_eq!(serde_json::from_str::<serde_json::Value>(&migrated.stdout).expect("json")["memberCount"], 1);
+    }
+
+
+    #[test]
+    fn fleet_remove_and_leave_round_trip_roster_members() {
+        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (root, _env) = roster_env("remove-leave");
+        let _oracle = EnvVarRestore::capture("MAW_ORACLE");
+        let _now = EnvVarRestore::capture("MAW_RS_FLEET_REGISTRY_NOW");
+        std::env::set_var("MAW_ORACLE", "drift");
+        std::env::set_var("MAW_RS_FLEET_REGISTRY_NOW", "2026-07-09T00:00:00.000Z");
+        std::fs::create_dir_all(root.join("state/fleet")).expect("fleet dir");
+        std::fs::write(
+            root.join("state/fleet/05-ccdc.json"),
+            r#"{"name":"05-ccdc","squadName":"ccdc","windows":[],"members":[{"handle":"atlas","role":"lead"},{"handle":"drift","node":"mba"},{"handle":"ghost"}]}"#,
+        ).expect("squad file");
+
+        let removed = run_fleet_command(&roster_args(&["remove", "ccdc", "ghost"]));
+        assert_eq!(removed.code, 0, "{}", removed.stderr);
+        assert!(removed.stdout.contains("fleet remove ccdc: ghost removed (2 members)"));
+        let missing = run_fleet_command(&roster_args(&["remove", "ccdc", "ghost"]));
+        assert_eq!(missing.code, 1);
+        assert!(missing.stderr.contains("unknown member ghost"), "{}", missing.stderr);
+        let left = run_fleet_command(&roster_args(&["leave", "ccdc"]));
+        assert_eq!(left.code, 0, "{}", left.stderr);
+        assert!(left.stdout.contains("fleet leave ccdc: drift removed (1 members)"));
+        let shown = run_fleet_command(&roster_args(&["show", "ccdc", "--json"]));
+        let value: serde_json::Value = serde_json::from_str(&shown.stdout).expect("json");
+        assert_eq!(value["memberCount"], 1);
+        assert_eq!(value["members"][0]["handle"], "atlas");
     }
 
     #[test]

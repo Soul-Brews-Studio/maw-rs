@@ -15,6 +15,7 @@ struct FleetOptions {
     all: bool,
     kill: bool,
     resume: bool,
+    scatter: bool,
     squads: Vec<String>,
 }
 
@@ -31,6 +32,7 @@ enum FleetCommand {
     Sync,
     Wake,
     Sleep,
+    Gather,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -170,6 +172,7 @@ fn fleet_run_with(argv: &[String], runtime: &mut impl FleetRuntime) -> Result<(i
         FleetCommand::Gc => fleet_run_gc(&state, &options, &mut maw_tmux::CommandTmuxRunner::new()),
         FleetCommand::Wake => fleet_run_wake(&state, &options),
         FleetCommand::Sleep => fleet_run_sleep(&state, &options),
+        FleetCommand::Gather => fleet_run_gather(&state, &options, runtime),
         FleetCommand::Init => fleet_run_named_plan(&state, &options, "init"),
         FleetCommand::Consolidate => fleet_run_named_plan(&state, &options, "consolidate"),
         FleetCommand::Resume => fleet_run_named_plan(&state, &options, "resume"),
@@ -192,6 +195,7 @@ fn fleet_parse_args(argv: &[String]) -> Result<FleetOptions, String> {
             "--all" => options.all = true,
             "--kill" => options.kill = true,
             "--resume" => options.resume = true,
+            "--scatter" => options.scatter = true,
             "--squads" => {
                 index += 1;
                 let Some(raw) = argv.get(index) else { return Err("fleet: --squads requires a value".to_owned()); };
@@ -224,6 +228,9 @@ fn fleet_parse_args(argv: &[String]) -> Result<FleetOptions, String> {
         let action = if options.command == FleetCommand::Wake { "wake" } else { "sleep" };
         return Err(format!("fleet {action}: specify a squad, or --all to {action} every registered session on this node"));
     }
+    if matches!(options.command, FleetCommand::Gather) && options.target.is_none() {
+        return Err("fleet gather: missing squad".to_owned());
+    }
     Ok(options)
 }
 
@@ -238,6 +245,7 @@ fn fleet_default_options() -> FleetOptions {
         all: false,
         kill: false,
         resume: false,
+        scatter: false,
         squads: Vec::new(),
     }
 }
@@ -246,7 +254,7 @@ fn fleet_parse_positional(options: &mut FleetOptions, seen: &mut bool, value: &s
     if !*seen {
         return fleet_set_command(options, seen, value);
     }
-    if matches!(options.command, FleetCommand::Add | FleetCommand::Wake | FleetCommand::Sleep) && options.target.is_none() {
+    if matches!(options.command, FleetCommand::Add | FleetCommand::Wake | FleetCommand::Sleep | FleetCommand::Gather) && options.target.is_none() {
         fleet_validate_session_name(value)?;
         options.target = Some(value.to_owned());
         return Ok(());
@@ -272,6 +280,7 @@ fn fleet_set_command(options: &mut FleetOptions, seen: &mut bool, value: &str) -
             FleetCommand::Wake
         }
         "sleep" => FleetCommand::Sleep,
+        "gather" => FleetCommand::Gather,
         _ => return Err(format!("fleet: unknown subcommand {value}")),
     };
     *seen = true;
@@ -287,7 +296,7 @@ fn fleet_parse_squad_filter(raw: &str) -> Vec<String> {
 }
 
 fn fleet_usage() -> String {
-    "usage: maw fleet [add <session>|create <squad>|show <squad>|status <squad>|join <fleet> --code <code>|ls|doctor|health|gc|init|consolidate|resume|sync|wake <squad|--all>|sleep <squad|--all>|token <squad> [ls|status]] [--json] [--dry-run] [--fix] [--reboot] [--all] [--kill] [--resume] [--squads <squad[,squad]...>]".to_owned()
+    "usage: maw fleet [add <session>|create <squad>|show <squad>|status <squad>|join <fleet> --code <code>|remove <squad> <handle>|leave <squad>|ls|doctor|health|gc|init|consolidate|resume|sync|wake <squad|--all>|sleep <squad|--all>|gather <squad>|token <squad> [ls|status]] [--json] [--dry-run] [--fix] [--reboot] [--all] [--kill] [--resume] [--scatter] [--squads <squad[,squad]...>]".to_owned()
 }
 
 fn fleet_load_state_with(runtime: &mut impl FleetRuntime) -> Result<FleetState, String> {
@@ -993,6 +1002,93 @@ fn fleet_write_session_plan(out: &mut String, sessions: &[FleetSessionSummary]) 
     }
 }
 
+
+fn fleet_run_gather(
+    state: &FleetState,
+    options: &FleetOptions,
+    runtime: &mut impl FleetRuntime,
+) -> Result<(i32, String), String> {
+    let group = options.target.as_deref().ok_or_else(|| "fleet gather: missing squad".to_owned())?;
+    let entry = state
+        .fleet_entries
+        .iter()
+        .find(|entry| fleet_roster_entry_matches(entry, group))
+        .ok_or_else(|| format!("fleet gather: no squad named {group} — try: maw fleet create {group}"))?;
+    let members = entry.session.members.as_deref().unwrap_or_default();
+    if members.is_empty() { return Err(format!("fleet gather: squad {group} has no members")); }
+    let registered = fleet_sweep_targets(state);
+    let live = runtime.fleet_list_all().into_iter().map(|session| session.name).collect::<BTreeSet<_>>();
+    let plan = members.iter().map(|member| {
+        let session = fleet_member_session(&member.handle, &registered);
+        let live_session = session.filter(|candidate| live.contains(&candidate.name));
+        (member.handle.as_str(), live_session)
+    }).collect::<Vec<_>>();
+    if options.json { return fleet_json_gather(state, group, options, &plan); }
+    if options.dry_run { return Ok((0, fleet_render_gather(state, group, options, &plan, None))); }
+
+    let mut runner = maw_tmux::CommandTmuxRunner::new();
+    let target = fleet_gather_current_target(&mut runner)?;
+    let mut changed = false;
+    for (_, session) in &plan {
+        let Some(session) = session else { continue; };
+        let window = session.windows.first().map_or("main", |window| window.name.as_str());
+        let source = format!("{}:{window}", session.name);
+        if options.scatter {
+            tmux_break_with_runner(&[source.clone(), "--force".to_owned()], &mut runner)
+                .map_err(|(_, message)| format!("fleet gather: {message}"))?;
+        } else {
+            join_with_runner(&[source, "--to".to_owned(), target.clone()], &mut runner)
+                .map_err(|(_, message)| format!("fleet gather: {message}"))?;
+        }
+        changed = true;
+    }
+    if changed && !options.scatter {
+        layout_with_runner(&["main-vertical".to_owned()], &mut runner).map_err(|(_, message)| format!("fleet gather: {message}"))?;
+    }
+    Ok((0, fleet_render_gather(state, group, options, &plan, Some(&target))))
+}
+
+fn fleet_gather_current_target<R: maw_tmux::TmuxRunner>(runner: &mut R) -> Result<String, String> {
+    let raw = runner.run("display-message", &["-p".to_owned(), "#{pane_id}".to_owned()])
+        .map_err(|error| format!("fleet gather: current tmux pane unavailable: {}", error.message))?;
+    let pane = raw.trim();
+    if pane.is_empty() { Err("fleet gather: current tmux pane unavailable".to_owned()) } else { Ok(pane.to_owned()) }
+}
+
+fn fleet_render_gather(state: &FleetState, group: &str, options: &FleetOptions, plan: &[(&str, Option<&FleetSessionSummary>)], target: Option<&str>) -> String {
+    let mut out = String::new();
+    let action = if options.scatter { "scatter" } else { "gather" };
+    let _ = writeln!(out, "fleet {action} plan node: {}", state.config.node);
+    let _ = writeln!(out, "  squad: {group} · dry-run: {}", options.dry_run);
+    if let Some(target) = target { let _ = writeln!(out, "  target: {target}"); }
+    for (handle, session) in plan {
+        if let Some(session) = session {
+            let window = session.windows.first().map_or("main", |window| window.name.as_str());
+            let verb = if options.scatter { "break" } else { "join" };
+            let _ = writeln!(out, "  - {handle} live: {verb} {}:{window}", session.name);
+        } else {
+            let _ = writeln!(out, "  - {handle} asleep: skipped (no auto-wake in v1)");
+        }
+    }
+    if plan.iter().any(|(_, session)| session.is_some()) && !options.scatter { out.push_str("  - layout: main-vertical\n"); }
+    out
+}
+
+fn fleet_json_gather(state: &FleetState, group: &str, options: &FleetOptions, plan: &[(&str, Option<&FleetSessionSummary>)]) -> Result<(i32, String), String> {
+    let value = serde_json::json!({
+        "node": state.config.node,
+        "action": if options.scatter { "scatter" } else { "gather" },
+        "dryRun": options.dry_run,
+        "squad": group,
+        "members": plan.iter().map(|(handle, session)| serde_json::json!({
+            "handle": handle,
+            "state": if session.is_some() { "live" } else { "asleep" },
+            "session": session.map(|session| session.name.clone()),
+        })).collect::<Vec<_>>(),
+    });
+    serde_json::to_string_pretty(&value).map(|text| (0, format!("{text}\n"))).map_err(|error| error.to_string())
+}
+
 fn fleet_run_sleep(state: &FleetState, options: &FleetOptions) -> Result<(i32, String), String> {
     if let Some(group) = options.target.as_deref() {
         return fleet_run_group_action(state, options, "sleep", group);
@@ -1538,6 +1634,29 @@ mod fleet_tests {
             assert_eq!(value["sessions"], serde_json::json!(["03-alpha"]));
             assert_eq!(value["members"][0]["handle"], "alpha");
             assert_eq!(value["skipped"][0], serde_json::json!({"handle": "drift", "reason": "no session"}));
+        });
+    }
+
+
+    #[test]
+    fn fleet_gather_dry_run_plans_live_and_asleep_members() {
+        fleet_with_fixture(|root| {
+            std::fs::write(root.join("config/fleet/01-3e.json"), FLEET_SQUADRON_JSON).expect("roster");
+            let mut runtime = FleetFakeRuntime {
+                sessions: vec![TmuxSession { name: "03-alpha".to_owned(), windows: Vec::new() }],
+                ..FleetFakeRuntime::default()
+            };
+            let (code, stdout) = fleet_run_with(&fleet_strings(&["gather", "3e", "--dry-run"]), &mut runtime).expect("gather");
+            assert_eq!(code, 0);
+            assert!(stdout.contains("fleet gather plan node: alpha"), "{stdout}");
+            assert!(stdout.contains("  - alpha live: join 03-alpha:maw"), "{stdout}");
+            assert!(stdout.contains("  - drift asleep: skipped (no auto-wake in v1)"), "{stdout}");
+            assert!(stdout.contains("  - layout: main-vertical"), "{stdout}");
+            let (code, stdout) = fleet_run_with(&fleet_strings(&["gather", "3e", "--scatter", "--dry-run"]), &mut runtime).expect("scatter");
+            assert_eq!(code, 0);
+            assert!(stdout.contains("fleet scatter plan node: alpha"), "{stdout}");
+            assert!(stdout.contains("  - alpha live: break 03-alpha:maw"), "{stdout}");
+            assert!(!stdout.contains("layout:"), "{stdout}");
         });
     }
 
