@@ -55,12 +55,20 @@ fn attach_run_with_runner<R: maw_tmux::TmuxRunner>(
     if opts.alive.is_empty() {
         opts.alive = attach_list_sessions(runner).into_iter().collect();
     }
-    let resolved_target = match resolve_tmux_attach_session(&opts.target, &opts.alive) {
-        TmuxAttachSessionResolution::Match { session }
-        | TmuxAttachSessionResolution::Missing { session } => session,
-        TmuxAttachSessionResolution::Ambiguous { candidates, .. } => {
-            return Err(attach_port_ambiguous_error(&opts.target, &candidates));
+    let resolved_target = match attach_resolve_typed_target(&opts.target, &opts.alive) {
+        AttachResolvedTarget::Live(session) | AttachResolvedTarget::Missing(session) => session,
+        AttachResolvedTarget::SleepingRegistry(session) => {
+            attach_validate_token(&session, "resolved session").map_err(|message| command_target_error("attach", &message))?;
+            return Ok(attach_bridge_sleeping_registry(&opts.target, &session, &opts));
         }
+        AttachResolvedTarget::FleetGroup(group) => {
+            attach_validate_token(&group, "fleet group").map_err(|message| command_target_error("attach", &message))?;
+            return Ok(attach_group_suggestion(&opts.target, &group));
+        }
+        AttachResolvedTarget::Ambiguous(candidates) => match attach_unique_raw_live_match(&opts.target, &candidates) {
+            Some(session) => session,
+            None => return Err(attach_typed_ambiguous_error(&opts.target, &candidates)),
+        },
     };
     attach_validate_token(&resolved_target, "resolved session").map_err(|message| command_target_error("attach", &message))?;
     let in_tmux = std::env::var_os("TMUX").is_some();
@@ -79,6 +87,96 @@ fn attach_run_with_runner<R: maw_tmux::TmuxRunner>(
     };
     let code = i32::from(matches!(action, TmuxAttachAction::Recover { .. }));
     Ok(CliOutput { code, stdout, stderr: String::new() })
+}
+
+
+enum AttachResolvedTarget {
+    Live(String),
+    Missing(String),
+    SleepingRegistry(String),
+    FleetGroup(String),
+    Ambiguous(Vec<maw_matcher::ResolveMatch>),
+}
+
+fn attach_resolve_typed_target(target: &str, alive: &BTreeSet<String>) -> AttachResolvedTarget {
+    let candidates = attach_typed_candidates(alive);
+    match maw_matcher::resolve_typed_target(target, &candidates) {
+        maw_matcher::ResolveTypedResult::None => AttachResolvedTarget::Missing(target.to_owned()),
+        maw_matcher::ResolveTypedResult::Ambiguous { candidates } => AttachResolvedTarget::Ambiguous(candidates),
+        maw_matcher::ResolveTypedResult::Match { matched } => match matched.candidate.kind {
+            maw_matcher::ResolveCandidateKind::LiveSession | maw_matcher::ResolveCandidateKind::Window => AttachResolvedTarget::Live(matched.candidate.name),
+            maw_matcher::ResolveCandidateKind::SleepingRegistry | maw_matcher::ResolveCandidateKind::Oracle if matched.rank == maw_matcher::ResolveMatchRank::Exact => AttachResolvedTarget::SleepingRegistry(matched.candidate.name),
+            maw_matcher::ResolveCandidateKind::FleetGroup => AttachResolvedTarget::FleetGroup(matched.candidate.name),
+            _ => AttachResolvedTarget::Missing(target.to_owned()),
+        },
+    }
+}
+
+fn attach_typed_candidates(alive: &BTreeSet<String>) -> Vec<maw_matcher::ResolveTypedCandidate> {
+    let mut candidates = alive.iter().map(|name| maw_matcher::ResolveTypedCandidate { kind: maw_matcher::ResolveCandidateKind::LiveSession, name: name.clone(), aliases: Vec::new() }).collect::<Vec<_>>();
+    for entry in fleet_load_entries() {
+        if let Some(group) = fleet_roster_group_name(&entry) {
+            candidates.push(maw_matcher::ResolveTypedCandidate { kind: maw_matcher::ResolveCandidateKind::FleetGroup, name: group, aliases: attach_group_aliases(&entry) });
+        } else if !attach_alive_covers_name(alive, &entry.session.name) {
+            candidates.push(maw_matcher::ResolveTypedCandidate { kind: maw_matcher::ResolveCandidateKind::SleepingRegistry, name: entry.session.name.clone(), aliases: attach_registry_aliases(&entry) });
+        }
+    }
+    candidates
+}
+
+fn attach_alive_covers_name(alive: &BTreeSet<String>, name: &str) -> bool {
+    let names = maw_matcher::normalized_match_names(name);
+    alive.iter().any(|live| maw_matcher::normalized_match_names(live).iter().any(|live_name| names.contains(live_name)))
+}
+
+fn attach_unique_raw_live_match(target: &str, candidates: &[maw_matcher::ResolveMatch]) -> Option<String> {
+    let target = target.trim();
+    let matches = candidates.iter()
+        .filter(|matched| matched.candidate.kind == maw_matcher::ResolveCandidateKind::LiveSession && matched.candidate.name.eq_ignore_ascii_case(target))
+        .map(|matched| matched.candidate.name.clone())
+        .collect::<Vec<_>>();
+    (matches.len() == 1).then(|| matches[0].clone())
+}
+
+fn attach_group_aliases(entry: &NativeFleetEntry) -> Vec<String> {
+    let mut aliases = vec![entry.session.name.clone(), entry.file.clone(), fleet_roster_unnumbered_stem(entry).to_owned()];
+    if !entry.session.group_name.is_empty() { aliases.push(entry.session.group_name.clone()); }
+    aliases
+}
+
+fn attach_registry_aliases(entry: &NativeFleetEntry) -> Vec<String> {
+    let mut aliases = Vec::new();
+    for window in &entry.session.windows {
+        if !window.name.is_empty() { aliases.push(window.name.clone()); }
+        if let Some(name) = native_fleet_window_oracle_name(window) { aliases.push(name); }
+        if let Some(repo) = window.repo.rsplit('/').next().filter(|repo| !repo.is_empty()) { aliases.push((*repo).to_owned()); }
+    }
+    aliases
+}
+
+fn attach_bridge_sleeping_registry(target: &str, session: &str, options: &AttachOptions) -> CliOutput {
+    let suggestion = attach_wake_suggestion(target, session);
+    if attach_has_flag(options, ATTACH_FLAG_PRINT) || attach_has_flag(options, ATTACH_FLAG_PLAN_JSON) { return CliOutput { code: 1, stdout: suggestion, stderr: String::new() }; }
+    if !attach_has_flag(options, ATTACH_FLAG_YES) && (!attach_stdin_is_terminal() || !attach_confirm_wake(target, session)) { return CliOutput { code: 1, stdout: suggestion, stderr: String::new() }; }
+    run_wake_command(&[session.to_owned(), "--attach".to_owned()])
+}
+
+fn attach_wake_suggestion(target: &str, session: &str) -> String {
+    format!("attach: '{target}' resolved to sleeping registry entry {session}\n  → maw wake {session} --attach\n")
+}
+
+fn attach_group_suggestion(target: &str, group: &str) -> CliOutput {
+    CliOutput { code: 1, stdout: format!("attach: '{target}' resolved to fleet group {group}\n  → maw fleet wake {group}\n"), stderr: String::new() }
+}
+
+fn attach_stdin_is_terminal() -> bool { use std::io::IsTerminal as _; std::io::stdin().is_terminal() }
+
+fn attach_confirm_wake(target: &str, session: &str) -> bool {
+    use std::io::Write as _;
+    eprint!("attach: '{target}' resolved to sleeping registry entry {session}. Run maw wake {session} --attach? [Y/n] ");
+    let _ = std::io::stderr().flush();
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line).is_ok() && !matches!(line.trim().to_ascii_lowercase().as_str(), "n" | "no")
 }
 
 fn attach_parse_args(argv: &[String]) -> Result<AttachOptions, String> {
@@ -154,15 +252,15 @@ fn attach_parse_explicit_remote_target(target: &str) -> Option<(String, String)>
     Some((node.to_owned(), session_name.to_owned()))
 }
 
-fn attach_port_ambiguous_error(target: &str, candidates: &[String]) -> CliOutput {
-    CliOutput {
-        code: 2,
-        stdout: String::new(),
-        stderr: format!(
-            "attach: '{target}' matches multiple sessions: {}\n  use the full name: maw-rs attach <exact-session>\n",
-            candidates.join(", ")
-        ),
+fn attach_typed_ambiguous_error(target: &str, candidates: &[maw_matcher::ResolveMatch]) -> CliOutput {
+    let mut stderr = format!("attach: '{target}' matches multiple sessions (ranked candidates):\n");
+    let names = candidates.iter().map(|matched| matched.candidate.name.as_str()).collect::<Vec<_>>().join(", ");
+    let _ = writeln!(stderr, "  candidates: {names}");
+    for matched in candidates {
+        let _ = writeln!(stderr, "  - {:?} {} ({:?})", matched.candidate.kind, matched.candidate.name, matched.rank);
     }
+    stderr.push_str("  use a full session name or exact target\n");
+    CliOutput { code: 2, stdout: String::new(), stderr }
 }
 
 
@@ -326,6 +424,20 @@ mod attach_tests {
 
     fn attach_strings(values: &[&str]) -> Vec<String> { values.iter().map(|value| (*value).to_owned()).collect() }
 
+
+    fn attach_fleet_root(name: &str) -> std::path::PathBuf { std::env::temp_dir().join(format!("maw-rs-attach-{name}-{}", std::process::id())) }
+
+    fn attach_with_fleet_env(root: &std::path::Path, test: impl FnOnce()) {
+        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _restore = ["HOME", "MAW_HOME", "MAW_XDG", "MAW_STATE_DIR", "MAW_CONFIG_DIR", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "GHQ_ROOT"].map(EnvVarRestore::capture);
+        std::env::set_var("HOME", root.join("home"));
+        std::env::set_var("MAW_STATE_DIR", root.join("state"));
+        std::env::set_var("MAW_CONFIG_DIR", root.join("config"));
+        std::env::set_var("GHQ_ROOT", root.join("ghq"));
+        for key in ["MAW_HOME", "MAW_XDG", "XDG_STATE_HOME", "XDG_CONFIG_HOME"] { std::env::remove_var(key); }
+        test();
+    }
+
     #[test]
     fn attach_dispatch_fragment_owns_attach_aliases() {
         let commands = DISPATCH_111.iter().map(|entry| entry.command).collect::<Vec<_>>();
@@ -334,34 +446,63 @@ mod attach_tests {
 
     #[test]
     fn attach_uses_tmux_runner_for_alive_sessions_and_prints_plan() {
-        let mut runner = AttachFakeRunner::default();
-        let output = attach_run_with_runner(&attach_strings(&["mawjs", "--print"]), &mut runner).unwrap();
-        assert_eq!(output.code, 0);
-        assert!(output.stdout.contains("Run: tmux attach -t 50-mawjs"));
-        assert_eq!(runner.calls[0].0, "list-sessions");
+        let root = attach_fleet_root("print-plan");
+        let _ = std::fs::remove_dir_all(&root);
+        attach_with_fleet_env(&root, || {
+            let mut runner = AttachFakeRunner::default();
+            let output = attach_run_with_runner(&attach_strings(&["mawjs", "--print"]), &mut runner).unwrap();
+            assert_eq!(output.code, 0);
+            assert!(output.stdout.contains("Run: tmux attach -t 50-mawjs"));
+            assert_eq!(runner.calls[0].0, "list-sessions");
+        });
     }
 
     #[test]
     fn attach_prefers_live_tmux_session_over_stale_legacy_fleet_file() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let _home = EnvVarRestore::capture("HOME");
-        let root = std::env::temp_dir().join(format!("maw-rs-attach-live-over-fleet-{}", std::process::id()));
+        let root = attach_fleet_root("live-over-fleet");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("home/.maw/fleet")).expect("legacy fleet dir");
-        std::fs::write(
-            root.join("home/.maw/fleet/ghost.json"),
-            r#"{"name":"ghost","windows":[{"name":"ghost","repo":"acme/dead"}]}"#,
-        )
-        .expect("legacy fleet file");
-        std::env::set_var("HOME", root.join("home"));
+        std::fs::write(root.join("home/.maw/fleet/ghost.json"), r#"{"name":"ghost","windows":[{"name":"ghost","repo":"acme/dead"}]}"#).expect("legacy fleet file");
+        attach_with_fleet_env(&root, || {
+            let mut runner = AttachFakeRunner { sessions: "05-ghost\n".to_owned(), ..AttachFakeRunner::default() };
+            let output = attach_run_with_runner(&attach_strings(&["ghost", "--plan-json"]), &mut runner).unwrap();
+            assert_eq!(output.code, 0, "{}{}", output.stdout, output.stderr);
+            assert!(output.stdout.contains("\"session\":\"05-ghost\""));
+            assert!(output.stdout.contains("\"action\":\"print\""));
+            assert!(runner.calls.iter().any(|call| call.0 == "list-sessions"));
+        });
+    }
 
-        let mut runner = AttachFakeRunner { sessions: "05-ghost\n".to_owned(), ..AttachFakeRunner::default() };
-        let output = attach_run_with_runner(&attach_strings(&["ghost", "--plan-json"]), &mut runner).unwrap();
+    #[test]
+    fn attach_resolver_bridges_sleeping_registry_and_suggests_group() {
+        let root = attach_fleet_root("bridge-group");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("state/fleet")).expect("state fleet");
+        std::fs::write(root.join("state/fleet/ghost.json"), r#"{"name":"ghost","windows":[{"name":"ghost","repo":"acme/ghost"}]}"#).expect("ghost fleet file");
+        std::fs::write(root.join("state/fleet/01-3e.json"), r#"{"name":"01-3e","groupName":"3e","windows":[],"members":[{"handle":"alpha"},{"handle":"drift"}]}"#).expect("group fleet file");
+        attach_with_fleet_env(&root, || {
+            let mut runner = AttachFakeRunner { sessions: "05-volt\n".to_owned(), ..AttachFakeRunner::default() };
+            let sleeping = attach_run_with_runner(&attach_strings(&["ghost"]), &mut runner).unwrap();
+            assert_eq!(sleeping.code, 1, "{}{}", sleeping.stdout, sleeping.stderr);
+            assert!(sleeping.stdout.contains("maw wake ghost --attach"));
+            let group = attach_run_with_runner(&attach_strings(&["3e"]), &mut runner).unwrap();
+            assert_eq!(group.code, 1, "{}{}", group.stdout, group.stderr);
+            assert!(group.stdout.contains("maw fleet wake 3e"));
+        });
+    }
 
-        assert_eq!(output.code, 0, "{}{}", output.stdout, output.stderr);
-        assert!(output.stdout.contains("\"session\":\"05-ghost\""));
-        assert!(output.stdout.contains("\"action\":\"print\""));
-        assert!(runner.calls.iter().any(|call| call.0 == "list-sessions"));
+    #[test]
+    fn attach_resolver_reports_session_prefixed_sibling_ambiguity() {
+        let root = attach_fleet_root("homekeeper-ambiguous");
+        let _ = std::fs::remove_dir_all(&root);
+        attach_with_fleet_env(&root, || {
+            let mut runner = AttachFakeRunner::default();
+            let err = attach_run_with_runner(&attach_strings(&["homekeeper", "--alive", "158-homekeeper", "--alive", "159-homekeeper"]), &mut runner).unwrap_err();
+            assert_eq!(err.code, 2, "{}{}", err.stdout, err.stderr);
+            assert!(err.stderr.contains("LiveSession 158-homekeeper (Exact)"), "{}", err.stderr);
+            assert!(err.stderr.contains("LiveSession 159-homekeeper (Exact)"), "{}", err.stderr);
+            assert!(runner.calls.is_empty());
+        });
     }
 
     #[test]
