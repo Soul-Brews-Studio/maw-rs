@@ -45,7 +45,7 @@ fn peek_with_runner<R: maw_tmux::TmuxRunner>(
             .map_err(|message| (1, message))?;
         return Ok(CliOutput {
             code: 0,
-            stdout: format!("\x1b[36m--- {resolved} ---\x1b[0m\n{content}"),
+            stdout: format!("\x1b[36m--- {resolved} ---\x1b[0m\n{}", peek_trim_trailing_blank_lines(&content)),
             stderr: String::new(),
         });
     }
@@ -69,7 +69,7 @@ fn peek_resolve_and_capture<R: maw_tmux::TmuxRunner>(
         Err(resolve_error) => {
             return peek_capture(runner, target, lines, history)
                 .map(|content| (target.to_owned(), content))
-                .map_err(|_| resolve_error);
+                .map_err(|_| peek_js_window_not_found_error(target, &resolve_error));
         }
     };
     peek_validate_tmux_target(&resolved)?;
@@ -208,7 +208,7 @@ fn peek_render_overview<R: maw_tmux::TmuxRunner>(
         let target = format!("{}:{}", window.session, window.index);
         peek_validate_tmux_target(&target).map_err(|message| (1, message))?;
         let summary = match peek_capture(runner, &target, 3, false) {
-            Ok(content) => peek_last_nonempty_line(&content).unwrap_or_else(|| "(empty)".to_owned()),
+            Ok(content) => peek_literal_last_line(&content).unwrap_or_else(|| "(empty)".to_owned()),
             Err(_) => "(unreachable)".to_owned(),
         };
         let dot = if window.active { "\x1b[32m*\x1b[0m" } else { " " };
@@ -222,12 +222,25 @@ fn peek_render_overview<R: maw_tmux::TmuxRunner>(
     Ok(stdout)
 }
 
-fn peek_last_nonempty_line(content: &str) -> Option<String> {
-    content
-        .lines()
-        .rev()
-        .find(|line| !line.trim().is_empty())
-        .map(ToOwned::to_owned)
+fn peek_literal_last_line(content: &str) -> Option<String> {
+    let trimmed = content.strip_suffix('\n').unwrap_or(content);
+    let line = trimmed.rsplit('\n').next()?.trim_end_matches('\r');
+    if line.trim().is_empty() { None } else { Some(line.to_owned()) }
+}
+
+fn peek_trim_trailing_blank_lines(content: &str) -> String {
+    let mut end = None;
+    let mut offset = 0;
+    for segment in content.split_inclusive('\n') {
+        offset += segment.len();
+        if !segment.trim_end_matches('\n').trim_end_matches('\r').trim().is_empty() { end = Some(offset); }
+    }
+    if end.is_none() && !content.ends_with('\n') && !content.trim().is_empty() { end = Some(content.len()); }
+    end.map_or_else(String::new, |idx| content[..idx].to_owned())
+}
+
+fn peek_js_window_not_found_error(target: &str, resolve_error: &str) -> String {
+    if resolve_error.starts_with("no window '") && resolve_error.contains(" in session '") { resolve_error.to_owned() } else { format!("window not found: {target}") }
 }
 
 fn peek_truncate_chars(value: &str, max: usize) -> String {
@@ -268,6 +281,17 @@ mod peek_tests {
 
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    #[test]
+    fn peek_trims_trailing_blank_padding_and_maps_session_miss_like_js() {
+        assert_eq!(peek_trim_trailing_blank_lines("body\n\n  \n"), "body\n");
+        assert_eq!(peek_literal_last_line("old\n\n").as_deref(), None);
+        assert_eq!(peek_js_window_not_found_error("missing", "no session named missing"), "window not found: missing");
+        assert_eq!(
+            peek_js_window_not_found_error("sess:9", "no window '9' in session 'sess' — windows: sess:0 (main)"),
+            "no window '9' in session 'sess' — windows: sess:0 (main)"
+        );
     }
 
     #[test]
@@ -318,12 +342,12 @@ mod peek_tests {
             list: "s\t0\tactive\t1\ns\t1\tdead\t0\n".to_owned(),
             ..PeekFakeRunner::default()
         };
-        runner.captures.insert("s:0".to_owned(), "old\nlast line\n".to_owned());
+        runner.captures.insert("s:0".to_owned(), "old\n\n\n".to_owned());
 
         let output = peek_with_runner(&args(&[]), &mut runner).expect("overview");
 
         assert!(output.stdout.contains("active"));
-        assert!(output.stdout.contains("last line"));
+        assert!(output.stdout.contains("(empty)"));
         assert!(output.stdout.contains("dead"));
         assert!(output.stdout.contains("(unreachable)"));
         assert_eq!(runner.calls[1].1, args(&["-p", "-t", "s:0", "-S", "-3", "-J"]));
@@ -397,7 +421,7 @@ mod peek_tests {
             .expect_err("missing window");
 
         assert_eq!(error.0, 1);
-        assert!(error.1.contains("no window 'codex-1' in session 'webhook-relay-v3'"), "{error:?}");
+        assert_eq!(error.1, "no window 'codex-1' in session 'webhook-relay-v3' — windows: webhook-relay-v3:0 (oracle)");
         assert_eq!(runner.calls[1].1, args(&["-p", "-t", "webhook-relay-v3:codex-1", "-S", "-30", "-J"]));
         assert!(!runner
             .calls
