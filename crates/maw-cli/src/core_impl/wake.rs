@@ -454,6 +454,7 @@ fn wake_oracle(options: &WakeOptionsNative) -> Result<String, String> {
 
 fn wake_typed_resolution(options: &WakeOptionsNative, oracle: &str) -> Result<Option<WakeTypedResolution>, String> {
     if wake_should_bypass_typed_resolution(options) { return Ok(None); }
+    if let Some(resolution) = wake_resolve_exact_registry_session(&options.target)? { return Ok(Some(resolution)); }
     if let Some(resolution) = wake_resolve_registry_target(&options.target)? { return Ok(Some(resolution)); }
     wake_resolve_repo_target(oracle).map(Some)
 }
@@ -514,6 +515,38 @@ fn wake_find_repo(oracle: &str) -> Result<WakeRepoResolution, String> {
         return Err(wake_registry_missing_repo_message(oracle, &path));
     }
     wake_resolve_repo_target(oracle).map(|resolution| resolution.repo)
+}
+
+fn wake_resolve_exact_registry_session(target: &str) -> Result<Option<WakeTypedResolution>, String> {
+    let matches = fleet_load_entries()
+        .into_iter()
+        .filter(|entry| entry.session.name == target || entry.file == target)
+        .collect::<Vec<_>>();
+    let Some(entry) = matches.first() else { return Ok(None); };
+    if matches.len() > 1 {
+        return Err(format!("wake: ambiguous registry session for {target}"));
+    }
+    let stem = maw_identity::parse_session_name(&entry.session.name).stem;
+    let Some(window) = wake_primary_registry_window(entry, &stem) else { return Ok(None); };
+    let Some(path) = native_fleet_repo_path(&window.repo) else { return Ok(None); };
+    if !path.is_dir() {
+        return Err(wake_registry_missing_repo_message(&entry.session.name, &path));
+    }
+    let oracle = wake_oracle_from_repo_slug(&window.repo).unwrap_or_else(|| stem.clone());
+    Ok(Some(WakeTypedResolution {
+        oracle,
+        repo: WakeRepoResolution { path, fuzzy_match: None },
+        session_hint: Some(entry.session.name.clone()),
+    }))
+}
+
+fn wake_primary_registry_window<'a>(entry: &'a NativeFleetEntry, stem: &str) -> Option<&'a NativeFleetWindow> {
+    entry
+        .session
+        .windows
+        .iter()
+        .find(|window| window.name == stem)
+        .or_else(|| entry.session.windows.first())
 }
 
 fn wake_resolve_registry_target(target: &str) -> Result<Option<WakeTypedResolution>, String> {
@@ -604,7 +637,7 @@ fn wake_typed_registry_candidates() -> Vec<WakeTypedRegistryCandidate> {
                 candidate: maw_matcher::ResolveTypedCandidate {
                     kind: maw_matcher::ResolveCandidateKind::SleepingRegistry,
                     name,
-                    aliases: wake_registry_aliases(&entry, window, &oracle),
+                    aliases: wake_registry_aliases(window, &oracle),
                 },
                 oracle,
                 session: entry.session.name.clone(),
@@ -615,8 +648,8 @@ fn wake_typed_registry_candidates() -> Vec<WakeTypedRegistryCandidate> {
     candidates
 }
 
-fn wake_registry_aliases(entry: &NativeFleetEntry, window: &NativeFleetWindow, oracle: &str) -> Vec<String> {
-    let mut aliases = vec![entry.session.name.clone(), entry.file.clone(), window.name.clone(), oracle.to_owned()];
+fn wake_registry_aliases(window: &NativeFleetWindow, oracle: &str) -> Vec<String> {
+    let mut aliases = vec![window.name.clone(), oracle.to_owned()];
     if let Some(repo_name) = window.repo.rsplit('/').next().filter(|name| !name.is_empty()) { aliases.push(repo_name.to_owned()); }
     aliases.sort();
     aliases.dedup();
@@ -1285,6 +1318,32 @@ mod wake_tests {
             assert!(stdout.contains(&format!("created session '{session}'")), "{stdout}");
             assert!(tmux.actions.iter().any(|action| action.starts_with(&format!("new-session {session} arra-oracle-v3"))), "{tmux:?}");
             assert!(tmux.actions.iter().any(|action| action.contains(&repo.display().to_string())), "{tmux:?}");
+        });
+    }
+
+    #[test]
+    fn wake_exact_session_name_with_multiple_windows_is_not_ambiguous() {
+        wake_with_fixture(|root| {
+            let session = "41-arra-oracle-v3";
+            let main_repo = root.join("ghq/github.com/laris-co/arra-oracle-v3");
+            let task_repo = root.join("ghq/github.com/laris-co/arra-oracle-v3-task");
+            std::fs::create_dir_all(&main_repo).expect("main repo");
+            std::fs::create_dir_all(&task_repo).expect("task repo");
+            std::fs::write(
+                root.join("config/fleet").join(format!("{session}.json")),
+                r#"{"name":"41-arra-oracle-v3","windows":[{"name":"arra-oracle-v3","repo":"github.com/laris-co/arra-oracle-v3"},{"name":"arra-oracle-v3-task","repo":"github.com/laris-co/arra-oracle-v3-task"}]}"#,
+            )
+            .expect("write registry");
+
+            let mut tmux = WakeMockTmux::default();
+            let (code, stdout) = wake_run(&wake_strings(&[session, "--dry-run"]), &mut tmux).expect("run");
+            assert_eq!(code, 0, "{stdout}");
+            assert!(stdout.contains("found"), "{stdout}");
+            assert!(stdout.contains("arra-oracle-v3"), "{stdout}");
+            assert!(stdout.contains(&main_repo.display().to_string()), "{stdout}");
+            assert!(stdout.contains(&format!("would wake window 'arra-oracle-v3' in session '{session}'")), "{stdout}");
+            assert!(!stdout.contains("ambiguous registry target"), "{stdout}");
+            assert!(tmux.actions.is_empty());
         });
     }
 
