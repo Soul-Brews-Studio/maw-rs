@@ -215,7 +215,7 @@ fn broadcast_fleet_session_names(fleet: &str) -> BTreeSet<String> {
         let file = entry.file.strip_suffix(".json").unwrap_or(&entry.file);
         let stripped = broadcast_strip_numeric_prefix(name);
         let candidates = [
-            entry.session.group_name.as_str(),
+            entry.session.squad_name.as_str(),
             file,
             name,
             stripped.as_str(),

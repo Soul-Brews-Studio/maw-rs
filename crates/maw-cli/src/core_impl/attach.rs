@@ -61,8 +61,8 @@ fn attach_run_with_runner<R: maw_tmux::TmuxRunner>(
             attach_validate_token(&session, "resolved session").map_err(|message| command_target_error("attach", &message))?;
             return Ok(attach_bridge_sleeping_registry(&opts.target, &session, &opts));
         }
-        AttachResolvedTarget::FleetGroup(group) => {
-            attach_validate_token(&group, "fleet group").map_err(|message| command_target_error("attach", &message))?;
+        AttachResolvedTarget::FleetSquad(group) => {
+            attach_validate_token(&group, "fleet squad").map_err(|message| command_target_error("attach", &message))?;
             return Ok(attach_group_suggestion(&opts.target, &group));
         }
         AttachResolvedTarget::Ambiguous(candidates) => match attach_unique_raw_live_match(&opts.target, &candidates) {
@@ -94,7 +94,7 @@ enum AttachResolvedTarget {
     Live(String),
     Missing(String),
     SleepingRegistry(String),
-    FleetGroup(String),
+    FleetSquad(String),
     Ambiguous(Vec<maw_matcher::ResolveMatch>),
 }
 
@@ -106,7 +106,7 @@ fn attach_resolve_typed_target(target: &str, alive: &BTreeSet<String>) -> Attach
         maw_matcher::ResolveTypedResult::Match { matched } => match matched.candidate.kind {
             maw_matcher::ResolveCandidateKind::LiveSession | maw_matcher::ResolveCandidateKind::Window => AttachResolvedTarget::Live(matched.candidate.name),
             maw_matcher::ResolveCandidateKind::SleepingRegistry | maw_matcher::ResolveCandidateKind::Oracle if matched.rank == maw_matcher::ResolveMatchRank::Exact => AttachResolvedTarget::SleepingRegistry(matched.candidate.name),
-            maw_matcher::ResolveCandidateKind::FleetGroup => AttachResolvedTarget::FleetGroup(matched.candidate.name),
+            maw_matcher::ResolveCandidateKind::FleetSquad => AttachResolvedTarget::FleetSquad(matched.candidate.name),
             _ => AttachResolvedTarget::Missing(target.to_owned()),
         },
     }
@@ -115,8 +115,8 @@ fn attach_resolve_typed_target(target: &str, alive: &BTreeSet<String>) -> Attach
 fn attach_typed_candidates(alive: &BTreeSet<String>) -> Vec<maw_matcher::ResolveTypedCandidate> {
     let mut candidates = alive.iter().map(|name| maw_matcher::ResolveTypedCandidate { kind: maw_matcher::ResolveCandidateKind::LiveSession, name: name.clone(), aliases: Vec::new() }).collect::<Vec<_>>();
     for entry in fleet_load_entries() {
-        if let Some(group) = fleet_roster_group_name(&entry) {
-            candidates.push(maw_matcher::ResolveTypedCandidate { kind: maw_matcher::ResolveCandidateKind::FleetGroup, name: group, aliases: attach_group_aliases(&entry) });
+        if let Some(group) = fleet_roster_squad_name(&entry) {
+            candidates.push(maw_matcher::ResolveTypedCandidate { kind: maw_matcher::ResolveCandidateKind::FleetSquad, name: group, aliases: attach_group_aliases(&entry) });
         } else if !attach_alive_covers_name(alive, &entry.session.name) {
             candidates.push(maw_matcher::ResolveTypedCandidate { kind: maw_matcher::ResolveCandidateKind::SleepingRegistry, name: entry.session.name.clone(), aliases: attach_registry_aliases(&entry) });
         }
@@ -140,7 +140,7 @@ fn attach_unique_raw_live_match(target: &str, candidates: &[maw_matcher::Resolve
 
 fn attach_group_aliases(entry: &NativeFleetEntry) -> Vec<String> {
     let mut aliases = vec![entry.session.name.clone(), entry.file.clone(), fleet_roster_unnumbered_stem(entry).to_owned()];
-    if !entry.session.group_name.is_empty() { aliases.push(entry.session.group_name.clone()); }
+    if !entry.session.squad_name.is_empty() { aliases.push(entry.session.squad_name.clone()); }
     aliases
 }
 
@@ -166,7 +166,7 @@ fn attach_wake_suggestion(target: &str, session: &str) -> String {
 }
 
 fn attach_group_suggestion(target: &str, group: &str) -> CliOutput {
-    CliOutput { code: 1, stdout: format!("attach: '{target}' resolved to fleet group {group}\n  → maw fleet wake {group}\n"), stderr: String::new() }
+    CliOutput { code: 1, stdout: format!("attach: '{target}' resolved to fleet squad {group}\n  → maw fleet wake {group}\n"), stderr: String::new() }
 }
 
 fn attach_stdin_is_terminal() -> bool { use std::io::IsTerminal as _; std::io::stdin().is_terminal() }
@@ -479,7 +479,7 @@ mod attach_tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("state/fleet")).expect("state fleet");
         std::fs::write(root.join("state/fleet/ghost.json"), r#"{"name":"ghost","windows":[{"name":"ghost","repo":"acme/ghost"}]}"#).expect("ghost fleet file");
-        std::fs::write(root.join("state/fleet/01-3e.json"), r#"{"name":"01-3e","groupName":"3e","windows":[],"members":[{"handle":"alpha"},{"handle":"drift"}]}"#).expect("group fleet file");
+        std::fs::write(root.join("state/fleet/01-3e.json"), r#"{"name":"01-3e","squadName":"3e","windows":[],"members":[{"handle":"alpha"},{"handle":"drift"}]}"#).expect("group fleet file");
         attach_with_fleet_env(&root, || {
             let mut runner = AttachFakeRunner { sessions: "05-volt\n".to_owned(), ..AttachFakeRunner::default() };
             let sleeping = attach_run_with_runner(&attach_strings(&["ghost"]), &mut runner).unwrap();

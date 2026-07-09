@@ -35,11 +35,11 @@ fn absorb_seed(name: &str) -> (PathBuf, PathBuf, PathBuf) {
     std::fs::create_dir_all(&bin).expect("bin dir");
     absorb_write(
         &config.join("fleet/01-donor.json"),
-        r#"{"name":"01-donor-oracle","groupName":"donor-team","windows":[{"name":"donor-window","repo":"org/donor-oracle"}]}"#,
+        r#"{"name":"01-donor-oracle","squadName":"donor-team","windows":[{"name":"donor-window","repo":"org/donor-oracle"}]}"#,
     );
     absorb_write(
         &config.join("fleet/02-receiver.json"),
-        r#"{"name":"02-receiver-oracle","groupName":"receiver-team","windows":[{"name":"receiver-window","repo":"org/receiver-oracle"}]}"#,
+        r#"{"name":"02-receiver-oracle","squadName":"receiver-team","windows":[{"name":"receiver-window","repo":"org/receiver-oracle"}]}"#,
     );
     std::fs::create_dir_all(root.join("ghq/github.com/org/donor-oracle/ψ/memory/learnings"))
         .expect("donor repo");

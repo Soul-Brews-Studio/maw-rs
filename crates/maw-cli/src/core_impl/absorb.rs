@@ -102,8 +102,8 @@ fn absorb_find_fleet_entry(entries: &[AbsorbFleetEntry], query: &str) -> Option<
 
 fn absorb_entry_names(entry: &AbsorbFleetEntry) -> Vec<String> {
     let session_name = absorb_strip_session_prefix(&entry.session.name);
-    let group_name = absorb_strip_session_prefix(&entry.session.group_name);
-    let mut names = vec![entry.session.name.clone(), session_name, group_name];
+    let squad_name = absorb_strip_session_prefix(&entry.session.squad_name);
+    let mut names = vec![entry.session.name.clone(), session_name, squad_name];
     for window in &entry.session.windows { names.push(window.name.clone()); names.push(absorb_repo_name(&window.repo)); }
     names.into_iter().filter(|name| !name.is_empty()).collect()
 }
@@ -216,7 +216,7 @@ mod absorb_tests {
             path: std::path::PathBuf::from("/tmp/01-neo.json"),
             session: NativeFleetSession {
                 name: "01-neo-oracle".to_owned(),
-                group_name: "team-neo".to_owned(),
+                squad_name: "team-neo".to_owned(),
                 windows: vec![NativeFleetWindow { name: "neo-oracle".to_owned(), repo: "org/neo-oracle".to_owned(), kind: None }],
                 ..NativeFleetSession::default()
             },

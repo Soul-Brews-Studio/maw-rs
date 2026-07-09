@@ -401,7 +401,7 @@ fn forget_fleet_entry_matches(entry: &ForgetFleetEntry, aliases: &BTreeSet<Strin
     let mut candidates = vec![
         entry.session.name.clone(),
         forget_strip_numeric_prefix(&entry.session.name).to_owned(),
-        entry.session.group_name.clone(),
+        entry.session.squad_name.clone(),
     ];
     for window in &entry.session.windows {
         candidates.push(window.name.clone());
@@ -696,7 +696,7 @@ mod forget_tests {
         std::fs::create_dir_all(root.join("config/fleet")).expect("fleet dir");
         std::fs::write(
             root.join("config/fleet/03-neo.json"),
-            r#"{"name":"03-neo","groupName":"knights","windows":[{"name":"neo","repo":"acme/neo-oracle"}]}"#,
+            r#"{"name":"03-neo","squadName":"knights","windows":[{"name":"neo","repo":"acme/neo-oracle"}]}"#,
         )
         .expect("fleet");
         std::fs::create_dir_all(root.join("state/snapshots")).expect("state snapshots");

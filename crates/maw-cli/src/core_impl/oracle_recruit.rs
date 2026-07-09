@@ -4,8 +4,8 @@
 // the #291 roster. Plan-json/dry-run are first-class so the flow tests without live peers.
 
 const ORACLE_RECRUIT_USAGE: &str =
-    "usage: maw oracle recruit <fleet> <oracle> [--pin <pin>] [--from <handle>] [--now <ms>] [--dry-run] [--plan-json]";
-const FLEET_JOIN_USAGE: &str = "usage: maw fleet join <fleet> --code <code>";
+    "usage: maw oracle recruit <squad> <oracle> [--pin <pin>] [--from <handle>] [--now <ms>] [--dry-run] [--plan-json]";
+const FLEET_JOIN_USAGE: &str = "usage: maw fleet join <squad> --code <code>";
 
 const DISPATCH_332: &[DispatcherEntry] =
     &[DispatcherEntry { command: "oracle-recruit", handler: Handler::Sync(run_oracle_recruit_command) }];
@@ -13,7 +13,8 @@ const DISPATCH_332: &[DispatcherEntry] =
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RecruitInvite {
-    fleet: String,
+    #[serde(alias = "fleet")]
+    squad: String,
     oracle: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     org_repo: Option<String>,
@@ -77,7 +78,7 @@ fn oracle_recruit_run(argv: &[String]) -> Result<String, String> {
     let env = current_xdg_env();
     let entries = fleet_load_entries_result_for_env(&env, "oracle recruit")?;
     if !entries.iter().any(|entry| fleet_roster_entry_matches(entry, &fleet)) {
-        return Err(format!("oracle recruit: no fleet named {fleet} — try: maw fleet create {fleet}"));
+        return Err(format!("oracle recruit: no squad named {fleet} — try: maw fleet create {fleet}"));
     }
     let cached = locate_load_registry_cache()
         .and_then(|cache| cache.oracles.into_iter().find(|entry| entry.name == oracle))
@@ -95,7 +96,7 @@ fn oracle_recruit_run(argv: &[String]) -> Result<String, String> {
         from: from.clone(),
         to: oracle.clone(),
         action: maw_auth::ConsentAction::FleetRecruit,
-        summary: format!("recruit {oracle} into fleet {fleet}"),
+        summary: format!("recruit {oracle} into squad {fleet}"),
         peer_url: None,
         request_id: request_id.clone(),
         pin: pin.clone(),
@@ -107,7 +108,7 @@ fn oracle_recruit_run(argv: &[String]) -> Result<String, String> {
     }
     let pending = store.read_pending(&request_id).ok_or_else(|| "oracle recruit: missing pending request".to_owned())?;
     let invite = RecruitInvite {
-        fleet: fleet.clone(),
+        squad: fleet.clone(),
         oracle: oracle.clone(),
         org_repo,
         node: node.clone(),
@@ -126,7 +127,7 @@ fn oracle_recruit_run(argv: &[String]) -> Result<String, String> {
     if options.plan_json {
         let value = serde_json::json!({
             "command": "oracle-recruit",
-            "fleet": fleet,
+            "squad": fleet,
             "oracle": oracle,
             "orgRepo": invite.org_repo,
             "node": invite.node,
@@ -140,7 +141,7 @@ fn oracle_recruit_run(argv: &[String]) -> Result<String, String> {
         });
         return serde_json::to_string_pretty(&value).map(|text| format!("{text}\n")).map_err(|error| error.to_string());
     }
-    let mut out = format!("oracle recruit {oracle} → fleet {fleet}\n");
+    let mut out = format!("oracle recruit {oracle} → squad {fleet}\n");
     let _ = writeln!(out, "  code:    {code} (expires {})", invite.expires_at);
     let _ = writeln!(out, "  consent: requestId={request_id} action=fleet-recruit pin={pin}");
     let _ = writeln!(out, "  deliver: maw hey {deliver_target} {deliver_message:?}");
@@ -195,8 +196,8 @@ fn fleet_join_run(argv: &[String]) -> Result<(i32, String), String> {
     let path = recruit_invites_dir(&env).join(format!("{code}.json"));
     let text = std::fs::read_to_string(&path).map_err(|_| format!("fleet join: unknown code {}", maw_auth::redact_pair_code(&code)))?;
     let mut invite: RecruitInvite = serde_json::from_str(&text).map_err(|error| format!("fleet join: parse {}: {error}", path.display()))?;
-    if invite.fleet != *fleet {
-        return Err(format!("fleet join: code is for fleet {}, not {fleet}", invite.fleet));
+    if invite.squad != *fleet {
+        return Err(format!("fleet join: code is for squad {}, not {fleet}", invite.squad));
     }
     if invite.status != "open" {
         return Err(format!("fleet join: code already {}", invite.status));
@@ -222,7 +223,7 @@ fn fleet_join_run(argv: &[String]) -> Result<(i32, String), String> {
 fn fleet_join_append_member(env: &MawXdgEnv, fleet: &str, invite: &RecruitInvite) -> Result<usize, String> {
     let entries = fleet_load_entries_result_for_env(env, "fleet join")?;
     let entry = entries.into_iter().find(|entry| fleet_roster_entry_matches(entry, fleet))
-        .ok_or_else(|| format!("fleet join: no fleet named {fleet}"))?;
+        .ok_or_else(|| format!("fleet join: no squad named {fleet}"))?;
     if entry.session.members.as_ref().is_some_and(|members| members.iter().any(|member| member.handle == invite.oracle)) {
         return Err(format!("fleet join: {} is already a member of {fleet}", invite.oracle));
     }
@@ -236,7 +237,7 @@ fn fleet_join_append_member(env: &MawXdgEnv, fleet: &str, invite: &RecruitInvite
         joined_at: Some(fleet_registry_now_iso()),
     };
     let member = serde_json::to_value(&member).map_err(|error| error.to_string())?;
-    let object = value.as_object_mut().ok_or_else(|| "fleet join: fleet file is not a JSON object".to_owned())?;
+    let object = value.as_object_mut().ok_or_else(|| "fleet join: squad file is not a JSON object".to_owned())?;
     let members = object.entry("members".to_owned()).or_insert_with(|| serde_json::json!([]));
     let members = members.as_array_mut().ok_or_else(|| "fleet join: members is not a JSON array".to_owned())?;
     members.push(member);
@@ -283,7 +284,7 @@ mod oracle_recruit_tests {
         let (root, _env) = recruit_env("dry-run");
         let plan = recruit_plan(&["--dry-run", "--now", "1751900000000"]);
         assert_eq!(plan["command"], "oracle-recruit");
-        assert_eq!(plan["fleet"], "3e");
+        assert_eq!(plan["squad"], "3e");
         assert_eq!(plan["oracle"], "fireman");
         assert_eq!(plan["orgRepo"], "acme/fireman-oracle");
         assert_eq!(plan["node"], "white", "resolved via oracles.json cache");

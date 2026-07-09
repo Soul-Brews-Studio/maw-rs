@@ -36,7 +36,7 @@ fn broadcast_seed(name: &str) -> (PathBuf, PathBuf, PathBuf) {
     broadcast_write(&root.join("CLAUDE.md"), "test repo\n");
     broadcast_write(
         &config.join("fleet/01-alpha.json"),
-        r#"{"name":"01-alpha","groupName":"alpha","windows":[{"name":"neo-oracle"}]}"#,
+        r#"{"name":"01-alpha","squadName":"alpha","windows":[{"name":"neo-oracle"}]}"#,
     );
     broadcast_write(
         &home.join(".claude/teams/tk/config.json"),

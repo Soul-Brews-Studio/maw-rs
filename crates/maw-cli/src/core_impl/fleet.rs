@@ -15,7 +15,7 @@ struct FleetOptions {
     all: bool,
     kill: bool,
     resume: bool,
-    groups: Vec<String>,
+    squads: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -192,25 +192,25 @@ fn fleet_parse_args(argv: &[String]) -> Result<FleetOptions, String> {
             "--all" => options.all = true,
             "--kill" => options.kill = true,
             "--resume" => options.resume = true,
-            "--groups" => {
+            "--squads" => {
                 index += 1;
-                let Some(raw) = argv.get(index) else { return Err("fleet: --groups requires a value".to_owned()); };
-                let values = fleet_parse_group_filter(raw);
+                let Some(raw) = argv.get(index) else { return Err("fleet: --squads requires a value".to_owned()); };
+                let values = fleet_parse_squad_filter(raw);
                 if values.is_empty() {
-                    return Err("fleet: --groups requires at least one value".to_owned());
+                    return Err("fleet: --squads requires at least one value".to_owned());
                 }
-                options.groups.extend(values);
+                options.squads.extend(values);
             }
-            value if value.starts_with("--groups=") => {
-                let raw = value["--groups=".len()..].trim();
+            value if value.starts_with("--squads=") => {
+                let raw = value["--squads=".len()..].trim();
                 if raw.is_empty() {
-                    return Err("fleet: --groups requires a value".to_owned());
+                    return Err("fleet: --squads requires a value".to_owned());
                 }
-                let values = fleet_parse_group_filter(raw);
+                let values = fleet_parse_squad_filter(raw);
                 if values.is_empty() {
-                    return Err("fleet: --groups requires at least one value".to_owned());
+                    return Err("fleet: --squads requires at least one value".to_owned());
                 }
-                options.groups.extend(values);
+                options.squads.extend(values);
             }
             value if value.starts_with('-') => return Err(format!("fleet: unknown argument {value}")),
             value => fleet_parse_positional(&mut options, &mut command_seen, value)?,
@@ -222,7 +222,7 @@ fn fleet_parse_args(argv: &[String]) -> Result<FleetOptions, String> {
     }
     if matches!(options.command, FleetCommand::Wake | FleetCommand::Sleep) && options.target.is_none() && !options.all {
         let action = if options.command == FleetCommand::Wake { "wake" } else { "sleep" };
-        return Err(format!("fleet {action}: specify a group, or --all to {action} every registered session on this node"));
+        return Err(format!("fleet {action}: specify a squad, or --all to {action} every registered session on this node"));
     }
     Ok(options)
 }
@@ -238,7 +238,7 @@ fn fleet_default_options() -> FleetOptions {
         all: false,
         kill: false,
         resume: false,
-        groups: Vec::new(),
+        squads: Vec::new(),
     }
 }
 
@@ -278,7 +278,7 @@ fn fleet_set_command(options: &mut FleetOptions, seen: &mut bool, value: &str) -
     Ok(())
 }
 
-fn fleet_parse_group_filter(raw: &str) -> Vec<String> {
+fn fleet_parse_squad_filter(raw: &str) -> Vec<String> {
     raw.split(',')
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -287,7 +287,7 @@ fn fleet_parse_group_filter(raw: &str) -> Vec<String> {
 }
 
 fn fleet_usage() -> String {
-    "usage: maw fleet [add <session>|create <group>|show <group>|status <group>|join <fleet> --code <code>|ls|doctor|health|gc|init|consolidate|resume|sync|wake <group|--all>|sleep <group|--all>|token <group> [ls|status]] [--json] [--dry-run] [--fix] [--reboot] [--all] [--kill] [--resume] [--groups <group[,group]...>]".to_owned()
+    "usage: maw fleet [add <session>|create <squad>|show <squad>|status <squad>|join <fleet> --code <code>|ls|doctor|health|gc|init|consolidate|resume|sync|wake <squad|--all>|sleep <squad|--all>|token <squad> [ls|status]] [--json] [--dry-run] [--fix] [--reboot] [--all] [--kill] [--resume] [--squads <squad[,squad]...>]".to_owned()
 }
 
 fn fleet_load_state_with(runtime: &mut impl FleetRuntime) -> Result<FleetState, String> {
@@ -392,8 +392,8 @@ fn fleet_entries_to_summaries(entries: &[NativeFleetEntry]) -> Vec<FleetSessionS
 }
 
 fn fleet_render_census(state: &FleetState, options: &FleetOptions) -> Result<String, String> {
-    let sessions = fleet_census_sessions(state, &options.groups);
-    let groups = fleet_census_groups(state, &options.groups);
+    let sessions = fleet_census_sessions(state, &options.squads);
+    let groups = fleet_census_groups(state, &options.squads);
     if options.json { return fleet_json_census(state, &sessions, &groups); }
     let windows = fleet_window_count(&sessions);
     let mut out = String::new();
@@ -405,7 +405,7 @@ fn fleet_render_census(state: &FleetState, options: &FleetOptions) -> Result<Str
     for session in &sessions {
         let _ = writeln!(out, "  - {} ({} windows)", session.name, session.windows.len());
     }
-    let _ = writeln!(out, "  groups: {}", groups.len());
+    let _ = writeln!(out, "  squads: {}", groups.len());
     for group in &groups {
         let _ = writeln!(
             out,
@@ -435,7 +435,7 @@ fn fleet_json_census(state: &FleetState, sessions: &[FleetSessionSummary], group
         "disabledCount": state.disabled_count,
         "peerCount": state.config.peers.len(),
         "agentCount": state.config.agents.len(),
-        "groups": groups.iter().map(fleet_json_group).collect::<Vec<_>>(),
+        "squads": groups.iter().map(fleet_json_group).collect::<Vec<_>>(),
     });
     serde_json::to_string_pretty(&value).map(|text| format!("{text}\n")).map_err(|error| error.to_string())
 }
@@ -465,7 +465,7 @@ fn fleet_census_groups(state: &FleetState, groups: &[String]) -> Vec<FleetGroupS
     };
     let mut output = Vec::new();
     for entry in &state.fleet_entries {
-        let Some(group_name) = fleet_roster_group_name(entry) else { continue; };
+        let Some(squad_name) = fleet_roster_squad_name(entry) else { continue; };
         if !groups.is_empty() && !filtered.iter().any(|group| fleet_roster_entry_matches(entry, group)) {
             continue;
         }
@@ -481,7 +481,7 @@ fn fleet_census_groups(state: &FleetState, groups: &[String]) -> Vec<FleetGroupS
         sessions.sort();
         sessions.dedup();
         output.push(FleetGroupSummary {
-            name: group_name,
+            name: squad_name,
             path: entry.path.clone(),
             members: member_summaries,
             sessions,
@@ -877,7 +877,7 @@ fn fleet_run_wake(state: &FleetState, options: &FleetOptions) -> Result<(i32, St
     Ok((0, out))
 }
 
-// Squadron roster files (#291, `members` present) describe groups, not sessions — never sweep targets.
+// Squadron roster files (#291, `members` present) describe squads, not sessions — never sweep targets.
 fn fleet_sweep_targets(state: &FleetState) -> Vec<FleetSessionSummary> {
     let rosters = state
         .fleet_entries
@@ -895,16 +895,16 @@ fn fleet_run_group_action(
     group: &str,
 ) -> Result<(i32, String), String> {
     if options.all {
-        return Err(format!("fleet {action}: pass a group or --all, not both"));
+        return Err(format!("fleet {action}: pass a squad or --all, not both"));
     }
     let entry = state
         .fleet_entries
         .iter()
         .find(|entry| fleet_roster_entry_matches(entry, group))
-        .ok_or_else(|| format!("fleet {action}: no group named {group} — try: maw fleet create {group}"))?;
+        .ok_or_else(|| format!("fleet {action}: no squad named {group} — try: maw fleet create {group}"))?;
     let members = entry.session.members.as_deref().unwrap_or_default();
     if members.is_empty() {
-        return Err(format!("fleet {action}: group {group} has no members"));
+        return Err(format!("fleet {action}: squad {group} has no members"));
     }
     let candidates = fleet_sweep_targets(state);
     let mut resolved: Vec<(&str, &FleetSessionSummary)> = Vec::new();
@@ -922,7 +922,7 @@ fn fleet_run_group_action(
     let mut out = String::new();
     let icon = if action == "wake" { "🌅" } else { "🌙" };
     let _ = writeln!(out, "{icon} Fleet {action} plan node: {}", state.config.node);
-    let _ = writeln!(out, "  group: {group} · members: {} · sessions: {} · skipped: {}", members.len(), resolved.len(), skipped.len());
+    let _ = writeln!(out, "  squad: {group} · members: {} · sessions: {} · skipped: {}", members.len(), resolved.len(), skipped.len());
     for (handle, session) in &resolved { let _ = writeln!(out, "  - {handle} -> {}", session.name); }
     for handle in &skipped { let _ = writeln!(out, "  - {handle} skipped: no session"); }
     Ok((0, out))
@@ -975,7 +975,7 @@ fn fleet_json_group_action(
         "node": state.config.node,
         "action": action,
         "dryRun": options.dry_run,
-        "group": group,
+        "squad": group,
         "sessionCount": resolved.len(),
         "sessions": resolved.iter().map(|(_, session)| session.name.clone()).collect::<Vec<_>>(),
         "members": resolved.iter().map(|(handle, session)| serde_json::json!({"handle": handle, "session": session.name})).collect::<Vec<_>>(),
@@ -1349,14 +1349,14 @@ mod fleet_tests {
         assert!(fleet_parse_args(&fleet_strings(&["-oProxyCommand=bad"])).expect_err("leading dash").contains("unknown argument"));
         let scoped = fleet_parse_args(&fleet_strings(&["wake", "3e"])).expect("group target");
         assert_eq!((scoped.command, scoped.target.as_deref()), (FleetCommand::Wake, Some("3e")));
-        let groups = fleet_parse_args(&fleet_strings(&["ls", "--groups", "3e,drift"])).expect("group filter");
-        assert_eq!(groups.groups, vec!["3e".to_owned(), "drift".to_owned()]);
+        let groups = fleet_parse_args(&fleet_strings(&["ls", "--squads", "3e,drift"])).expect("squad filter");
+        assert_eq!(groups.squads, vec!["3e".to_owned(), "drift".to_owned()]);
         let alias = fleet_parse_args(&fleet_strings(&["wake-all"])).expect("alias");
         assert!(alias.all, "wake-all implies --all");
         let bare = fleet_parse_args(&fleet_strings(&["wake"])).expect_err("bare wake");
-        assert!(bare.contains("specify a group, or --all to wake every registered session on this node"), "{bare}");
+        assert!(bare.contains("specify a squad, or --all to wake every registered session on this node"), "{bare}");
         let sleep = fleet_parse_args(&fleet_strings(&["sleep", "--json"])).expect_err("bare sleep");
-        assert!(sleep.contains("fleet sleep: specify a group"), "{sleep}");
+        assert!(sleep.contains("fleet sleep: specify a squad"), "{sleep}");
     }
 
     #[test]
@@ -1367,35 +1367,35 @@ mod fleet_tests {
             assert!(output.stderr.is_empty());
             assert_eq!(
                 output.stdout,
-                "\u{1b}[36mfleet\u{1b}[0m node alpha\n  sessions: 1 (2 windows, 1 disabled)\n  peers: 1\n  agents: 2\n  session list:\n  - 03-alpha (2 windows)\n  groups: 0\n"
+                "\u{1b}[36mfleet\u{1b}[0m node alpha\n  sessions: 1 (2 windows, 1 disabled)\n  peers: 1\n  agents: 2\n  session list:\n  - 03-alpha (2 windows)\n  squads: 0\n"
             );
         });
     }
 
     #[test]
-    fn fleet_census_lists_groups_and_filters_membership() {
+    fn fleet_census_lists_squads_and_filters_membership() {
         fleet_with_fixture(|root| {
             std::fs::write(root.join("config/fleet/01-3e.json"), FLEET_SQUADRON_JSON).expect("roster");
             let unfiltered = run_fleet_command(&fleet_strings(&["ls", "--json"]));
             assert_eq!(unfiltered.code, 0, "{}", unfiltered.stderr);
             let raw: serde_json::Value = serde_json::from_str(&unfiltered.stdout).expect("json");
-            assert_eq!(raw["groups"].as_array().expect("groups").len(), 1);
-            assert_eq!(raw["groups"][0]["name"], serde_json::json!("3e"));
+            assert_eq!(raw["squads"].as_array().expect("squads").len(), 1);
+            assert_eq!(raw["squads"][0]["name"], serde_json::json!("3e"));
             assert_eq!(raw["sessionCount"], 1); // rosters are excluded from sessions
             assert_eq!(raw["sessions"][0]["name"], serde_json::json!("03-alpha"));
 
-            let filtered = run_fleet_command(&fleet_strings(&["ls", "--groups", "3e", "--json"]));
+            let filtered = run_fleet_command(&fleet_strings(&["ls", "--squads", "3e", "--json"]));
             assert_eq!(filtered.code, 0, "{}", filtered.stderr);
             let filtered_json: serde_json::Value = serde_json::from_str(&filtered.stdout).expect("json");
-            assert_eq!(filtered_json["groups"][0]["name"], serde_json::json!("3e"));
+            assert_eq!(filtered_json["squads"][0]["name"], serde_json::json!("3e"));
             assert_eq!(filtered_json["sessionCount"], 1);
             assert_eq!(filtered_json["sessions"][0]["name"], serde_json::json!("03-alpha"));
-            let muted = run_fleet_command(&fleet_strings(&["ls", "--groups", "nope", "--json"]));
+            let muted = run_fleet_command(&fleet_strings(&["ls", "--squads", "nope", "--json"]));
             assert_eq!(muted.code, 0, "{}", muted.stderr);
             let muted_json: serde_json::Value = serde_json::from_str(&muted.stdout).expect("json");
             assert_eq!(muted_json["sessionCount"], 0);
             assert_eq!(muted_json["sessions"], serde_json::json!([]));
-            assert_eq!(muted_json["groups"], serde_json::json!([]));
+            assert_eq!(muted_json["squads"], serde_json::json!([]));
         });
     }
 
@@ -1497,7 +1497,7 @@ mod fleet_tests {
     }
 
     const FLEET_SQUADRON_JSON: &str =
-        r#"{"name":"01-3e","groupName":"3e","windows":[],"members":[{"handle":"alpha"},{"handle":"drift"}]}"#;
+        r#"{"name":"01-3e","squadName":"3e","windows":[],"members":[{"handle":"alpha"},{"handle":"drift"}]}"#;
 
     #[test]
     fn fleet_wake_bare_errors_and_all_sweep_excludes_roster_files() {
@@ -1505,7 +1505,7 @@ mod fleet_tests {
             std::fs::write(root.join("config/fleet/01-3e.json"), FLEET_SQUADRON_JSON).expect("roster");
             let bare = run_fleet_command(&fleet_strings(&["wake"]));
             assert_eq!(bare.code, 1);
-            assert!(bare.stderr.contains("specify a group, or --all"), "{}", bare.stderr);
+            assert!(bare.stderr.contains("specify a squad, or --all"), "{}", bare.stderr);
             let all = run_fleet_command(&fleet_strings(&["wake", "--all", "--json", "--dry-run"]));
             assert_eq!(all.code, 0, "{}", all.stderr);
             assert!(all.stdout.contains("\"action\": \"wake\"") && all.stdout.contains("\"sessionCount\": 1"), "{}", all.stdout);
@@ -1526,14 +1526,14 @@ mod fleet_tests {
             std::fs::write(root.join("config/fleet/01-3e.json"), FLEET_SQUADRON_JSON).expect("roster");
             let plan = run_fleet_command(&fleet_strings(&["wake", "3e", "--dry-run"]));
             assert_eq!(plan.code, 0, "{}", plan.stderr);
-            assert!(plan.stdout.contains("group: 3e · members: 2 · sessions: 1 · skipped: 1"), "{}", plan.stdout);
+            assert!(plan.stdout.contains("squad: 3e · members: 2 · sessions: 1 · skipped: 1"), "{}", plan.stdout);
             assert!(plan.stdout.contains("  - alpha -> 03-alpha"), "{}", plan.stdout);
             assert!(plan.stdout.contains("  - drift skipped: no session"), "{}", plan.stdout);
             let json = run_fleet_command(&fleet_strings(&["sleep", "3e", "--json", "--dry-run"]));
             assert_eq!(json.code, 0, "{}", json.stderr);
             let value: serde_json::Value = serde_json::from_str(&json.stdout).expect("json");
             assert_eq!(value["action"], "sleep");
-            assert_eq!(value["group"], "3e");
+            assert_eq!(value["squad"], "3e");
             assert_eq!(value["dryRun"], true);
             assert_eq!(value["sessions"], serde_json::json!(["03-alpha"]));
             assert_eq!(value["members"][0]["handle"], "alpha");
@@ -1556,7 +1556,7 @@ mod fleet_tests {
             .expect("write config hook");
             std::fs::write(
                 root.join("config/fleet/01-hooks.json"),
-                r#"{"name":"01-hooks","groupName":"hooks","windows":[],"members":[{"handle":"maw"},{"handle":"ghost"}]}"#,
+                r#"{"name":"01-hooks","squadName":"hooks","windows":[],"members":[{"handle":"maw"},{"handle":"ghost"}]}"#,
             )
             .expect("roster");
 
@@ -1573,18 +1573,18 @@ mod fleet_tests {
         fleet_with_fixture(|root| {
             let missing = run_fleet_command(&fleet_strings(&["wake", "nope"]));
             assert_eq!(missing.code, 1);
-            assert!(missing.stderr.contains("fleet wake: no group named nope"), "{}", missing.stderr);
+            assert!(missing.stderr.contains("fleet wake: no squad named nope"), "{}", missing.stderr);
             std::fs::write(
                 root.join("config/fleet/02-empty.json"),
-                r#"{"name":"02-empty","groupName":"empty","windows":[],"members":[]}"#,
+                r#"{"name":"02-empty","squadName":"empty","windows":[],"members":[]}"#,
             )
             .expect("roster");
             let empty = run_fleet_command(&fleet_strings(&["wake", "empty"]));
             assert_eq!(empty.code, 1);
-            assert!(empty.stderr.contains("fleet wake: group empty has no members"), "{}", empty.stderr);
+            assert!(empty.stderr.contains("fleet wake: squad empty has no members"), "{}", empty.stderr);
             let both = run_fleet_command(&fleet_strings(&["wake", "empty", "--all"]));
             assert_eq!(both.code, 1);
-            assert!(both.stderr.contains("pass a group or --all, not both"), "{}", both.stderr);
+            assert!(both.stderr.contains("pass a squad or --all, not both"), "{}", both.stderr);
         });
     }
 

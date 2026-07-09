@@ -3,7 +3,7 @@ const DISPATCH_99: &[DispatcherEntry] = &[DispatcherEntry {
     handler: Handler::Sync(completions_run_command),
 }];
 
-const COMPLETIONS_HELP: &str = "usage: maw completions <commands [--describe]|subs <command>|fleet|oracle|groups|oracles|windows|zsh|bash|fish>\n\nGenerate shell completion scripts and dynamic completion data for maw.\n\nInstall examples:\n  zsh:  mkdir -p ~/.zsh/completions && maw completions zsh > ~/.zsh/completions/_maw\n        add to ~/.zshrc before compinit: fpath=(~/.zsh/completions $fpath)\n  bash: maw completions bash > ~/.maw-completion.bash\n        add to ~/.bashrc: source ~/.maw-completion.bash\n  fish: mkdir -p ~/.config/fish/completions && maw completions fish > ~/.config/fish/completions/maw.fish\n\nData subcommands:\n  commands             command names for first-position completion\n  commands --describe  one name<TAB>description line per command, sourced from usage strings\n  subs <command>       second-position words for <command>, derived from its usage string\n  fleet                fleet subcommand names (alias for: subs fleet)\n  oracle               oracle subcommand names (alias for: subs oracle)\n  groups               squadron group names from fleet roster files\n  oracles              oracle names from fleet configs\n  windows              tmux window/session names from fleet configs";
+const COMPLETIONS_HELP: &str = "usage: maw completions <commands [--describe]|subs <command>|fleet|oracle|squads|oracles|windows|zsh|bash|fish>\n\nGenerate shell completion scripts and dynamic completion data for maw.\n\nInstall examples:\n  zsh:  mkdir -p ~/.zsh/completions && maw completions zsh > ~/.zsh/completions/_maw\n        add to ~/.zshrc before compinit: fpath=(~/.zsh/completions $fpath)\n  bash: maw completions bash > ~/.maw-completion.bash\n        add to ~/.bashrc: source ~/.maw-completion.bash\n  fish: mkdir -p ~/.config/fish/completions && maw completions fish > ~/.config/fish/completions/maw.fish\n\nData subcommands:\n  commands             command names for first-position completion\n  commands --describe  one name<TAB>description line per command, sourced from usage strings\n  subs <command>       second-position words for <command>, derived from its usage string\n  fleet                fleet subcommand names (alias for: subs fleet)\n  oracle               oracle subcommand names (alias for: subs oracle)\n  squads               squad names from fleet roster files\n  oracles              oracle names from fleet configs\n  windows              tmux window/session names from fleet configs";
 
 const COMPLETIONS_ZSH: &str = r#"#compdef maw
 
@@ -26,10 +26,10 @@ _maw_windows() {
   _describe 'window' windows
 }
 
-_maw_groups() {
-  local -a groups
-  groups=(${(f)"$(maw completions groups 2>/dev/null)"})
-  _describe 'fleet group' groups
+_maw_squads() {
+  local -a squads
+  squads=(${(f)"$(maw completions squads 2>/dev/null)"})
+  _describe 'fleet squad' squads
 }
 
 _maw_commands() {
@@ -84,7 +84,7 @@ _maw() {
             _maw_subs fleet
           elif (( CURRENT == 3 )); then
             case $words[2] in
-              show|status|wake|sleep|token) _maw_groups ;;
+              show|status|wake|sleep|token) _maw_squads ;;
             esac
           fi
           ;;
@@ -92,7 +92,7 @@ _maw() {
           if (( CURRENT == 2 )); then
             _maw_subs oracle
           elif [[ $words[2] == recruit ]]; then
-            (( CURRENT == 3 )) && _maw_groups
+            (( CURRENT == 3 )) && _maw_squads
             (( CURRENT == 4 )) && _maw_oracles
           fi
           ;;
@@ -138,7 +138,7 @@ _maw_complete() {
         words="$(maw completions subs fleet 2>/dev/null)"
       elif [[ $COMP_CWORD -eq 3 ]]; then
         case "${COMP_WORDS[2]}" in
-          show|status|wake|sleep|token) words="$(maw completions groups 2>/dev/null)" ;;
+          show|status|wake|sleep|token) words="$(maw completions squads 2>/dev/null)" ;;
         esac
       fi
       ;;
@@ -146,7 +146,7 @@ _maw_complete() {
       if [[ $COMP_CWORD -eq 2 ]]; then
         words="$(maw completions subs oracle 2>/dev/null)"
       elif [[ ${COMP_WORDS[2]} == recruit && $COMP_CWORD -eq 3 ]]; then
-        words="$(maw completions groups 2>/dev/null)"
+        words="$(maw completions squads 2>/dev/null)"
       elif [[ ${COMP_WORDS[2]} == recruit && $COMP_CWORD -eq 4 ]]; then
         words="$(maw completions oracles 2>/dev/null)"
       fi
@@ -168,8 +168,8 @@ complete -c maw -f -n '__fish_use_subcommand' -a '(maw completions oracles 2>/de
 complete -c maw -f -n '__fish_seen_subcommand_from wake about info' -a '(maw completions oracles 2>/dev/null)'
 complete -c maw -f -n '__fish_seen_subcommand_from peek see a attach bring b hey send tell done finish' -a '(maw completions windows 2>/dev/null)'
 complete -c maw -f -n 'test (count (commandline -opc)) -eq 2' -a '(maw completions subs (commandline -opc)[2] 2>/dev/null)'
-complete -c maw -f -n 'test (count (commandline -opc)) -eq 3; and contains -- (commandline -opc)[2] fleet; and contains -- (commandline -opc)[3] show status wake sleep token' -a '(maw completions groups 2>/dev/null)'
-complete -c maw -f -n 'test (count (commandline -opc)) -eq 3; and contains -- (commandline -opc)[2] oracle; and contains -- (commandline -opc)[3] recruit' -a '(maw completions groups 2>/dev/null)'
+complete -c maw -f -n 'test (count (commandline -opc)) -eq 3; and contains -- (commandline -opc)[2] fleet; and contains -- (commandline -opc)[3] show status wake sleep token' -a '(maw completions squads 2>/dev/null)'
+complete -c maw -f -n 'test (count (commandline -opc)) -eq 3; and contains -- (commandline -opc)[2] oracle; and contains -- (commandline -opc)[3] recruit' -a '(maw completions squads 2>/dev/null)'
 complete -c maw -f -n 'test (count (commandline -opc)) -eq 4; and contains -- (commandline -opc)[2] oracle; and contains -- (commandline -opc)[3] recruit' -a '(maw completions oracles 2>/dev/null)'";
 
 fn completions_run_command(argv: &[String]) -> CliOutput {
@@ -220,7 +220,7 @@ fn completions_render_mode(mode: &str) -> Result<String, String> {
         "commands" => Ok(completions_commands().join("\n")),
         "oracles" => Ok(completions_targets(CompletionsTargetKind::Oracles).join("\n")),
         "windows" => Ok(completions_targets(CompletionsTargetKind::Windows).join("\n")),
-        "groups" => Ok(completions_groups().join("\n")),
+        "squads" => Ok(completions_squads().join("\n")),
         "fleet" => Ok(completions_subs("fleet").join("\n")),
         "oracle" => Ok(completions_subs("oracle").join("\n")),
         "pulse" => Ok("add ls list".to_owned()),
@@ -460,12 +460,12 @@ fn completions_leading_word(alternative: &str) -> Option<String> {
     valid.then(|| token.to_owned())
 }
 
-// Squadron group names from fleet roster files — reuses the #291 roster parsing
-// (fleet_load_entries + fleet_roster_group_name), no separate (de)serialization.
-fn completions_groups() -> Vec<String> {
+// Squadron squad names from fleet roster files — reuses the #291 roster parsing
+// (fleet_load_entries + fleet_roster_squad_name), no separate (de)serialization.
+fn completions_squads() -> Vec<String> {
     let mut names = std::collections::BTreeSet::new();
     for entry in fleet_load_entries() {
-        if let Some(name) = fleet_roster_group_name(&entry) {
+        if let Some(name) = fleet_roster_squad_name(&entry) {
             if completions_is_safe_target(&name) {
                 names.insert(name);
             }
@@ -535,7 +535,7 @@ mod completions_tests {
         assert!(output.stdout.contains("maw completions subs fleet 2>/dev/null"));
         assert!(output.stdout.contains("maw completions subs oracle 2>/dev/null"));
         assert!(output.stdout.contains("maw completions subs \"$cmd\" 2>/dev/null"));
-        assert!(output.stdout.contains("maw completions groups 2>/dev/null"));
+        assert!(output.stdout.contains("maw completions squads 2>/dev/null"));
         assert!(output.stdout.contains("show|status|wake|sleep|token"));
         assert!(output.stdout.contains("complete -F _maw_complete maw\n"));
     }
@@ -548,14 +548,14 @@ mod completions_tests {
         assert!(fish.stdout.contains("__fish_use_subcommand"));
         assert!(fish.stdout.contains("maw completions commands --describe 2>/dev/null"));
         assert!(fish.stdout.contains("maw completions subs (commandline -opc)[2] 2>/dev/null"));
-        assert!(fish.stdout.contains("maw completions groups 2>/dev/null"));
+        assert!(fish.stdout.contains("maw completions squads 2>/dev/null"));
         assert!(fish.stdout.contains("-d 'Oracle (peek/send shorthand)'"));
         assert!(zsh.stdout.contains("#compdef maw"));
         assert!(zsh.stdout.contains("maw completions commands --describe 2>/dev/null"));
         assert!(zsh.stdout.contains("_maw_subs"));
         assert!(zsh.stdout.contains("'oracle shorthand'"));
         assert!(zsh.stdout.contains("'maw commands'"));
-        assert!(zsh.stdout.contains("_maw_groups"));
+        assert!(zsh.stdout.contains("_maw_squads"));
     }
 
     #[test]
@@ -631,7 +631,7 @@ mod completions_tests {
             assert!(plugin.contains(&probe.to_owned()), "plugin usage lost {probe}");
         }
         let own = completions_subs("completions");
-        for probe in ["commands", "subs", "fleet", "oracle", "groups", "zsh", "bash", "fish"] {
+        for probe in ["commands", "subs", "fleet", "oracle", "squads", "zsh", "bash", "fish"] {
             assert!(own.contains(&probe.to_owned()), "completions usage lost {probe}");
         }
         // Placeholder-only synopses contribute nothing; uncovered commands are empty.
@@ -664,9 +664,9 @@ mod completions_tests {
     }
 
     #[test]
-    fn completions_groups_lists_roster_group_names_from_fleet_files() {
+    fn completions_squads_lists_roster_squad_names_from_fleet_files() {
         let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let root = std::env::temp_dir().join(format!("maw-rs-completions-groups-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("maw-rs-completions-squads-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let _restore = ["HOME", "MAW_HOME", "MAW_CONFIG_DIR", "MAW_STATE_DIR", "MAW_CACHE_DIR", "GHQ_ROOT"].map(EnvVarRestore::capture);
         std::env::remove_var("MAW_HOME");
@@ -675,12 +675,12 @@ mod completions_tests {
         }
         let fleet_dir = root.join("state/fleet");
         std::fs::create_dir_all(&fleet_dir).expect("fleet dir");
-        std::fs::write(fleet_dir.join("01-3e.json"), r#"{"name":"01-3e","groupName":"3e","windows":[],"members":[{"handle":"atlas"}]}"#).expect("roster");
+        std::fs::write(fleet_dir.join("01-3e.json"), r#"{"name":"01-3e","squadName":"3e","windows":[],"members":[{"handle":"atlas"}]}"#).expect("roster");
         std::fs::write(fleet_dir.join("05-ccdc.json"), r#"{"name":"05-ccdc","windows":[],"members":[]}"#).expect("members-only roster");
         std::fs::write(fleet_dir.join("03-alpha.json"), r#"{"name":"03-alpha","windows":[]}"#).expect("legacy file");
-        let output = completions_run_command(&completions_args(&["groups"]));
+        let output = completions_run_command(&completions_args(&["squads"]));
         assert_eq!(output.code, 0, "{}", output.stderr);
-        assert_eq!(output.stdout, "3e\nccdc\n", "groupName wins, members-only falls back to stem, legacy excluded");
+        assert_eq!(output.stdout, "3e\nccdc\n", "squadName wins, members-only falls back to stem, legacy excluded");
     }
 
     #[test]

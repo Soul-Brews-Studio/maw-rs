@@ -1,5 +1,5 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResolveCandidateKind { LiveSession, SleepingRegistry, FleetGroup, Oracle, Repo, Window, Peer }
+pub enum ResolveCandidateKind { LiveSession, SleepingRegistry, FleetSquad, Oracle, Repo, Window, Peer }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ResolveMatchRank { Exact, Live, Registry, HashSlotOwner, Fuzzy }

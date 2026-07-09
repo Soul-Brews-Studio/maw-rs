@@ -13,8 +13,8 @@ struct NativeScope {
 #[derive(Debug, Clone, serde::Deserialize, Default, PartialEq, Eq)]
 struct NativeFleetSession {
     name: String,
-    #[serde(default, alias = "groupName")]
-    group_name: String,
+    #[serde(default, rename = "squadName", alias = "groupName")]
+    squad_name: String,
     #[serde(default)]
     windows: Vec<NativeFleetWindow>,
     #[serde(default, alias = "syncPeers")]
@@ -610,7 +610,7 @@ fn fleet_load_entries_impl(dirs: Vec<std::path::PathBuf>, strict: bool, label: &
     let mut entries = Vec::new();
     let mut seen_prior_dirs = BTreeSet::new();
     for dir in dirs {
-        fleet_migrate_group_files(&dir, strict, label)?;
+        fleet_migrate_squad_files(&dir, strict, label)?;
         let mut seen_this_dir = BTreeSet::new();
         let mut files = match std::fs::read_dir(&dir) {
             Ok(values) => values
@@ -622,8 +622,8 @@ fn fleet_load_entries_impl(dirs: Vec<std::path::PathBuf>, strict: bool, label: &
             Err(error) if strict => return Err(format!("{label}: read {}: {error}", dir.display())),
             Err(_) => Vec::new(),
         };
-        if let Ok(groups) = std::fs::read_dir(dir.join("groups")) {
-            files.extend(groups.flatten().map(|entry| entry.path().join("group.json")).filter(|path| path.is_file()));
+        if let Ok(groups) = std::fs::read_dir(dir.join("squads")) {
+            files.extend(groups.flatten().map(|entry| entry.path().join("squad.json")).filter(|path| path.is_file()));
         }
         files.sort();
         for path in files {
@@ -638,7 +638,9 @@ fn fleet_load_entries_impl(dirs: Vec<std::path::PathBuf>, strict: bool, label: &
     Ok(entries)
 }
 
-fn fleet_migrate_group_files(dir: &std::path::Path, strict: bool, label: &str) -> Result<(), String> {
+fn fleet_migrate_squad_files(dir: &std::path::Path, strict: bool, label: &str) -> Result<(), String> {
+    fleet_migrate_legacy_group_dir(dir, label)?;
+    fleet_migrate_legacy_squad_file_names(dir, label)?;
     let files = match std::fs::read_dir(dir) {
         Ok(values) => values.flatten().map(|entry| entry.path()).filter(|path| fleet_is_json_file(path)).collect::<Vec<_>>(),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -652,11 +654,69 @@ fn fleet_migrate_group_files(dir: &std::path::Path, strict: bool, label: &str) -
             continue;
         }
         let Some(stem) = path.file_stem().and_then(std::ffi::OsStr::to_str) else { continue };
-        let target_dir = dir.join("groups").join(stem);
-        let target = target_dir.join("group.json");
-        std::fs::create_dir_all(&target_dir).map_err(|error| format!("{label}: create {}: {error}", target_dir.display()))?;
-        std::fs::rename(&path, &target).map_err(|error| format!("{label}: move {} to {}: {error}", path.display(), target.display()))?;
-        eprintln!("fleet: migrated group roster {} -> {}", path.display(), target.display());
+        let target_dir = dir.join("squads").join(stem);
+        let target = target_dir.join("squad.json");
+        fleet_move_squad_file(&path, &target_dir, &target, label)?;
+    }
+    Ok(())
+}
+
+fn fleet_migrate_legacy_group_dir(dir: &std::path::Path, label: &str) -> Result<(), String> {
+    let legacy = dir.join("groups");
+    let Ok(entries) = std::fs::read_dir(&legacy) else { return Ok(()) };
+    for entry in entries.flatten() {
+        let source = entry.path().join("group.json");
+        if !source.is_file() {
+            continue;
+        }
+        let target_dir = dir.join("squads").join(entry.file_name());
+        let target = target_dir.join("squad.json");
+        fleet_move_squad_file(&source, &target_dir, &target, label)?;
+        let _ = std::fs::remove_dir(entry.path());
+    }
+    let _ = std::fs::remove_dir(&legacy);
+    Ok(())
+}
+
+fn fleet_migrate_legacy_squad_file_names(dir: &std::path::Path, label: &str) -> Result<(), String> {
+    let squads = dir.join("squads");
+    let Ok(entries) = std::fs::read_dir(&squads) else { return Ok(()) };
+    for entry in entries.flatten() {
+        let source = entry.path().join("group.json");
+        if !source.is_file() {
+            continue;
+        }
+        let target = entry.path().join("squad.json");
+        fleet_move_squad_file(&source, &entry.path(), &target, label)?;
+    }
+    Ok(())
+}
+
+fn fleet_move_squad_file(
+    source: &std::path::Path,
+    target_dir: &std::path::Path,
+    target: &std::path::Path,
+    label: &str,
+) -> Result<(), String> {
+    std::fs::create_dir_all(target_dir).map_err(|error| format!("{label}: create {}: {error}", target_dir.display()))?;
+    if target.exists() {
+        std::fs::remove_file(source).map_err(|error| format!("{label}: remove duplicate {}: {error}", source.display()))?;
+    } else {
+        std::fs::rename(source, target).map_err(|error| format!("{label}: move {} to {}: {error}", source.display(), target.display()))?;
+    }
+    fleet_rewrite_squad_name(target, label)?;
+    eprintln!("fleet: migrated squad roster {} -> {}", source.display(), target.display());
+    Ok(())
+}
+
+fn fleet_rewrite_squad_name(path: &std::path::Path, label: &str) -> Result<(), String> {
+    let text = std::fs::read_to_string(path).map_err(|error| format!("{label}: read {}: {error}", path.display()))?;
+    let mut value: serde_json::Value = serde_json::from_str(&text).map_err(|error| format!("{label}: parse {}: {error}", path.display()))?;
+    let Some(object) = value.as_object_mut() else { return Ok(()) };
+    if let Some(group_name) = object.remove("groupName") {
+        object.entry("squadName").or_insert(group_name);
+        let body = serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?;
+        std::fs::write(path, format!("{body}\n")).map_err(|error| format!("{label}: write {}: {error}", path.display()))?;
     }
     Ok(())
 }
@@ -676,11 +736,11 @@ fn fleet_parse_entry(path: &std::path::Path, strict: bool, label: &str) -> Resul
         return Ok(None);
     }
     native_fleet_apply_role_markers(&mut session);
-    let file = if path.file_name().and_then(std::ffi::OsStr::to_str) == Some("group.json") {
+    let file = if path.file_name().and_then(std::ffi::OsStr::to_str) == Some("squad.json") {
         path.parent()
             .and_then(std::path::Path::file_name)
             .and_then(std::ffi::OsStr::to_str)
-            .map_or_else(|| "group".to_owned(), str::to_owned)
+            .map_or_else(|| "squad".to_owned(), str::to_owned)
     } else {
         path.file_name().and_then(std::ffi::OsStr::to_str).unwrap_or_default().to_owned()
     };
@@ -868,7 +928,7 @@ mod native_fleet_loader_tests {
         );
         fleet_loader_write(
             &root.join("config/fleet/03-gamma.json"),
-            r#"{"name":"03-gamma","groupName":"fallback","windows":[{"name":"gamma","repo":"org/gamma"}]}"#,
+            r#"{"name":"03-gamma","squadName":"fallback","windows":[{"name":"gamma","repo":"org/gamma"}]}"#,
         );
         fleet_loader_write(&root.join("state/fleet/99-disabled.json.disabled"), "{}");
 
@@ -881,7 +941,7 @@ mod native_fleet_loader_tests {
             assert_eq!(entries[0].session.project_repos, vec!["org/project"]);
             assert_eq!(entries[0].session.skip_command, Some(serde_json::json!(true)));
             assert_eq!(entries[0].session.budded_from.as_deref(), Some("root"));
-            assert_eq!(entries[2].session.group_name, "fallback");
+            assert_eq!(entries[2].session.squad_name, "fallback");
             assert_eq!(fleet_disabled_count_for_env(&current_xdg_env()), 1);
         });
     }

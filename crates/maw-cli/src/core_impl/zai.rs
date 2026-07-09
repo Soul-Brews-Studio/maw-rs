@@ -40,7 +40,7 @@ fn zai_split_fleet(args: &[String]) -> Result<(Option<String>, Vec<String>), Str
     while let Some(arg) = iter.next() {
         if arg == "--fleet" {
             let value = iter.next().ok_or_else(|| "zai: --fleet needs a group name".to_owned())?;
-            if !zai_safe_group(value) { return Err(format!("zai: invalid fleet group name {value}")); }
+            if !zai_safe_group(value) { return Err(format!("zai: invalid fleet squad name {value}")); }
             fleet = Some(value.clone());
         } else {
             rest.push(arg.clone());

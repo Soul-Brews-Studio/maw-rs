@@ -1,7 +1,7 @@
-// maw fleet roster — squadron members[] on fleet group files (#291). Pure roster (de)serialization
+// maw fleet roster — squadron members[] on fleet squad files (#291). Pure roster (de)serialization
 // stays deterministic and I/O-free; commands compose it with fleet read dirs + oracles.json cache.
 
-const FLEET_ROSTER_USAGE: &str = "usage: maw fleet create <group> | maw fleet show <group> [--json] | maw fleet status <group> [--json]";
+const FLEET_ROSTER_USAGE: &str = "usage: maw fleet create <squad> | maw fleet show <squad> [--json] | maw fleet status <squad> [--json]";
 
 #[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
 struct NativeFleetMember {
@@ -48,13 +48,13 @@ fn fleet_roster_run(argv: &[String]) -> Result<(i32, String), String> {
 fn fleet_roster_create(env: &MawXdgEnv, group: &str) -> Result<(i32, String), String> {
     let entries = fleet_load_entries_result_for_env(env, "fleet create")?;
     if entries.iter().any(|entry| fleet_roster_entry_matches(entry, group)) {
-        return Err(format!("fleet create: group {group} already exists"));
+        return Err(format!("fleet create: squad {group} already exists"));
     }
     let nn = fleet_roster_next_nn(&fleet_roster_used_nns(env))
         .ok_or_else(|| "fleet create: no free NN slot in 01-99".to_owned())?;
-    let dir = maw_state_path(env, &["fleet"]).join("groups").join(format!("{nn:02}-{group}"));
+    let dir = maw_state_path(env, &["fleet"]).join("squads").join(format!("{nn:02}-{group}"));
     std::fs::create_dir_all(&dir).map_err(|error| format!("fleet create: create {}: {error}", dir.display()))?;
-    let path = dir.join("group.json");
+    let path = dir.join("squad.json");
     let body = fleet_roster_new_file_json(nn, group, &fleet_registry_now_iso())?;
     std::fs::write(&path, body).map_err(|error| format!("fleet create: write {}: {error}", path.display()))?;
     Ok((0, format!("fleet create {group}: created {}\n", path.display())))
@@ -64,7 +64,7 @@ fn fleet_roster_create(env: &MawXdgEnv, group: &str) -> Result<(i32, String), St
 fn fleet_roster_new_file_json(nn: u32, group: &str, created_at: &str) -> Result<String, String> {
     let value = serde_json::json!({
         "name": format!("{nn:02}-{group}"),
-        "groupName": group,
+        "squadName": group,
         "created_at": created_at,
         "created_by": "maw fleet create",
         "windows": [],
@@ -82,7 +82,7 @@ fn fleet_roster_used_nns(env: &MawXdgEnv) -> BTreeSet<u32> {
         if let Ok(entries) = std::fs::read_dir(&dir) {
             used.extend(entries.flatten().filter_map(|entry| fleet_roster_nn_prefix(&entry.file_name().to_string_lossy())));
         }
-        if let Ok(entries) = std::fs::read_dir(dir.join("groups")) {
+        if let Ok(entries) = std::fs::read_dir(dir.join("squads")) {
             used.extend(entries.flatten().filter_map(|entry| fleet_roster_nn_prefix(&entry.file_name().to_string_lossy())));
         }
     }
@@ -100,7 +100,7 @@ fn fleet_roster_next_nn(used: &BTreeSet<u32>) -> Option<u32> {
 }
 
 fn fleet_roster_entry_matches(entry: &NativeFleetEntry, group: &str) -> bool {
-    if fleet_roster_group_name(entry).is_none() {
+    if fleet_roster_squad_name(entry).is_none() {
         return false;
     }
     let stem = entry.file.strip_suffix(".json").unwrap_or(&entry.file);
@@ -108,7 +108,7 @@ fn fleet_roster_entry_matches(entry: &NativeFleetEntry, group: &str) -> bool {
         || group == entry.file
         || group == fleet_roster_unnumbered_stem(entry)
         || group == entry.session.name
-        || (!entry.session.group_name.is_empty() && group == entry.session.group_name)
+        || (!entry.session.squad_name.is_empty() && group == entry.session.squad_name)
 }
 
 fn fleet_roster_unnumbered_stem(entry: &NativeFleetEntry) -> &str {
@@ -118,11 +118,11 @@ fn fleet_roster_unnumbered_stem(entry: &NativeFleetEntry) -> &str {
         .map_or(stem, |(_, tail)| tail)
 }
 
-// Squadron-group view for completions + ls filtering (#307/#317): only members[] files
-// are rosters; groupName is just the display alias when present.
-fn fleet_roster_group_name(entry: &NativeFleetEntry) -> Option<String> {
+// Squadron-squad view for completions + ls filtering (#307/#317): only members[] files
+// are rosters; squadName is just the display alias when present.
+fn fleet_roster_squad_name(entry: &NativeFleetEntry) -> Option<String> {
     entry.session.members.as_ref()?;
-    if !entry.session.group_name.is_empty() { return Some(entry.session.group_name.clone()); }
+    if !entry.session.squad_name.is_empty() { return Some(entry.session.squad_name.clone()); }
     Some(fleet_roster_unnumbered_stem(entry).to_owned())
 }
 
@@ -131,7 +131,7 @@ fn fleet_roster_show(env: &MawXdgEnv, group: &str, json: bool, live: Option<&[Tm
     let entry = entries
         .into_iter()
         .find(|entry| fleet_roster_entry_matches(entry, group))
-        .ok_or_else(|| format!("fleet: no group named {group} — try: maw fleet create {group}"))?;
+        .ok_or_else(|| format!("fleet: no squad named {group} — try: maw fleet create {group}"))?;
     let cache = locate_load_registry_cache();
     let members = entry.session.members.clone().unwrap_or_default().into_iter()
         .map(|member| fleet_roster_member_view(member, cache.as_ref(), live))
@@ -185,7 +185,7 @@ mod fleet_roster_tests {
     use super::*;
 
     const ROSTER_LEGACY_FIXTURE: &str = include_str!("../../tests/fixtures/native-fleet-roster/legacy-03-alpha.json");
-    const ROSTER_GROUP_FIXTURE: &str = include_str!("../../tests/fixtures/native-fleet-roster/groups/01-3e/group.json");
+    const ROSTER_GROUP_FIXTURE: &str = include_str!("../../tests/fixtures/native-fleet-roster/squads/01-3e/squad.json");
 
     fn roster_args(values: &[&str]) -> Vec<String> { values.iter().map(|value| (*value).to_owned()).collect() }
 
@@ -215,7 +215,7 @@ mod fleet_roster_tests {
         assert_eq!(first, fleet_roster_new_file_json(1, "3e", "2026-07-08T00:00:00.000Z").expect("render"));
         let session: NativeFleetSession = serde_json::from_str(&first).expect("parse");
         assert_eq!(session.name, "01-3e");
-        assert_eq!(session.group_name, "3e");
+        assert_eq!(session.squad_name, "3e");
         assert_eq!(session.members, Some(Vec::new()));
         assert_eq!(fleet_roster_next_nn(&BTreeSet::from([1, 2, 4])), Some(3));
         assert_eq!(fleet_roster_next_nn(&(1..=99).collect()), None);
@@ -228,8 +228,8 @@ mod fleet_roster_tests {
         let (root, _env) = roster_env("round-trip");
         let created = run_fleet_command(&roster_args(&["create", "3e"]));
         assert_eq!(created.code, 0, "{}", created.stderr);
-        assert!(root.join("state/fleet/groups/01-3e/group.json").exists());
-        assert_eq!(run_fleet_command(&roster_args(&["create", "3e"])).code, 1, "duplicate group refused");
+        assert!(root.join("state/fleet/squads/01-3e/squad.json").exists());
+        assert_eq!(run_fleet_command(&roster_args(&["create", "3e"])).code, 1, "duplicate squad refused");
         let shown = run_fleet_command(&roster_args(&["show", "3e", "--json"]));
         assert_eq!(shown.code, 0, "{}", shown.stderr);
         let value: serde_json::Value = serde_json::from_str(&shown.stdout).expect("json");
@@ -237,9 +237,9 @@ mod fleet_roster_tests {
         assert_eq!(value["legacy"], false);
         assert_eq!(value["memberCount"], 0);
 
-        let roster_json = r#"{"name":"05-ccdc","groupName":"ccdc","windows":[],"members":[{"handle":"atlas","role":"lead"},{"handle":"drift","node":"mba"}]}"#;
-        std::fs::create_dir_all(root.join("state/fleet/groups/05-ccdc")).expect("group dir");
-        std::fs::write(root.join("state/fleet/groups/05-ccdc/group.json"), roster_json).expect("group file");
+        let roster_json = r#"{"name":"05-ccdc","squadName":"ccdc","windows":[],"members":[{"handle":"atlas","role":"lead"},{"handle":"drift","node":"mba"}]}"#;
+        std::fs::create_dir_all(root.join("state/fleet/squads/05-ccdc")).expect("squad dir");
+        std::fs::write(root.join("state/fleet/squads/05-ccdc/squad.json"), roster_json).expect("squad file");
         std::fs::write(root.join("state/fleet/03-alpha.json"), ROSTER_LEGACY_FIXTURE).expect("legacy file");
         std::fs::create_dir_all(root.join("cache")).expect("cache dir");
         let cache_json = r#"{"schema":1,"oracles":[{"org":"acme","repo":"atlas-oracle","name":"atlas","local_path":"/tmp/atlas","has_psi":true,"has_fleet_config":true,"federation_node":"white"}]}"#;
@@ -253,24 +253,31 @@ mod fleet_roster_tests {
         assert!(roster["members"][0].get("is_live").is_none(), "show has no liveness");
         assert_eq!(roster["members"][1]["node"], "mba", "explicit node wins");
         let legacy = run_fleet_command(&roster_args(&["show", "alpha", "--json"]));
-        assert_eq!(legacy.code, 1, "flat session snapshots are not group rosters");
+        assert_eq!(legacy.code, 1, "flat session snapshots are not squad rosters");
     }
 
     #[test]
-    fn fleet_roster_groups_fixture_and_flat_roster_migrates() {
+    fn fleet_roster_squads_fixture_and_flat_roster_migrates() {
         let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let (root, _env) = roster_env("migration");
         let fleet_dir = root.join("state/fleet");
-        std::fs::create_dir_all(fleet_dir.join("groups/01-3e")).expect("group dir");
-        std::fs::write(fleet_dir.join("groups/01-3e/group.json"), ROSTER_GROUP_FIXTURE).expect("group fixture");
+        std::fs::create_dir_all(fleet_dir.join("groups/01-3e")).expect("squad dir");
+        std::fs::write(fleet_dir.join("groups/01-3e/group.json"), ROSTER_GROUP_FIXTURE).expect("legacy group fixture");
+        std::fs::write(fleet_dir.join("01-3e.json"), r#"{"name":"01-3e","groupName":"3e","windows":[],"members":[]}"#).expect("duplicate flat roster");
         let shown: serde_json::Value = serde_json::from_str(&run_fleet_command(&roster_args(&["show", "3e", "--json"])).stdout).expect("json");
         assert_eq!(shown["memberCount"], 5);
+        assert!(!fleet_dir.join("01-3e.json").exists());
+        assert!(!fleet_dir.join("groups/01-3e/group.json").exists());
+        assert!(fleet_dir.join("squads/01-3e/squad.json").exists());
 
         std::fs::write(fleet_dir.join("02-flat.json"), r#"{"name":"02-flat","groupName":"flat","windows":[],"members":[{"handle":"one"}]}"#).expect("flat roster");
         let migrated = run_fleet_command(&roster_args(&["show", "flat", "--json"]));
         assert_eq!(migrated.code, 0, "{}", migrated.stderr);
         assert!(!fleet_dir.join("02-flat.json").exists());
-        assert!(fleet_dir.join("groups/02-flat/group.json").exists());
+        assert!(fleet_dir.join("squads/02-flat/squad.json").exists());
+        let migrated_file = std::fs::read_to_string(fleet_dir.join("squads/02-flat/squad.json")).expect("migrated flat");
+        assert!(migrated_file.contains(r#""squadName": "flat""#), "{migrated_file}");
+        assert!(!migrated_file.contains("groupName"), "{migrated_file}");
         assert_eq!(serde_json::from_str::<serde_json::Value>(&migrated.stdout).expect("json")["memberCount"], 1);
     }
 
