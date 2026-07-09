@@ -118,11 +118,14 @@ fn attach_refuses_ambiguous_fuzzy_session_matches() {
         "--alive=06-caller",
         "--plan-json",
     ]);
-    assert_eq!(ambiguous.code, 2);
+    assert_eq!(ambiguous.code, 1);
     assert!(ambiguous
-        .stderr
-        .contains("attach: 'call' matches multiple sessions"));
-    assert!(ambiguous.stderr.contains("05-calliope, 06-caller"));
+        .stdout
+        .contains("\"context\":\"matches multiple sessions\""));
+    assert!(ambiguous
+        .stdout
+        .contains("\"action\":\"maw attach 05-calliope\""));
+    assert!(ambiguous.stderr.is_empty());
 }
 
 #[test]
