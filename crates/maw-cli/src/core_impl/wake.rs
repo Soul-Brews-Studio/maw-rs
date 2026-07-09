@@ -168,9 +168,11 @@ fn wake_run(argv: &[String], tmux: &mut impl WakeTmuxNative) -> Result<(i32, Str
     let sessions = tmux.wake_list();
     if options.list { return Ok((0, wake_render_list(&options, &sessions))); }
     if options.all { return Ok((0, wake_render_all_plan(&options, &sessions))); }
-    let resolved = wake_resolve(&options, &sessions)?;
-    if options.dry_run { return Ok((0, wake_render_dry_run(&options, &resolved))); }
     let mut out = String::new();
+    let started = std::time::Instant::now();
+    let resolved = wake_resolve(&options, &sessions)?;
+    wake_record_phase(&resolved, "resolve", wake_elapsed_ms(started), &mut out, true);
+    if options.dry_run { return Ok((0, wake_render_dry_run(&options, &resolved))); }
     wake_apply(&options, &resolved, tmux, &mut out)?;
     Ok((0, out))
 }
@@ -865,22 +867,67 @@ fn wake_render_dry_run(options: &WakeOptionsNative, resolved: &WakeResolvedNativ
     out
 }
 
+fn wake_elapsed_ms(started: std::time::Instant) -> u64 { u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX) }
+
+fn wake_record_phase(resolved: &WakeResolvedNative, phase: &str, ms: u64, out: &mut String, pre_attach: bool) {
+    if pre_attach && ms > 300 {
+        let _ = writeln!(out, "\x1b[36m→\x1b[0m wake {phase} took {ms}ms");
+    }
+    wake_write_phase_audit(resolved, phase, ms);
+}
+
+fn wake_write_phase_audit(resolved: &WakeResolvedNative, phase: &str, ms: u64) {
+    let row = serde_json::json!({
+        "ts": cli_dispatch_now_iso(),
+        "event": "wake.phase",
+        "cmd": "wake",
+        "phase": phase,
+        "ms": ms,
+        "session": resolved.session,
+        "window": resolved.window,
+        "target": resolved.target,
+        "binary": "maw-rs",
+        "version": MAW_RS_BUILD_VERSION,
+    });
+    let path = maw_state_path(&current_xdg_env(), &["audit.jsonl"]);
+    let Some(parent) = path.parent() else { return; };
+    if std::fs::create_dir_all(parent).is_err() { return; }
+    let _ = std::fs::OpenOptions::new().create(true).append(true).open(path).and_then(|mut file| {
+        use std::io::Write as _;
+        writeln!(file, "{row}")
+    });
+}
+
 fn wake_apply(
     options: &WakeOptionsNative,
     resolved: &WakeResolvedNative,
     tmux: &mut impl WakeTmuxNative,
     out: &mut String,
 ) -> Result<(), String> {
+    let started = std::time::Instant::now();
     if !resolved.repo_path.is_dir() { return Err(format!("wake: repo path missing: {}", resolved.repo_path.display())); }
+    wake_record_phase(resolved, "repo-check", wake_elapsed_ms(started), out, true);
     if let Some(name) = &resolved.repo_fuzzy_match {
         let _ = writeln!(out, "\x1b[36m→\x1b[0m fuzzy match: {name}");
     }
+    let started = std::time::Instant::now();
     let session_exists = tmux.wake_has_session(&resolved.session);
-    if session_exists { wake_create_or_reuse_window(options, resolved, tmux, out)?; } else { wake_create_session(resolved, tmux, out)?; }
+    wake_record_phase(resolved, "session-probe", wake_elapsed_ms(started), out, true);
+    let started = std::time::Instant::now();
+    if session_exists { wake_create_or_reuse_window(options, resolved, tmux, out)?; } else { wake_create_session(options, resolved, tmux, out)?; }
+    wake_record_phase(resolved, "first-window", wake_elapsed_ms(started), out, true);
+    if options.attach {
+        let started = std::time::Instant::now();
+        tmux.wake_select_window(&resolved.target)?;
+        wake_record_phase(resolved, "attach", wake_elapsed_ms(started), out, false);
+    }
+    let started = std::time::Instant::now();
     wake_register_fleet_session(resolved, tmux)?;
+    wake_record_phase(resolved, "fleet-upsert", wake_elapsed_ms(started), out, false);
+    let started = std::time::Instant::now();
     let hooks = wake_post_wake_hooks(options);
     wake_run_post_wake_hooks(&resolved.oracle, &resolved.session, &resolved.window, &hooks);
-    if options.attach { tmux.wake_select_window(&resolved.target)?; }
+    wake_record_phase(resolved, "post-wake-hooks", wake_elapsed_ms(started), out, false);
     Ok(())
 }
 
@@ -919,10 +966,14 @@ fn wake_run_post_wake_hooks(oracle: &str, session: &str, window: &str, hooks: &[
     }
 }
 
-fn wake_create_session(resolved: &WakeResolvedNative, tmux: &mut impl WakeTmuxNative, out: &mut String) -> Result<(), String> {
+fn wake_create_session(options: &WakeOptionsNative, resolved: &WakeResolvedNative, tmux: &mut impl WakeTmuxNative, out: &mut String) -> Result<(), String> {
     tmux.wake_new_session(&resolved.session, &resolved.window, &resolved.repo_path)?;
     tmux.wake_send_text(&resolved.target, &resolved.command)?;
-    let _ = writeln!(out, "\x1b[32m+\x1b[0m created session '{}' (main: {})", resolved.session, resolved.window);
+    if options.attach {
+        let _ = writeln!(out, "\x1b[32m+\x1b[0m created session '{}' (main: {})", resolved.session, resolved.window);
+    } else {
+        let _ = writeln!(out, "\x1b[32m+\x1b[0m created session '{}' (attach: maw a {})", resolved.session, resolved.session);
+    }
     Ok(())
 }
 
@@ -1469,9 +1520,26 @@ mod wake_tests {
             let (code, stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("run");
             assert_eq!(code, 0);
             assert!(stdout.contains("created session"));
+            assert!(stdout.contains("attach: maw a"));
             assert!(tmux.actions.iter().any(|action| action.starts_with("new-session")));
             assert!(tmux.actions.iter().any(|action| action.contains(&root.join("ghq/github.com/acme/neo-oracle").display().to_string())));
             assert!(!tmux.actions.iter().any(|action| action.starts_with("select")));
+        });
+    }
+
+    #[test]
+    fn wake_attach_selects_before_post_attach_work_and_audits_phases() {
+        wake_with_fixture(|root| {
+            let mut tmux = WakeMockTmux::default();
+            let (code, stdout) = wake_run(&wake_strings(&["neo", "--attach"]), &mut tmux).expect("run");
+            assert_eq!(code, 0, "{stdout}");
+            assert_eq!(tmux.actions[0].split_whitespace().next(), Some("new-session"));
+            assert_eq!(tmux.actions[1].split_whitespace().next(), Some("send"));
+            assert_eq!(tmux.actions[2].split_whitespace().next(), Some("select"));
+            let audit = std::fs::read_to_string(root.join("state/audit.jsonl")).expect("audit");
+            assert!(audit.contains(r#""event":"wake.phase""#), "{audit}");
+            assert!(audit.contains(r#""phase":"first-window""#), "{audit}");
+            assert!(audit.contains(r#""phase":"fleet-upsert""#), "{audit}");
         });
     }
 
