@@ -158,14 +158,14 @@ pub(super) fn parse_flags(args: &[String]) -> (Vec<String>, HashMap<String, Vec<
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
-            "--no-mention" | "--mention" | "--dry-run" | "--json" | "--refresh" | "--off"
-            | "--all-guilds" | "--with-threads" => {
+            "--no-mention" | "--mention" | "--dry-run" | "--force" | "--json" | "--refresh"
+            | "--off" | "--all-guilds" | "--with-threads" => {
                 flags
                     .entry(args[i].trim_start_matches("--").to_owned())
                     .or_default()
                     .push("true".to_owned());
             }
-            "--guild" | "--allow" => {
+            "--guild" | "--allow" | "--cwd" => {
                 if let Some(v) = args.get(i + 1) {
                     flags
                         .entry(args[i].trim_start_matches("--").to_owned())

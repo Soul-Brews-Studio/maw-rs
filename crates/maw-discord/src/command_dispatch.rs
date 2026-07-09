@@ -35,8 +35,11 @@ pub async fn run_discord_command_with(
             version(&mut logs);
             true
         }
-        Some(sub) if sub == "tokens" => tokens(env, rest, &args[1..], &mut logs).await,
+        Some(sub) if sub == "tokens" || sub == "token" => {
+            tokens(env, rest, &args[1..], &mut logs).await
+        }
         Some(sub) if sub == "status" => status(env, rest, &args[1..], &mut logs).await,
+        Some(sub) if sub == "state" => state(env, &args[1..], &mut logs),
         Some(sub) if sub == "bind" => bind(env, &args[1..], &mut logs),
         Some(sub) if sub == "access" => access(env, rest, &args[1..], &mut logs).await,
         Some(sub) if sub == "guilds" => guilds(env, rest, &args[1..], &mut logs).await,
@@ -77,6 +80,7 @@ pub(super) fn usage(log: &mut Vec<String>) {
         "subcommands:".to_owned(),
         "  version                            show plugin version + subcommand status".to_owned(),
         "  tokens ls                          list all Discord bot tokens in pass (no reveal)".to_owned(),
+        "  state <current|list|use|link>        manage DISCORD_STATE_DIR global slots + .discord links".to_owned(),
         "  tokens check [bot]                 verify each token decrypts + Discord REST 200".to_owned(),
         "  status [bot] [--check] [--redact] [--json]".to_owned(),
         "                                     fleet inspection from this host — pass × legacy × hybrid × tmux × registry".to_owned(),
@@ -102,6 +106,7 @@ pub(super) fn version(log: &mut Vec<String>) {
         "subcommand status:".to_owned(),
         "  ✓ tokens ls / check        v0.1".to_owned(),
         "  ✓ status [bot] [flags]     v0.3.1 (real online/where via bun ancestry)".to_owned(),
+        "  ✓ state current/list/use/link v0.5.1 (global slots + .discord symlink)".to_owned(),
         "  ✓ bind <bot>               v0.3 (rewrite to use 'maw wake' pending)".to_owned(),
         "  ✓ access <bot> ...         v0.4 (list/show/map/add/rm/set/allow/lockdown)".to_owned(),
         "  ✓ guilds/channels/members/inventory <bot>  v0.4.2 (Discord-state visibility)".to_owned(),
