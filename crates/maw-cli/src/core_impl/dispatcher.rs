@@ -414,9 +414,11 @@ pub fn run_cli(argv: &[String]) -> CliOutput {
     match dispatcher_target(command) {
         DispatchTarget::Native(handler) => {
             cli_dispatch_log_command(command, &argv[1..]);
-            handler(&argv[1..])
+            native_or_plugin_fallback(argv, || handler(&argv[1..]))
         }
-        DispatchTarget::AsyncNative(handler) => run_async_handler_blocking(handler, &argv[1..]),
+        DispatchTarget::AsyncNative(handler) => native_or_plugin_fallback(argv, || {
+            run_async_handler_blocking(handler, &argv[1..])
+        }),
         DispatchTarget::UnknownCommand => dispatch_cli_plugin_or_unknown(argv, command),
     }
 }
@@ -435,11 +437,43 @@ pub async fn run_cli_async(argv: &[String]) -> CliOutput {
     match dispatcher_target(command) {
         DispatchTarget::Native(handler) => {
             cli_dispatch_log_command(command, &argv[1..]);
-            handler(&argv[1..])
+            native_or_plugin_fallback(argv, || handler(&argv[1..]))
         }
-        DispatchTarget::AsyncNative(handler) => handler(argv[1..].to_vec()).await,
+        DispatchTarget::AsyncNative(handler) => {
+            plugin_fallback_for_native_miss(argv, handler(argv[1..].to_vec()).await)
+        }
         DispatchTarget::UnknownCommand => dispatch_cli_plugin_or_unknown(argv, command),
     }
+}
+
+fn native_or_plugin_fallback(argv: &[String], native: impl FnOnce() -> CliOutput) -> CliOutput {
+    plugin_fallback_for_native_miss(argv, native())
+}
+
+fn plugin_fallback_for_native_miss(argv: &[String], native_output: CliOutput) -> CliOutput {
+    if native_output.code != 2 || !looks_like_top_level_unknown_args(argv, &native_output.stderr) {
+        return native_output;
+    }
+    dispatch_cli_plugin(argv).unwrap_or(native_output)
+}
+
+fn looks_like_top_level_unknown_args(argv: &[String], stderr: &str) -> bool {
+    let Some(command) = argv.first() else {
+        return false;
+    };
+    if !native_plugin_fallthrough_command(command) {
+        return false;
+    }
+    let Some(detail) = stderr.strip_prefix(&format!("{command}: ")) else {
+        return false;
+    };
+    detail.starts_with("unknown")
+        || detail.starts_with("unexpected")
+        || detail.starts_with("unrecognized")
+}
+
+fn native_plugin_fallthrough_command(command: &str) -> bool {
+    command == "cross-team-queue"
 }
 
 fn cli_dispatch_log_command(command: &str, args: &[String]) {
