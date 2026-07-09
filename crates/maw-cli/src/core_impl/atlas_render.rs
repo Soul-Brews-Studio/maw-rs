@@ -7,7 +7,7 @@ fn atlas_fake_discord() -> Option<AtlasFakeDiscord> {
 
 async fn atlas_render_fake(parsed: &AtlasArgs, fake: &AtlasFakeDiscord) -> Result<String, String> {
     if fake.bot != parsed.bot {
-        return Err(format!("atlas: fake discord has bot '{}', requested '{}'", fake.bot, parsed.bot));
+        return Err(format!("discord-inv: fake discord has bot '{}', requested '{}'", fake.bot, parsed.bot));
     }
     let guilds = atlas_filter_guilds(parsed, &fake.guilds)?;
     let gateway_events = atlas_gateway_observed_count(&fake.gateway_events).await;
@@ -62,7 +62,7 @@ fn atlas_render_json(bot: &str, gateway_events: usize, guilds: &[AtlasGuild]) ->
 
 fn atlas_render_text(bot: &str, gateway_events: usize, guilds: &[AtlasGuild]) -> String {
     let mut out = String::new();
-    let _ = writeln!(out, "🗺️ atlas — Discord oracle registry for {bot}");
+    let _ = writeln!(out, "🗺️ discord-inv — Discord oracle registry for {bot}");
     let _ = writeln!(out, "  gateway: {gateway_events} event(s) observed");
     let mut total_channels = 0usize;
     let mut total_enabled = 0usize;

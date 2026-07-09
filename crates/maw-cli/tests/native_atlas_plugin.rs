@@ -27,17 +27,17 @@ fn fake_discord() -> &'static str {
 }
 
 #[test]
-fn atlas_default_committed_golden_without_ref_checkout() {
+fn discord_inv_default_committed_golden_without_ref_checkout() {
     let _guard = env_lock()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let output = Command::new(env!("CARGO_BIN_EXE_maw-rs"))
-        .args(["atlas", "nova-oracle"])
+        .args(["discord-inv", "nova-oracle"])
         .env("MAW_JS_REF_DIR", "/nonexistent")
         .env("MAW_RS_ATLAS_FAKE_DISCORD", fake_discord())
         .env("DISCORD_BOT_TOKEN", "mock-token-never-printed")
         .output()
-        .expect("run atlas");
+        .expect("run discord-inv");
     assert!(
         output.status.success(),
         "stderr={}",
@@ -52,13 +52,13 @@ fn atlas_default_committed_golden_without_ref_checkout() {
 }
 
 #[test]
-fn atlas_json_redacts_token_and_validates_guild_id() {
+fn discord_inv_json_redacts_token_and_validates_guild_id() {
     let _guard = env_lock()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let output = Command::new(env!("CARGO_BIN_EXE_maw-rs"))
         .args([
-            "atlas",
+            "discord-inv",
             "nova-oracle",
             "--guild",
             "123456789012345678",
@@ -68,7 +68,7 @@ fn atlas_json_redacts_token_and_validates_guild_id() {
         .env("MAW_RS_ATLAS_FAKE_DISCORD", fake_discord())
         .env("DISCORD_BOT_TOKEN", "mock-token-never-printed")
         .output()
-        .expect("run atlas json");
+        .expect("run discord-inv json");
     assert!(
         output.status.success(),
         "stderr={}",
@@ -79,12 +79,12 @@ fn atlas_json_redacts_token_and_validates_guild_id() {
     assert!(!stdout.contains("mock-token-never-printed"), "{stdout}");
 
     let rejected = Command::new(env!("CARGO_BIN_EXE_maw-rs"))
-        .args(["atlas", "nova-oracle", "--guild", "abc"])
+        .args(["discord-inv", "nova-oracle", "--guild", "abc"])
         .env("MAW_JS_REF_DIR", "/nonexistent")
         .env("MAW_RS_ATLAS_FAKE_DISCORD", fake_discord())
         .env("DISCORD_BOT_TOKEN", "mock-token-never-printed")
         .output()
-        .expect("run atlas bad guild");
+        .expect("run discord-inv bad guild");
     assert!(!rejected.status.success());
     let stderr = String::from_utf8(rejected.stderr).expect("stderr");
     assert!(stderr.contains("invalid guild id"), "{stderr}");
@@ -138,7 +138,7 @@ fn write_legacy_atlas_plugin(plugins_dir: &std::path::Path) {
 }
 
 #[test]
-fn atlas_legacy_subcommand_falls_through_to_ts_plugin() {
+fn atlas_namespace_is_owned_by_plugin_not_native_discord_inv() {
     let _guard = env_lock()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -174,6 +174,35 @@ fn atlas_legacy_subcommand_falls_through_to_ts_plugin() {
     assert!(captured.contains("arg1=--json"), "{captured}");
     let stderr = String::from_utf8(output.stderr).expect("stderr");
     assert!(stderr.contains("legacy-atlas"), "{stderr}");
+
+    std::fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn atlas_namespace_without_plugin_fails_fast_instead_of_hanging() {
+    let _guard = env_lock()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let root = atlas_temp_dir("missing-plugin");
+    let plugins_dir = root.join("plugins");
+    std::fs::create_dir_all(&plugins_dir).expect("plugins dir");
+
+    let started = std::time::Instant::now();
+    let output = Command::new(env!("CARGO_BIN_EXE_maw-rs"))
+        .args(["atlas", "backfill"])
+        .env("MAW_PLUGINS_DIR", &plugins_dir)
+        .env_remove("MAW_RS_ATLAS_FAKE_DISCORD")
+        .output()
+        .expect("run atlas missing plugin");
+    let elapsed = started.elapsed();
+
+    assert!(!output.status.success());
+    assert!(
+        elapsed < std::time::Duration::from_secs(1),
+        "atlas dispatch miss hung for {elapsed:?}"
+    );
+    let stderr = String::from_utf8(output.stderr).expect("stderr");
+    assert!(stderr.contains("unknown command 'atlas'"), "{stderr}");
 
     std::fs::remove_dir_all(root).expect("cleanup");
 }

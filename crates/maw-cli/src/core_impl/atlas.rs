@@ -1,14 +1,13 @@
 use maw_discord::is_numeric_snowflake;
 
 const DISPATCH_116: &[DispatcherEntry] = &[DispatcherEntry {
-    command: "atlas",
+    command: "discord-inv",
     handler: Handler::Async(atlas_async_native),
 }];
 
-const ATLAS_USAGE: &str = "usage: maw atlas <bot> [--guild <id>] [--all-guilds] [--with-threads] [--json]";
+const ATLAS_USAGE: &str = "usage: maw discord-inv <bot> [--guild <id>] [--all-guilds] [--with-threads] [--json]";
 const ATLAS_FAKE_DISCORD_ENV: &str = "MAW_RS_ATLAS_FAKE_DISCORD";
-const ATLAS_LEGACY_PLUGIN_FALLTHROUGH: &str = "atlas: legacy plugin fallthrough";
-const ATLAS_LEGACY_SUBCOMMANDS: &[&str] = &["ls", "read", "backfill", "check", "wake", "vesicle"];
+const ATLAS_DISCORD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct AtlasArgs {
@@ -61,12 +60,6 @@ async fn atlas_run_async(argv: &[String]) -> CliOutput {
     let parsed = match atlas_parse_args(argv) {
         Ok(parsed) => parsed,
         Err(message) if message == ATLAS_USAGE => return atlas_ok(ATLAS_USAGE),
-        Err(message) if message == ATLAS_LEGACY_PLUGIN_FALLTHROUGH => {
-            let mut full_argv = Vec::with_capacity(argv.len() + 1);
-            full_argv.push("atlas".to_owned());
-            full_argv.extend(argv.iter().cloned());
-            return dispatch_cli_plugin_or_unknown(&full_argv, "atlas");
-        }
         Err(message) => return atlas_error(&message),
     };
     if let Some(fake) = atlas_fake_discord() {
@@ -97,8 +90,10 @@ async fn atlas_run_real(parsed: AtlasArgs) -> CliOutput {
     if parsed.json {
         args.push("--json".to_owned());
     }
-    let output = run_discord_command(args).await;
-    CliOutput { code: output.code, stdout: output.stdout, stderr: output.stderr }
+    match tokio::time::timeout(ATLAS_DISCORD_TIMEOUT, run_discord_command(args)).await {
+        Ok(output) => CliOutput { code: output.code, stdout: output.stdout, stderr: output.stderr },
+        Err(_) => atlas_error("discord-inv: timed out waiting for Discord inventory"),
+    }
 }
 
 fn atlas_parse_args(argv: &[String]) -> Result<AtlasArgs, String> {
@@ -108,7 +103,7 @@ fn atlas_parse_args(argv: &[String]) -> Result<AtlasArgs, String> {
         let token = &argv[index];
         match token.as_str() {
             "help" | "--help" | "-h" => return Err(ATLAS_USAGE.to_owned()),
-            "--" => return Err("atlas: -- separator is not allowed".to_owned()),
+            "--" => return Err("discord-inv: -- separator is not allowed".to_owned()),
             "--json" => parsed.json = true,
             "--all-guilds" => parsed.all_guilds = true,
             "--with-threads" => parsed.with_threads = true,
@@ -122,7 +117,7 @@ fn atlas_parse_args(argv: &[String]) -> Result<AtlasArgs, String> {
                 atlas_validate_snowflake("guild", &guild)?;
                 parsed.guild = Some(guild);
             }
-            value if value.starts_with('-') => return Err(format!("atlas: unknown argument {value}")),
+            value if value.starts_with('-') => return Err(format!("discord-inv: unknown argument {value}")),
             value => atlas_set_bot(&mut parsed, value)?,
         }
         index += 1;
@@ -135,23 +130,16 @@ fn atlas_parse_args(argv: &[String]) -> Result<AtlasArgs, String> {
 
 fn atlas_take_value(argv: &[String], index: &mut usize, flag: &str) -> Result<String, String> {
     *index += 1;
-    let Some(value) = argv.get(*index) else { return Err(format!("atlas: {flag} requires a value")); };
+    let Some(value) = argv.get(*index) else { return Err(format!("discord-inv: {flag} requires a value")); };
     atlas_validate_value(flag, value)
 }
 
 fn atlas_set_bot(parsed: &mut AtlasArgs, value: &str) -> Result<(), String> {
-    if parsed.bot.is_empty() && atlas_is_legacy_subcommand(value) {
-        return Err(ATLAS_LEGACY_PLUGIN_FALLTHROUGH.to_owned());
-    }
     if !parsed.bot.is_empty() {
-        return Err(format!("atlas: unexpected argument {value}"));
+        return Err(format!("discord-inv: unexpected argument {value}"));
     }
     parsed.bot = atlas_validate_value("bot", value)?;
     Ok(())
-}
-
-fn atlas_is_legacy_subcommand(value: &str) -> bool {
-    ATLAS_LEGACY_SUBCOMMANDS.contains(&value)
 }
 
 fn atlas_validate_value(label: &str, value: &str) -> Result<String, String> {
@@ -162,7 +150,7 @@ fn atlas_validate_value(label: &str, value: &str) -> Result<String, String> {
         || value.contains('\0')
         || value == "--"
     {
-        return Err(format!("atlas: invalid {label} value"));
+        return Err(format!("discord-inv: invalid {label} value"));
     }
     Ok(value.to_owned())
 }
@@ -171,7 +159,7 @@ fn atlas_validate_snowflake(label: &str, value: &str) -> Result<(), String> {
     if is_numeric_snowflake(value) {
         Ok(())
     } else {
-        Err(format!("atlas: invalid {label} id '{value}'"))
+        Err(format!("discord-inv: invalid {label} id '{value}'"))
     }
 }
 
@@ -205,14 +193,7 @@ mod atlas_tests {
     }
 
     #[test]
-    fn atlas_legacy_subcommands_fall_through_before_bot_parse() {
-        for subcommand in ATLAS_LEGACY_SUBCOMMANDS {
-            assert_eq!(
-                atlas_parse_args(&atlas_strings(&[subcommand])).unwrap_err(),
-                ATLAS_LEGACY_PLUGIN_FALLTHROUGH,
-                "{subcommand}"
-            );
-        }
+    fn discord_inv_accepts_bot_inventory_args() {
         let parsed = atlas_parse_args(&atlas_strings(&["nova", "--all-guilds", "--with-threads"])).expect("native bot route");
         assert_eq!(parsed.bot, "nova");
         assert!(parsed.all_guilds);
@@ -226,7 +207,8 @@ mod atlas_tests {
 
     #[test]
     fn atlas_dispatch_registers_native() {
-        assert_eq!(dispatcher_status("atlas"), DispatchKind::Native);
-        assert_eq!(DISPATCH_116[0].command, "atlas");
+        assert_eq!(dispatcher_status("discord-inv"), DispatchKind::Native);
+        assert_eq!(dispatcher_status("atlas"), DispatchKind::NativeError);
+        assert_eq!(DISPATCH_116[0].command, "discord-inv");
     }
 }
