@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeSet,
     ffi::OsStr,
-    io::IsTerminal,
+    io::{self, ErrorKind, IsTerminal, Write},
     process::{Command, Stdio},
 };
 
@@ -28,9 +28,7 @@ fn main_code_with(argv: &[String], attach: impl FnOnce(&[String]) -> Option<i32>
         return code;
     }
     let output = maw_cli::run_cli(argv);
-    print!("{}", output.stdout);
-    eprint!("{}", output.stderr);
-    output.code
+    finish_cli_output(output.code, &output.stdout, &output.stderr)
 }
 
 async fn main_code_async_with(
@@ -41,9 +39,33 @@ async fn main_code_async_with(
         return code;
     }
     let output = maw_cli::run_cli_async(argv).await;
-    print!("{}", output.stdout);
-    eprint!("{}", output.stderr);
-    output.code
+    finish_cli_output(output.code, &output.stdout, &output.stderr)
+}
+
+fn finish_cli_output(code: i32, stdout: &str, stderr: &str) -> i32 {
+    match write_cli_output(stdout, stderr) {
+        Ok(()) => code,
+        Err(error) if error.kind() == ErrorKind::BrokenPipe => 0,
+        Err(error) => {
+            let _ = writeln!(
+                io::stderr().lock(),
+                "maw-rs: failed to write output: {error}"
+            );
+            1
+        }
+    }
+}
+
+fn write_cli_output(stdout: &str, stderr: &str) -> io::Result<()> {
+    let mut out = io::stdout().lock();
+    if !stdout.is_empty() {
+        out.write_all(stdout.as_bytes())?;
+    }
+    let mut err = io::stderr().lock();
+    if !stderr.is_empty() {
+        err.write_all(stderr.as_bytes())?;
+    }
+    Ok(())
 }
 
 fn maybe_exec_attach(argv: &[String]) -> Option<i32> {
