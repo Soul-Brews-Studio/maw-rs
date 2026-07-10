@@ -278,8 +278,11 @@ fn attach_picker_action(matched: &maw_matcher::ResolveMatch) -> Option<String> {
         maw_matcher::ResolveCandidateKind::FleetSquad => {
             Some(format!("maw fleet wake {}", matched.candidate.name))
         }
-        maw_matcher::ResolveCandidateKind::SleepingRegistry
-        | maw_matcher::ResolveCandidateKind::Oracle => {
+        maw_matcher::ResolveCandidateKind::SleepingRegistry => Some(format!(
+            "maw wake {} --attach --session {}",
+            matched.candidate.name, matched.candidate.name
+        )),
+        maw_matcher::ResolveCandidateKind::Oracle => {
             Some(format!("maw wake {} --attach", matched.candidate.name))
         }
         maw_matcher::ResolveCandidateKind::LiveSession
@@ -333,8 +336,13 @@ fn attach_run_picker_row(row: PickerRow) -> Result<String, CliOutput> {
     match row.matched.candidate.kind {
         maw_matcher::ResolveCandidateKind::LiveSession
         | maw_matcher::ResolveCandidateKind::Window => Ok(row.matched.candidate.name),
-        maw_matcher::ResolveCandidateKind::SleepingRegistry
-        | maw_matcher::ResolveCandidateKind::Oracle => Err(run_wake_command(&[
+        maw_matcher::ResolveCandidateKind::SleepingRegistry => Err(run_wake_command(&[
+            row.matched.candidate.name.clone(),
+            "--attach".to_owned(),
+            "--session".to_owned(),
+            row.matched.candidate.name,
+        ])),
+        maw_matcher::ResolveCandidateKind::Oracle => Err(run_wake_command(&[
             row.matched.candidate.name,
             "--attach".to_owned(),
         ])),
@@ -866,7 +874,7 @@ mod attach_tests {
         );
         assert_eq!(
             attach_picker_action(&sleeping).as_deref(),
-            Some("maw wake 47-3e-infra --attach")
+            Some("maw wake 47-3e-infra --attach --session 47-3e-infra")
         );
         assert_eq!(
             attach_picker_action(&live).as_deref(),

@@ -135,8 +135,24 @@ impl WakeTmuxNative for WakeNativeTmux {
 
     fn wake_select_window(&mut self, target: &str) -> Result<(), String> {
         wake_validate_tmux_target(target)?;
-        TmuxClient::local().select_window(target);
-        Ok(())
+        let session = target.split(':').next().unwrap_or(target);
+        let mut tmux = TmuxClient::local();
+        if std::env::var_os("TMUX").is_some() {
+            tmux.switch_client(session);
+            tmux.select_window(target);
+            return Ok(());
+        }
+        tmux.select_window(target);
+        let status = std::process::Command::new("tmux")
+            .arg("attach-session")
+            .arg("-t")
+            .arg(session)
+            .stdin(std::process::Stdio::inherit())
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit())
+            .status()
+            .map_err(|error| format!("wake: failed to execute tmux attach-session: {error}"))?;
+        if status.success() { Ok(()) } else { Err(format!("wake: tmux attach-session exited with status {status}")) }
     }
 }
 
@@ -421,18 +437,20 @@ fn wake_label(options: &WakeOptionsNative) -> String {
 }
 
 fn wake_resolve(options: &WakeOptionsNative, sessions: &[TmuxSession]) -> Result<WakeResolvedNative, String> {
+    let fleet_entries = fleet_load_entries();
     let initial_oracle = wake_oracle(options)?;
-    let typed = wake_typed_resolution(options, &initial_oracle)?;
+    let typed = wake_typed_resolution(options, &initial_oracle, &fleet_entries)?;
+    let typed_session_hint = typed.as_ref().and_then(|resolution| resolution.session_hint.clone());
     let oracle = typed.as_ref().map_or_else(|| initial_oracle.clone(), |resolution| resolution.oracle.clone());
-    let repo = typed.map_or_else(|| wake_repo_path(options, &oracle), |resolution| Ok(resolution.repo))?;
+    let repo = typed.map_or_else(|| wake_repo_path(options, &oracle, &fleet_entries), |resolution| Ok(resolution.repo))?;
     let repo_path = repo.path;
-    let session_hint = wake_registry_session_hint(&initial_oracle, &repo_path);
+    let session_hint = typed_session_hint.or_else(|| wake_registry_session_hint(&initial_oracle, &repo_path, &fleet_entries));
     let session = options
         .parent
         .clone()
         .or_else(|| wake_detect_session(&oracle, sessions))
         .or(session_hint)
-        .or_else(|| wake_detect_session_from_fleet_registry(&oracle, &repo_path))
+        .or_else(|| wake_detect_session_from_fleet_registry(&oracle, &repo_path, &fleet_entries))
         .unwrap_or_else(|| wake_session_name(&oracle, sessions));
     let window = wake_window_name(options, &oracle);
     let target = format!("{session}:{window}");
@@ -454,11 +472,11 @@ fn wake_oracle(options: &WakeOptionsNative) -> Result<String, String> {
     Ok(oracle.to_owned())
 }
 
-fn wake_typed_resolution(options: &WakeOptionsNative, oracle: &str) -> Result<Option<WakeTypedResolution>, String> {
+fn wake_typed_resolution(options: &WakeOptionsNative, oracle: &str, fleet_entries: &[NativeFleetEntry]) -> Result<Option<WakeTypedResolution>, String> {
     if wake_should_bypass_typed_resolution(options) { return Ok(None); }
-    if let Some(resolution) = wake_resolve_exact_registry_session(&options.target)? { return Ok(Some(resolution)); }
-    if let Some(resolution) = wake_resolve_registry_target(&options.target)? { return Ok(Some(resolution)); }
-    wake_resolve_repo_target(oracle).map(Some)
+    if let Some(resolution) = wake_resolve_exact_registry_session(&options.target, fleet_entries)? { return Ok(Some(resolution)); }
+    if let Some(resolution) = wake_resolve_registry_target(&options.target, fleet_entries)? { return Ok(Some(resolution)); }
+    wake_resolve_repo_target(oracle, fleet_entries).map(Some)
 }
 
 fn wake_should_bypass_typed_resolution(options: &WakeOptionsNative) -> bool {
@@ -471,7 +489,7 @@ fn wake_should_bypass_typed_resolution(options: &WakeOptionsNative) -> bool {
         || options.target.starts_with('/')
 }
 
-fn wake_repo_path(options: &WakeOptionsNative, oracle: &str) -> Result<WakeRepoResolution, String> {
+fn wake_repo_path(options: &WakeOptionsNative, oracle: &str, fleet_entries: &[NativeFleetEntry]) -> Result<WakeRepoResolution, String> {
     // `--repo-path <dir>` is an explicit filesystem override (used by `team up`
     // to point at the bound worktree) — it bypasses ghq/fleet resolution.
     if let Some(repo_path) = &options.repo_path {
@@ -486,7 +504,7 @@ fn wake_repo_path(options: &WakeOptionsNative, oracle: &str) -> Result<WakeRepoR
     {
         return wake_resolve_workon_repo(&options.target);
     }
-    wake_find_repo(oracle)
+    wake_find_repo(oracle, fleet_entries)
 }
 
 fn wake_normalize_repo_path(path: &std::path::Path) -> Result<std::path::PathBuf, String> {
@@ -511,16 +529,16 @@ fn wake_resolve_workon_repo(input: &str) -> Result<WakeRepoResolution, String> {
     Ok(wake_exact_repo_resolution(repo.repo_path))
 }
 
-fn wake_find_repo(oracle: &str) -> Result<WakeRepoResolution, String> {
-    if let Some(path) = wake_registry_repo_for_oracle(oracle) {
+fn wake_find_repo(oracle: &str, fleet_entries: &[NativeFleetEntry]) -> Result<WakeRepoResolution, String> {
+    if let Some(path) = wake_registry_repo_for_oracle(oracle, fleet_entries) {
         if path.is_dir() { return Ok(wake_exact_repo_resolution(path)); }
         return Err(wake_registry_missing_repo_message(oracle, &path));
     }
-    wake_resolve_repo_target(oracle).map(|resolution| resolution.repo)
+    wake_resolve_repo_target(oracle, fleet_entries).map(|resolution| resolution.repo)
 }
 
-fn wake_resolve_exact_registry_session(target: &str) -> Result<Option<WakeTypedResolution>, String> {
-    let matches = fleet_load_entries()
+fn wake_resolve_exact_registry_session(target: &str, fleet_entries: &[NativeFleetEntry]) -> Result<Option<WakeTypedResolution>, String> {
+    let matches = fleet_entries
         .into_iter()
         .filter(|entry| entry.session.name == target || entry.file == target)
         .collect::<Vec<_>>();
@@ -551,8 +569,8 @@ fn wake_primary_registry_window<'a>(entry: &'a NativeFleetEntry, stem: &str) -> 
         .or_else(|| entry.session.windows.first())
 }
 
-fn wake_resolve_registry_target(target: &str) -> Result<Option<WakeTypedResolution>, String> {
-    let candidates = wake_typed_registry_candidates();
+fn wake_resolve_registry_target(target: &str, fleet_entries: &[NativeFleetEntry]) -> Result<Option<WakeTypedResolution>, String> {
+    let candidates = wake_typed_registry_candidates(fleet_entries);
     let typed = candidates.iter().map(|candidate| candidate.candidate.clone()).collect::<Vec<_>>();
     match maw_matcher::resolve_typed_target(target, &typed) {
         maw_matcher::ResolveTypedResult::None => Ok(None),
@@ -577,8 +595,8 @@ fn wake_resolve_registry_target(target: &str) -> Result<Option<WakeTypedResoluti
     }
 }
 
-fn wake_resolve_repo_target(oracle: &str) -> Result<WakeTypedResolution, String> {
-    let candidates = wake_typed_repo_candidates();
+fn wake_resolve_repo_target(oracle: &str, fleet_entries: &[NativeFleetEntry]) -> Result<WakeTypedResolution, String> {
+    let candidates = wake_typed_repo_candidates(fleet_entries);
     let typed = candidates.iter().map(|candidate| candidate.candidate.clone()).collect::<Vec<_>>();
     match maw_matcher::resolve_typed_target(oracle, &typed) {
         maw_matcher::ResolveTypedResult::Match { matched } => {
@@ -598,10 +616,10 @@ fn wake_resolve_repo_target(oracle: &str) -> Result<WakeTypedResolution, String>
     }
 }
 
-fn wake_registry_repo_for_oracle(oracle: &str) -> Option<std::path::PathBuf> {
+fn wake_registry_repo_for_oracle(oracle: &str, fleet_entries: &[NativeFleetEntry]) -> Option<std::path::PathBuf> {
     let mut repos = BTreeSet::new();
-    for entry in fleet_load_entries() {
-        for window in entry.session.windows {
+    for entry in fleet_entries {
+        for window in &entry.session.windows {
             let repo = window.repo.strip_prefix("github.com/").unwrap_or(&window.repo);
             let Some(name) = repo.rsplit('/').next() else { continue; };
             if !wake_repo_name_matches(name, oracle) {
@@ -618,18 +636,18 @@ fn wake_registry_repo_for_oracle(oracle: &str) -> Option<std::path::PathBuf> {
     }
 }
 
-fn wake_registry_session_hint(oracle: &str, repo_path: &std::path::Path) -> Option<String> {
-    wake_resolve_registry_target(oracle)
+fn wake_registry_session_hint(oracle: &str, repo_path: &std::path::Path, fleet_entries: &[NativeFleetEntry]) -> Option<String> {
+    wake_resolve_registry_target(oracle, fleet_entries)
         .ok()
         .flatten()
         .filter(|resolution| wake_canonicalize_path(&resolution.repo.path) == wake_canonicalize_path(repo_path))
         .and_then(|resolution| resolution.session_hint)
 }
 
-fn wake_typed_registry_candidates() -> Vec<WakeTypedRegistryCandidate> {
+fn wake_typed_registry_candidates(fleet_entries: &[NativeFleetEntry]) -> Vec<WakeTypedRegistryCandidate> {
     let mut candidates = Vec::new();
     let mut seen = BTreeSet::new();
-    for entry in fleet_load_entries() {
+    for entry in fleet_entries {
         for window in &entry.session.windows {
             let Some(path) = native_fleet_repo_path(&window.repo) else { continue; };
             let oracle = wake_oracle_from_repo_slug(&window.repo).unwrap_or_else(|| window.name.clone());
@@ -658,8 +676,8 @@ fn wake_registry_aliases(window: &NativeFleetWindow, oracle: &str) -> Vec<String
     aliases
 }
 
-fn wake_typed_repo_candidates() -> Vec<WakeTypedRepoCandidate> {
-    wake_repo_candidates()
+fn wake_typed_repo_candidates(fleet_entries: &[NativeFleetEntry]) -> Vec<WakeTypedRepoCandidate> {
+    wake_repo_candidates(fleet_entries)
         .into_iter()
         .map(|candidate| WakeTypedRepoCandidate {
             candidate: maw_matcher::ResolveTypedCandidate {
@@ -672,15 +690,15 @@ fn wake_typed_repo_candidates() -> Vec<WakeTypedRepoCandidate> {
         .collect()
 }
 
-fn wake_repo_candidates() -> Vec<WakeRepoCandidate> {
+fn wake_repo_candidates(fleet_entries: &[NativeFleetEntry]) -> Vec<WakeRepoCandidate> {
     let mut candidates = Vec::new();
     let mut seen = BTreeSet::new();
     let root = wake_ghq_root().join("github.com");
     if let Ok(orgs) = std::fs::read_dir(root) {
         for org in orgs.flatten() { wake_collect_repo_candidates(&org.path(), &mut candidates, &mut seen); }
     }
-    for entry in fleet_load_entries() {
-        for window in entry.session.windows {
+    for entry in fleet_entries {
+        for window in &entry.session.windows {
             let Some(path) = native_fleet_repo_path(&window.repo) else { continue; };
             wake_push_repo_candidate(path, &mut candidates, &mut seen);
         }
@@ -738,10 +756,10 @@ fn wake_detect_session(oracle: &str, sessions: &[TmuxSession]) -> Option<String>
     sessions.iter().find(|session| wake_session_matches(&session.name, oracle)).map(|session| session.name.clone())
 }
 
-fn wake_detect_session_from_fleet_registry(oracle: &str, repo_path: &std::path::Path) -> Option<String> {
+fn wake_detect_session_from_fleet_registry(oracle: &str, repo_path: &std::path::Path, fleet_entries: &[NativeFleetEntry]) -> Option<String> {
     let canonical = wake_canonicalize_path(repo_path);
     let mut sessions = Vec::new();
-    for entry in fleet_load_entries() {
+    for entry in fleet_entries {
         for window in &entry.session.windows {
             let repo_name = window.repo.rsplit('/').next().unwrap_or_default();
             if !wake_repo_name_matches(repo_name, oracle) {
@@ -917,9 +935,8 @@ fn wake_apply(
     if session_exists { wake_create_or_reuse_window(options, resolved, tmux, out)?; } else { wake_create_session(options, resolved, tmux, out)?; }
     wake_record_phase(resolved, "first-window", wake_elapsed_ms(started), out, true);
     if options.attach {
-        let started = std::time::Instant::now();
+        wake_record_phase(resolved, "attach", 0, out, false);
         tmux.wake_select_window(&resolved.target)?;
-        wake_record_phase(resolved, "attach", wake_elapsed_ms(started), out, false);
     }
     let started = std::time::Instant::now();
     wake_register_fleet_session(resolved, tmux)?;
@@ -1230,7 +1247,7 @@ mod wake_tests {
         .expect("parse --repo-path");
         assert_eq!(options.repo_path.as_deref(), Some(std::path::Path::new("/tmp/wt/coder-1")));
         assert_eq!(
-            wake_repo_path(&options, "coder-1").expect("resolve").path,
+            wake_repo_path(&options, "coder-1", &fleet_load_entries()).expect("resolve").path,
             std::path::PathBuf::from("/tmp/wt/coder-1")
         );
     }
@@ -1249,7 +1266,7 @@ mod wake_tests {
 
             assert!(!wake_should_use_peer_target(&options));
             assert_eq!(wake_oracle(&options).expect("oracle"), "maw-fleetpad");
-            assert_eq!(wake_repo_path(&options, "maw-fleetpad").expect("resolve").path, repo);
+            assert_eq!(wake_repo_path(&options, "maw-fleetpad", &fleet_load_entries()).expect("resolve").path, repo);
 
             let mut tmux = WakeMockTmux::default();
             let (code, stdout) = wake_run(&args, &mut tmux).expect("run");
@@ -1271,7 +1288,7 @@ mod wake_tests {
             ]))
             .expect("parse");
 
-            assert_eq!(wake_repo_path(&options, "maw-fleetpad").expect("resolve").path, repo);
+            assert_eq!(wake_repo_path(&options, "maw-fleetpad", &fleet_load_entries()).expect("resolve").path, repo);
         });
     }
 
@@ -1539,6 +1556,7 @@ mod wake_tests {
             let audit = std::fs::read_to_string(root.join("state/audit.jsonl")).expect("audit");
             assert!(audit.contains(r#""event":"wake.phase""#), "{audit}");
             assert!(audit.contains(r#""phase":"first-window""#), "{audit}");
+            assert!(audit.contains(r#""phase":"attach","ms":0"#), "{audit}");
             assert!(audit.contains(r#""phase":"fleet-upsert""#), "{audit}");
         });
     }
