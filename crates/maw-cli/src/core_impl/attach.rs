@@ -120,7 +120,8 @@ fn attach_run_with_runner<R: maw_tmux::TmuxRunner>(
 
 fn attach_resolved_target_for_options(opts: &AttachOptions) -> Result<String, CliOutput> {
     match attach_resolve_typed_target(&opts.target, &opts.alive) {
-        AttachResolvedTarget::Live(session) | AttachResolvedTarget::Missing(session) => Ok(session),
+        AttachResolvedTarget::Live(session) => Ok(session),
+        AttachResolvedTarget::NotFound(candidates) => attach_not_found_output(&opts.target, &candidates),
         AttachResolvedTarget::BridgeCandidates(candidates) => attach_picker_output(
             &opts.target,
             "not found as a live session",
@@ -143,15 +144,16 @@ fn attach_resolved_target_for_options(opts: &AttachOptions) -> Result<String, Cl
 
 enum AttachResolvedTarget {
     Live(String),
-    Missing(String),
+    NotFound(Vec<maw_matcher::ResolveMatch>),
     BridgeCandidates(Vec<maw_matcher::ResolveMatch>),
     Ambiguous(Vec<maw_matcher::ResolveMatch>),
 }
 
 fn attach_resolve_typed_target(target: &str, alive: &BTreeSet<String>) -> AttachResolvedTarget {
     let candidates = attach_typed_candidates(alive);
-    match maw_matcher::resolve_typed_target(target, &candidates) {
-        maw_matcher::ResolveTypedResult::None => AttachResolvedTarget::Missing(target.to_owned()),
+    let query = target.split(':').next().unwrap_or(target);
+    match maw_matcher::resolve_typed_target(query, &candidates) {
+        maw_matcher::ResolveTypedResult::None => AttachResolvedTarget::NotFound(deadend_suggestion_matches(target, &candidates)),
         maw_matcher::ResolveTypedResult::Ambiguous { candidates } => {
             AttachResolvedTarget::Ambiguous(candidates)
         }
@@ -165,7 +167,7 @@ fn attach_resolve_typed_target(target: &str, alive: &BTreeSet<String>) -> Attach
             | maw_matcher::ResolveCandidateKind::FleetSquad => {
                 AttachResolvedTarget::BridgeCandidates(vec![matched])
             }
-            _ => AttachResolvedTarget::Missing(target.to_owned()),
+            _ => AttachResolvedTarget::NotFound(deadend_suggestion_matches(target, &candidates)),
         },
     }
 }
@@ -194,7 +196,12 @@ fn attach_typed_candidates(alive: &BTreeSet<String>) -> Vec<maw_matcher::Resolve
             });
         }
     }
+    candidates.extend(deadend_oracle_candidates());
     candidates
+}
+
+fn attach_not_found_output(target: &str, candidates: &[maw_matcher::ResolveMatch]) -> Result<String, CliOutput> {
+    Err(CliOutput { code: 1, stdout: deadend_suggestions_text("attach", target, candidates), stderr: String::new() })
 }
 
 fn attach_alive_covers_name(alive: &BTreeSet<String>, name: &str) -> bool {
@@ -211,11 +218,18 @@ fn attach_unique_raw_live_match(
     candidates: &[maw_matcher::ResolveMatch],
 ) -> Option<String> {
     let target = target.trim();
+    let normalized_target = target.to_lowercase();
+    let exact = candidates.iter().filter(|matched| {
+        matched.candidate.kind == maw_matcher::ResolveCandidateKind::LiveSession
+            && matched.candidate.name.eq_ignore_ascii_case(target)
+    }).map(|matched| matched.candidate.name.clone()).collect::<Vec<_>>();
+    if exact.len() == 1 { return Some(exact[0].clone()); }
     let matches = candidates
         .iter()
+        .filter(|matched| matched.candidate.kind == maw_matcher::ResolveCandidateKind::LiveSession)
         .filter(|matched| {
-            matched.candidate.kind == maw_matcher::ResolveCandidateKind::LiveSession
-                && matched.candidate.name.eq_ignore_ascii_case(target)
+            matched.candidate.name.eq_ignore_ascii_case(target)
+                || maw_matcher::normalized_match_names(&matched.candidate.name).iter().any(|name| name == &normalized_target)
         })
         .map(|matched| matched.candidate.name.clone())
         .collect::<Vec<_>>();
