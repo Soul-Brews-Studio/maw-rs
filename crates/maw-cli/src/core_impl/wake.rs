@@ -96,6 +96,9 @@ trait WakeTmuxNative {
     fn wake_new_session(&mut self, name: &str, window: &str, cwd: &std::path::Path) -> Result<(), String>;
     fn wake_new_window(&mut self, session: &str, window: &str, cwd: &std::path::Path) -> Result<(), String>;
     fn wake_send_text(&mut self, target: &str, text: &str) -> Result<(), String>;
+    fn wake_send_text_detached(&mut self, target: String, text: String) -> Result<(), String> {
+        self.wake_send_text(&target, &text)
+    }
     fn wake_select_window(&mut self, target: &str) -> Result<(), String>;
 }
 
@@ -131,6 +134,18 @@ impl WakeTmuxNative for WakeNativeTmux {
     fn wake_send_text(&mut self, target: &str, text: &str) -> Result<(), String> {
         wake_validate_tmux_target(target)?;
         TmuxClient::local().send_text(target, text).map(|_| ()).map_err(|error| error.to_string())
+    }
+
+    fn wake_send_text_detached(&mut self, target: String, text: String) -> Result<(), String> {
+        wake_validate_tmux_target(&target)?;
+        std::thread::Builder::new()
+            .name("maw-wake-send-text".to_owned())
+            .spawn(move || {
+                let mut tmux = WakeNativeTmux;
+                let _ = tmux.wake_send_text(&target, &text);
+            })
+            .map(|_| ())
+            .map_err(|error| format!("wake: failed to spawn engine sender: {error}"))
     }
 
     fn wake_select_window(&mut self, target: &str) -> Result<(), String> {
@@ -932,9 +947,16 @@ fn wake_apply(
     let session_exists = tmux.wake_has_session(&resolved.session);
     wake_record_phase(resolved, "session-probe", wake_elapsed_ms(started), out, true);
     let started = std::time::Instant::now();
-    if session_exists { wake_create_or_reuse_window(options, resolved, tmux, out)?; } else { wake_create_session(options, resolved, tmux, out)?; }
+    let deferred_send = if session_exists {
+        wake_create_or_reuse_window(options, resolved, tmux, out)?
+    } else {
+        wake_create_session(options, resolved, tmux, out)?
+    };
     wake_record_phase(resolved, "first-window", wake_elapsed_ms(started), out, true);
     if options.attach {
+        if deferred_send {
+            tmux.wake_send_text_detached(resolved.target.clone(), resolved.command.clone())?;
+        }
         wake_record_phase(resolved, "attach", 0, out, false);
         tmux.wake_select_window(&resolved.target)?;
     }
@@ -983,15 +1005,15 @@ fn wake_run_post_wake_hooks(oracle: &str, session: &str, window: &str, hooks: &[
     }
 }
 
-fn wake_create_session(options: &WakeOptionsNative, resolved: &WakeResolvedNative, tmux: &mut impl WakeTmuxNative, out: &mut String) -> Result<(), String> {
+fn wake_create_session(options: &WakeOptionsNative, resolved: &WakeResolvedNative, tmux: &mut impl WakeTmuxNative, out: &mut String) -> Result<bool, String> {
     tmux.wake_new_session(&resolved.session, &resolved.window, &resolved.repo_path)?;
-    tmux.wake_send_text(&resolved.target, &resolved.command)?;
     if options.attach {
         let _ = writeln!(out, "\x1b[32m+\x1b[0m created session '{}' (main: {})", resolved.session, resolved.window);
-    } else {
-        let _ = writeln!(out, "\x1b[32m+\x1b[0m created session '{}' (attach: maw a {})", resolved.session, resolved.session);
+        return Ok(true);
     }
-    Ok(())
+    tmux.wake_send_text(&resolved.target, &resolved.command)?;
+    let _ = writeln!(out, "\x1b[32m+\x1b[0m created session '{}' (attach: maw a {})", resolved.session, resolved.session);
+    Ok(false)
 }
 
 fn wake_create_or_reuse_window(
@@ -999,16 +1021,20 @@ fn wake_create_or_reuse_window(
     resolved: &WakeResolvedNative,
     tmux: &mut impl WakeTmuxNative,
     out: &mut String,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let windows = tmux.wake_list().into_iter().find(|session| session.name == resolved.session).map(|session| session.windows).unwrap_or_default();
     if !options.new_window && windows.iter().any(|window| window.name == resolved.window) {
         let _ = writeln!(out, "\x1b[32m⚡\x1b[0m '{}' running in {}", resolved.window, resolved.session);
-        return Ok(());
+        return Ok(false);
     }
     tmux.wake_new_window(&resolved.session, &resolved.window, &resolved.repo_path)?;
+    if options.attach {
+        let _ = writeln!(out, "\x1b[32m✅\x1b[0m woke '{}' in {} → {}", resolved.window, resolved.session, resolved.repo_path.display());
+        return Ok(true);
+    }
     tmux.wake_send_text(&resolved.target, &resolved.command)?;
     let _ = writeln!(out, "\x1b[32m✅\x1b[0m woke '{}' in {} → {}", resolved.window, resolved.session, resolved.repo_path.display());
-    Ok(())
+    Ok(false)
 }
 
 fn wake_register_fleet_session(
@@ -1077,6 +1103,10 @@ mod wake_tests {
         }
         fn wake_send_text(&mut self, target: &str, text: &str) -> Result<(), String> {
             self.actions.push(format!("send {target} {text}"));
+            Ok(())
+        }
+        fn wake_send_text_detached(&mut self, target: String, text: String) -> Result<(), String> {
+            self.actions.push(format!("send-detached {target} {text}"));
             Ok(())
         }
         fn wake_select_window(&mut self, target: &str) -> Result<(), String> {
@@ -1551,7 +1581,7 @@ mod wake_tests {
             let (code, stdout) = wake_run(&wake_strings(&["neo", "--attach"]), &mut tmux).expect("run");
             assert_eq!(code, 0, "{stdout}");
             assert_eq!(tmux.actions[0].split_whitespace().next(), Some("new-session"));
-            assert_eq!(tmux.actions[1].split_whitespace().next(), Some("send"));
+            assert_eq!(tmux.actions[1].split_whitespace().next(), Some("send-detached"));
             assert_eq!(tmux.actions[2].split_whitespace().next(), Some("select"));
             let audit = std::fs::read_to_string(root.join("state/audit.jsonl")).expect("audit");
             assert!(audit.contains(r#""event":"wake.phase""#), "{audit}");
