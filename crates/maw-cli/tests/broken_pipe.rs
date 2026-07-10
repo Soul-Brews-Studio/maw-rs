@@ -1,4 +1,5 @@
 use std::{
+    fmt::Write as _,
     process::{Command, Stdio},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -21,11 +22,11 @@ fn audit_closed_stdout_pipe_exits_zero_without_panic() {
 
     let mut audit = String::new();
     for index in 0..50_000 {
-        audit.push_str(&format!(
+        let _ = writeln!(
+            audit,
             r#"{{"ts":"2026-07-10T00:00:{:02}.000Z","cmd":"audit-spam","args":["{index}"],"result":"ok"}}"#,
             index % 60
-        ));
-        audit.push('\n');
+        );
     }
     std::fs::write(maw_state.join("audit.jsonl"), audit).expect("audit log");
 

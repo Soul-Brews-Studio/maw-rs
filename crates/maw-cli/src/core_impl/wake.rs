@@ -539,7 +539,7 @@ fn wake_find_repo(oracle: &str, fleet_entries: &[NativeFleetEntry]) -> Result<Wa
 
 fn wake_resolve_exact_registry_session(target: &str, fleet_entries: &[NativeFleetEntry]) -> Result<Option<WakeTypedResolution>, String> {
     let matches = fleet_entries
-        .into_iter()
+        .iter()
         .filter(|entry| entry.session.name == target || entry.file == target)
         .collect::<Vec<_>>();
     let Some(entry) = matches.first() else { return Ok(None); };
@@ -1556,7 +1556,10 @@ mod wake_tests {
             let audit = std::fs::read_to_string(root.join("state/audit.jsonl")).expect("audit");
             assert!(audit.contains(r#""event":"wake.phase""#), "{audit}");
             assert!(audit.contains(r#""phase":"first-window""#), "{audit}");
-            assert!(audit.contains(r#""phase":"attach","ms":0"#), "{audit}");
+            let first = audit.find(r#""phase":"first-window""#).expect("first-window phase");
+            let attach = audit.find(r#""phase":"attach""#).expect("attach phase");
+            let fleet = audit.find(r#""phase":"fleet-upsert""#).expect("fleet phase");
+            assert!(first < attach && attach < fleet, "{audit}");
             assert!(audit.contains(r#""phase":"fleet-upsert""#), "{audit}");
         });
     }
