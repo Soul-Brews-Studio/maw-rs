@@ -283,7 +283,6 @@ fn completions_usage_sources() -> Vec<(&'static str, String)> {
         ("scaffold", SCAFFOLD_USAGE.to_owned()),
         ("setup", SETUP_USAGE.to_owned()),
         ("snapshots", SNAPSHOTS_USAGE.to_owned()),
-        ("soul-sync", SOULSYNC_USAGE.to_owned()),
         ("split", SPLIT_USAGE.to_owned()),
         ("stop", STOP_USAGE.to_owned()),
         ("stream", STREAM_USAGE.to_owned()),

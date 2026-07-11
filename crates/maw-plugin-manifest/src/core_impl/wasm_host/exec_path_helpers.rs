@@ -201,6 +201,9 @@ fn known_fs_root(
         "cwd" => std::env::current_dir().ok(),
         "maw-cache" => Some(configured_maw_cache_root(home)),
         "maw-legacy" => Some(home.join(".maw")),
+        "fleet-state" => Some(default_state_root().join("fleet")),
+        "fleet-legacy" => Some(home.join(".maw").join("fleet")),
+        "fleet-config" => Some(default_config_root(config_root).join("fleet")),
         "vault" => configured_vault_root(home, config_root, vault_root).ok(),
         _ => None,
     }

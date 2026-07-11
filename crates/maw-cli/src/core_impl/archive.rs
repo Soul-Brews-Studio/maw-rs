@@ -294,10 +294,6 @@ mod archive_tests {
     }
 
     impl SoulsyncHost for ArchiveSoulsyncFakeHost {
-        fn soulsync_current_dir(&mut self) -> std::path::PathBuf { std::path::PathBuf::from(".") }
-        fn soulsync_tmux_cwd(&mut self) -> Option<std::path::PathBuf> { None }
-        fn soulsync_git_common_dir(&mut self, _: &std::path::Path) -> Option<std::path::PathBuf> { None }
-        fn soulsync_git_top_level(&mut self, _: &std::path::Path) -> Option<std::path::PathBuf> { None }
         fn soulsync_now(&mut self) -> String { self.now.clone() }
     }
 
