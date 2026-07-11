@@ -1,10 +1,10 @@
 use axum::{
     body::{Body, Bytes},
     extract::{ConnectInfo, Path as AxumPath, Query, State},
-    http::{HeaderMap, Method, Request, StatusCode, Uri},
+    http::{HeaderMap, HeaderValue, Method, Request, StatusCode, Uri},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{any, get, post},
     Json, Router,
 };
 use rand::RngCore;
@@ -12,7 +12,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::HashSet,
-    net::{IpAddr, SocketAddr},
+    net::{IpAddr, SocketAddr, TcpListener, TcpStream},
+    path::PathBuf,
+    process::{Child, Command, Stdio},
     sync::{Arc, Mutex},
 };
 #[cfg(test)]
@@ -49,7 +51,7 @@ struct ServeState {
     api_token_auth: ServeApiTokenAuth,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 struct ServePluginRoute {
     name: String,
     command: Option<String>,
@@ -57,6 +59,15 @@ struct ServePluginRoute {
     health_path: String,
     events: Vec<String>,
     event_path: Option<String>,
+    dir: PathBuf,
+    process: Arc<Mutex<Option<ServePluginProcess>>>,
+}
+
+#[derive(Debug)]
+struct ServePluginProcess { port: u16, child: Child }
+
+impl Drop for ServePluginProcess {
+    fn drop(&mut self) { let _ = self.child.kill(); }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -504,6 +515,8 @@ fn serve_discover_plugin_routes() -> Vec<ServePluginRoute> {
                 health_path,
                 events: serve.events.unwrap_or_default(),
                 event_path,
+                dir: plugin.dir,
+                process: Arc::new(Mutex::new(None)),
             })
         })
         .filter(|route| {
@@ -543,6 +556,11 @@ fn serve_mount_plugin_routes(
     plugin_routes: &[ServePluginRoute],
 ) -> Router<Arc<ServeState>> {
     for route in plugin_routes {
+        if route.command.is_some() {
+            router = router
+                .route(&route.prefix, any(api_plugin_serve_proxy))
+                .route(&format!("{}/*path", route.prefix), any(api_plugin_serve_proxy));
+        }
         router = router.route(&route.health_path, get(api_plugin_serve_health));
         if let Some(event_path) = &route.event_path {
             router = router.route(event_path, get(api_plugin_serve_events));
@@ -554,16 +572,27 @@ fn serve_mount_plugin_routes(
 async fn api_plugin_serve_health(
     State(state): State<Arc<ServeState>>,
     uri: Uri,
-) -> impl IntoResponse {
-    serve_plugin_route_for_path(&state, uri.path()).map_or_else(
-        || (StatusCode::NOT_FOUND, Json(json!({"ok": false, "error": "plugin route not found"}))),
-        |route| {
-            (
-                StatusCode::OK,
-                Json(json!({"ok": true, "plugin": route.name, "prefix": route.prefix, "command": route.command, "health": route.health_path})),
-            )
-        },
-    )
+) -> Response {
+    let Some(route) = serve_plugin_route_for_path(&state, uri.path()) else {
+        return (StatusCode::NOT_FOUND, Json(json!({"ok": false, "error": "plugin route not found"}))).into_response();
+    };
+    if route.command.is_some() && serve_plugin_process_running(route) {
+        return serve_proxy_to_plugin(route, Method::GET, &uri, HeaderMap::new(), Bytes::new()).await;
+    }
+    (StatusCode::OK, Json(json!({"ok": true, "plugin": route.name, "prefix": route.prefix, "command": route.command, "health": route.health_path}))).into_response()
+}
+
+async fn api_plugin_serve_proxy(
+    State(state): State<Arc<ServeState>>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let Some(route) = serve_plugin_route_for_prefix(&state, uri.path()) else {
+        return (StatusCode::NOT_FOUND, Json(json!({"ok": false, "error": "plugin route not found"}))).into_response();
+    };
+    serve_proxy_to_plugin(route, method, &uri, headers, body).await
 }
 
 async fn api_plugin_serve_events(
@@ -581,6 +610,83 @@ fn serve_plugin_route_for_path<'a>(state: &'a ServeState, path: &str) -> Option<
         .plugin_serve_routes
         .iter()
         .find(|route| route.health_path == path || route.event_path.as_deref() == Some(path))
+}
+
+fn serve_plugin_route_for_prefix<'a>(state: &'a ServeState, path: &str) -> Option<&'a ServePluginRoute> {
+    state.plugin_serve_routes.iter().filter(|route| route.command.is_some()).find(|route| path == route.prefix || path.starts_with(&format!("{}/", route.prefix)))
+}
+
+fn serve_plugin_process_running(route: &ServePluginRoute) -> bool {
+    let mut guard = route.process.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(process) = guard.as_mut() else { return false; };
+    if let Ok(None) = process.child.try_wait() { return true; }
+    *guard = None;
+    false
+}
+
+fn serve_plugin_process_port(route: &ServePluginRoute) -> Result<u16, String> {
+    {
+        let mut guard = route.process.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(process) = guard.as_mut() {
+            if process.child.try_wait().map_err(|error| error.to_string())?.is_none() { return Ok(process.port); }
+            *guard = None;
+        }
+    }
+    let port = serve_allocate_loopback_port()?;
+    let command = route.command.as_deref().ok_or_else(|| "missing engine.serve.command".to_owned())?;
+    let argv = command.split_whitespace().map(str::to_owned).collect::<Vec<_>>();
+    let (program, command_args) = argv.split_first().ok_or_else(|| "empty engine.serve.command".to_owned())?;
+    let child = Command::new(program).args(command_args).current_dir(&route.dir)
+        .env("PORT", port.to_string()).env("MAW_ENGINE_SERVE_PORT", port.to_string()).env("MAW_ENGINE_SERVE_PREFIX", &route.prefix)
+        .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()
+        .map_err(|error| format!("spawn {}: {error}", route.name))?;
+    let mut guard = route.process.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    *guard = Some(ServePluginProcess { port, child });
+    serve_wait_loopback_port(port);
+    Ok(port)
+}
+
+fn serve_allocate_loopback_port() -> Result<u16, String> {
+    TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).and_then(|listener| listener.local_addr()).map(|addr| addr.port()).map_err(|error| format!("allocate plugin port: {error}"))
+}
+
+fn serve_wait_loopback_port(port: u16) {
+    for _ in 0..20 {
+        if TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port)).is_ok() { return; }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+}
+
+async fn serve_proxy_to_plugin(route: &ServePluginRoute, method: Method, uri: &Uri, headers: HeaderMap, body: Bytes) -> Response {
+    let port = match serve_plugin_process_port(route) {
+        Ok(port) => port,
+        Err(error) => return (StatusCode::BAD_GATEWAY, Json(json!({"ok": false, "error": error, "plugin": route.name}))).into_response(),
+    };
+    let target = format!("http://127.0.0.1:{port}{}", uri.path_and_query().map_or_else(|| uri.path().to_owned(), ToString::to_string));
+    let req_method = match reqwest::Method::from_bytes(method.as_str().as_bytes()) {
+        Ok(method) => method,
+        Err(error) => return (StatusCode::BAD_REQUEST, Json(json!({"ok": false, "error": format!("bad method: {error}")}))).into_response(),
+    };
+    let client = reqwest::Client::new();
+    let mut request = client.request(req_method, target).body(body.to_vec());
+    if let Some(content_type) = headers.get(axum::http::header::CONTENT_TYPE) {
+        request = request.header(reqwest::header::CONTENT_TYPE, content_type.as_bytes());
+    }
+    match request.send().await {
+        Ok(response) => serve_proxy_response(response).await,
+        Err(error) => (StatusCode::BAD_GATEWAY, Json(json!({"ok": false, "error": format!("proxy failed: {error}"), "plugin": route.name}))).into_response(),
+    }
+}
+
+async fn serve_proxy_response(response: reqwest::Response) -> Response {
+    let status = StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let content_type = response.headers().get(reqwest::header::CONTENT_TYPE).cloned();
+    let bytes = response.bytes().await.unwrap_or_default();
+    let mut out = (status, Body::from(bytes)).into_response();
+    if let Some(value) = content_type.and_then(|value| HeaderValue::from_bytes(value.as_bytes()).ok()) {
+        out.headers_mut().insert(axum::http::header::CONTENT_TYPE, value);
+    }
+    out
 }
 
 async fn api_send(
@@ -3136,9 +3242,24 @@ mod serve_tests {
                 health_path: "/api/testext/health".to_owned(),
                 events: Vec::new(),
                 event_path: None,
+                dir: std::env::temp_dir(),
+                process: Arc::new(Mutex::new(None)),
             }],
             api_token_auth,
         })
+    }
+
+    fn serve_test_proxy_route(port: u16, child: Child) -> ServePluginRoute {
+        ServePluginRoute {
+            name: "testext".to_owned(),
+            command: Some("sleep 60".to_owned()),
+            prefix: "/api/testext".to_owned(),
+            health_path: "/api/testext/health".to_owned(),
+            events: Vec::new(),
+            event_path: None,
+            dir: std::env::temp_dir(),
+            process: Arc::new(Mutex::new(Some(ServePluginProcess { port, child }))),
+        }
     }
 
     fn signed_trust_request(method: &str, uri: &str, auth_path: &str, body: &'static str) -> axum::http::Request<Body> {
@@ -4313,6 +4434,48 @@ mod serve_tests {
             .await
             .expect("send legacy");
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn serve_plugin_engine_command_prefix_http_proxies_when_process_is_up() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.expect("bind upstream");
+        let port = listener.local_addr().expect("addr").port();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept upstream");
+            let mut buf = [0_u8; 1024];
+            let n = stream.read(&mut buf).await.expect("read request");
+            let request = String::from_utf8_lossy(&buf[..n]);
+            assert!(request.starts_with("GET /api/testext/assets/app.js?x=1 "));
+            stream.write_all(b"HTTP/1.1 202 Accepted\r\ncontent-type: text/plain\r\ncontent-length: 7\r\n\r\nproxied").await.expect("write response");
+        });
+        let child = Command::new("sleep").arg("60").spawn().expect("sleep child");
+        let app = serve_test_app_with_plugin_routes(vec![serve_test_proxy_route(port, child)]);
+        let response = app.oneshot(axum::http::Request::get("/api/testext/assets/app.js?x=1").body(Body::empty()).unwrap()).await.expect("proxy response");
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024).await.expect("body");
+        assert_eq!(&body[..], b"proxied");
+    }
+
+    #[tokio::test]
+    async fn serve_plugin_health_falls_back_when_command_process_is_down() {
+        let route = ServePluginRoute {
+            name: "testext".to_owned(),
+            command: Some("sleep 60".to_owned()),
+            prefix: "/api/testext".to_owned(),
+            health_path: "/api/testext/health".to_owned(),
+            events: Vec::new(),
+            event_path: None,
+            dir: std::env::temp_dir(),
+            process: Arc::new(Mutex::new(None)),
+        };
+        let app = serve_test_app_with_plugin_routes(vec![route]);
+        let response = app.oneshot(axum::http::Request::get("/api/testext/health").body(Body::empty()).unwrap()).await.expect("health");
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = response_json(response).await;
+        assert_eq!(payload["plugin"], "testext");
+        assert_eq!(payload["command"], "sleep 60");
     }
 
     #[tokio::test]
