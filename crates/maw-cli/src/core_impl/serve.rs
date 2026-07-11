@@ -44,6 +44,17 @@ struct ServeState {
     #[cfg(test)]
     serve_core_state_override: Option<crate::serve_core::ServecoreSharedState>,
     trust_store_path: std::path::PathBuf,
+    plugin_serve_routes: Vec<ServePluginRoute>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ServePluginRoute {
+    name: String,
+    command: Option<String>,
+    prefix: String,
+    health_path: String,
+    events: Vec<String>,
+    event_path: Option<String>,
 }
 
 trait ServeDelivery: Send + Sync {
@@ -205,6 +216,7 @@ async fn run_serve_async_impl(raw_args: &[String]) -> CliOutput {
         #[cfg(test)]
         serve_core_state_override: None,
         trust_store_path: trust_store_path(),
+        plugin_serve_routes: serve_discover_plugin_routes(),
     });
     println!("maw-rs serve listening http://{local_addr}");
     match axum::serve(
@@ -364,10 +376,12 @@ fn serve_core_state(state: &ServeState) -> crate::serve_core::ServecoreSharedSta
 
 fn serve_router(state: ServeState) -> Router {
     let serve_core_state = serve_core_state(&state);
+    let plugin_serve_routes = state.plugin_serve_routes.clone();
     let state = Arc::new(state);
     let router = Router::new();
     let router = crate::serve_core::servecore_mount_core_routes(router);
     let router = crate::serve_core::modules::servecore_mount_modules(router, &[]);
+    let router = serve_mount_plugin_routes(router, &plugin_serve_routes);
     let router = router
         .route("/api/send", post(api_send))
         .route("/api/feed", get(api_feed_get).post(api_feed_post))
@@ -398,6 +412,119 @@ fn serve_router(state: ServeState) -> Router {
     let router = crate::serve_core::servecore_apply_pipeline(router);
     let router = crate::serve_core::servecore_with_shared_state(router, serve_core_state);
     router.with_state(state)
+}
+
+fn serve_discover_plugin_routes() -> Vec<ServePluginRoute> {
+    maw_plugin_manifest::discover_packages(&maw_plugin_manifest::DiscoverPackagesOptions::default())
+        .plugins
+        .into_iter()
+        .filter_map(|plugin| {
+            let serve = plugin.manifest.engine?.serve?;
+            let name = plugin.manifest.name;
+            let Some(prefix) = serve.prefix else {
+                eprintln!("maw serve: skipping plugin {name}: engine.serve.prefix missing");
+                return None;
+            };
+            let Some(health_path) =
+                serve_join_plugin_path(&prefix, serve.health.as_deref().unwrap_or("/health"))
+            else {
+                eprintln!("maw serve: skipping plugin {name}: invalid engine.serve health path");
+                return None;
+            };
+            let event_path = match serve.event_path.as_deref() {
+                Some(path) => {
+                    let Some(joined) = serve_join_plugin_path(&prefix, path) else {
+                        eprintln!("maw serve: skipping plugin {name}: invalid engine.serve eventPath");
+                        return None;
+                    };
+                    Some(joined)
+                },
+                None => None,
+            };
+            Some(ServePluginRoute {
+                name,
+                command: serve.command,
+                prefix,
+                health_path,
+                events: serve.events.unwrap_or_default(),
+                event_path,
+            })
+        })
+        .filter(|route| {
+            let collides = serve_plugin_route_collides(route);
+            if collides {
+                eprintln!(
+                    "maw serve: skipping plugin {}: engine.serve prefix {} collides with core route",
+                    route.name, route.prefix
+                );
+            }
+            !collides
+        })
+        .collect()
+}
+
+fn serve_join_plugin_path(prefix: &str, path: &str) -> Option<String> {
+    if !prefix.starts_with("/api/") || !path.starts_with('/') {
+        return None;
+    }
+    Some(format!("{}{}", prefix.trim_end_matches('/'), path))
+}
+
+fn serve_plugin_route_collides(route: &ServePluginRoute) -> bool {
+    const CORE_PREFIXES: &[&str] = &[
+        "/api/agents", "/api/capture", "/api/feed", "/api/health", "/api/message-ledger",
+        "/api/orchestration", "/api/plugins", "/api/probe", "/api/requests", "/api/reply",
+        "/api/request", "/api/send", "/api/serve-core", "/api/sessions", "/api/transport",
+        "/api/triggers", "/api/trust", "/api/wake", "/api/workspace", "/api/worktrees",
+    ];
+    CORE_PREFIXES
+        .iter()
+        .any(|core| route.prefix == *core || route.prefix.starts_with(&format!("{core}/")))
+}
+
+fn serve_mount_plugin_routes(
+    mut router: Router<Arc<ServeState>>,
+    plugin_routes: &[ServePluginRoute],
+) -> Router<Arc<ServeState>> {
+    for route in plugin_routes {
+        router = router.route(&route.health_path, get(api_plugin_serve_health));
+        if let Some(event_path) = &route.event_path {
+            router = router.route(event_path, get(api_plugin_serve_events));
+        }
+    }
+    router
+}
+
+async fn api_plugin_serve_health(
+    State(state): State<Arc<ServeState>>,
+    uri: Uri,
+) -> impl IntoResponse {
+    serve_plugin_route_for_path(&state, uri.path()).map_or_else(
+        || (StatusCode::NOT_FOUND, Json(json!({"ok": false, "error": "plugin route not found"}))),
+        |route| {
+            (
+                StatusCode::OK,
+                Json(json!({"ok": true, "plugin": route.name, "prefix": route.prefix, "command": route.command, "health": route.health_path})),
+            )
+        },
+    )
+}
+
+async fn api_plugin_serve_events(
+    State(state): State<Arc<ServeState>>,
+    uri: Uri,
+) -> impl IntoResponse {
+    serve_plugin_route_for_path(&state, uri.path()).map_or_else(
+        || (StatusCode::NOT_FOUND, Json(json!({"ok": false, "error": "plugin route not found"}))),
+        |route| (StatusCode::OK, Json(json!({"ok": true, "plugin": route.name, "events": route.events}))),
+    )
+}
+
+fn serve_plugin_route_for_path<'a>(state: &'a ServeState, path: &str) -> Option<&'a ServePluginRoute> {
+    state
+        .plugin_serve_routes
+        .iter()
+        .find(|route| route.health_path == path || route.event_path.as_deref() == Some(path))
 }
 
 async fn api_send(
@@ -2875,6 +3002,26 @@ mod serve_tests {
             now_override: Some(1_782_277_200),
             serve_core_state_override: None,
             trust_store_path,
+            plugin_serve_routes: Vec::new(),
+        })
+    }
+
+    fn serve_test_app_with_plugin_routes(plugin_serve_routes: Vec<ServePluginRoute>) -> Router {
+        serve_router(ServeState {
+            cached_pubkey: Some(KEY.to_owned()),
+            peer_pubkeys: Vec::new(),
+            workspace_key: Some(KEY.to_owned()),
+            workspaces: Mutex::new(WorkspaceStore::default()),
+            requests: Mutex::new(RequestReplyStore::default()),
+            delivery: serve_test_delivery(),
+            receiver_inbox: serve_test_receiver_inbox(),
+            delivery_idempotency: Mutex::new(DeliveryIdempotencyStore::default()),
+            feed: Mutex::new(Vec::new()),
+            peer_addr_override: Some(NON_LOOPBACK_TEST_PEER),
+            now_override: Some(1_782_277_200),
+            serve_core_state_override: None,
+            trust_store_path: serve_test_trust_store_path("plugins"),
+            plugin_serve_routes,
         })
     }
 
@@ -2965,6 +3112,7 @@ mod serve_tests {
             now_override: Some(now),
             serve_core_state_override: None,
             trust_store_path: serve_test_trust_store_path("o6"),
+            plugin_serve_routes: Vec::new(),
         })
     }
 
@@ -3972,6 +4120,7 @@ mod serve_tests {
             now_override: Some(1_782_277_200),
             serve_core_state_override: None,
             trust_store_path: serve_test_trust_store_path("server"),
+            plugin_serve_routes: Vec::new(),
         });
         let (tx, rx) = oneshot::channel::<()>();
         tokio::spawn(async move {
@@ -4048,6 +4197,80 @@ mod serve_tests {
         assert_eq!(response.status(), StatusCode::OK);
     }
 
+
+    #[tokio::test]
+    async fn serve_mounts_discovered_plugin_engine_serve_health_and_skips_bad_manifest() {
+        let (root, plugin_routes) = {
+            let _guard = env_test_lock().lock().unwrap_or_else(|error| error.into_inner());
+            let _plugins_restore = EnvVarRestore::capture("MAW_PLUGINS_DIR");
+            let root = std::env::temp_dir().join(format!(
+                "maw-serve-plugin-{}-{}",
+                std::process::id(),
+                random_hex(4)
+            ));
+            let plugins = root.join("plugins");
+            serve_write_plugin(
+                &plugins,
+                "testext",
+                &json!({"prefix": "/api/testext", "health": "/health", "events": ["ready"], "eventPath": "/events"}),
+            );
+            serve_write_plugin(&plugins, "badext", &json!({"prefix": "/not-api/bad"}));
+            std::env::set_var("MAW_PLUGINS_DIR", &plugins);
+            (root, serve_discover_plugin_routes())
+        };
+
+        let app = serve_test_app_with_plugin_routes(plugin_routes);
+        let health = app
+            .clone()
+            .oneshot(
+                axum::http::Request::get("/api/testext/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("plugin health");
+        assert_eq!(health.status(), StatusCode::OK);
+        let payload = response_json(health).await;
+        assert_eq!(payload["ok"], true);
+        assert_eq!(payload["plugin"], "testext");
+        assert_eq!(payload["prefix"], "/api/testext");
+
+        let missing = app
+            .clone()
+            .oneshot(
+                axum::http::Request::get("/not-api/bad/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("bad plugin skipped");
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        let core = app
+            .oneshot(axum::http::Request::get("/api/health").body(Body::empty()).unwrap())
+            .await
+            .expect("core health");
+        assert_eq!(core.status(), StatusCode::OK);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn serve_write_plugin(root: &std::path::Path, name: &str, serve: &Value) {
+        let dir = root.join(name);
+        std::fs::create_dir_all(&dir).expect("plugin dir");
+        std::fs::write(dir.join("index.ts"), "export default async function run() {}\n").expect("entry");
+        std::fs::write(
+            dir.join("plugin.json"),
+            serde_json::to_vec_pretty(&json!({
+                "name": name,
+                "version": "1.0.0",
+                "sdk": "*",
+                "target": "js",
+                "entry": "index.ts",
+                "engine": {"serve": serve}
+            }))
+            .expect("manifest json"),
+        )
+        .expect("manifest");
+    }
 
     #[tokio::test]
     async fn serve_trust_live_is_auth_gated_atomic_redacted_and_tofu_safe() {
@@ -4276,6 +4499,7 @@ mod serve_tests {
             now_override: Some(1_782_277_200),
             serve_core_state_override: Some(fake_core),
             trust_store_path: serve_test_trust_store_path("agents"),
+            plugin_serve_routes: Vec::new(),
         });
         let (tx, rx) = oneshot::channel::<()>();
         tokio::spawn(async move {
