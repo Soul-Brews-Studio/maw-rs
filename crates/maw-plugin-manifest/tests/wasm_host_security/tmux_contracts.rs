@@ -128,3 +128,33 @@ fn tmux_send_host_allows_destructive_send_with_force_cap() {
     );
 }
 
+#[test]
+fn tmux_command_host_requires_manage_cap_and_restricts_argv() {
+    let dir = temp("tmux-command");
+    let denied = call(
+        &host(&dir, &["tmux:read"]),
+        "maw.tmux.command",
+        &json!({"command":"unlink-window","args":["-t","view:oracle"]}),
+    );
+    assert_eq!(denied["code"], "capability_denied", "{denied}");
+
+    let host = host(&dir, &["tmux:raw:new-session", "tmux:raw:unlink-window"])
+        .with_tmux_dry_run();
+    let invalid = call(
+        &host,
+        "maw.tmux.command",
+        &json!({"command":"new-session","args":["-d","-s","view","sh","-c","id"]}),
+    );
+    assert_eq!(invalid["code"], "invalid_args", "{invalid}");
+
+    let allowed = call(
+        &host,
+        "maw.tmux.command",
+        &json!({"command":"unlink-window","args":["-t","view:oracle"]}),
+    );
+    assert_eq!(allowed["ok"], true, "{allowed}");
+    assert!(
+        host.audit_json_lines()
+            .contains("\"capability\":\"tmux:raw:unlink-window\"")
+    );
+}

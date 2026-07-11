@@ -20,12 +20,27 @@ fn temp_dir(name: &str) -> PathBuf {
 }
 
 fn run(args: &[&str], maw_home: &Path) -> std::process::Output {
-    Command::new(bin())
+    let mut command = Command::new(bin());
+    command
         .args(args)
         .env("MAW_HOME", maw_home)
-        .env("MAW_JS_REF_DIR", "/nonexistent")
-        .output()
-        .expect("run maw-rs")
+        .env("MAW_JS_REF_DIR", "/nonexistent");
+    if args.first() == Some(&"stream") {
+        let plugin = maw_home.join("plugins/stream");
+        fs::create_dir_all(&plugin).expect("stream plugin dir");
+        fs::write(
+            plugin.join("plugin.json"),
+            include_str!("fixtures/native-interactive/stream-plugin/plugin.json"),
+        )
+        .expect("stream plugin json");
+        fs::write(
+            plugin.join("plugin.wasm"),
+            include_bytes!("fixtures/native-interactive/stream-plugin/plugin.wasm"),
+        )
+        .expect("stream plugin wasm");
+        command.env("MAW_PLUGINS_DIR", maw_home.join("plugins"));
+    }
+    command.output().expect("run maw-rs")
 }
 
 fn assert_stdout_golden(name: &str, args: &[&str], expected: &str) {

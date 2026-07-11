@@ -123,6 +123,54 @@ impl MawWasmHost {
         )
     }
 
+    fn tmux_command(&self, input: &str) -> HostResult<Value> {
+        let start = Instant::now();
+        let args = match parse_args::<TmuxCommandArgs>(input) {
+            Ok(args) => args,
+            Err(err) => return err,
+        };
+        let capability = if matches!(args.command.as_str(), "display-message" | "show-options") {
+            "tmux:read".to_owned()
+        } else {
+            format!("tmux:raw:{}", args.command)
+        };
+        if !self.has_exact_cap(&capability) {
+            return HostResult::err(
+                HostErrorCode::CapabilityDenied,
+                format!("capability denied: {capability}"),
+            );
+        }
+        if !valid_tmux_command_argv(&args.command, &args.args) {
+            return HostResult::err(
+                HostErrorCode::InvalidArgs,
+                "tmux command or arguments are outside the managed ABI",
+            );
+        }
+        let output = if self.tmux_dry_run {
+            String::new()
+        } else {
+            let mut runner = CommandTmuxRunner::new();
+            match maw_tmux::TmuxRunner::run(&mut runner, &args.command, &args.args) {
+                Ok(output) => output,
+                Err(error) => return HostResult::err(HostErrorCode::IoError, error.message),
+            }
+        };
+        let resource = format!("tmux://{}", args.command);
+        let result = HostResult::ok(json!({
+            "command": args.command,
+            "args": args.args,
+            "stdout": output,
+        }));
+        self.audit(
+            "maw.tmux.command",
+            &capability,
+            &resource,
+            status_of(&result),
+            start,
+        );
+        result
+    }
+
     fn tmux_send_enter(&self, input: &str) -> HostResult<Value> {
         let args = match parse_args::<TmuxEnterArgs>(input) {
             Ok(args) => args,
@@ -191,4 +239,49 @@ impl MawWasmHost {
         }
     }
 
+}
+
+fn valid_tmux_command_argv(command: &str, args: &[String]) -> bool {
+    let safe = |value: &str| {
+        !value.is_empty()
+            && value == value.trim()
+            && !value.starts_with('-')
+            && !value.chars().any(char::is_control)
+    };
+    match (command, args) {
+        ("display-message", [print, format]) => print == "-p" && format == "#{session_name}",
+        ("show-options", [target, session, global, option]) => {
+            target == "-t" && safe(session) && global == "-gv" && option == "base-index"
+        }
+        ("new-session", [detached, session_flag, session, name_flag, name]) => {
+            detached == "-d"
+                && session_flag == "-s"
+                && safe(session)
+                && name_flag == "-n"
+                && name == "maw-stream-placeholder"
+        }
+        ("link-window", [detached, source_flag, source, target_flag, target]) => {
+            detached == "-d"
+                && source_flag == "-s"
+                && safe(source)
+                && target_flag == "-t"
+                && safe(target)
+        }
+        ("rename-window", [target_flag, target, alias]) => {
+            target_flag == "-t" && safe(target) && safe(alias) && !alias.contains(':')
+        }
+        ("set-window-option", [target_flag, target, key, source]) => {
+            target_flag == "-t"
+                && safe(target)
+                && key == "@maw-linked-from"
+                && safe(source)
+        }
+        ("kill-window", [target_flag, target]) => {
+            target_flag == "-t"
+                && safe(target)
+                && target.ends_with(":maw-stream-placeholder")
+        }
+        ("unlink-window", [target_flag, target]) => target_flag == "-t" && safe(target),
+        _ => false,
+    }
 }

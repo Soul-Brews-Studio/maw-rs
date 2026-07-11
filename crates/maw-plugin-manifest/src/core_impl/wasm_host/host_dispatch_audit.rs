@@ -49,6 +49,7 @@ impl MawWasmHost {
             "maw.tmux.capture" => to_json(&self.tmux_capture(input)),
             "maw.tmux.send_keys" => to_json(&self.tmux_send_keys(input)),
             "maw.tmux.run" => to_json(&self.tmux_run(input)),
+            "maw.tmux.command" => to_json(&self.tmux_command(input)),
             "maw.tmux.send_enter" => to_json(&self.tmux_send_enter(input)),
             "maw.tmux.tags_read" => to_json(&self.tmux_tags_read(input)),
             "maw.tmux.tags_write" => to_json(&self.tmux_tags_write(input)),

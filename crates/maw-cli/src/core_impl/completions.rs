@@ -287,7 +287,6 @@ fn completions_usage_sources() -> Vec<(&'static str, String)> {
         ("soul-sync", SOULSYNC_USAGE.to_owned()),
         ("split", SPLIT_USAGE.to_owned()),
         ("stop", STOP_USAGE.to_owned()),
-        ("stream", STREAM_USAGE.to_owned()),
         ("t", TEAM_USAGE.to_owned()),
         ("talk-to", TALKTO_USAGE.to_owned()),
         ("team", TEAM_USAGE.to_owned()),

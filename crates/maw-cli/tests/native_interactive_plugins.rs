@@ -31,6 +31,28 @@ fn run(args: &[&str], maw_home: &Path) -> std::process::Output {
         .expect("run maw-rs")
 }
 
+fn run_stream(args: &[&str], root: &Path) -> std::process::Output {
+    let plugin = root.join("plugins/stream");
+    fs::create_dir_all(&plugin).expect("stream plugin dir");
+    fs::write(
+        plugin.join("plugin.json"),
+        include_str!("fixtures/native-interactive/stream-plugin/plugin.json"),
+    )
+    .expect("stream plugin json");
+    fs::write(
+        plugin.join("plugin.wasm"),
+        include_bytes!("fixtures/native-interactive/stream-plugin/plugin.wasm"),
+    )
+    .expect("stream plugin wasm");
+    Command::new(bin())
+        .args(args)
+        .env("MAW_HOME", root)
+        .env("MAW_JS_REF_DIR", "/nonexistent")
+        .env("MAW_PLUGINS_DIR", root.join("plugins"))
+        .output()
+        .expect("run stream plugin")
+}
+
 #[test]
 fn interactive_plugin_commands_are_native_not_bun_fallback() {
     for command in ["init", "tmux", "view", "split"] {
@@ -174,13 +196,8 @@ fn init_interactive_wizard_uses_isolated_pty_when_script_is_available() {
 
 #[test]
 fn subset2_commands_are_native_not_bun_fallback() {
-    for command in ["stream", "attach-ssh"] {
-        assert_eq!(
-            dispatcher_status(command),
-            DispatchKind::Native,
-            "{command}"
-        );
-    }
+    assert_eq!(dispatcher_status("stream"), DispatchKind::NativeError);
+    assert_eq!(dispatcher_status("attach-ssh"), DispatchKind::Native);
 }
 
 #[test]
@@ -267,7 +284,7 @@ fn attach_ssh_refuses_unsafe_session_before_ssh() {
 #[test]
 fn stream_unlink_dry_run_matches_committed_golden_without_ref_checkout() {
     let root = temp_dir("stream-unlink-dry-run");
-    let output = run(&["stream", "--unlink", "view:oracle", "--dry-run"], &root);
+    let output = run_stream(&["stream", "--unlink", "view:oracle", "--dry-run"], &root);
 
     assert!(
         output.status.success(),
@@ -284,7 +301,7 @@ fn stream_unlink_dry_run_matches_committed_golden_without_ref_checkout() {
 #[test]
 fn stream_unlink_plan_json_matches_committed_golden_without_ref_checkout() {
     let root = temp_dir("stream-unlink-plan-json");
-    let output = run(&["stream", "--unlink", "view:oracle", "--plan-json"], &root);
+    let output = run_stream(&["stream", "--unlink", "view:oracle", "--plan-json"], &root);
 
     assert!(
         output.status.success(),

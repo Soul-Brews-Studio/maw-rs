@@ -147,6 +147,12 @@ struct TmuxRunArgs {
     text: String,
 }
 #[derive(Debug, Deserialize)]
+struct TmuxCommandArgs {
+    command: String,
+    #[serde(default)]
+    args: Vec<String>,
+}
+#[derive(Debug, Deserialize)]
 struct TmuxEnterArgs {
     target: String,
     count: Option<u32>,

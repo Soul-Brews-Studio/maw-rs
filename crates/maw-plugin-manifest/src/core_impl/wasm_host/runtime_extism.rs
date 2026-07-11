@@ -100,6 +100,7 @@ pub const HOST_FN_NAMES: &[&str] = &[
     "maw.tmux.capture",
     "maw.tmux.send_keys",
     "maw.tmux.run",
+    "maw.tmux.command",
     "maw.tmux.send_enter",
     "maw.tmux.tags_read",
     "maw.tmux.tags_write",

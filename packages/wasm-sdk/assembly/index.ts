@@ -17,6 +17,7 @@ import { length } from "@extism/as-pdk/lib/env";
 @external("extism:host/user", "maw.tmux.list_sessions") declare function mawTmuxListSessions(input: u64): u64;
 @external("extism:host/user", "maw.tmux.capture") declare function mawTmuxCapture(input: u64): u64;
 @external("extism:host/user", "maw.tmux.send_keys") declare function mawTmuxSendKeys(input: u64): u64;
+@external("extism:host/user", "maw.tmux.command") declare function mawTmuxCommand(input: u64): u64;
 @external("extism:host/user", "maw.tmux.tags_read") declare function mawTmuxTagsRead(input: u64): u64;
 @external("extism:host/user", "maw.tmux.tags_write") declare function mawTmuxTagsWrite(input: u64): u64;
 @external("extism:host/user", "maw.http.peer_send") declare function mawHttpPeerSend(input: u64): u64;
@@ -154,6 +155,7 @@ export function localserverRequest(argsJson: string): string { return call(mawLo
 export function listSessions(argsJson: string = "{}"): string { return call(mawTmuxListSessions, argsJson); }
 export function capture(argsJson: string): string { return call(mawTmuxCapture, argsJson); }
 export function sendKeys(argsJson: string): string { return call(mawTmuxSendKeys, argsJson); }
+export function tmuxCommand(argsJson: string): string { return call(mawTmuxCommand, argsJson); }
 export function readPaneTags(argsJson: string): string { return call(mawTmuxTagsRead, argsJson); }
 export function tagPane(argsJson: string): string { return call(mawTmuxTagsWrite, argsJson); }
 export function cmdSend(argsJson: string): string { return call(mawHttpPeerSend, argsJson); }
