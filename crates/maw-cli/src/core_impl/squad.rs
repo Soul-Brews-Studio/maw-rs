@@ -1,10 +1,21 @@
 const DISPATCH_333: &[DispatcherEntry] = &[DispatcherEntry { command: "squad", handler: Handler::Sync(run_squad_command) }];
 
 fn run_squad_command(argv: &[String]) -> CliOutput {
+    if squad_plugin_owned_args(argv) {
+        return CliOutput {
+            code: 2,
+            stdout: String::new(),
+            stderr: "squad: unknown native subcommand\n".to_owned(),
+        };
+    }
     match squad_run(argv) {
         Ok(stdout) => CliOutput { code: 0, stdout, stderr: String::new() },
         Err(message) => CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") },
     }
+}
+
+fn squad_plugin_owned_args(argv: &[String]) -> bool {
+    !matches!(argv.first().map(String::as_str), Some("token" | "import"))
 }
 
 fn squad_run(argv: &[String]) -> Result<String, String> {
@@ -140,5 +151,13 @@ mod squad_tests {
         let saved: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(core).expect("core squad")).expect("json");
         assert_eq!(saved["token"], "duo");
         assert_eq!(saved["members"][0]["handle"], "token");
+    }
+
+    #[test]
+    fn squad_start_is_a_plugin_fallthrough_miss_not_native_usage() {
+        let output = run_squad_command(&args(&["start"]));
+
+        assert_eq!(output.code, 2);
+        assert_eq!(output.stderr, "squad: unknown native subcommand\n");
     }
 }

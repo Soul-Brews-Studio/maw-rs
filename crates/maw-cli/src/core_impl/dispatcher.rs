@@ -473,7 +473,7 @@ fn looks_like_top_level_unknown_args(argv: &[String], stderr: &str) -> bool {
 }
 
 fn native_plugin_fallthrough_command(command: &str) -> bool {
-    command == "cross-team-queue"
+    command == "cross-team-queue" || command == "squad"
 }
 
 fn cli_dispatch_log_command(command: &str, args: &[String]) {
