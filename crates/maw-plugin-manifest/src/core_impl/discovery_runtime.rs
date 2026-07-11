@@ -64,6 +64,9 @@ fn invoke_context_json(ctx: &InvokeContext) -> String {
         if let Ok(now) = std::env::var("MAW_TEST_NOW") {
             map.insert("now".to_owned(), serde_json::Value::from(now));
         }
+        if let Ok(repo) = std::env::var("MAW_PULSE_REPO") {
+            map.insert("pulseRepo".to_owned(), serde_json::Value::from(repo));
+        }
     }
     value.to_string()
 }

@@ -223,7 +223,6 @@ fn completions_render_mode(mode: &str) -> Result<String, String> {
         "squads" => Ok(completions_squads().join("\n")),
         "fleet" => Ok(completions_subs("fleet").join("\n")),
         "oracle" => Ok(completions_subs("oracle").join("\n")),
-        "pulse" => Ok("add ls list".to_owned()),
         "zsh" => Ok(COMPLETIONS_ZSH.to_owned()),
         "bash" => Ok(COMPLETIONS_BASH.to_owned()),
         "fish" => Ok(COMPLETIONS_FISH.to_owned()),
