@@ -16,6 +16,7 @@ struct FleetOptions {
     kill: bool,
     resume: bool,
     scatter: bool,
+    include_99: bool,
     squads: Vec<String>,
 }
 
@@ -33,6 +34,7 @@ enum FleetCommand {
     Wake,
     Sleep,
     Gather,
+    Renumber,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,6 +121,18 @@ struct FleetRegistryWrite {
     window_count: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FleetRenumberItem {
+    old_name: String,
+    new_name: String,
+    old_file: String,
+    new_file: String,
+    path: std::path::PathBuf,
+    changed: bool,
+    tmux: Option<String>,
+    tmux_error: Option<String>,
+}
+
 trait FleetRuntime {
     fn fleet_run_command(&mut self, program: &str, args: &[String]) -> Result<String, String>;
     fn fleet_list_all(&mut self) -> Vec<TmuxSession>;
@@ -173,6 +187,7 @@ fn fleet_run_with(argv: &[String], runtime: &mut impl FleetRuntime) -> Result<(i
         FleetCommand::Wake => fleet_run_wake(&state, &options),
         FleetCommand::Sleep => fleet_run_sleep(&state, &options),
         FleetCommand::Gather => fleet_run_gather(&state, &options, runtime),
+        FleetCommand::Renumber => fleet_run_renumber(&state, &options, runtime),
         FleetCommand::Init => fleet_run_named_plan(&state, &options, "init"),
         FleetCommand::Consolidate => fleet_run_named_plan(&state, &options, "consolidate"),
         FleetCommand::Resume => fleet_run_named_plan(&state, &options, "resume"),
@@ -196,6 +211,7 @@ fn fleet_parse_args(argv: &[String]) -> Result<FleetOptions, String> {
             "--kill" => options.kill = true,
             "--resume" => options.resume = true,
             "--scatter" => options.scatter = true,
+            "--include-99" => options.include_99 = true,
             "--squads" => {
                 index += 1;
                 let Some(raw) = argv.get(index) else { return Err("fleet: --squads requires a value".to_owned()); };
@@ -246,6 +262,7 @@ fn fleet_default_options() -> FleetOptions {
         kill: false,
         resume: false,
         scatter: false,
+        include_99: false,
         squads: Vec::new(),
     }
 }
@@ -281,6 +298,7 @@ fn fleet_set_command(options: &mut FleetOptions, seen: &mut bool, value: &str) -
         }
         "sleep" => FleetCommand::Sleep,
         "gather" => FleetCommand::Gather,
+        "renumber" => FleetCommand::Renumber,
         _ => return Err(format!("fleet: unknown subcommand {value}")),
     };
     *seen = true;
@@ -296,7 +314,7 @@ fn fleet_parse_squad_filter(raw: &str) -> Vec<String> {
 }
 
 fn fleet_usage() -> String {
-    "usage: maw fleet [add <session>|create <squad>|show <squad>|status <squad>|join <fleet> --code <code>|remove <squad> <handle>|leave <squad>|ls|doctor|health|gc|init|consolidate|resume|sync|wake <squad|--all>|sleep <squad|--all>|gather <squad>|token <squad> [ls|status]] [--json] [--dry-run] [--fix] [--reboot] [--all] [--kill] [--resume] [--scatter] [--squads <squad[,squad]...>]".to_owned()
+    "usage: maw fleet [add <session>|create <squad>|show <squad>|status <squad>|join <fleet> --code <code>|remove <squad> <handle>|leave <squad>|ls|doctor|health|gc|init|consolidate|resume|sync|wake <squad|--all>|sleep <squad|--all>|gather <squad>|renumber|token <squad> [ls|status]] [--json] [--dry-run] [--include-99] [--fix] [--reboot] [--all] [--kill] [--resume] [--scatter] [--squads <squad[,squad]...>]".to_owned()
 }
 
 fn fleet_load_state_with(runtime: &mut impl FleetRuntime) -> Result<FleetState, String> {
@@ -871,6 +889,144 @@ fn fleet_json_gc_result(result: &FleetGcResult) -> serde_json::Value {
     })
 }
 
+fn fleet_run_renumber(state: &FleetState, options: &FleetOptions, runtime: &mut impl FleetRuntime) -> Result<(i32, String), String> {
+    let mut items = fleet_renumber_plan(&state.fleet_entries, options.include_99);
+    let live = runtime.fleet_list_all().into_iter().map(|session| session.name).collect::<Vec<_>>();
+    if !options.dry_run {
+        fleet_apply_renumber(&mut items, &live, runtime)?;
+    }
+    if options.json {
+        return Ok((0, fleet_json_renumber(state, options, &items)?));
+    }
+    Ok((0, fleet_render_renumber(state, options, &items)))
+}
+
+fn fleet_renumber_plan(entries: &[NativeFleetEntry], include_99: bool) -> Vec<FleetRenumberItem> {
+    let mut candidates = entries
+        .iter()
+        .filter_map(|entry| fleet_renumber_candidate(entry, include_99))
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    candidates
+        .into_iter()
+        .enumerate()
+        .map(|(index, (_, stem, entry))| {
+            let next = format!("{:02}", index + 1);
+            let new_name = format!("{next}-{stem}");
+            let new_file = format!("{new_name}.json");
+            FleetRenumberItem {
+                old_name: entry.session.name.clone(),
+                new_name: new_name.clone(),
+                old_file: entry.file.clone(),
+                new_file,
+                path: entry.path.clone(),
+                changed: entry.session.name != new_name,
+                tmux: None,
+                tmux_error: None,
+            }
+        })
+        .collect()
+}
+
+fn fleet_renumber_candidate(entry: &NativeFleetEntry, include_99: bool) -> Option<(u32, String, &NativeFleetEntry)> {
+    if entry.path.file_name().and_then(std::ffi::OsStr::to_str) == Some("squad.json") {
+        return None;
+    }
+    let (prefix, stem) = entry.session.name.split_once('-')?;
+    if prefix.is_empty() || !prefix.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let number = prefix.parse::<u32>().ok()?;
+    if number == 99 && !include_99 {
+        return None;
+    }
+    Some((number, stem.to_owned(), entry))
+}
+
+fn fleet_apply_renumber(items: &mut [FleetRenumberItem], live: &[String], runtime: &mut impl FleetRuntime) -> Result<(), String> {
+    for item in items.iter_mut().filter(|item| item.changed) {
+        fleet_write_renumbered_config(item)?;
+        let stem = fleet_session_stem(&item.old_name);
+        let running = live
+            .iter()
+            .find(|name| name.as_str() == item.old_name)
+            .or_else(|| live.iter().find(|name| fleet_session_stem(name) == stem));
+        if let Some(running) = running.filter(|running| running.as_str() != item.new_name) {
+            match runtime.fleet_run_command("tmux", &["rename-session".to_owned(), "-t".to_owned(), running.clone(), item.new_name.clone()]) {
+                Ok(_) => item.tmux = Some(running.clone()),
+                Err(error) => item.tmux_error = Some(format!("{running}: {}", error.trim())),
+            }
+        }
+    }
+    Ok(())
+}
+
+fn fleet_write_renumbered_config(item: &FleetRenumberItem) -> Result<(), String> {
+    let text = std::fs::read_to_string(&item.path).map_err(|error| format!("fleet renumber: read {}: {error}", item.path.display()))?;
+    let mut value: serde_json::Value = serde_json::from_str(&text).map_err(|error| format!("fleet renumber: parse {}: {error}", item.path.display()))?;
+    value["name"] = serde_json::json!(item.new_name);
+    let body = serde_json::to_string_pretty(&value).map_err(|error| format!("fleet renumber: render {}: {error}", item.new_name))? + "\n";
+    let dir = item.path.parent().ok_or_else(|| format!("fleet renumber: no parent for {}", item.path.display()))?;
+    let target = dir.join(&item.new_file);
+    let tmp = dir.join(format!(".tmp-{}", item.new_file));
+    std::fs::write(&tmp, body).map_err(|error| format!("fleet renumber: write {}: {error}", tmp.display()))?;
+    std::fs::rename(&tmp, &target).map_err(|error| format!("fleet renumber: rename {} -> {}: {error}", tmp.display(), target.display()))?;
+    if target != item.path && item.path.exists() {
+        std::fs::remove_file(&item.path).map_err(|error| format!("fleet renumber: remove {}: {error}", item.path.display()))?;
+    }
+    Ok(())
+}
+
+fn fleet_render_renumber(state: &FleetState, options: &FleetOptions, items: &[FleetRenumberItem]) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "fleet renumber plan node: {}", state.config.node);
+    let _ = writeln!(out, "  dry-run: {} · include-99: {} · configs: {}", options.dry_run, options.include_99, items.len());
+    if items.is_empty() {
+        out.push_str("  ok: no numbered fleet configs\n");
+        return out;
+    }
+    for item in items {
+        if item.changed {
+            let verb = if options.dry_run { "would rename" } else { "renamed" };
+            let _ = write!(out, "  - {verb} {} -> {}", item.old_file, item.new_file);
+            if let Some(tmux) = &item.tmux {
+                let _ = write!(out, " (tmux: {tmux} -> {})", item.new_name);
+            }
+            if let Some(error) = &item.tmux_error {
+                let _ = write!(out, " (tmux rename failed: {error})");
+            }
+            out.push('\n');
+        } else {
+            let _ = writeln!(out, "  - {} (unchanged)", item.old_file);
+        }
+    }
+    out
+}
+
+fn fleet_json_renumber(state: &FleetState, options: &FleetOptions, items: &[FleetRenumberItem]) -> Result<String, String> {
+    let value = serde_json::json!({
+        "node": state.config.node,
+        "action": "renumber",
+        "dryRun": options.dry_run,
+        "include99": options.include_99,
+        "configCount": items.len(),
+        "configs": items.iter().map(fleet_json_renumber_item).collect::<Vec<_>>(),
+    });
+    serde_json::to_string_pretty(&value).map(|text| format!("{text}\n")).map_err(|error| error.to_string())
+}
+
+fn fleet_json_renumber_item(item: &FleetRenumberItem) -> serde_json::Value {
+    serde_json::json!({
+        "oldName": item.old_name,
+        "newName": item.new_name,
+        "oldFile": item.old_file,
+        "newFile": item.new_file,
+        "changed": item.changed,
+        "tmux": item.tmux,
+        "tmuxError": item.tmux_error,
+    })
+}
+
 fn fleet_run_wake(state: &FleetState, options: &FleetOptions) -> Result<(i32, String), String> {
     if let Some(group) = options.target.as_deref() {
         return fleet_run_group_action(state, options, "wake", group);
@@ -1380,6 +1536,8 @@ mod fleet_tests {
             self.commands.push((program.to_owned(), args.to_vec()));
             if program == "ghq" && args == ["root".to_owned()] {
                 self.ghq_root.clone().ok_or_else(|| "fake ghq root failed".to_owned())
+            } else if program == "tmux" && args.first().is_some_and(|arg| arg == "rename-session") {
+                Ok(String::new())
             } else {
                 Err(format!("unexpected command {program} {args:?}"))
             }
@@ -1441,6 +1599,9 @@ mod fleet_tests {
         let parsed = fleet_parse_args(&fleet_strings(&["wake", "--json", "--dry-run", "--all", "--kill", "--resume"])).expect("parse");
         assert_eq!(parsed.command, FleetCommand::Wake);
         assert!(parsed.json && parsed.dry_run && parsed.all && parsed.kill && parsed.resume);
+        let renumber = fleet_parse_args(&fleet_strings(&["renumber", "--include-99", "--dry-run"])).expect("renumber parse");
+        assert_eq!(renumber.command, FleetCommand::Renumber);
+        assert!(renumber.include_99 && renumber.dry_run);
         assert!(fleet_parse_args(&fleet_strings(&["--", "wake"])).expect_err("separator guard").contains("unknown argument"));
         assert!(fleet_parse_args(&fleet_strings(&["-oProxyCommand=bad"])).expect_err("leading dash").contains("unknown argument"));
         let scoped = fleet_parse_args(&fleet_strings(&["wake", "3e"])).expect("group target");
@@ -1594,6 +1755,61 @@ mod fleet_tests {
 
     const FLEET_SQUADRON_JSON: &str =
         r#"{"name":"01-3e","squadName":"3e","windows":[],"members":[{"handle":"alpha"},{"handle":"drift"}]}"#;
+
+    #[test]
+    fn fleet_renumber_dry_run_skips_99_by_default() {
+        fleet_with_fixture(|root| {
+            std::fs::write(
+                root.join("config/fleet/99-bud.json"),
+                r#"{"name":"99-bud","windows":[],"mystery":true}"#,
+            )
+            .expect("bud");
+            let mut runtime = FleetFakeRuntime::default();
+            let (code, stdout) = fleet_run_with(&fleet_strings(&["renumber", "--dry-run", "--json"]), &mut runtime).expect("renumber");
+            assert_eq!(code, 0);
+            let value: serde_json::Value = serde_json::from_str(&stdout).expect("json");
+            assert_eq!(value["dryRun"], true);
+            assert_eq!(value["include99"], false);
+            assert_eq!(value["configs"].as_array().expect("configs").len(), 1);
+            assert_eq!(value["configs"][0]["oldName"], "03-alpha");
+            assert_eq!(value["configs"][0]["newName"], "01-alpha");
+            assert!(root.join("config/fleet/03-alpha.json").exists());
+            assert!(root.join("config/fleet/99-bud.json").exists());
+        });
+    }
+
+    #[test]
+    fn fleet_renumber_include_99_rewrites_configs_and_renames_tmux() {
+        fleet_with_fixture(|root| {
+            std::fs::write(
+                root.join("config/fleet/99-bud.json"),
+                r#"{"name":"99-bud","windows":[],"mystery":true}"#,
+            )
+            .expect("bud");
+            let mut runtime = FleetFakeRuntime {
+                sessions: vec![
+                    TmuxSession { name: "03-alpha".to_owned(), windows: Vec::new() },
+                    TmuxSession { name: "99-bud".to_owned(), windows: Vec::new() },
+                ],
+                ..Default::default()
+            };
+
+            let (code, stdout) = fleet_run_with(&fleet_strings(&["renumber", "--include-99"]), &mut runtime).expect("renumber");
+
+            assert_eq!(code, 0);
+            assert!(stdout.contains("renamed 03-alpha.json -> 01-alpha.json"), "{stdout}");
+            assert!(stdout.contains("renamed 99-bud.json -> 02-bud.json"), "{stdout}");
+            assert!(!root.join("config/fleet/03-alpha.json").exists());
+            assert!(!root.join("config/fleet/99-bud.json").exists());
+            let alpha: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(root.join("config/fleet/01-alpha.json")).expect("alpha")).expect("alpha json");
+            let bud: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(root.join("config/fleet/02-bud.json")).expect("bud")).expect("bud json");
+            assert_eq!(alpha["name"], "01-alpha");
+            assert_eq!(bud["name"], "02-bud");
+            assert_eq!(bud["mystery"], true);
+            assert!(runtime.commands.iter().any(|(program, args)| program == "tmux" && args == &fleet_strings(&["rename-session", "-t", "03-alpha", "01-alpha"])));
+            assert!(runtime.commands.iter().any(|(program, args)| program == "tmux" && args == &fleet_strings(&["rename-session", "-t", "99-bud", "02-bud"])));
+        });
+    }
 
     #[test]
     fn fleet_wake_bare_errors_and_all_sweep_excludes_roster_files() {
