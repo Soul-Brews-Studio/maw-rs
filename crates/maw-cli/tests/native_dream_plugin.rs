@@ -139,7 +139,14 @@ fn dream_command(root: &Path, home: &Path, config: &Path, cache: &Path) -> Comma
 fn dream_plugin_porcelain_golden_is_hermetic() {
     let (root, home, config, cache) = dream_seed("porcelain");
     let output = dream_command(&root, &home, &config, &cache)
-        .args(["dream", "--porcelain", "--limit", "20"])
+        .args([
+            "dream",
+            "--porcelain",
+            "--limit",
+            "20",
+            "--date",
+            "2026-06-25",
+        ])
         .output()
         .expect("run dream");
     assert!(
@@ -161,7 +168,15 @@ fn dream_plugin_porcelain_golden_is_hermetic() {
 fn dream_plugin_writes_seeded_state_and_guards_values() {
     let (root, home, config, cache) = dream_seed("write");
     let output = dream_command(&root, &home, &config, &cache)
-        .args(["dream", "--project", "alpha", "--between", "--all"])
+        .args([
+            "dream",
+            "--project",
+            "alpha",
+            "--between",
+            "--all",
+            "--date",
+            "2026-06-25",
+        ])
         .output()
         .expect("run dream");
     assert!(

@@ -25,6 +25,6 @@
   "weight": 20,
   "artifact": {
     "path": "./plugin.wasm",
-    "sha256": "sha256:fe529f21ddd35b368a905fd1b0729fff973de0d1eace0ca1b42ae1e853bb98fb"
+    "sha256": "sha256:5de4f4f819d2de66435757232e838ea3b1396f2c53ee195d7471826a1131aff6"
   }
 }

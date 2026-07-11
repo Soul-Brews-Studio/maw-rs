@@ -61,10 +61,6 @@ fn invoke_context_json(ctx: &InvokeContext) -> String {
         if let Ok(today) = std::env::var("MAW_COSTS_TODAY") {
             if today.len() >= 10 { map.insert("today".to_owned(), serde_json::Value::from(&today[..10])); }
         }
-        if let Ok(date) = std::env::var("MAW_DREAM_DATE") { map.insert("dreamDate".to_owned(), serde_json::Value::from(date)); }
-        let epoch = std::env::var("MAW_DREAM_EPOCH").ok().and_then(|value| value.parse::<i64>().ok()).unwrap_or_else(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |duration| i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)));
-        map.insert("dreamEpoch".to_owned(), serde_json::Value::from(epoch));
-        if let Some(root) = std::env::var_os("GHQ_ROOT") { let root = std::path::PathBuf::from(root); let root = if root.file_name().and_then(std::ffi::OsStr::to_str) == Some("github.com") { root } else { root.join("github.com") }; map.insert("reposRoot".to_owned(), serde_json::Value::from(root.to_string_lossy().into_owned())); }
     }
     value.to_string()
 }
