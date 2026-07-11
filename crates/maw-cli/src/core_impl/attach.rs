@@ -28,7 +28,24 @@ fn attach_run_command(argv: &[String]) -> CliOutput {
     }
 }
 
-fn attach_run_with_runner<R: maw_tmux::TmuxRunner>(
+trait AttachLiveExecutor {
+    fn execute_attach(&mut self, args: &[String]) -> Result<i32, String>;
+}
+
+impl AttachLiveExecutor for maw_tmux::CommandTmuxRunner {
+    fn execute_attach(&mut self, args: &[String]) -> Result<i32, String> {
+        let status = std::process::Command::new("tmux")
+            .args(args)
+            .stdin(std::process::Stdio::inherit())
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit())
+            .status()
+            .map_err(|error| format!("attach: failed to execute tmux: {error}"))?;
+        Ok(status.code().unwrap_or(1))
+    }
+}
+
+fn attach_run_with_runner<R: maw_tmux::TmuxRunner + AttachLiveExecutor>(
     argv: &[String],
     runner: &mut R,
 ) -> Result<CliOutput, CliOutput> {
@@ -94,6 +111,9 @@ fn attach_run_with_runner<R: maw_tmux::TmuxRunner>(
         false,
         in_tmux,
     );
+    if let Some(output) = attach_execute_live_action(&opts, &action, runner)? {
+        return Ok(output);
+    }
     let session = attach_port_action_session(&action);
     let stdout = if attach_has_flag(&opts, ATTACH_FLAG_PLAN_JSON) {
         attach_render_plan_json(
@@ -116,6 +136,30 @@ fn attach_run_with_runner<R: maw_tmux::TmuxRunner>(
         stdout,
         stderr: String::new(),
     })
+}
+
+fn attach_execute_live_action<R: AttachLiveExecutor>(
+    opts: &AttachOptions,
+    action: &TmuxAttachAction,
+    runner: &mut R,
+) -> Result<Option<CliOutput>, CliOutput> {
+    if attach_has_flag(opts, ATTACH_FLAG_PRINT) || attach_has_flag(opts, ATTACH_FLAG_PLAN_JSON) {
+        return Ok(None);
+    }
+    if matches!(action, TmuxAttachAction::Recover { .. } | TmuxAttachAction::Print { .. }) {
+        return Ok(None);
+    }
+    let args = attach_exec_command_args(action, attach_has_flag(opts, ATTACH_FLAG_READONLY));
+    let code = runner.execute_attach(&args).map_err(|message| CliOutput {
+        code: 1,
+        stdout: String::new(),
+        stderr: format!("{message}\n"),
+    })?;
+    Ok(Some(CliOutput {
+        code,
+        stdout: String::new(),
+        stderr: String::new(),
+    }))
 }
 
 fn attach_resolved_target_for_options(opts: &AttachOptions) -> Result<String, CliOutput> {
@@ -640,6 +684,28 @@ fn attach_port_command_args(action: &TmuxAttachAction, readonly: bool) -> Vec<St
     )
 }
 
+fn attach_exec_command_args(action: &TmuxAttachAction, readonly: bool) -> Vec<String> {
+    if readonly {
+        return vec![
+            "attach".to_owned(),
+            "-r".to_owned(),
+            "-t".to_owned(),
+            attach_port_action_session(action).to_owned(),
+        ];
+    }
+    match action {
+        TmuxAttachAction::SwitchClient { session } => {
+            vec!["switch-client".to_owned(), "-t".to_owned(), session.clone()]
+        }
+        TmuxAttachAction::Attach { session } => {
+            vec!["attach".to_owned(), "-t".to_owned(), session.clone()]
+        }
+        TmuxAttachAction::Print { .. } | TmuxAttachAction::Recover { .. } => {
+            attach_port_command_args(action, readonly)
+        }
+    }
+}
+
 fn attach_port_action_session(action: &TmuxAttachAction) -> &str {
     match action {
         TmuxAttachAction::Print { session }
@@ -702,6 +768,13 @@ mod attach_tests {
             } else {
                 Ok(String::new())
             }
+        }
+    }
+
+    impl AttachLiveExecutor for AttachFakeRunner {
+        fn execute_attach(&mut self, args: &[String]) -> Result<i32, String> {
+            self.calls.push(("exec-attach".to_owned(), args.to_vec()));
+            Ok(0)
         }
     }
 
@@ -850,6 +923,36 @@ mod attach_tests {
             );
             assert!(err.stderr.is_empty(), "{}", err.stderr);
             assert!(runner.calls.is_empty());
+        });
+    }
+
+    #[test]
+    fn attach_live_picker_resolution_execs_instead_of_printing_run_text() {
+        let root = attach_fleet_root("picker-live-exec");
+        let _ = std::fs::remove_dir_all(&root);
+        attach_with_fleet_env(&root, || {
+            let opts = AttachOptions {
+                flags: 0,
+                ssh_alias: None,
+                alive: BTreeSet::from(["158-homekeeper".to_owned(), "159-homekeeper".to_owned()]),
+                target: "homekeeper".to_owned(),
+            };
+            let action = TmuxAttachAction::Attach {
+                session: "158-homekeeper".to_owned(),
+            };
+            let mut runner = AttachFakeRunner::default();
+            let output = attach_execute_live_action(&opts, &action, &mut runner)
+                .expect("live action")
+                .expect("exec output");
+            assert_eq!(output.code, 0);
+            assert!(output.stdout.is_empty());
+            assert_eq!(
+                runner.calls,
+                vec![(
+                    "exec-attach".to_owned(),
+                    attach_strings(&["attach", "-t", "158-homekeeper"])
+                )]
+            );
         });
     }
 
