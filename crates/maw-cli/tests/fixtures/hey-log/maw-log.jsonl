@@ -1,0 +1,3 @@
+{"ts":"2026-07-10T00:00:00.000Z","from":"alice","host":"m5","msg":"hello","route":"local","to":"bob"}
+{"ts":"2026-07-10T00:00:01.000Z","from":"mallory","host":"m5","msg":"[mallory] spoof","route":"local","to":"bob"}
+{"ts":"2026-07-10T00:00:02.000Z","from":"carol","host":"m5","msg":"oops","route":"local","to":"bob"}
