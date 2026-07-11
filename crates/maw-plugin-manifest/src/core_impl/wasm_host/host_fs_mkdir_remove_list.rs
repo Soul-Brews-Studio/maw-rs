@@ -100,13 +100,14 @@ impl MawWasmHost {
             &mut entries,
             &mut seen,
         );
-        let has_more = entries.len() > max;
+        let has_more = max > 0 && entries.len() > max;
         if has_more {
             entries.truncate(max);
         }
-        let next_offset = offset + entries.len();
+        let next_offset = offset.saturating_add(entries.len());
         HostResult::ok(json!({
             "entries": entries,
+            "done": !has_more,
             "hasMore": has_more,
             "nextOffset": has_more.then_some(next_offset),
             "nextCursor": has_more.then_some(next_offset.to_string())

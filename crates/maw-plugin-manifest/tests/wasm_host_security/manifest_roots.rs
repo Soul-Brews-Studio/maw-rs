@@ -265,6 +265,7 @@ fn fs_list_paginates_more_than_one_thousand_entries() {
     );
     assert_eq!(first["ok"], true, "{first}");
     assert_eq!(first["value"]["entries"].as_array().unwrap().len(), 1000);
+    assert_eq!(first["value"]["done"], false);
     assert_eq!(first["value"]["hasMore"], true);
     assert_eq!(first["value"]["nextOffset"], 1000);
 
@@ -275,6 +276,7 @@ fn fs_list_paginates_more_than_one_thousand_entries() {
     );
     assert_eq!(second["ok"], true, "{second}");
     assert_eq!(second["value"]["entries"].as_array().unwrap().len(), 5);
+    assert_eq!(second["value"]["done"], true);
     assert_eq!(second["value"]["hasMore"], false);
     assert!(second["value"]["nextOffset"].is_null());
 }
