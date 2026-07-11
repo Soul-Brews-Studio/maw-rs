@@ -46,15 +46,14 @@ fn rename_with_runner<R: maw_tmux::TmuxRunner>(
         return Err(format!("tabs: {tabs}\ntab {target} not found in {session}"));
     };
 
-    let full_name = rename_auto_prefix(&session, new_name);
     rename_tmux_run(
         runner,
         "rename-window",
-        &["-t", &format!("{session}:{}", window.index), &full_name],
+        &["-t", &format!("{session}:{}", window.index), new_name],
     )?;
     Ok(format!(
         "\x1b[32m✓\x1b[0m tab {} \x1b[33m{}\x1b[0m → \x1b[33m{}\x1b[0m\n",
-        window.index, window.name, full_name
+        window.index, window.name, new_name
     ))
 }
 
@@ -117,19 +116,6 @@ fn parse_js_i32_prefix(value: &str) -> Option<i32> {
         .flatten()
 }
 
-fn rename_auto_prefix(session: &str, new_name: &str) -> String {
-    let oracle = session
-        .split_once('-')
-        .filter(|(prefix, _)| prefix.chars().all(|ch| ch.is_ascii_digit()))
-        .map_or(session, |(_, suffix)| suffix);
-    let prefix = format!("{oracle}-");
-    if new_name.starts_with(&prefix) {
-        new_name.to_owned()
-    } else {
-        format!("{prefix}{new_name}")
-    }
-}
-
 fn validate_rename_tmux_target(target: &str) -> Result<(), String> {
     if target.is_empty() || target.trim() != target || target.starts_with('-') {
         Err("tmux target/session must be non-empty, unpadded, and not start with '-'".to_owned())
@@ -170,14 +156,7 @@ mod rename_tests {
     }
 
     #[test]
-    fn rename_auto_prefix_strips_numeric_fleet_slot_once() {
-        assert_eq!(rename_auto_prefix("03-neo", "work"), "neo-work");
-        assert_eq!(rename_auto_prefix("neo", "neo-work"), "neo-work");
-        assert_eq!(rename_auto_prefix("dev-neo", "work"), "dev-neo-work");
-    }
-
-    #[test]
-    fn rename_by_number_matches_maw_js_success_output_and_tmux_args() {
+    fn rename_by_number_uses_literal_name_in_tmux_args_and_success_output() {
         let mut runner = MockTmuxRunner {
             session: "03-neo\n".to_owned(),
             windows: "0:zsh\n1:old\n".to_owned(),
@@ -186,23 +165,38 @@ mod rename_tests {
 
         let stdout = rename_with_runner(&strings(&["1abc", "work"]), &mut runner).expect("rename");
 
-        assert_eq!(stdout, "\x1b[32m✓\x1b[0m tab 1 \x1b[33mold\x1b[0m → \x1b[33mneo-work\x1b[0m\n");
+        assert_eq!(stdout, "\x1b[32m✓\x1b[0m tab 1 \x1b[33mold\x1b[0m → \x1b[33mwork\x1b[0m\n");
         assert_eq!(runner.calls[0], ("display-message".to_owned(), strings(&["-p", "#S"])));
         assert_eq!(runner.calls[1], ("list-windows".to_owned(), strings(&["-t", "03-neo", "-F", "#I:#W"])));
-        assert_eq!(runner.calls[2], ("rename-window".to_owned(), strings(&["-t", "03-neo:1", "neo-work"])));
+        assert_eq!(runner.calls[2], ("rename-window".to_owned(), strings(&["-t", "03-neo:1", "work"])));
     }
 
     #[test]
-    fn rename_by_name_does_not_double_prefix() {
+    fn rename_maw_work_spawned_window_does_not_derive_session_prefix() {
         let mut runner = MockTmuxRunner {
-            session: "neo\n".to_owned(),
-            windows: "0:zsh\n2:old:name\n".to_owned(),
+            session: "41-arra-oracle-v3\n".to_owned(),
+            windows: "0:zsh\n3:arra-oracle-v3-arra-codex-frontend\n".to_owned(),
             ..MockTmuxRunner::default()
         };
 
-        let stdout = rename_with_runner(&strings(&["old:name", "neo-done"]), &mut runner).expect("rename");
+        let stdout = rename_with_runner(&strings(&["3", "arra-codex-frontend"]), &mut runner).expect("rename");
 
-        assert_eq!(stdout, "\x1b[32m✓\x1b[0m tab 2 \x1b[33mold:name\x1b[0m → \x1b[33mneo-done\x1b[0m\n");
+        assert_eq!(stdout, "\x1b[32m✓\x1b[0m tab 3 \x1b[33marra-oracle-v3-arra-codex-frontend\x1b[0m → \x1b[33marra-codex-frontend\x1b[0m\n");
+        assert_eq!(runner.calls[2], ("rename-window".to_owned(), strings(&["-t", "41-arra-oracle-v3:3", "arra-codex-frontend"])));
+    }
+
+    #[test]
+    fn rename_failure_returns_tmux_error_without_success_output() {
+        let mut runner = MockTmuxRunner {
+            session: "41-arra-oracle-v3\n".to_owned(),
+            windows: "3:old\n".to_owned(),
+            fail_on_rename: Some("rename failed".to_owned()),
+            ..MockTmuxRunner::default()
+        };
+
+        let error = rename_with_runner(&strings(&["3", "new"]), &mut runner).expect_err("failure");
+
+        assert_eq!(error, "rename failed");
     }
 
     #[test]
