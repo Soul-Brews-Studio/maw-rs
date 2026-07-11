@@ -1,12 +1,13 @@
 use axum::{
     body::{Body, Bytes},
-    extract::{ConnectInfo, Path as AxumPath, Query, State},
+    extract::{ws::WebSocketUpgrade, ConnectInfo, Path as AxumPath, Query, State},
     http::{HeaderMap, HeaderValue, Method, Request, StatusCode, Uri},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{any, get, post},
     Json, Router,
 };
+use futures_util::{SinkExt, StreamExt};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -584,6 +585,7 @@ async fn api_plugin_serve_health(
 
 async fn api_plugin_serve_proxy(
     State(state): State<Arc<ServeState>>,
+    ws: Option<WebSocketUpgrade>,
     method: Method,
     uri: Uri,
     headers: HeaderMap,
@@ -592,6 +594,10 @@ async fn api_plugin_serve_proxy(
     let Some(route) = serve_plugin_route_for_prefix(&state, uri.path()) else {
         return (StatusCode::NOT_FOUND, Json(json!({"ok": false, "error": "plugin route not found"}))).into_response();
     };
+    if let Some(ws) = ws {
+        let route = route.clone();
+        return ws.on_upgrade(move |socket| serve_proxy_websocket(route, uri, headers, socket)).into_response();
+    }
     serve_proxy_to_plugin(route, method, &uri, headers, body).await
 }
 
@@ -668,14 +674,25 @@ async fn serve_proxy_to_plugin(route: &ServePluginRoute, method: Method, uri: &U
         Err(error) => return (StatusCode::BAD_REQUEST, Json(json!({"ok": false, "error": format!("bad method: {error}")}))).into_response(),
     };
     let client = reqwest::Client::new();
-    let mut request = client.request(req_method, target).body(body.to_vec());
+    let mut request = client.request(req_method, &target).body(body.to_vec());
     if let Some(content_type) = headers.get(axum::http::header::CONTENT_TYPE) {
         request = request.header(reqwest::header::CONTENT_TYPE, content_type.as_bytes());
     }
     match request.send().await {
-        Ok(response) => serve_proxy_response(response).await,
+        Ok(response) => {
+            if response.status() == reqwest::StatusCode::NOT_FOUND && uri.path() != route.health_path && serve_spa_fallback_path(&method, uri).is_some() {
+                if let Ok(fallback) = client.get(format!("http://127.0.0.1:{port}{}/index.html", route.prefix)).send().await {
+                    return serve_proxy_response(fallback).await;
+                }
+            }
+            serve_proxy_response(response).await
+        },
         Err(error) => (StatusCode::BAD_GATEWAY, Json(json!({"ok": false, "error": format!("proxy failed: {error}"), "plugin": route.name}))).into_response(),
     }
+}
+
+fn serve_spa_fallback_path(method: &Method, uri: &Uri) -> Option<()> {
+    (method == Method::GET && !uri.path().rsplit('/').next().is_some_and(|segment| segment.contains('.'))).then_some(())
 }
 
 async fn serve_proxy_response(response: reqwest::Response) -> Response {
@@ -687,6 +704,50 @@ async fn serve_proxy_response(response: reqwest::Response) -> Response {
         out.headers_mut().insert(axum::http::header::CONTENT_TYPE, value);
     }
     out
+}
+
+async fn serve_proxy_websocket(route: ServePluginRoute, uri: Uri, headers: HeaderMap, socket: axum::extract::ws::WebSocket) {
+    let Ok(port) = serve_plugin_process_port(&route) else { return; };
+    let target = format!("ws://127.0.0.1:{port}{}", uri.path_and_query().map_or_else(|| uri.path().to_owned(), ToString::to_string));
+    let Ok(mut request) = tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(target) else { return; };
+    if let Some(protocol) = headers.get(axum::http::header::SEC_WEBSOCKET_PROTOCOL).and_then(|value| value.to_str().ok()) {
+        if let Ok(value) = protocol.parse() { request.headers_mut().insert("sec-websocket-protocol", value); }
+    }
+    let Ok((upstream, _)) = tokio_tungstenite::connect_async(request).await else { return; };
+    let (mut client_tx, mut client_rx) = socket.split();
+    let (mut upstream_tx, mut upstream_rx) = upstream.split();
+    loop {
+        tokio::select! {
+            from_client = client_rx.next() => match from_client {
+                Some(Ok(message)) => if let Some(message) = serve_ws_to_upstream(message) { if upstream_tx.send(message).await.is_err() { break; } },
+                _ => break,
+            },
+            from_upstream = upstream_rx.next() => match from_upstream {
+                Some(Ok(message)) => if let Some(message) = serve_ws_to_client(message) { if client_tx.send(message).await.is_err() { break; } },
+                _ => break,
+            },
+        }
+    }
+}
+
+fn serve_ws_to_upstream(message: axum::extract::ws::Message) -> Option<tokio_tungstenite::tungstenite::Message> {
+    match message {
+        axum::extract::ws::Message::Text(text) => Some(tokio_tungstenite::tungstenite::Message::Text(text)),
+        axum::extract::ws::Message::Binary(bytes) => Some(tokio_tungstenite::tungstenite::Message::Binary(bytes)),
+        axum::extract::ws::Message::Ping(bytes) => Some(tokio_tungstenite::tungstenite::Message::Ping(bytes)),
+        axum::extract::ws::Message::Pong(bytes) => Some(tokio_tungstenite::tungstenite::Message::Pong(bytes)),
+        axum::extract::ws::Message::Close(_) => None,
+    }
+}
+
+fn serve_ws_to_client(message: tokio_tungstenite::tungstenite::Message) -> Option<axum::extract::ws::Message> {
+    match message {
+        tokio_tungstenite::tungstenite::Message::Text(text) => Some(axum::extract::ws::Message::Text(text)),
+        tokio_tungstenite::tungstenite::Message::Binary(bytes) => Some(axum::extract::ws::Message::Binary(bytes)),
+        tokio_tungstenite::tungstenite::Message::Ping(bytes) => Some(axum::extract::ws::Message::Ping(bytes)),
+        tokio_tungstenite::tungstenite::Message::Pong(bytes) => Some(axum::extract::ws::Message::Pong(bytes)),
+        tokio_tungstenite::tungstenite::Message::Close(_) | tokio_tungstenite::tungstenite::Message::Frame(_) => None,
+    }
 }
 
 async fn api_send(
@@ -4376,6 +4437,16 @@ mod serve_tests {
         addr
     }
 
+    async fn spawn_plugin_proxy_server(route: ServePluginRoute) -> SocketAddr {
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.expect("bind proxy");
+        let addr = listener.local_addr().expect("proxy addr");
+        let app = serve_test_app_with_plugin_routes(vec![route]);
+        tokio::spawn(async move {
+            axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await.expect("proxy server");
+        });
+        addr
+    }
+
     #[tokio::test]
     async fn serve_real_wire_accepts_v3_rejects_unsigned_and_accepts_legacy() {
         let addr = spawn_test_server().await;
@@ -4434,6 +4505,48 @@ mod serve_tests {
             .await
             .expect("send legacy");
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn serve_plugin_proxy_websocket_passthrough() {
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.expect("bind ws upstream");
+        let port = listener.local_addr().expect("addr").port();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept ws upstream");
+            let mut ws = tokio_tungstenite::accept_async(stream).await.expect("accept websocket");
+            assert_eq!(ws.next().await.expect("frame").expect("ok").into_text().expect("text"), "ping");
+            ws.send(tokio_tungstenite::tungstenite::Message::Text("pong".to_owned())).await.expect("send pong");
+        });
+        let child = Command::new("sleep").arg("5").spawn().expect("sleep child");
+        let addr = spawn_plugin_proxy_server(serve_test_proxy_route(port, child)).await;
+        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/api/testext/ws?room=1")).await.expect("connect proxy ws");
+        ws.send(tokio_tungstenite::tungstenite::Message::Text("ping".to_owned())).await.expect("send ping");
+        let reply = ws.next().await.expect("reply").expect("reply ok").into_text().expect("text");
+        assert_eq!(reply, "pong");
+    }
+
+    #[tokio::test]
+    async fn serve_plugin_proxy_spa_index_fallback_on_extensionless_404() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.expect("bind upstream");
+        let port = listener.local_addr().expect("addr").port();
+        tokio::spawn(async move {
+            for response in [b"HTTP/1.1 404 Not Found\r\nconnection: close\r\ncontent-length: 0\r\n\r\n".as_slice(), b"HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: 13\r\n\r\n<main></main>".as_slice()] {
+                let (mut stream, _) = listener.accept().await.expect("accept upstream");
+                let mut buf = [0_u8; 1024];
+                let n = stream.read(&mut buf).await.expect("read request");
+                let request = String::from_utf8_lossy(&buf[..n]);
+                assert!(request.starts_with(if response[9] == b'4' { "GET /api/testext/board/42 " } else { "GET /api/testext/index.html " }));
+                stream.write_all(response).await.expect("write response");
+            }
+        });
+        let child = Command::new("sleep").arg("5").spawn().expect("sleep child");
+        let app = serve_test_app_with_plugin_routes(vec![serve_test_proxy_route(port, child)]);
+        let response = app.oneshot(axum::http::Request::get("/api/testext/board/42").body(Body::empty()).unwrap()).await.expect("proxy response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024).await.expect("body");
+        assert_eq!(&body[..], b"<main></main>");
     }
 
     #[tokio::test]

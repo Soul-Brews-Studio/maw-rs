@@ -1,5 +1,3 @@
-use futures_util::{SinkExt as _, StreamExt as _};
-
 const DISPATCH_108: &[DispatcherEntry] = &[
     DispatcherEntry { command: "follow", handler: Handler::Sync(follow_run_command) },
 ];
@@ -305,7 +303,7 @@ async fn follow_connect_async(pane: &str, options: &FollowOptions, url: &str) ->
     let (mut ws, _) = tokio_tungstenite::connect_async(url).await.map_err(|error| format!("follow: websocket error: {url}: {error}"))?;
     let replay_lines = options.since.as_deref().and_then(follow_parse_duration_ms).map_or(0, follow_replay_lines_for_duration);
     let attach = serde_json::json!({"type":"attach","target":pane,"cols":120,"rows":40,"replayLines":replay_lines}).to_string();
-    ws.send(tokio_tungstenite::tungstenite::Message::Text(attach)).await.map_err(|error| format!("follow: attach send failed: {error}"))?;
+    futures_util::SinkExt::send(&mut ws, tokio_tungstenite::tungstenite::Message::Text(attach)).await.map_err(|error| format!("follow: attach send failed: {error}"))?;
     follow_read_ws(pane, options, ws).await
 }
 
@@ -316,7 +314,7 @@ async fn follow_read_ws(
 ) -> Result<FollowResult, String> {
     let grep = options.grep.as_deref().map(follow_compile_grep).transpose()?;
     let mut chunks = 0usize;
-    while let Some(message) = ws.next().await {
+    while let Some(message) = futures_util::StreamExt::next(&mut ws).await {
         let message = message.map_err(|error| format!("follow: websocket read failed: {error}"))?;
         let text = follow_message_text(message)?;
         if let Some(reason) = follow_control_reason(&text)? {
