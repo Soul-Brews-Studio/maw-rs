@@ -205,13 +205,14 @@ fn known_fs_root(
         "fleet-state" => Some(default_state_root().join("fleet")),
         "fleet-legacy" => Some(home.join(".maw").join("fleet")),
         "fleet-config" => Some(default_config_root(config_root).join("fleet")),
+        "psi" => configured_psi_root(config_root).ok(),
         "vault" => configured_vault_root(home, config_root, vault_root).ok(),
         _ => None,
     }
 }
 
 fn known_fs_root_should_create(scope: &str) -> bool {
-    matches!(scope, "teams" | "config" | "maw-cache")
+    matches!(scope, "teams" | "config" | "maw-cache" | "psi")
 }
 
 fn configured_maw_cache_root(home: &Path) -> PathBuf {
@@ -240,6 +241,34 @@ fn configured_repos_root(home: &Path) -> PathBuf {
             if root.file_name().and_then(std::ffi::OsStr::to_str) == Some("github.com") { root } else { root.join("github.com") }
         },
     )
+}
+
+fn configured_psi_root(config_root: Option<&Path>) -> Result<PathBuf, HostResult<Value>> {
+    let cwd = std::env::current_dir().map_err(|error| {
+        HostResult::err(
+            HostErrorCode::IoError,
+            format!("failed to read cwd: {error}"),
+        )
+    })?;
+    let config = read_config_json(&default_config_root(config_root).join("maw.config.json"))?;
+    if let Some(path) = config
+        .get("psiPath")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+    {
+        let path = PathBuf::from(path);
+        return Ok(if path.is_absolute() {
+            path
+        } else {
+            cwd.join(path)
+        });
+    }
+    let greek_psi = cwd.join("ψ");
+    Ok(if greek_psi.exists() {
+        greek_psi
+    } else {
+        cwd.join("psi")
+    })
 }
 
 fn configured_claude_projects_root(home: &Path) -> PathBuf {

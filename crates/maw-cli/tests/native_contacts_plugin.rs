@@ -22,15 +22,33 @@ fn temp_dir(name: &str) -> PathBuf {
     path
 }
 
-fn run(args: &[&str], cwd: &Path, maw_home: &Path, ghq_root: &Path) -> std::process::Output {
+fn run(args: &[&str], cwd: &Path, maw_home: &Path, plugins_dir: &Path) -> std::process::Output {
     Command::new(bin())
         .args(args)
         .current_dir(cwd)
+        .env("HOME", maw_home)
         .env("MAW_HOME", maw_home)
-        .env("GHQ_ROOT", ghq_root)
         .env("MAW_JS_REF_DIR", "/nonexistent")
+        .env("MAW_PLUGINS_DIR", plugins_dir)
+        .env("MAW_CONTACTS_NOW_MS", "1783788121251")
         .output()
         .expect("run maw-rs")
+}
+
+fn install_contacts_plugin(root: &Path) -> PathBuf {
+    let plugin = root.join("plugins/contacts");
+    fs::create_dir_all(&plugin).expect("plugin dir");
+    fs::write(
+        plugin.join("plugin.json"),
+        include_str!("fixtures/native-contacts/contacts-plugin/plugin.json"),
+    )
+    .expect("plugin json");
+    fs::write(
+        plugin.join("plugin.wasm"),
+        include_bytes!("fixtures/native-contacts/contacts-plugin/plugin.wasm"),
+    )
+    .expect("plugin wasm");
+    root.join("plugins")
 }
 
 fn assert_success(output: &std::process::Output) {
@@ -43,14 +61,14 @@ fn assert_success(output: &std::process::Output) {
 }
 
 #[test]
-fn native_contacts_add_list_remove_matches_committed_golden_without_ref_checkout() {
+fn contacts_plugin_add_list_remove_matches_committed_golden_without_ref_checkout() {
     let root = temp_dir("golden");
     let maw_home = root.join("home");
-    let ghq = root.join("ghq");
     let cwd = root.join("repo");
+    let plugins = install_contacts_plugin(&root);
     fs::create_dir_all(&cwd).expect("cwd");
 
-    let empty = run(&["contacts"], &cwd, &maw_home, &ghq);
+    let empty = run(&["contacts"], &cwd, &maw_home, &plugins);
     assert_success(&empty);
     assert_eq!(
         String::from_utf8(empty.stdout).expect("stdout"),
@@ -76,7 +94,7 @@ fn native_contacts_add_list_remove_matches_committed_golden_without_ref_checkout
         ],
         &cwd,
         &maw_home,
-        &ghq,
+        &plugins,
     );
     assert_success(&add);
     assert_eq!(
@@ -101,7 +119,7 @@ fn native_contacts_add_list_remove_matches_committed_golden_without_ref_checkout
             && value.len() == "2026-06-25T00:00:00.000Z".len()
     }));
 
-    let list = run(&["contacts"], &cwd, &maw_home, &ghq);
+    let list = run(&["contacts"], &cwd, &maw_home, &plugins);
     assert_success(&list);
     assert_eq!(
         String::from_utf8(list.stdout).expect("stdout"),
@@ -109,7 +127,7 @@ fn native_contacts_add_list_remove_matches_committed_golden_without_ref_checkout
     );
     assert_eq!(String::from_utf8(list.stderr).expect("stderr"), "");
 
-    let remove = run(&["contact", "remove", "nova"], &cwd, &maw_home, &ghq);
+    let remove = run(&["contact", "remove", "nova"], &cwd, &maw_home, &plugins);
     assert_success(&remove);
     assert_eq!(
         String::from_utf8(remove.stdout).expect("stdout"),
@@ -123,7 +141,7 @@ fn native_contacts_add_list_remove_matches_committed_golden_without_ref_checkout
     .expect("contacts json");
     assert_eq!(retired["contacts"]["nova"]["retired"], true);
 
-    let after_remove = run(&["contacts"], &cwd, &maw_home, &ghq);
+    let after_remove = run(&["contacts"], &cwd, &maw_home, &plugins);
     assert_success(&after_remove);
     assert_eq!(
         String::from_utf8(after_remove.stdout).expect("stdout"),
@@ -133,12 +151,12 @@ fn native_contacts_add_list_remove_matches_committed_golden_without_ref_checkout
 }
 
 #[test]
-fn native_contacts_honors_configured_psi_path_in_temp_maw_home() {
+fn contacts_plugin_honors_configured_psi_path_in_temp_maw_home() {
     let root = temp_dir("psi-path");
     let maw_home = root.join("home");
-    let ghq = root.join("ghq");
     let cwd = root.join("repo");
     let configured_psi = root.join("configured-psi");
+    let plugins = install_contacts_plugin(&root);
     fs::create_dir_all(maw_home.join("config")).expect("config dir");
     fs::create_dir_all(&cwd).expect("cwd");
     fs::write(
@@ -154,7 +172,7 @@ fn native_contacts_honors_configured_psi_path_in_temp_maw_home() {
         &["contacts", "add", "tk", "--maw=tonk"],
         &cwd,
         &maw_home,
-        &ghq,
+        &plugins,
     );
     assert_success(&add);
 
@@ -164,7 +182,7 @@ fn native_contacts_honors_configured_psi_path_in_temp_maw_home() {
 }
 
 #[test]
-fn native_dispatcher_registers_contacts_plugin_aliases() {
-    assert_eq!(dispatcher_status("contacts"), DispatchKind::Native);
-    assert_eq!(dispatcher_status("contact"), DispatchKind::Native);
+fn native_dispatcher_registration_is_removed_for_plugin_fallthrough() {
+    assert_eq!(dispatcher_status("contacts"), DispatchKind::NativeError);
+    assert_eq!(dispatcher_status("contact"), DispatchKind::NativeError);
 }

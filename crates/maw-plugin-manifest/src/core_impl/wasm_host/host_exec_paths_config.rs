@@ -149,6 +149,17 @@ impl MawWasmHost {
                 }
                 self.fs_roots.get("claude-projects").map(|root| root.to_string_lossy().into_owned())
             }
+            "psi" => {
+                if !self.has_exact_cap("fs:read:psi") {
+                    return HostResult::err(
+                        HostErrorCode::CapabilityDenied,
+                        "capability denied: fs:read:psi",
+                    );
+                }
+                self.fs_roots
+                    .get("psi")
+                    .map(|root| root.to_string_lossy().into_owned())
+            }
             "maw-cache" => {
                 if !self.has_exact_cap("fs:read:maw-cache") {
                     return HostResult::err(
@@ -201,7 +212,7 @@ impl MawWasmHost {
             _ => {
                 return HostResult::err(
                     HostErrorCode::InvalidArgs,
-                    format!("unknown path name '{name}'; allowed: home, cwd, repos, fleet-state, fleet-legacy, fleet-config, teams, claude-projects, maw-cache, vault"),
+                    format!("unknown path name '{name}'; allowed: home, cwd, repos, fleet-state, fleet-legacy, fleet-config, teams, claude-projects, maw-cache, psi, vault"),
                 );
             }
         };

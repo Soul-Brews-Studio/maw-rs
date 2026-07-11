@@ -1550,7 +1550,12 @@ fn receiver_inbox_now_millis() -> u128 {
 fn receiver_inbox_iso_from_millis(millis: u128) -> String {
     let seconds = i64::try_from(millis / 1_000).unwrap_or(i64::MAX);
     let ms = u32::try_from(millis % 1_000).unwrap_or(999);
-    let (year, month, day, hour, minute, second) = unix_seconds_to_utc(seconds);
+    let days = seconds.div_euclid(86_400);
+    let seconds_of_day = seconds.rem_euclid(86_400);
+    let (year, month, day) = cli_dispatch_civil_from_days(days);
+    let hour = seconds_of_day / 3_600;
+    let minute = (seconds_of_day % 3_600) / 60;
+    let second = seconds_of_day % 60;
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{ms:03}Z")
 }
 
