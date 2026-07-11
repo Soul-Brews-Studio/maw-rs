@@ -1,0 +1,5 @@
+[
+  {"displayName":"Built-in","space":"1","oracle":"athena","note":"primary"},
+  {"displayName":"Studio","space":"2","match":"zai"},
+  {"displayName":"Studio","space":"2","match":"ghost","note":"offline pin"}
+]
