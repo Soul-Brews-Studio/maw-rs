@@ -47,6 +47,24 @@ fn assert_host_error(value: &Value, code: &str) {
 }
 
 #[test]
+fn config_caps_grant_the_injected_config_root() {
+    let dir = temp("config-plugin");
+    let home = temp("config-home");
+    let config = home.join("maw-config");
+    let host = host_manifest_roots_with_vault(
+        &dir,
+        &home,
+        &["fs:read:config", "fs:write:config"],
+        None,
+        Some(config.clone()),
+    );
+    let workspaces = config.join("workspaces");
+    let created = call(&host, "maw.fs.mkdir", &json!({"path": workspaces}));
+    assert_eq!(created["ok"], true, "{created}");
+    assert!(workspaces.is_dir());
+}
+
+#[test]
 fn vault_read_cap_grants_injected_root_for_paths_list_and_read() {
     let dir = temp("vault-env-plugin");
     let home = temp("vault-injected-home");

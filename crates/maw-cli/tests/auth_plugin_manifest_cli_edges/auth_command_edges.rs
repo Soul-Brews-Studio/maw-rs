@@ -224,22 +224,7 @@ fn auth_text_and_parser_edges_are_covered() {
 
 #[test]
 #[allow(clippy::too_many_lines)]
-fn hub_xdg_scaffold_bind_feed_fuzzy_identity_text_and_errors_are_covered() {
-    assert_usage(
-        &["hub"],
-        "hub: expected validate-workspace or load-workspaces",
-    );
-    assert_usage(&["hub", "bogus"], "hub: unknown subcommand bogus");
-    assert_usage(
-        &["hub", "validate-workspace", "--bogus"],
-        "hub validate-workspace: unknown argument --bogus",
-    );
-    assert_usage(
-        &["hub", "load-workspaces", "--bogus"],
-        "hub load-workspaces: unknown argument --bogus",
-    );
-    assert_ok(&["hub", "constants"], "hub constants heartbeat-ms=");
-
+fn xdg_scaffold_bind_feed_fuzzy_identity_text_and_errors_are_covered() {
     assert_usage(
         &["xdg"],
         "xdg: expected paths, core-paths, or validate-instance",
@@ -445,4 +430,3 @@ fn hub_xdg_scaffold_bind_feed_fuzzy_identity_text_and_errors_are_covered() {
         "identity constants actions=session-name,node-identity",
     );
 }
-

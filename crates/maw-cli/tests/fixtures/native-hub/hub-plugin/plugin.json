@@ -1,0 +1,28 @@
+{
+  "artifact": {
+    "path": "./plugin.wasm",
+    "sha256": "sha256:9ffb3a76778ccbde19a3fd67372907a74c0f691300f512602affd431c7d9afe6"
+  },
+  "author": "Soul-Brews-Studio",
+  "capabilities": [
+    "fs:read:config",
+    "fs:write:config"
+  ],
+  "cli": {
+    "command": "hub",
+    "help": "maw hub [validate-workspace|load-workspaces|constants]"
+  },
+  "description": "Validate and load workspace hub configuration.",
+  "entry": {
+    "export": "handle",
+    "kind": "wasm",
+    "path": "plugin.wasm"
+  },
+  "name": "hub",
+  "schemaVersion": 1,
+  "sdk": "^1.0.0",
+  "target": "wasm",
+  "version": "1.0.0",
+  "wasm": "plugin.wasm",
+  "weight": 20
+}

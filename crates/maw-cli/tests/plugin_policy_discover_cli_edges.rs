@@ -88,19 +88,6 @@ fn early_command_error_and_text_edges_are_covered() {
         "refuse-unsigned",
     );
 
-    let blocking_file = temp_path("hub-file");
-    write(&blocking_file, "not a dir").expect("write blocking file");
-    assert_error_code(
-        &[
-            "hub",
-            "load-workspaces",
-            "--config-dir",
-            blocking_file.to_str().unwrap(),
-        ],
-        1,
-        "hub load-workspaces",
-    );
-
     assert_ok(&["xdg", "core-paths"], "/");
 
     let blocking_home = temp_path("xdg-home");

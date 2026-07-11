@@ -28,10 +28,6 @@ use maw_calver::{compute_version, Channel, ComputeArgs, DateParts};
 use maw_feed::{active_oracles_at, describe_activity, parse_line, FeedEvent};
 use maw_discord::run_discord_command;
 use maw_fuzzy::{distance as fuzzy_distance, fuzzy_match};
-use maw_hub::{
-    load_workspace_configs, validate_workspace_config, WorkspaceConfig, WorkspaceConfigValidation,
-    HEARTBEAT_MS, RECONNECT_BASE_MS, RECONNECT_MAX_MS,
-};
 use maw_identity::{canonical_node_identity, canonical_session_name, CanonicalSessionNameInput};
 use maw_matcher::{
     normalize_target, resolve_by_name, resolve_session_target, resolve_worktree_target,
@@ -254,7 +250,7 @@ mod dispatcher_fragment_tests {
     use std::path::PathBuf;
 
     const CORE_COMMANDS: &[&str] = &[
-        "hey", "send", "serve", "health", "ls", "wake", "hub", "tmux", "init", "reply", "run",
+        "hey", "send", "serve", "health", "ls", "wake", "tmux", "init", "reply", "run",
         "attach", "bud", "buddy",
     ];
 

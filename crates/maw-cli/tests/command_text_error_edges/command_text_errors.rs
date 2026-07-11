@@ -241,48 +241,7 @@ fn plugin_manifest_text_rendering_and_parser_errors_are_stable() {
 }
 
 #[test]
-fn hub_xdg_feed_fuzzy_text_rendering_and_parser_errors_are_stable() {
-    let hub_dir = temp_dir("hub");
-    assert_ok_text(
-        &run_cli(&[
-            "hub".to_owned(),
-            "validate-workspace".to_owned(),
-            "--id".to_owned(),
-            "ws".to_owned(),
-            "--hub-url".to_owned(),
-            "wss://hub.example.test".to_owned(),
-            "--token".to_owned(),
-            "secret".to_owned(),
-        ]),
-        "ok\n",
-    );
-    assert_ok_text(
-        &run_cli(&[
-            "hub".to_owned(),
-            "validate-workspace".to_owned(),
-            "--id".to_owned(),
-            "ws".to_owned(),
-            "--hub-url".to_owned(),
-            "http://hub.example.test".to_owned(),
-            "--token".to_owned(),
-            "secret".to_owned(),
-        ]),
-        "invalid: hubUrl must be ws:|wss: (got http:)\n",
-    );
-    assert_ok_text(
-        &run_cli(&[
-            "hub".to_owned(),
-            "load-workspaces".to_owned(),
-            "--config-dir".to_owned(),
-            hub_dir.display().to_string(),
-        ]),
-        "configs=0 warnings=0\n",
-    );
-    assert_usage_error(
-        &run_cli(&["hub".to_owned(), "load-workspaces".to_owned()]),
-        "hub load-workspaces: --config-dir is required",
-    );
-
+fn xdg_feed_fuzzy_text_rendering_and_parser_errors_are_stable() {
     assert_ok_text(
         &run_cli(&[
             "xdg".to_owned(),
@@ -384,8 +343,6 @@ fn hub_xdg_feed_fuzzy_text_rendering_and_parser_errors_are_stable() {
         ]),
         "fuzzy: --max-distance must be a non-negative integer",
     );
-
-    remove_dir_all(hub_dir).expect("cleanup hub");
 }
 
 #[test]
@@ -574,4 +531,3 @@ fn route_resolve_worktree_calver_text_rendering_and_parser_errors_are_stable() {
         "calver: --now contains out-of-range date/time parts",
     );
 }
-

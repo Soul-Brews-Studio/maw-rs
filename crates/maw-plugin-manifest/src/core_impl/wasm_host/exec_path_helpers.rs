@@ -196,6 +196,7 @@ fn known_fs_root(
 ) -> Option<PathBuf> {
     match scope {
         "teams" => Some(home.join(".claude").join("teams")),
+        "config" => Some(default_config_root(config_root)),
         "claude-projects" => Some(configured_claude_projects_root(home)),
         "repos" => Some(configured_repos_root(home)),
         "cwd" => std::env::current_dir().ok(),
@@ -207,7 +208,7 @@ fn known_fs_root(
 }
 
 fn known_fs_root_should_create(scope: &str) -> bool {
-    matches!(scope, "teams" | "maw-cache")
+    matches!(scope, "teams" | "config" | "maw-cache")
 }
 
 fn configured_maw_cache_root(home: &Path) -> PathBuf {
