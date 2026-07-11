@@ -8,7 +8,15 @@ fn file_kind(file_type: std::fs::FileType) -> &'static str {
     }
 }
 
-fn list_dir(path: &Path, recursive: bool, include_dirs: bool, max: usize, out: &mut Vec<Value>) {
+fn list_dir_page(
+    path: &Path,
+    recursive: bool,
+    include_dirs: bool,
+    offset: usize,
+    max: usize,
+    out: &mut Vec<Value>,
+    seen: &mut usize,
+) {
     if out.len() >= max {
         return;
     }
@@ -24,14 +32,17 @@ fn list_dir(path: &Path, recursive: bool, include_dirs: bool, max: usize, out: &
         };
         let kind = file_kind(meta.file_type());
         if include_dirs || kind != "dir" {
-            out.push(json!({
-                "path": entry.path().display().to_string(),
-                "kind": kind,
-                "bytes": meta.len()
-            }));
+            if *seen >= offset {
+                out.push(json!({
+                    "path": entry.path().display().to_string(),
+                    "kind": kind,
+                    "bytes": meta.len()
+                }));
+            }
+            *seen += 1;
         }
         if recursive && kind == "dir" {
-            list_dir(&entry.path(), true, include_dirs, max, out);
+            list_dir_page(&entry.path(), true, include_dirs, offset, max, out, seen);
         }
     }
 }
@@ -187,4 +198,3 @@ fn tmux_sessions_json(sessions: Vec<maw_tmux::TmuxSession>) -> Vec<Value> {
         })
         .collect()
 }
-

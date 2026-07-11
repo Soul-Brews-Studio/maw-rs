@@ -44,6 +44,8 @@ struct FsListArgs {
     path: String,
     recursive: Option<bool>,
     max_entries: Option<usize>,
+    offset: Option<usize>,
+    cursor: Option<String>,
     include_dirs: Option<bool>,
 }
 #[derive(Debug, Deserialize)]

@@ -248,6 +248,38 @@ fn manifest_read_cap_grants_exactly_the_named_teams_root() {
 }
 
 #[test]
+fn fs_list_paginates_more_than_one_thousand_entries() {
+    let dir = temp("fs-list-page-plugin");
+    let home = temp("fs-list-page-home");
+    let root = teams_root(&home).join("many");
+    create_dir_all(&root).expect("many dir");
+    for i in 0..1005 {
+        write(root.join(format!("{i:04}.txt")), "x").expect("seed file");
+    }
+    let host = host_manifest_roots(&dir, &home, &["fs:read:teams"]);
+
+    let first = call(
+        &host,
+        "maw.fs.list",
+        &json!({ "path": root, "includeDirs": false, "maxEntries": 1000 }),
+    );
+    assert_eq!(first["ok"], true, "{first}");
+    assert_eq!(first["value"]["entries"].as_array().unwrap().len(), 1000);
+    assert_eq!(first["value"]["hasMore"], true);
+    assert_eq!(first["value"]["nextOffset"], 1000);
+
+    let second = call(
+        &host,
+        "maw.fs.list",
+        &json!({ "path": root, "includeDirs": false, "cursor": "1000", "maxEntries": 1000 }),
+    );
+    assert_eq!(second["ok"], true, "{second}");
+    assert_eq!(second["value"]["entries"].as_array().unwrap().len(), 5);
+    assert_eq!(second["value"]["hasMore"], false);
+    assert!(second["value"]["nextOffset"].is_null());
+}
+
+#[test]
 fn manifest_write_cap_grants_write_not_read() {
     let dir = temp("caps-write-plugin");
     let home = temp("caps-write-home");

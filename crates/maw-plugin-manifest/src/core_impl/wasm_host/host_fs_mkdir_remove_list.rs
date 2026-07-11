@@ -86,14 +86,31 @@ impl MawWasmHost {
         };
         let mut entries = Vec::new();
         let max = args.max_entries.unwrap_or(200).min(1000);
-        list_dir(
+        let offset = args
+            .offset
+            .or_else(|| args.cursor.as_deref().and_then(|cursor| cursor.parse().ok()))
+            .unwrap_or(0);
+        let mut seen = 0;
+        list_dir_page(
             &real,
             args.recursive.unwrap_or(false),
             args.include_dirs.unwrap_or(true),
-            max,
+            offset,
+            max.saturating_add(1),
             &mut entries,
+            &mut seen,
         );
-        HostResult::ok(json!({"entries": entries}))
+        let has_more = entries.len() > max;
+        if has_more {
+            entries.truncate(max);
+        }
+        let next_offset = offset + entries.len();
+        HostResult::ok(json!({
+            "entries": entries,
+            "hasMore": has_more,
+            "nextOffset": has_more.then_some(next_offset),
+            "nextCursor": has_more.then_some(next_offset.to_string())
+        }))
     }
 
     fn fs_stat(&self, input: &str) -> HostResult<Value> {
