@@ -83,6 +83,7 @@ pub const HOST_FN_NAMES: &[&str] = &[
     "maw.exec.run",
     "maw.exec.spawn",
     "maw.paths.get",
+    "maw.time.now",
     "maw.config.get",
     "maw.config.set",
     "maw.consent.read",

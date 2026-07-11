@@ -44,20 +44,12 @@ fn optional_string_field(
 }
 
 fn invoke_context_json(ctx: &InvokeContext) -> String {
-    let now_millis = std::env::var("MAW_CONTACTS_NOW_MS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or_else(|| {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |duration| {
-                    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
-                })
-        });
+    // cwd/home are additive maw-rs context fields. Emit them only when known so
+    // the default `{source,args}` shape stays byte-identical to maw-js (and the
+    // committed wasm-parity goldens) for plugins that don't need them.
     let mut value = serde_json::json!({
         "source": ctx.source.as_str(),
         "args": ctx.args,
-        "nowMillis": now_millis,
     });
     if let Some(map) = value.as_object_mut() {
         if let Some(cwd) = &ctx.cwd {
@@ -705,11 +697,7 @@ mod part03_coverage_tests {
             cwd: None,
             home: None,
         };
-        let value: serde_json::Value =
-            serde_json::from_str(&invoke_context_json(&ctx)).expect("context json");
-        assert_eq!(value["source"], "cli");
-        assert!(value["nowMillis"].as_u64().is_some());
-        assert!(value.get("cwd").is_none());
-        assert!(value.get("home").is_none());
+        // Default shape stays maw-js-identical: no cwd/home keys at all.
+        assert_eq!(invoke_context_json(&ctx), r#"{"args":[],"source":"cli"}"#);
     }
 }

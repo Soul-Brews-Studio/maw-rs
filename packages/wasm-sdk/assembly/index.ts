@@ -2,6 +2,7 @@ import { Memory } from "@extism/as-pdk";
 import { length } from "@extism/as-pdk/lib/env";
 
 @external("extism:host/user", "maw.config.get") declare function mawConfigGet(input: u64): u64;
+@external("extism:host/user", "maw.time.now") declare function mawTimeNow(input: u64): u64;
 @external("extism:host/user", "maw.config.set") declare function mawConfigSet(input: u64): u64;
 @external("extism:host/user", "maw.consent.read") declare function mawConsentRead(input: u64): u64;
 @external("extism:host/user", "maw.state.get") declare function mawStateGet(input: u64): u64;
@@ -140,6 +141,7 @@ export function saveConfig(argsJson: string): string { return call(mawConfigSet,
 export function resetConfig(argsJson: string = "{}"): string { return call(mawConfigSet, argsJson); }
 export function readConsent(argsJson: string): string { return call(mawConsentRead, argsJson); }
 export function getEnvVars(argsJson: string = "{}"): string { return call(mawConfigGet, argsJson); }
+export function timeNow(argsJson: string = "{}"): string { return call(mawTimeNow, argsJson); }
 export function loadPending(argsJson: string): string { return call(mawStateGet, argsJson); }
 export function savePending(argsJson: string): string { return call(mawStateSet, argsJson); }
 export function readAudit(argsJson: string): string { return call(mawStateGet, argsJson); }

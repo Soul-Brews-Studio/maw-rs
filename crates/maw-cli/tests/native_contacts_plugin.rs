@@ -30,7 +30,6 @@ fn run(args: &[&str], cwd: &Path, maw_home: &Path, plugins_dir: &Path) -> std::p
         .env("MAW_HOME", maw_home)
         .env("MAW_JS_REF_DIR", "/nonexistent")
         .env("MAW_PLUGINS_DIR", plugins_dir)
-        .env("MAW_CONTACTS_NOW_MS", "1783788121251")
         .output()
         .expect("run maw-rs")
 }

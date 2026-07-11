@@ -27,6 +27,11 @@ impl MawWasmHost {
             "maw.exec.run" => to_json(&self.exec_run(input)),
             "maw.exec.spawn" => to_json(&self.exec_spawn(input)),
             "maw.paths.get" => to_json(&self.paths_get(input)),
+            "maw.time.now" => to_json(&HostResult::ok(json!({
+                "millis": std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)),
+            }))),
             "maw.config.get" => to_json(&self.config_get(input)),
             "maw.config.set" => to_json(&self.config_set(input)),
             "maw.consent.read" => to_json(&self.consent_read(input)),
