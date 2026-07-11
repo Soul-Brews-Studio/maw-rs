@@ -10,6 +10,20 @@ fn epic55_base() -> Command {
     command
 }
 
+fn epic55_follow() -> (Command, PathBuf) {
+    let root = std::env::temp_dir().join(format!("maw-rs-follow-plugin-{}", std::process::id()));
+    let plugin = root.join("follow");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&plugin).expect("plugin dir");
+    let fixture =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/epic55/follow-plugin");
+    std::fs::copy(fixture.join("plugin.json"), plugin.join("plugin.json")).expect("manifest");
+    std::fs::copy(fixture.join("plugin.wasm"), plugin.join("plugin.wasm")).expect("wasm");
+    let mut command = epic55_base();
+    command.env("MAW_PLUGINS_DIR", &root);
+    (command, root)
+}
+
 #[test]
 fn epic55_activity_matches_committed_golden_without_ref_checkout() {
     let output = epic55_base()
@@ -31,26 +45,14 @@ fn epic55_activity_matches_committed_golden_without_ref_checkout() {
 }
 
 #[test]
-fn epic55_follow_matches_committed_golden_without_ref_checkout() {
-    let output = epic55_base()
-        .args(["follow", "s:main", "--grep", "hello"])
-        .env(
-            "MAW_RS_FOLLOW_FAKE_STREAM",
-            "skip me\n---chunk---\nhello from pane\n",
-        )
-        .output()
-        .expect("run follow");
-
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(
-        String::from_utf8(output.stdout).expect("stdout"),
-        include_str!("fixtures/epic55/follow-fake.stdout")
-    );
-    assert_eq!(String::from_utf8(output.stderr).expect("stderr"), "");
+fn epic55_follow_plugin_preserves_usage_guard() {
+    let (mut command, root) = epic55_follow();
+    let output = command.args(["follow", "-pane"]).output().expect("follow");
+    assert!(!output.status.success());
+    assert!(String::from_utf8(output.stderr)
+        .expect("stderr")
+        .contains("usage: maw follow"));
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]
@@ -64,7 +66,8 @@ fn epic55_activity_follow_guard_leading_dash_values_before_io() {
         .expect("stderr")
         .contains("usage: maw activity"));
 
-    let follow = epic55_base()
+    let (mut follow_command, root) = epic55_follow();
+    let follow = follow_command
         .args(["follow", "-pane"])
         .output()
         .expect("follow");
@@ -72,6 +75,7 @@ fn epic55_activity_follow_guard_leading_dash_values_before_io() {
     assert!(String::from_utf8(follow.stderr)
         .expect("stderr")
         .contains("usage: maw follow"));
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]
@@ -82,7 +86,7 @@ fn epic55_dispatch_registers_activity_follow_without_token_slice() {
     );
     assert_eq!(
         maw_cli::dispatcher_status("follow"),
-        maw_cli::DispatchKind::Native
+        maw_cli::DispatchKind::NativeError
     );
     assert_eq!(
         maw_cli::dispatcher_status("token"),

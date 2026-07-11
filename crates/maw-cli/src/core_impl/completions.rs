@@ -265,7 +265,6 @@ fn completions_usage_sources() -> Vec<(&'static str, String)> {
         ("done", DONE_USAGE.to_owned()),
         ("dream", DREAM_USAGE.to_owned()),
         ("fleet", fleet_usage()),
-        ("follow", FOLLOW_USAGE.to_owned()),
         ("inbox", INBOX_USAGE.to_owned()),
         ("join", JOIN_USAGE.to_owned()),
         ("kill", KILL_USAGE.to_owned()),
