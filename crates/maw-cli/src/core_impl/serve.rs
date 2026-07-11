@@ -1,8 +1,9 @@
 use axum::{
-    body::Bytes,
+    body::{Body, Bytes},
     extract::{ConnectInfo, Path as AxumPath, Query, State},
-    http::{HeaderMap, Method, StatusCode, Uri},
-    response::IntoResponse,
+    http::{HeaderMap, Method, Request, StatusCode, Uri},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -45,6 +46,7 @@ struct ServeState {
     serve_core_state_override: Option<crate::serve_core::ServecoreSharedState>,
     trust_store_path: std::path::PathBuf,
     plugin_serve_routes: Vec<ServePluginRoute>,
+    api_token_auth: ServeApiTokenAuth,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,6 +57,31 @@ struct ServePluginRoute {
     health_path: String,
     events: Vec<String>,
     event_path: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ServeApiTokenAuth {
+    token: Option<String>,
+    loopback_exempt: bool,
+    forced_open: bool,
+}
+
+impl ServeApiTokenAuth {
+    #[cfg(test)]
+    fn open() -> Self { Self { token: None, loopback_exempt: true, forced_open: true } }
+
+    fn mode_label(&self) -> &'static str {
+        if self.forced_open { "open (configured)" } else if self.token.is_some() { "token" } else { "open" }
+    }
+
+    fn token_matches(&self, headers: &HeaderMap) -> bool {
+        let Some(token) = self.token.as_deref() else { return true; };
+        let bearer = headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("Bearer "));
+        bearer == Some(token) || header_to_string(headers, "x-maw-token") == token
+    }
 }
 
 trait ServeDelivery: Send + Sync {
@@ -199,6 +226,7 @@ async fn run_serve_async_impl(raw_args: &[String]) -> CliOutput {
             }
         }
     };
+    let api_token_auth = load_serve_api_token_auth();
     let app = serve_router(ServeState {
         cached_pubkey: args.cached_pubkey,
         peer_pubkeys: load_inbound_peer_pubkeys(),
@@ -217,8 +245,10 @@ async fn run_serve_async_impl(raw_args: &[String]) -> CliOutput {
         serve_core_state_override: None,
         trust_store_path: trust_store_path(),
         plugin_serve_routes: serve_discover_plugin_routes(),
+        api_token_auth: api_token_auth.clone(),
     });
     println!("maw-rs serve listening http://{local_addr}");
+    println!("maw-rs serve auth: {}", api_token_auth.mode_label());
     match axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
@@ -410,8 +440,34 @@ fn serve_router(state: ServeState) -> Router {
         .route("/api/workspace/:id/message", post(api_workspace_message));
     let router = router.fallback(api_not_found);
     let router = crate::serve_core::servecore_apply_pipeline(router);
+    let router = router.layer(middleware::from_fn_with_state(
+        state.api_token_auth.clone(),
+        serve_api_token_gate,
+    ));
     let router = crate::serve_core::servecore_with_shared_state(router, serve_core_state);
     router.with_state(state)
+}
+
+async fn serve_api_token_gate(
+    State(auth): State<ServeApiTokenAuth>,
+    req: Request<Body>,
+    next: Next,
+) -> Response {
+    let path = req.uri().path();
+    if !path.starts_with("/api/") || path == "/api/health" || auth.forced_open || auth.token.is_none() {
+        return next.run(req).await;
+    }
+    if auth.loopback_exempt {
+        if let Some(ConnectInfo(peer)) = req.extensions().get::<ConnectInfo<SocketAddr>>() {
+            if maw_auth::is_loopback(Some(&peer.ip().to_string())) {
+                return next.run(req).await;
+            }
+        }
+    }
+    if auth.token_matches(req.headers()) {
+        return next.run(req).await;
+    }
+    (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized", "auth": "maw-serve-token"}))).into_response()
 }
 
 fn serve_discover_plugin_routes() -> Vec<ServePluginRoute> {
@@ -2406,6 +2462,37 @@ fn agent_key(node_id: &str, name: &str) -> String {
     format!("{node_id}:{name}")
 }
 
+fn load_serve_api_token_auth() -> ServeApiTokenAuth {
+    let config = merged_config_value_for_env(&real_xdg_env());
+    let serve = config.get("serve");
+    let forced_open = serve
+        .and_then(|v| v.get("authMode").or_else(|| v.get("auth")))
+        .and_then(Value::as_str)
+        .is_some_and(|mode| mode.eq_ignore_ascii_case("open"))
+        || serve.and_then(|v| v.get("open")).and_then(Value::as_bool) == Some(true);
+    let loopback_exempt = serve
+        .and_then(|v| v.get("loopbackExempt").or_else(|| v.get("authLoopbackExempt")))
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let config_token = serve
+        .and_then(|v| v.get("token").or_else(|| v.get("apiToken")))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let env_token = std::env::var("MAW_SERVE_TOKEN")
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    let env_overrides = env_token.is_some();
+    let token = env_token.or(config_token);
+    ServeApiTokenAuth {
+        token: if forced_open && !env_overrides { None } else { token },
+        loopback_exempt,
+        forced_open: forced_open && !env_overrides,
+    }
+}
+
 fn load_serve_workspace_key() -> Option<String> {
     if let Ok(value) = std::env::var("MAW_FEDERATION_TOKEN") {
         let value = value.trim();
@@ -3003,6 +3090,7 @@ mod serve_tests {
             serve_core_state_override: None,
             trust_store_path,
             plugin_serve_routes: Vec::new(),
+            api_token_auth: ServeApiTokenAuth::open(),
         })
     }
 
@@ -3022,6 +3110,34 @@ mod serve_tests {
             serve_core_state_override: None,
             trust_store_path: serve_test_trust_store_path("plugins"),
             plugin_serve_routes,
+            api_token_auth: ServeApiTokenAuth::open(),
+        })
+    }
+
+    fn serve_test_app_with_api_auth(api_token_auth: ServeApiTokenAuth) -> Router {
+        serve_router(ServeState {
+            cached_pubkey: Some(KEY.to_owned()),
+            peer_pubkeys: Vec::new(),
+            workspace_key: Some(KEY.to_owned()),
+            workspaces: Mutex::new(WorkspaceStore::default()),
+            requests: Mutex::new(RequestReplyStore::default()),
+            delivery: serve_test_delivery(),
+            receiver_inbox: serve_test_receiver_inbox(),
+            delivery_idempotency: Mutex::new(DeliveryIdempotencyStore::default()),
+            feed: Mutex::new(Vec::new()),
+            peer_addr_override: Some(NON_LOOPBACK_TEST_PEER),
+            now_override: Some(1_782_277_200),
+            serve_core_state_override: None,
+            trust_store_path: serve_test_trust_store_path("api-token"),
+            plugin_serve_routes: vec![ServePluginRoute {
+                name: "testext".to_owned(),
+                command: None,
+                prefix: "/api/testext".to_owned(),
+                health_path: "/api/testext/health".to_owned(),
+                events: Vec::new(),
+                event_path: None,
+            }],
+            api_token_auth,
         })
     }
 
@@ -3113,6 +3229,7 @@ mod serve_tests {
             serve_core_state_override: None,
             trust_store_path: serve_test_trust_store_path("o6"),
             plugin_serve_routes: Vec::new(),
+            api_token_auth: ServeApiTokenAuth::open(),
         })
     }
 
@@ -4121,6 +4238,7 @@ mod serve_tests {
             serve_core_state_override: None,
             trust_store_path: serve_test_trust_store_path("server"),
             plugin_serve_routes: Vec::new(),
+            api_token_auth: ServeApiTokenAuth::open(),
         });
         let (tx, rx) = oneshot::channel::<()>();
         tokio::spawn(async move {
@@ -4194,6 +4312,43 @@ mod serve_tests {
             .send()
             .await
             .expect("send legacy");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn serve_api_token_auth_gates_api_but_leaves_health_open() {
+        let app = serve_test_app_with_api_auth(ServeApiTokenAuth {
+            token: Some("secret-token".to_owned()),
+            loopback_exempt: false,
+            forced_open: false,
+        });
+        let denied = app.clone().oneshot(axum::http::Request::get("/api/feed").body(Body::empty()).unwrap()).await.expect("denied");
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+
+        let health = app.clone().oneshot(axum::http::Request::get("/api/health").body(Body::empty()).unwrap()).await.expect("health");
+        assert_eq!(health.status(), StatusCode::OK);
+
+        let bearer = app.clone().oneshot(
+            axum::http::Request::get("/api/feed")
+                .header("authorization", "Bearer secret-token")
+                .body(Body::empty())
+                .unwrap(),
+        ).await.expect("bearer");
+        assert_eq!(bearer.status(), StatusCode::OK);
+
+        let plugin = app.oneshot(
+            axum::http::Request::get("/api/testext/health")
+                .header("x-maw-token", "secret-token")
+                .body(Body::empty())
+                .unwrap(),
+        ).await.expect("plugin x token");
+        assert_eq!(plugin.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn serve_api_token_auth_open_mode_is_backward_compatible() {
+        let app = serve_test_app_with_api_auth(ServeApiTokenAuth::open());
+        let response = app.oneshot(axum::http::Request::get("/api/feed").body(Body::empty()).unwrap()).await.expect("open mode");
         assert_eq!(response.status(), StatusCode::OK);
     }
 
@@ -4500,6 +4655,7 @@ mod serve_tests {
             serve_core_state_override: Some(fake_core),
             trust_store_path: serve_test_trust_store_path("agents"),
             plugin_serve_routes: Vec::new(),
+            api_token_auth: ServeApiTokenAuth::open(),
         });
         let (tx, rx) = oneshot::channel::<()>();
         tokio::spawn(async move {
