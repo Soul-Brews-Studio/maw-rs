@@ -45,6 +45,7 @@ fn net_fetch_granted_endpoint_uses_policy_and_audits_hostless_path() {
         &json!({"endpoint":"local-api","path":"/sessions/abc","query":{"limit":"1"}}),
     );
     assert_eq!(result["value"]["status"], 200, "{result}");
+    assert!(result["value"]["elapsedMs"].as_u64().is_some(), "{result}");
     assert!(rx
         .recv()
         .expect("captured")

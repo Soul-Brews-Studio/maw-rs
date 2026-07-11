@@ -75,7 +75,13 @@ impl MawWasmHost {
             Ok(cap) => cap,
             Err(err) => return err,
         };
-        let result = self.net_fetch_checked(args, &method);
+        let mut result = self.net_fetch_checked(args, &method);
+        if let HostResult::Ok { value, .. } = &mut result {
+            if let Some(response) = value.as_object_mut() {
+                let elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
+                response.insert("elapsedMs".to_owned(), Value::from(elapsed_ms));
+            }
+        }
         self.audit("maw.net.fetch", &cap, &resource, status_of(&result), start);
         result
     }
@@ -281,28 +287,23 @@ impl MawWasmHost {
     }
 
     fn run_http_transport(&self, request: &TransportHttpRequest) -> HostResult<Value> {
-        let runtime = match tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
+        let request = request.clone();
+        let timeout_ms = request.timeout_ms.unwrap_or(self.http_timeout_ms);
+        match std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|error| format!("tokio runtime failed: {error}"))?;
+            let client = ReqwestHttpTransportIo::new(timeout_ms)?;
+            runtime.block_on(client.request(&request))
+        })
+        .join()
         {
-            Ok(rt) => rt,
-            Err(error) => {
-                return HostResult::err(
-                    HostErrorCode::NetworkError,
-                    format!("tokio runtime failed: {error}"),
-                )
-            }
-        };
-        let client =
-            match ReqwestHttpTransportIo::new(request.timeout_ms.unwrap_or(self.http_timeout_ms)) {
-                Ok(client) => client,
-                Err(error) => return HostResult::err(HostErrorCode::NetworkError, error),
-            };
-        match runtime.block_on(client.request(request)) {
-            Ok(resp) => HostResult::ok(
+            Ok(Ok(resp)) => HostResult::ok(
                 json!({"status": resp.status, "headers": resp.headers, "body": resp.body, "url": resp.url}),
             ),
-            Err(error) => HostResult::err(HostErrorCode::NetworkError, error),
+            Ok(Err(error)) => HostResult::err(HostErrorCode::NetworkError, error),
+            Err(_) => HostResult::err(HostErrorCode::NetworkError, "HTTP worker thread panicked"),
         }
     }
 
