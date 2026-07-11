@@ -158,3 +158,36 @@ fn tmux_command_host_requires_manage_cap_and_restricts_argv() {
             .contains("\"capability\":\"tmux:raw:unlink-window\"")
     );
 }
+
+#[test]
+fn tmux_command_host_manages_mega_read_and_kill_shapes() {
+    let dir = temp("tmux-command-mega");
+    let read_host = host(&dir, &["tmux:read"]).with_tmux_dry_run();
+    let list = call(
+        &read_host,
+        "maw.tmux.command",
+        &json!({"command":"list-windows","args":["-t","01-alpha","-F","#{window_index}\t#{window_name}\t#{window_active}\t#{window_panes}"]}),
+    );
+    assert_eq!(list["ok"], true, "{list}");
+
+    let denied = call(
+        &read_host,
+        "maw.tmux.command",
+        &json!({"command":"kill-session","args":["-t","01-alpha"]}),
+    );
+    assert_eq!(denied["code"], "capability_denied", "{denied}");
+
+    let kill_host = host(&dir, &["tmux:raw:kill-session"]).with_tmux_dry_run();
+    let kill = call(
+        &kill_host,
+        "maw.tmux.command",
+        &json!({"command":"kill-session","args":["-t","01-alpha"]}),
+    );
+    assert_eq!(kill["ok"], true, "{kill}");
+    let injected = call(
+        &kill_host,
+        "maw.tmux.command",
+        &json!({"command":"kill-session","args":["-t","-Sbad"]}),
+    );
+    assert_eq!(injected["code"], "invalid_args", "{injected}");
+}

@@ -129,7 +129,10 @@ impl MawWasmHost {
             Ok(args) => args,
             Err(err) => return err,
         };
-        let capability = if matches!(args.command.as_str(), "display-message" | "show-options") {
+        let capability = if matches!(
+            args.command.as_str(),
+            "display-message" | "show-options" | "list-windows"
+        ) {
             "tmux:read".to_owned()
         } else {
             format!("tmux:raw:{}", args.command)
@@ -253,6 +256,12 @@ fn valid_tmux_command_argv(command: &str, args: &[String]) -> bool {
         ("show-options", [target, session, global, option]) => {
             target == "-t" && safe(session) && global == "-gv" && option == "base-index"
         }
+        ("list-windows", [target, session, format_flag, format]) => {
+            target == "-t"
+                && safe(session)
+                && format_flag == "-F"
+                && format == "#{window_index}\t#{window_name}\t#{window_active}\t#{window_panes}"
+        }
         ("new-session", [detached, session_flag, session, name_flag, name]) => {
             detached == "-d"
                 && session_flag == "-s"
@@ -281,7 +290,9 @@ fn valid_tmux_command_argv(command: &str, args: &[String]) -> bool {
                 && safe(target)
                 && target.ends_with(":maw-stream-placeholder")
         }
-        ("unlink-window", [target_flag, target]) => target_flag == "-t" && safe(target),
+        ("kill-session" | "unlink-window", [target_flag, target]) => {
+            target_flag == "-t" && safe(target)
+        }
         _ => false,
     }
 }

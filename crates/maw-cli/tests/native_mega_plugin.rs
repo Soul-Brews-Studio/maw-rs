@@ -1,8 +1,13 @@
+use maw_cli::{dispatcher_status, DispatchKind};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn maw_rs_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_maw-rs"))
+}
+
+fn plugin_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native-mega")
 }
 
 fn write_file(path: &Path, text: &str) {
@@ -45,12 +50,14 @@ fn command_with_env(root: &Path, home: &Path, config: &Path) -> Command {
         .env("XDG_CACHE_HOME", root.join("cache"))
         .env("TMUX", "hermetic-tmux")
         .env("MAW_JS_REF_DIR", "/nonexistent")
+        .env("MAW_PLUGINS_DIR", plugin_dir())
         .env("PATH", root.join("bin"));
     command
 }
 
 #[test]
 fn mega_ls_team_lead_is_hermetic_and_does_not_need_tmux() {
+    assert_eq!(dispatcher_status("mega"), DispatchKind::NativeError);
     let (root, home, config) = seed_mega_env("ls");
 
     let output = command_with_env(&root, &home, &config)
