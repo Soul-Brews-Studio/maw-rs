@@ -834,7 +834,13 @@ fn bun_dev_banner(plugin_name: &str) -> String {
 }
 
 fn plugin_cli_args<'a>(plugin: &LoadedPlugin, argv: &'a [String]) -> Option<&'a [String]> {
-    let command = &plugin.manifest.cli.as_ref()?.command;
+    let cli = plugin.manifest.cli.as_ref()?;
+    std::iter::once(&cli.command)
+        .chain(cli.aliases.iter().flatten())
+        .find_map(|command| plugin_command_args(command, argv))
+}
+
+fn plugin_command_args<'a>(command: &str, argv: &'a [String]) -> Option<&'a [String]> {
     let command_parts = command.split_whitespace().collect::<Vec<_>>();
     if command_parts.is_empty() || argv.len() < command_parts.len() {
         return None;

@@ -248,6 +248,32 @@ fn manifest_read_cap_grants_exactly_the_named_teams_root() {
 }
 
 #[test]
+fn maw_cache_caps_resolve_the_fixed_cache_root() {
+    let dir = temp("maw-cache-plugin");
+    let home = temp("maw-cache-home");
+    let host = host_manifest_roots(
+        &dir,
+        &home,
+        &["fs:read:maw-cache", "fs:write:maw-cache"],
+    );
+    let cache = home.join(".maw");
+
+    let resolved = call(&host, "maw.paths.get", &json!({ "name": "maw-cache" }));
+    assert_eq!(resolved["ok"], true, "{resolved}");
+    assert_eq!(resolved["value"]["path"], cache.display().to_string());
+
+    let target = cache.join("artifacts/team-a/t1/meta.json");
+    let written = call(
+        &host,
+        "maw.fs.write",
+        &json!({ "path": &target, "content": "{}", "mode": "overwrite", "mkdirp": true }),
+    );
+    assert_eq!(written["ok"], true, "{written}");
+    let read = call(&host, "maw.fs.read", &json!({ "path": &target }));
+    assert_eq!(read["value"]["content"], "{}", "{read}");
+}
+
+#[test]
 fn fs_list_paginates_more_than_one_thousand_entries() {
     let dir = temp("fs-list-page-plugin");
     let home = temp("fs-list-page-home");

@@ -256,7 +256,6 @@ fn completions_usage_sources() -> Vec<(&'static str, String)> {
     vec![
         ("absorb", ABSORB_USAGE.to_owned()),
         ("activity", ACTIVITY_USAGE.to_owned()),
-        ("art", ARTIFACTMGR_USAGE.to_owned()),
         ("audit", AUDIT_USAGE.to_owned()),
         ("awake", AWAKE_USAGE.to_owned()),
         ("codex", CODEX_USAGE_273.to_owned()),
@@ -617,7 +616,6 @@ mod completions_tests {
         assert_eq!(completions_subs("codex"), ["accounts"]);
         assert_eq!(completions_subs("policy"), ["--constants", "--default-active", "--weight", "constants"]);
         assert_eq!(completions_subs("consent"), ["approve", "list", "list-trust", "reject", "trust", "untrust"]);
-        assert_eq!(completions_subs("art"), ["attach", "get", "init", "ls", "write"]);
         assert_eq!(completions_subs("more"), ["codex", "status"]);
         assert_eq!(completions_subs("user-setup"), ["projects"]);
         let team = completions_subs("team");

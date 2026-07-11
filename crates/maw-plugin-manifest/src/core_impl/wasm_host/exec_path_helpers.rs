@@ -199,13 +199,33 @@ fn known_fs_root(
         "claude-projects" => Some(configured_claude_projects_root(home)),
         "repos" => Some(configured_repos_root(home)),
         "cwd" => std::env::current_dir().ok(),
+        "maw-cache" => Some(configured_maw_cache_root(home)),
+        "maw-legacy" => Some(home.join(".maw")),
         "vault" => configured_vault_root(home, config_root, vault_root).ok(),
         _ => None,
     }
 }
 
 fn known_fs_root_should_create(scope: &str) -> bool {
-    scope == "teams"
+    matches!(scope, "teams" | "maw-cache")
+}
+
+fn configured_maw_cache_root(home: &Path) -> PathBuf {
+    if let Some(path) = std::env::var_os("MAW_HOME").filter(|value| !value.is_empty()) {
+        return resolve_configured_path(PathBuf::from(path), home);
+    }
+    if let Some(path) = std::env::var_os("MAW_CACHE_DIR").filter(|value| !value.is_empty()) {
+        return resolve_configured_path(PathBuf::from(path), home);
+    }
+    if std::env::var("MAW_XDG").is_ok_and(|value| {
+        matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
+    }) {
+        return std::env::var_os("XDG_CACHE_HOME")
+            .filter(|value| !value.is_empty())
+            .map_or_else(|| home.join(".cache"), PathBuf::from)
+            .join("maw");
+    }
+    home.join(".maw")
 }
 
 fn configured_repos_root(home: &Path) -> PathBuf {

@@ -61,6 +61,9 @@ fn invoke_context_json(ctx: &InvokeContext) -> String {
         if let Ok(today) = std::env::var("MAW_COSTS_TODAY") {
             if today.len() >= 10 { map.insert("today".to_owned(), serde_json::Value::from(&today[..10])); }
         }
+        if let Ok(now) = std::env::var("MAW_TEST_NOW") {
+            map.insert("now".to_owned(), serde_json::Value::from(now));
+        }
     }
     value.to_string()
 }
