@@ -1,7 +1,7 @@
 // maw fleet roster — squadron members[] on fleet squad files (#291). Pure roster (de)serialization
 // stays deterministic and I/O-free; commands compose it with fleet read dirs + oracles.json cache.
 
-const FLEET_ROSTER_USAGE: &str = "usage: maw fleet create <squad> | maw fleet show <squad> [--json] | maw fleet status <squad> [--json] | maw fleet remove <squad> <handle> | maw fleet leave <squad>";
+const FLEET_ROSTER_USAGE: &str = "usage: maw fleet create <squad> [--token X] | maw fleet show <squad> [--json] | maw fleet status <squad> [--json] | maw fleet remove <squad> <handle> | maw fleet leave <squad>";
 
 #[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
 struct NativeFleetMember {
@@ -96,13 +96,27 @@ fn fleet_roster_find_entry(env: &MawXdgEnv, group: &str, verb: &str) -> Result<N
 
 fn fleet_roster_run(argv: &[String]) -> Result<(i32, String), String> {
     let mut json = false;
+    let mut token = None::<String>;
     let mut positional = Vec::new();
-    for arg in argv {
-        match arg.as_str() {
+    let mut idx = 0;
+    while idx < argv.len() {
+        match argv[idx].as_str() {
             "--json" => json = true,
+            "--token" => {
+                idx += 1;
+                let Some(value) = argv.get(idx) else { return Err("fleet create: --token requires a value".to_owned()); };
+                token_validate_name("token name", value)?;
+                token = Some(value.clone());
+            }
+            value if value.starts_with("--token=") => {
+                let value = value.trim_start_matches("--token=");
+                token_validate_name("token name", value)?;
+                token = Some(value.to_owned());
+            }
             value if value.starts_with('-') => return Err(FLEET_ROSTER_USAGE.to_owned()),
             value => positional.push(value),
         }
+        idx += 1;
     }
     let (Some(&sub), Some(&group), None) = (positional.first(), positional.get(1), positional.get(2)) else {
         return Err(FLEET_ROSTER_USAGE.to_owned());
@@ -110,13 +124,14 @@ fn fleet_roster_run(argv: &[String]) -> Result<(i32, String), String> {
     fleet_validate_session_name(group)?;
     let env = current_xdg_env();
     match sub {
-        "create" => fleet_roster_create(&env, group),
+        "create" => fleet_roster_create_with_token(&env, group, token.as_deref()),
         "show" => fleet_roster_show(&env, group, json, None),
         _ => fleet_roster_show(&env, group, json, Some(&TmuxClient::local().list_all())),
     }
 }
 
-fn fleet_roster_create(env: &MawXdgEnv, group: &str) -> Result<(i32, String), String> {
+
+fn fleet_roster_create_with_token(env: &MawXdgEnv, group: &str, token: Option<&str>) -> Result<(i32, String), String> {
     let entries = fleet_load_entries_result_for_env(env, "fleet create")?;
     if entries.iter().any(|entry| fleet_roster_entry_matches(entry, group)) {
         return Err(format!("fleet create: squad {group} already exists"));
@@ -126,14 +141,19 @@ fn fleet_roster_create(env: &MawXdgEnv, group: &str) -> Result<(i32, String), St
     let dir = maw_state_path(env, &["fleet"]).join("squads").join(format!("{nn:02}-{group}"));
     std::fs::create_dir_all(&dir).map_err(|error| format!("fleet create: create {}: {error}", dir.display()))?;
     let path = dir.join("squad.json");
-    let body = fleet_roster_new_file_json(nn, group, &fleet_registry_now_iso())?;
+    let body = fleet_roster_new_file_json_with_token(nn, group, &fleet_registry_now_iso(), token)?;
     std::fs::write(&path, body).map_err(|error| format!("fleet create: write {}: {error}", path.display()))?;
     Ok((0, format!("fleet create {group}: created {}\n", path.display())))
 }
 
 // Pure + deterministic: same inputs render the same file body.
+#[cfg(test)]
 fn fleet_roster_new_file_json(nn: u32, group: &str, created_at: &str) -> Result<String, String> {
-    let value = serde_json::json!({
+    fleet_roster_new_file_json_with_token(nn, group, created_at, None)
+}
+
+fn fleet_roster_new_file_json_with_token(nn: u32, group: &str, created_at: &str, token: Option<&str>) -> Result<String, String> {
+    let mut value = serde_json::json!({
         "name": format!("{nn:02}-{group}"),
         "squadName": group,
         "created_at": created_at,
@@ -141,6 +161,7 @@ fn fleet_roster_new_file_json(nn: u32, group: &str, created_at: &str) -> Result<
         "windows": [],
         "members": [],
     });
+    if let Some(token) = token { value["token"] = serde_json::json!(token); }
     serde_json::to_string_pretty(&value).map(|text| format!("{text}\n")).map_err(|error| error.to_string())
 }
 

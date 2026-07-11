@@ -160,6 +160,7 @@ fn token_dispatch(argv: &[String], runner: &mut dyn TokenRunner) -> Result<Token
         "list" | "ls" | "tokens" => token_cmd_list(runner).map(token_ok),
         "current" => Ok(token_ok(token_current().map_or_else(String::new, |name| format!("{name}\n")))),
         "resolve" => token_cmd_resolve().map(token_ok),
+        "status" => Ok(token_ok(token_status(&TmuxClient::local().list_panes())?)),
         "use" => token_cmd_use(&parsed, runner),
         "apply" => {
             let mut tmux = TokenSystemApplyTmux::new();
@@ -416,6 +417,41 @@ fn token_current_file() -> Option<String> {
     let value = std::fs::read_to_string(maw_state_path(&current_xdg_env(), &["token-current"])).ok()?;
     let name = value.trim();
     (!name.is_empty()).then(|| name.to_owned())
+}
+
+fn token_status(panes: &[maw_tmux::TmuxPane]) -> Result<String, String> {
+    let running = token_running_by_oracle(panes);
+    let mut rows = Vec::new();
+    for entry in fleet_load_entries_result("token status")? {
+        let squad_token = entry.session.token.as_deref();
+        for member in entry.session.members.unwrap_or_default() {
+            let assigned = member.token.as_deref().or(squad_token).unwrap_or("-").to_owned();
+            let running = running.get(&member.handle).cloned().unwrap_or_else(|| "-".to_owned());
+            rows.push((member.handle, assigned, running));
+        }
+    }
+    rows.sort();
+    let mut out = "oracle	assigned	running
+".to_owned();
+    for (oracle, assigned, running) in rows { let _ = std::fmt::Write::write_fmt(&mut out, format_args!("{oracle}\t{assigned}\t{running}\n")); }
+    Ok(out)
+}
+
+fn token_running_by_oracle(panes: &[maw_tmux::TmuxPane]) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for pane in panes {
+        let oracle = pane.cwd.as_deref().and_then(|cwd| std::path::Path::new(cwd).file_name()).and_then(std::ffi::OsStr::to_str).map(|name| name.strip_suffix("-oracle").unwrap_or(name).to_owned());
+        let Some(oracle) = oracle else { continue; };
+        let Some(token) = token_extract_running_marker(&pane.title) else { continue; };
+        out.insert(oracle, token);
+    }
+    out
+}
+
+fn token_extract_running_marker(text: &str) -> Option<String> {
+    let idx = text.find('🔐')? + '🔐'.len_utf8();
+    let name = text[idx..].chars().take_while(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.')).collect::<String>();
+    (!name.is_empty()).then_some(name)
 }
 
 fn token_apply_scope_sessions(args: &TokenArgs) -> Result<Option<Vec<String>>, String> {
@@ -770,6 +806,31 @@ mod token_apply_tests {
         TokenFakeRunner { root, fail: None }
     }
 
+
+    #[test]
+    fn token_status_reports_assigned_and_running_tokens() {
+        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let root = temp("status-root");
+        let _restore = ["HOME", "MAW_HOME", "MAW_CONFIG_DIR", "MAW_STATE_DIR", "MAW_CACHE_DIR", "GHQ_ROOT"].map(EnvVarRestore::capture);
+        for (key, dir) in [("HOME", "home"), ("MAW_CONFIG_DIR", "config"), ("MAW_STATE_DIR", "state"), ("MAW_CACHE_DIR", "cache"), ("GHQ_ROOT", "ghq")] {
+            std::env::set_var(key, root.join(dir));
+        }
+        std::env::remove_var("MAW_HOME");
+        let squad_dir = root.join("state/fleet/squads/01-core");
+        std::fs::create_dir_all(&squad_dir).expect("squad dir");
+        std::fs::write(
+            squad_dir.join("squad.json"),
+            r#"{"name":"01-core","squadName":"core","token":"duo","members":[{"handle":"atlas","token":"dd2"},{"handle":"maw-rs"}]}"#,
+        )
+        .expect("squad file");
+        let mut panes = vec![pane("%9", "core")];
+        panes[0].cwd = Some("/repos/atlas-oracle".to_owned());
+        panes[0].title = "ready 🔐wave".to_owned();
+        let out = token_status(&panes).expect("status");
+        assert!(out.contains("atlas\tdd2\twave\n"));
+        assert!(out.contains("maw-rs\tduo\t-\n"));
+        assert_eq!(token_extract_running_marker("x 🔐dd2*"), Some("dd2".to_owned()));
+    }
 
     #[test]
     fn token_resolve_prefers_member_then_squad_then_legacy_fallbacks() {
