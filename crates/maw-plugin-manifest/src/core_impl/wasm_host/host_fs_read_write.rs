@@ -10,20 +10,26 @@ impl MawWasmHost {
             Err(err) => return err,
         };
         let max = args.max_bytes.unwrap_or(MAX_READ_BYTES).min(MAX_READ_BYTES);
-        let file = match open_nofollow_existing(&real) {
+        let mut file = match open_nofollow_existing(&real) {
             Ok(file) => file,
             Err(err) => return err,
         };
         if let Err(err) = verify_fd_path(&file, &real) {
             return err;
         }
+        let offset = args.offset.unwrap_or(0);
+        if let Err(error) = std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(offset)) {
+            return HostResult::err(HostErrorCode::IoError, format!("seek failed: {error}"));
+        }
         let mut bytes = Vec::new();
         if let Err(error) = file.take(max + 1).read_to_end(&mut bytes) {
             return HostResult::err(HostErrorCode::IoError, format!("read failed: {error}"));
         }
-        if bytes.len() as u64 > max {
-            return HostResult::err(HostErrorCode::IoError, "read exceeds maxBytes");
+        let has_more = bytes.len() as u64 > max;
+        if has_more {
+            bytes.truncate(max as usize);
         }
+        let next_offset = offset + bytes.len() as u64;
         let content = if args.encoding.as_deref() == Some("base64") {
             base64::engine::general_purpose::STANDARD.encode(&bytes)
         } else {
@@ -34,9 +40,13 @@ impl MawWasmHost {
                 }
             }
         };
-        let result = HostResult::ok(
-            json!({"path": real.display().to_string(), "bytes": bytes.len(), "content": content}),
-        );
+        let result = HostResult::ok(json!({
+            "path": real.display().to_string(),
+            "bytes": bytes.len(),
+            "content": content,
+            "hasMore": has_more,
+            "nextOffset": has_more.then_some(next_offset)
+        }));
         self.audit(
             "maw.fs.read",
             &cap,
@@ -57,10 +67,7 @@ impl MawWasmHost {
             // Create missing ancestors first: `secure_write_path` canonicalizes
             // the parent, which fails with NotFound until the parent exists.
             let Some(parent) = Path::new(&args.path).parent() else {
-                return HostResult::err(
-                    HostErrorCode::InvalidArgs,
-                    "write path requires parent",
-                );
+                return HostResult::err(HostErrorCode::InvalidArgs, "write path requires parent");
             };
             if let Err(err) = self.secure_mkdirp(parent) {
                 return err;
@@ -125,5 +132,4 @@ impl MawWasmHost {
         );
         result
     }
-
 }

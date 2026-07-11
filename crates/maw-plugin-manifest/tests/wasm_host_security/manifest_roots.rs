@@ -280,6 +280,35 @@ fn fs_list_paginates_more_than_one_thousand_entries() {
 }
 
 #[test]
+fn fs_read_supports_offset_chunks() {
+    let dir = temp("fs-read-page-plugin");
+    let home = temp("fs-read-page-home");
+    let host = host_manifest_roots(&dir, &home, &["fs:read:teams"]);
+    let target = teams_root(&home).join("chunked.txt");
+    write(&target, "abcdef").expect("seed file");
+
+    let first = call(
+        &host,
+        "maw.fs.read",
+        &json!({ "path": &target, "maxBytes": 3 }),
+    );
+    assert_eq!(first["ok"], true, "{first}");
+    assert_eq!(first["value"]["content"], "abc");
+    assert_eq!(first["value"]["hasMore"], true);
+    assert_eq!(first["value"]["nextOffset"], 3);
+
+    let second = call(
+        &host,
+        "maw.fs.read",
+        &json!({ "path": &target, "offset": 3, "maxBytes": 3 }),
+    );
+    assert_eq!(second["ok"], true, "{second}");
+    assert_eq!(second["value"]["content"], "def");
+    assert_eq!(second["value"]["hasMore"], false);
+    assert!(second["value"]["nextOffset"].is_null());
+}
+
+#[test]
 fn manifest_write_cap_grants_write_not_read() {
     let dir = temp("caps-write-plugin");
     let home = temp("caps-write-home");

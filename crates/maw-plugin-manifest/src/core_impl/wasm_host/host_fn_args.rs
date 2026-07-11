@@ -17,6 +17,7 @@ struct FsReadArgs {
     path: String,
     encoding: Option<String>,
     max_bytes: Option<u64>,
+    offset: Option<u64>,
 }
 #[derive(Debug, Deserialize)]
 struct FsPathArgs {
