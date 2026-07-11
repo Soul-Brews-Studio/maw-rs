@@ -13,6 +13,13 @@ struct ExecRunArgs {
 }
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct CliRunArgs {
+    command: String,
+    #[serde(default)]
+    args: Vec<String>,
+}
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct FsReadArgs {
     path: String,
     encoding: Option<String>,

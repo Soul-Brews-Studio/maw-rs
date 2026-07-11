@@ -31,6 +31,19 @@ fn batch3_host_direct_denies_ssrf_undeclared_exec_and_privileged_exec() {
 }
 
 #[test]
+fn cli_run_requires_the_exact_native_command_capability() {
+    let dir = temp("cli-run-capability");
+    let host = host(&dir, &["cli:run:costs"]);
+    let denied = call(
+        &host,
+        "maw.cli.run",
+        &json!({"command": "bud", "args": ["sprout", "--dry-run"]}),
+    );
+    assert_eq!(denied["ok"], false, "{denied}");
+    assert_eq!(denied["code"], "capability_denied", "{denied}");
+}
+
+#[test]
 fn ssh_exec_refuses_option_injection_host_before_ssh_spawn() {
     let dir = temp("ssh-host-option-injection");
     let payload = dir.join("proxycommand-payload");
@@ -144,4 +157,3 @@ fn exec_enforces_capability_and_env_allowlist() {
     assert!(stdout.contains("MAW_VISIBLE=yes"));
     assert!(!stdout.contains("HOME=/should/not/inherit"));
 }
-

@@ -218,6 +218,10 @@ fn bud_parse(argv: &[String]) -> Result<BudOptions, String> {
             "--track-vault" => options.track_vault = true,
             "--sync-peers" => options.sync_peers = true,
             flag @ ("--from" | "--from-repo" | "--stem" | "--org" | "--repo" | "--issue" | "--issue-repo" | "--note" | "--nickname" | "--engine" | "-e" | "--parent" | "--parent-session-id" | "--session-id" | "--session") => { bud_assign_value(&mut options, flag, &bud_take_value(argv, &mut index, flag)?)?; }
+            value if value.starts_with("--") && value.contains('=') => {
+                let (flag, value) = value.split_once('=').unwrap_or_default();
+                bud_assign_value(&mut options, flag, value)?;
+            }
             value if value.starts_with('-') => return Err(bud_flag_like(value)),
             value => bud_set_name(&mut options, value)?,
         }
@@ -703,6 +707,20 @@ mod bud_tests {
         let mut gh = FakeGh::default(); let mut fs = FakeFs::default(); let mut wake = FakeWake::default(); let mut http = FakeHttp::default();
         let out = bud_run_with(&bud_args(&["../bad", "--dry-run"]), &mut gh, &mut fs, &mut wake, &mut http);
         assert_ne!(out.code, 0); assert!(gh.calls.is_empty()); assert!(fs.files.is_empty());
+    }
+
+    #[test]
+    fn bud_equals_values_remain_opaque_for_plugin_subdispatch() {
+        let options = bud_parse(&bud_args(&[
+            "sprout",
+            "--note=--split --from=mallory",
+            "--nickname=-leading",
+        ]))
+        .expect("parse opaque values");
+        assert_eq!(options.note.as_deref(), Some("--split --from=mallory"));
+        assert_eq!(options.nickname.as_deref(), Some("-leading"));
+        assert!(!options.split);
+        assert_eq!(options.from, None);
     }
 
     #[test]

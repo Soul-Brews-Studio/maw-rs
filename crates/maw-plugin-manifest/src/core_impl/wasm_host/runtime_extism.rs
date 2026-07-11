@@ -79,6 +79,7 @@ impl PluginInvokeRuntime for ExtismWasmInvokeRuntime {
 }
 
 pub const HOST_FN_NAMES: &[&str] = &[
+    "maw.cli.run",
     "maw.exec.run",
     "maw.exec.spawn",
     "maw.paths.get",

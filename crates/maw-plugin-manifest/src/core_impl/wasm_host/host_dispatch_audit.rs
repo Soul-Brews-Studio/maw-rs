@@ -23,6 +23,7 @@ impl MawWasmHost {
             return fake.output.clone();
         }
         match name {
+            "maw.cli.run" => to_json(&self.cli_run(input)),
             "maw.exec.run" => to_json(&self.exec_run(input)),
             "maw.exec.spawn" => to_json(&self.exec_spawn(input)),
             "maw.paths.get" => to_json(&self.paths_get(input)),

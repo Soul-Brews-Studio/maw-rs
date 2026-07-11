@@ -1,4 +1,43 @@
 impl MawWasmHost {
+    fn cli_run(&self, input: &str) -> HostResult<Value> {
+        let start = Instant::now();
+        let args = match parse_args::<CliRunArgs>(input) {
+            Ok(args) => args,
+            Err(err) => return err,
+        };
+        if args.command.is_empty()
+            || args.command.starts_with('-')
+            || args.command.chars().any(char::is_control)
+        {
+            return HostResult::err(HostErrorCode::InvalidArgs, "invalid CLI command");
+        }
+        let cap = match self.caps.require("cli", "run", Some(&args.command)) {
+            Ok(cap) => cap,
+            Err(err) => return err,
+        };
+        let Ok(exe) = std::env::current_exe() else {
+            return HostResult::err(
+                HostErrorCode::ProcessFailed,
+                "failed to resolve current maw executable",
+            );
+        };
+        let mut command = Command::new(exe);
+        command.arg(&args.command).args(&args.args);
+        if let Some(cwd) = &self.cwd {
+            command.current_dir(cwd);
+        }
+        let result = match command.output() {
+            Ok(output) => HostResult::ok(json!({
+                "status": output.status.code().unwrap_or(-1),
+                "stdout": String::from_utf8_lossy(&output.stdout),
+                "stderr": String::from_utf8_lossy(&output.stderr),
+            })),
+            Err(_) => HostResult::err(HostErrorCode::ProcessFailed, "CLI command failed to run"),
+        };
+        self.audit("maw.cli.run", &cap, &args.command, status_of(&result), start);
+        result
+    }
+
     fn exec_run(&self, input: &str) -> HostResult<Value> {
         let start = Instant::now();
         let args = match parse_args::<ExecRunArgs>(input) {

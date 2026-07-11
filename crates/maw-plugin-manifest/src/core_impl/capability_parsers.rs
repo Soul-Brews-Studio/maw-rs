@@ -432,6 +432,7 @@ fn is_known_capability_namespace(namespace: &str) -> bool {
 fn known_capability_namespaces() -> Vec<&'static str> {
     vec![
         "net", "fs", "peer", "sdk", "proc", "ffi", "tmux", "shell", "attach", "secret",
+        "cli",
     ]
 }
 
