@@ -251,9 +251,15 @@ fn valid_tmux_command_argv(command: &str, args: &[String]) -> bool {
             && !value.starts_with('-')
             && !value.chars().any(char::is_control)
     };
+    let token = |value: &str| safe(value) && value.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'));
+    let layout = |value: &str| matches!(value, "even-horizontal" | "even-vertical" | "main-horizontal" | "main-vertical" | "tiled");
     match (command, args) {
-        ("display-message", [print, format]) => print == "-p" && matches!(format.as_str(), "#{session_name}" | "#{window_name}"),
-        ("display-message", [target_flag, target, print, format]) => target_flag == "-t" && safe(target) && print == "-p" && format == "#{pane_current_command}",
+        ("display-message", [print, format]) => {
+            print == "-p" && matches!(format.as_str(), "#{session_name}" | "#{window_name}" | "#{pane_id}" | "#{window_id}")
+        }
+        ("display-message", [target_flag, target, print, format]) => {
+            target_flag == "-t" && safe(target) && print == "-p" && matches!(format.as_str(), "#{pane_current_command}" | "#{session_name}:#{window_index}.#{pane_index}" | "#{session_name}:#{window_index}")
+        }
         ("show-options", [target, session, global, option]) => {
             target == "-t" && safe(session) && global == "-gv" && option == "base-index"
         }
@@ -291,8 +297,41 @@ fn valid_tmux_command_argv(command: &str, args: &[String]) -> bool {
                 && safe(target)
                 && target.ends_with(":maw-stream-placeholder")
         }
-        ("kill-session" | "unlink-window", [target_flag, target]) => {
+        ("kill-session" | "unlink-window" | "kill-pane", [target_flag, target]) => {
             target_flag == "-t" && safe(target)
+        }
+        ("list-panes", [target_flag, target, format_flag, format]) => {
+            target_flag == "-t" && safe(target) && format_flag == "-F" && matches!(format.as_str(), "#{pane_id}|||#{pane_title}|||#{@maw_tile}" | "#{pane_index}|||#{pane_id}|||#{pane_title}|||#{pane_top}" | "#{pane_id}" | "#{pane_height}")
+        }
+        ("split-window", [target_flag, target, horizontal, print, format_flag, format, shell]) => {
+            target_flag == "-t" && safe(target) && horizontal == "-h" && print == "-P" && format_flag == "-F" && format == "#{pane_id}" && !shell.is_empty() && !shell.chars().any(char::is_control)
+        }
+        ("select-pane", [target_flag, target, title_flag, title]) => {
+            target_flag == "-t" && safe(target) && title_flag == "-T" && token(title)
+        }
+        ("set-option", [pane, target_flag, target, key, value]) if pane == "-p" => {
+            target_flag == "-t" && safe(target) && match key.as_str() {
+                "pane-border-format" => value.starts_with("#[fg=") && value.ends_with(",bold] #{pane_title}"),
+                "pane-active-border-style" => value.starts_with("fg=") && token(&value[3..]),
+                "@maw_tile" => value == "1",
+                "@maw_tile_parent" | "@maw_tile_role" => safe(value),
+                _ => false,
+            }
+        }
+        ("set-option", [window, target_flag, target, key, value]) if window == "-w" => {
+            target_flag == "-t" && safe(target) && key == "pane-border-status" && value == "top"
+        }
+        ("send-keys", [target_flag, target, key]) => {
+            target_flag == "-t" && safe(target) && matches!(key.as_str(), "C-u" | "Enter")
+        }
+        ("send-keys", [target_flag, target, literal, value]) => {
+            target_flag == "-t" && safe(target) && literal == "-l" && token(value)
+        }
+        ("select-layout", [target_flag, target, preset]) => {
+            target_flag == "-t" && safe(target) && layout(preset)
+        }
+        ("swap-pane", [source_flag, source, target_flag, target]) => {
+            source_flag == "-s" && safe(source) && target_flag == "-t" && safe(target)
         }
         _ => false,
     }

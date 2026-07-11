@@ -286,7 +286,6 @@ fn completions_usage_sources() -> Vec<(&'static str, String)> {
         ("t", TEAM_USAGE.to_owned()),
         ("talk-to", TALKTO_USAGE.to_owned()),
         ("team", TEAM_USAGE.to_owned()),
-        ("tile", TILE_USAGE.to_owned()),
         ("user-setup", USERSETUP_USAGE.to_owned()),
         ("wave", WAVE_USAGE.to_owned()),
         ("zai", ZAI_USAGE.to_owned()),

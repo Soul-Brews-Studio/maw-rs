@@ -191,3 +191,36 @@ fn tmux_command_host_manages_mega_read_and_kill_shapes() {
     );
     assert_eq!(injected["code"], "invalid_args", "{injected}");
 }
+
+#[test]
+fn tmux_command_host_manages_tile_shapes_exactly() {
+    let dir = temp("tmux-tile");
+    let host = host(&dir, &[
+        "tmux:read", "tmux:raw:list-panes", "tmux:raw:split-window",
+        "tmux:raw:select-pane", "tmux:raw:set-option", "tmux:raw:send-keys",
+        "tmux:raw:select-layout", "tmux:raw:swap-pane", "tmux:raw:kill-pane",
+    ]).with_tmux_dry_run();
+    let allowed = [
+        json!({"command":"display-message","args":["-p","#{pane_id}"]}),
+        json!({"command":"list-panes","args":["-t","@7","-F","#{pane_id}|||#{pane_title}|||#{@maw_tile}"]}),
+        json!({"command":"split-window","args":["-t","%1","-h","-P","-F","#{pane_id}","export MAW_TILE_ROLE='tile-1'; exec zsh"]}),
+        json!({"command":"select-pane","args":["-t","%2","-T","tile-1"]}),
+        json!({"command":"set-option","args":["-p","-t","%2","@maw_tile","1"]}),
+        json!({"command":"send-keys","args":["-t","%2","-l","claude"]}),
+        json!({"command":"select-layout","args":["-t","@7","main-vertical"]}),
+        json!({"command":"swap-pane","args":["-s","%2","-t","%3"]}),
+        json!({"command":"kill-pane","args":["-t","%2"]}),
+    ];
+    for request in allowed {
+        let result = call(&host, "maw.tmux.command", &request);
+        assert_eq!(result["ok"], true, "{request}: {result}");
+    }
+    for request in [
+        json!({"command":"split-window","args":["-t","%1","sh","-c","id"]}),
+        json!({"command":"set-option","args":["-p","-t","%2","@evil","1"]}),
+        json!({"command":"send-keys","args":["-t","%2","-l","rm -rf"]}),
+    ] {
+        let result = call(&host, "maw.tmux.command", &request);
+        assert_eq!(result["code"], "invalid_args", "{request}: {result}");
+    }
+}
