@@ -17,6 +17,7 @@ struct FleetOptions {
     resume: bool,
     scatter: bool,
     include_99: bool,
+    only_99: bool,
     squads: Vec<String>,
 }
 
@@ -212,6 +213,7 @@ fn fleet_parse_args(argv: &[String]) -> Result<FleetOptions, String> {
             "--resume" => options.resume = true,
             "--scatter" => options.scatter = true,
             "--include-99" => options.include_99 = true,
+            "--only-99" => options.only_99 = true,
             "--squads" => {
                 index += 1;
                 let Some(raw) = argv.get(index) else { return Err("fleet: --squads requires a value".to_owned()); };
@@ -263,6 +265,7 @@ fn fleet_default_options() -> FleetOptions {
         resume: false,
         scatter: false,
         include_99: false,
+        only_99: false,
         squads: Vec::new(),
     }
 }
@@ -314,7 +317,7 @@ fn fleet_parse_squad_filter(raw: &str) -> Vec<String> {
 }
 
 fn fleet_usage() -> String {
-    "usage: maw fleet [add <session>|create <squad>|show <squad>|status <squad>|join <fleet> --code <code>|remove <squad> <handle>|leave <squad>|ls|doctor|health|gc|init|consolidate|resume|sync|wake <squad|--all>|sleep <squad|--all>|gather <squad>|renumber|token <squad> [ls|status]] [--json] [--dry-run] [--include-99] [--fix] [--reboot] [--all] [--kill] [--resume] [--scatter] [--squads <squad[,squad]...>]".to_owned()
+    "usage: maw fleet [add <session>|create <squad>|show <squad>|status <squad>|join <fleet> --code <code>|remove <squad> <handle>|leave <squad>|ls|doctor|health|gc|init|consolidate|resume|sync|wake <squad|--all>|sleep <squad|--all>|gather <squad>|renumber|token <squad> [ls|status]] [--json] [--dry-run] [--include-99|--only-99] [--fix] [--reboot] [--all] [--kill] [--resume] [--scatter] [--squads <squad[,squad]...>]".to_owned()
 }
 
 fn fleet_load_state_with(runtime: &mut impl FleetRuntime) -> Result<FleetState, String> {
@@ -890,7 +893,7 @@ fn fleet_json_gc_result(result: &FleetGcResult) -> serde_json::Value {
 }
 
 fn fleet_run_renumber(state: &FleetState, options: &FleetOptions, runtime: &mut impl FleetRuntime) -> Result<(i32, String), String> {
-    let mut items = fleet_renumber_plan(&state.fleet_entries, options.include_99);
+    let mut items = fleet_renumber_plan(&state.fleet_entries, options.include_99, options.only_99);
     let live = runtime.fleet_list_all().into_iter().map(|session| session.name).collect::<Vec<_>>();
     if !options.dry_run {
         fleet_apply_renumber(&mut items, &live, runtime)?;
@@ -901,7 +904,10 @@ fn fleet_run_renumber(state: &FleetState, options: &FleetOptions, runtime: &mut 
     Ok((0, fleet_render_renumber(state, options, &items)))
 }
 
-fn fleet_renumber_plan(entries: &[NativeFleetEntry], include_99: bool) -> Vec<FleetRenumberItem> {
+fn fleet_renumber_plan(entries: &[NativeFleetEntry], include_99: bool, only_99: bool) -> Vec<FleetRenumberItem> {
+    if only_99 {
+        return fleet_renumber_only_99_plan(entries);
+    }
     let mut candidates = entries
         .iter()
         .filter_map(|entry| fleet_renumber_candidate(entry, include_99))
@@ -910,22 +916,45 @@ fn fleet_renumber_plan(entries: &[NativeFleetEntry], include_99: bool) -> Vec<Fl
     candidates
         .into_iter()
         .enumerate()
-        .map(|(index, (_, stem, entry))| {
-            let next = format!("{:02}", index + 1);
-            let new_name = format!("{next}-{stem}");
-            let new_file = format!("{new_name}.json");
-            FleetRenumberItem {
-                old_name: entry.session.name.clone(),
-                new_name: new_name.clone(),
-                old_file: entry.file.clone(),
-                new_file,
-                path: entry.path.clone(),
-                changed: entry.session.name != new_name,
-                tmux: None,
-                tmux_error: None,
-            }
+        .map(|(index, (_, stem, entry))| fleet_renumber_item(entry, &format!("{:02}-{stem}", index + 1)))
+        .collect()
+}
+
+fn fleet_renumber_only_99_plan(entries: &[NativeFleetEntry]) -> Vec<FleetRenumberItem> {
+    let mut used = entries
+        .iter()
+        .filter_map(|entry| fleet_renumber_candidate(entry, true))
+        .filter_map(|(number, _, entry)| (number != 99).then_some(entry.session.name.clone()))
+        .filter_map(|name| name.split_once('-').and_then(|(prefix, _)| prefix.parse::<u32>().ok()))
+        .collect::<BTreeSet<_>>();
+    let mut candidates = entries
+        .iter()
+        .filter_map(|entry| fleet_renumber_candidate(entry, true))
+        .filter(|(number, stem, _)| *number == 99 && stem != "overview")
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| left.1.cmp(&right.1));
+    candidates
+        .into_iter()
+        .filter_map(|(_, stem, entry)| {
+            let next = (1..=99).find(|number| !used.contains(number))?;
+            used.insert(next);
+            Some(fleet_renumber_item(entry, &format!("{next:02}-{stem}")))
         })
         .collect()
+}
+
+fn fleet_renumber_item(entry: &NativeFleetEntry, new_name: &str) -> FleetRenumberItem {
+    let new_file = format!("{new_name}.json");
+    FleetRenumberItem {
+        old_name: entry.session.name.clone(),
+        new_name: new_name.to_owned(),
+        old_file: entry.file.clone(),
+        new_file,
+        path: entry.path.clone(),
+        changed: entry.session.name != new_name,
+        tmux: None,
+        tmux_error: None,
+    }
 }
 
 fn fleet_renumber_candidate(entry: &NativeFleetEntry, include_99: bool) -> Option<(u32, String, &NativeFleetEntry)> {
@@ -980,7 +1009,7 @@ fn fleet_write_renumbered_config(item: &FleetRenumberItem) -> Result<(), String>
 fn fleet_render_renumber(state: &FleetState, options: &FleetOptions, items: &[FleetRenumberItem]) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "fleet renumber plan node: {}", state.config.node);
-    let _ = writeln!(out, "  dry-run: {} · include-99: {} · configs: {}", options.dry_run, options.include_99, items.len());
+    let _ = writeln!(out, "  dry-run: {} · include-99: {} · only-99: {} · configs: {}", options.dry_run, options.include_99, options.only_99, items.len());
     if items.is_empty() {
         out.push_str("  ok: no numbered fleet configs\n");
         return out;
@@ -1009,6 +1038,7 @@ fn fleet_json_renumber(state: &FleetState, options: &FleetOptions, items: &[Flee
         "action": "renumber",
         "dryRun": options.dry_run,
         "include99": options.include_99,
+        "only99": options.only_99,
         "configCount": items.len(),
         "configs": items.iter().map(fleet_json_renumber_item).collect::<Vec<_>>(),
     });
@@ -1602,6 +1632,8 @@ mod fleet_tests {
         let renumber = fleet_parse_args(&fleet_strings(&["renumber", "--include-99", "--dry-run"])).expect("renumber parse");
         assert_eq!(renumber.command, FleetCommand::Renumber);
         assert!(renumber.include_99 && renumber.dry_run);
+        let only_99 = fleet_parse_args(&fleet_strings(&["renumber", "--only-99", "--dry-run"])).expect("only 99 parse");
+        assert!(only_99.only_99 && only_99.dry_run);
         assert!(fleet_parse_args(&fleet_strings(&["--", "wake"])).expect_err("separator guard").contains("unknown argument"));
         assert!(fleet_parse_args(&fleet_strings(&["-oProxyCommand=bad"])).expect_err("leading dash").contains("unknown argument"));
         let scoped = fleet_parse_args(&fleet_strings(&["wake", "3e"])).expect("group target");
@@ -1807,6 +1839,54 @@ mod fleet_tests {
             assert_eq!(bud["name"], "02-bud");
             assert_eq!(bud["mystery"], true);
             assert!(runtime.commands.iter().any(|(program, args)| program == "tmux" && args == &fleet_strings(&["rename-session", "-t", "03-alpha", "01-alpha"])));
+            assert!(runtime.commands.iter().any(|(program, args)| program == "tmux" && args == &fleet_strings(&["rename-session", "-t", "99-bud", "02-bud"])));
+        });
+    }
+
+
+    #[test]
+    fn fleet_renumber_only_99_dry_run_fills_gaps_without_touching_existing() {
+        fleet_with_fixture(|root| {
+            std::fs::write(root.join("config/fleet/01-root.json"), r#"{"name":"01-root","windows":[]}"#).expect("root");
+            std::fs::write(root.join("config/fleet/99-bud.json"), r#"{"name":"99-bud","windows":[],"mystery":true}"#).expect("bud");
+            std::fs::write(root.join("config/fleet/99-cat.json"), r#"{"name":"99-cat","windows":[]}"#).expect("cat");
+            std::fs::write(root.join("config/fleet/99-overview.json"), r#"{"name":"99-overview","windows":[]}"#).expect("overview");
+            let mut runtime = FleetFakeRuntime::default();
+
+            let (code, stdout) = fleet_run_with(&fleet_strings(&["renumber", "--only-99", "--dry-run", "--json"]), &mut runtime).expect("renumber");
+
+            assert_eq!(code, 0);
+            let value: serde_json::Value = serde_json::from_str(&stdout).expect("json");
+            assert_eq!(value["only99"], true);
+            assert_eq!(value["configs"].as_array().expect("configs").len(), 2);
+            assert_eq!(value["configs"][0]["oldName"], "99-bud");
+            assert_eq!(value["configs"][0]["newName"], "02-bud");
+            assert_eq!(value["configs"][1]["newName"], "04-cat");
+            assert!(root.join("config/fleet/01-root.json").exists());
+            assert!(root.join("config/fleet/03-alpha.json").exists());
+            assert!(root.join("config/fleet/99-bud.json").exists());
+            assert!(runtime.commands.is_empty());
+        });
+    }
+
+    #[test]
+    fn fleet_renumber_only_99_rewrites_only_99_and_renames_tmux() {
+        fleet_with_fixture(|root| {
+            std::fs::write(root.join("config/fleet/01-root.json"), r#"{"name":"01-root","windows":[]}"#).expect("root");
+            std::fs::write(root.join("config/fleet/99-bud.json"), r#"{"name":"99-bud","windows":[],"mystery":true}"#).expect("bud");
+            let mut runtime = FleetFakeRuntime { sessions: vec![TmuxSession { name: "99-bud".to_owned(), windows: Vec::new() }], ..Default::default() };
+
+            let (code, stdout) = fleet_run_with(&fleet_strings(&["renumber", "--only-99"]), &mut runtime).expect("renumber");
+
+            assert_eq!(code, 0);
+            assert!(stdout.contains("only-99: true"), "{stdout}");
+            assert!(stdout.contains("renamed 99-bud.json -> 02-bud.json"), "{stdout}");
+            assert!(root.join("config/fleet/01-root.json").exists());
+            assert!(root.join("config/fleet/03-alpha.json").exists());
+            assert!(!root.join("config/fleet/99-bud.json").exists());
+            let bud: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(root.join("config/fleet/02-bud.json")).expect("bud")).expect("json");
+            assert_eq!(bud["name"], "02-bud");
+            assert_eq!(bud["mystery"], true);
             assert!(runtime.commands.iter().any(|(program, args)| program == "tmux" && args == &fleet_strings(&["rename-session", "-t", "99-bud", "02-bud"])));
         });
     }
