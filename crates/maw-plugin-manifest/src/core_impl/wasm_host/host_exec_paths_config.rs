@@ -92,6 +92,7 @@ impl MawWasmHost {
         let value = match name {
             "home" => self.home.clone(),
             "cwd" => self.cwd.clone(),
+            "repos" => self.fs_roots.get("repos").map(|root| root.to_string_lossy().into_owned()),
             "teams" => self.fs_roots.get("teams").map(|root| root.to_string_lossy().into_owned()).or_else(|| {
                 self.home.as_ref().map(|home| {
                     Path::new(home).join(".claude").join("teams").to_string_lossy().into_owned()
@@ -132,7 +133,7 @@ impl MawWasmHost {
             _ => {
                 return HostResult::err(
                     HostErrorCode::InvalidArgs,
-                    format!("unknown path name '{name}'; allowed: home, cwd, teams, claude-projects, vault"),
+                    format!("unknown path name '{name}'; allowed: home, cwd, repos, teams, claude-projects, vault"),
                 );
             }
         };

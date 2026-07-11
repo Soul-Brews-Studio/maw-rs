@@ -263,7 +263,6 @@ fn completions_usage_sources() -> Vec<(&'static str, String)> {
         ("completions", COMPLETIONS_HELP.to_owned()),
         ("consent", consent_help_135()),
         ("done", DONE_USAGE.to_owned()),
-        ("dream", DREAM_USAGE.to_owned()),
         ("fleet", fleet_usage()),
         ("follow", FOLLOW_USAGE.to_owned()),
         ("inbox", INBOX_USAGE.to_owned()),

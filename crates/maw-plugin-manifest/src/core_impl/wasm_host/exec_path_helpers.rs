@@ -197,6 +197,8 @@ fn known_fs_root(
     match scope {
         "teams" => Some(home.join(".claude").join("teams")),
         "claude-projects" => Some(configured_claude_projects_root(home)),
+        "repos" => Some(configured_repos_root(home)),
+        "cwd" => std::env::current_dir().ok(),
         "vault" => configured_vault_root(home, config_root, vault_root).ok(),
         _ => None,
     }
@@ -204,6 +206,16 @@ fn known_fs_root(
 
 fn known_fs_root_should_create(scope: &str) -> bool {
     scope == "teams"
+}
+
+fn configured_repos_root(home: &Path) -> PathBuf {
+    std::env::var_os("GHQ_ROOT").filter(|value| !value.is_empty()).map_or_else(
+        || home.join("Code").join("github.com"),
+        |value| {
+            let root = resolve_configured_path(PathBuf::from(value), home);
+            if root.file_name().and_then(std::ffi::OsStr::to_str) == Some("github.com") { root } else { root.join("github.com") }
+        },
+    )
 }
 
 fn configured_claude_projects_root(home: &Path) -> PathBuf {

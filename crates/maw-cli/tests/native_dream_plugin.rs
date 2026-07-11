@@ -100,6 +100,21 @@ fn dream_seed(name: &str) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
 }
 
 fn dream_command(root: &Path, home: &Path, config: &Path, cache: &Path) -> Command {
+    let plugins = root.join("plugins");
+    let fixture =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native-dream/dream-plugin");
+    std::fs::create_dir_all(&plugins).expect("plugins dir");
+    std::fs::create_dir_all(plugins.join("dream")).expect("dream plugin dir");
+    std::fs::copy(
+        fixture.join("plugin.json"),
+        plugins.join("dream/plugin.json"),
+    )
+    .expect("manifest");
+    std::fs::copy(
+        fixture.join("plugin.wasm"),
+        plugins.join("dream/plugin.wasm"),
+    )
+    .expect("wasm");
     let mut command = Command::new(dream_bin());
     command
         .current_dir(root)
@@ -113,6 +128,7 @@ fn dream_command(root: &Path, home: &Path, config: &Path, cache: &Path) -> Comma
         .env("XDG_CACHE_HOME", root.join("xdg-cache"))
         .env("GHQ_ROOT", root.join("ghq"))
         .env("MAW_JS_REF_DIR", "/nonexistent")
+        .env("MAW_PLUGINS_DIR", plugins)
         .env("MAW_DREAM_DATE", "2026-06-25")
         .env("MAW_DREAM_EPOCH", "1782345600")
         .env("PATH", std::env::var_os("PATH").unwrap_or_default());
@@ -120,7 +136,7 @@ fn dream_command(root: &Path, home: &Path, config: &Path, cache: &Path) -> Comma
 }
 
 #[test]
-fn dream_native_porcelain_golden_is_hermetic() {
+fn dream_plugin_porcelain_golden_is_hermetic() {
     let (root, home, config, cache) = dream_seed("porcelain");
     let output = dream_command(&root, &home, &config, &cache)
         .args(["dream", "--porcelain", "--limit", "20"])
@@ -133,7 +149,7 @@ fn dream_native_porcelain_golden_is_hermetic() {
     );
     let expected = include_str!("fixtures/native-dream/porcelain.stdout");
     assert_eq!(String::from_utf8(output.stdout).expect("stdout"), expected);
-    assert_eq!(dispatcher_status("dream"), DispatchKind::Native);
+    assert_eq!(dispatcher_status("dream"), DispatchKind::NativeError);
     assert!(
         !root.join("ψ/writing/dreams").exists(),
         "porcelain should not write dream state"
@@ -142,7 +158,7 @@ fn dream_native_porcelain_golden_is_hermetic() {
 }
 
 #[test]
-fn dream_native_writes_seeded_state_and_guards_values() {
+fn dream_plugin_writes_seeded_state_and_guards_values() {
     let (root, home, config, cache) = dream_seed("write");
     let output = dream_command(&root, &home, &config, &cache)
         .args(["dream", "--project", "alpha", "--between", "--all"])
