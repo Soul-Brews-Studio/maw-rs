@@ -35,12 +35,11 @@ struct OverviewTarget {
 trait OverviewTmux {
     fn kill_session(&mut self, name: &str) -> Result<(), String>;
     fn list_all(&mut self) -> Vec<TmuxSession>;
-    fn new_session(&mut self, name: &str, window: &str) -> Result<(), String>;
-    fn new_window(&mut self, session: &str, name: &str) -> Result<(), String>;
+    fn new_session(&mut self, name: &str, window: &str, command: &str) -> Result<(), String>;
+    fn new_window(&mut self, session: &str, name: &str, command: &str) -> Result<(), String>;
     fn set(&mut self, target: &str, option: &str, value: &str) -> Result<(), String>;
     fn select_pane(&mut self, target: &str, title: &str) -> Result<(), String>;
-    fn send_command(&mut self, target: &str, command: &str) -> Result<(), String>;
-    fn split_window(&mut self, target: &str) -> Result<(), String>;
+    fn split_window(&mut self, target: &str, command: &str) -> Result<(), String>;
     fn select_layout(&mut self, target: &str, layout: &str) -> Result<(), String>;
     fn select_window(&mut self, target: &str) -> Result<(), String>;
 }
@@ -68,7 +67,7 @@ impl OverviewTmux for NativeOverviewTmux {
         self.client.list_all()
     }
 
-    fn new_session(&mut self, name: &str, window: &str) -> Result<(), String> {
+    fn new_session(&mut self, name: &str, window: &str, command: &str) -> Result<(), String> {
         validate_overview_tmux_target(name)?;
         validate_overview_tmux_token(window)?;
         self.client
@@ -76,6 +75,7 @@ impl OverviewTmux for NativeOverviewTmux {
                 name,
                 &maw_tmux::NewSessionOptions {
                     window: Some(window.to_owned()),
+                    command: Some(command.to_owned()),
                     ..maw_tmux::NewSessionOptions::default()
                 },
             )
@@ -83,11 +83,11 @@ impl OverviewTmux for NativeOverviewTmux {
             .map_err(|error| error.message)
     }
 
-    fn new_window(&mut self, session: &str, name: &str) -> Result<(), String> {
+    fn new_window(&mut self, session: &str, name: &str, command: &str) -> Result<(), String> {
         validate_overview_tmux_target(session)?;
         validate_overview_tmux_token(name)?;
         self.client
-            .new_window(session, name, None)
+            .new_window_with_command(session, name, command)
             .map_err(|error| error.message)
     }
 
@@ -110,17 +110,16 @@ impl OverviewTmux for NativeOverviewTmux {
             .map_err(|error| error.message)
     }
 
-    fn send_command(&mut self, target: &str, command: &str) -> Result<(), String> {
+    fn split_window(&mut self, target: &str, command: &str) -> Result<(), String> {
         validate_overview_tmux_target(target)?;
         self.client
-            .send_keys(target, &[command.to_owned(), "Enter".to_owned()])
-            .map_err(|error| error.message)
-    }
-
-    fn split_window(&mut self, target: &str) -> Result<(), String> {
-        validate_overview_tmux_target(target)?;
-        self.client
-            .split_window(Some(target), &maw_tmux::SplitWindowOptions::default())
+            .split_window(
+                Some(target),
+                &maw_tmux::SplitWindowOptions {
+                    command: Some(command.to_owned()),
+                    ..maw_tmux::SplitWindowOptions::default()
+                },
+            )
             .map(|_| ())
             .map_err(|error| error.message)
     }
@@ -183,23 +182,30 @@ fn run_overview_with_tmux(
     }
 
     let pages = chunk_overview_targets(&targets);
-    tmux.new_session(OVERVIEW_SESSION, "page-1")?;
+    tmux.new_session(
+        OVERVIEW_SESSION,
+        "page-1",
+        &overview_mirror_cmd(&pages[0][0], port),
+    )?;
     apply_overview_style(tmux, targets.len())?;
 
     for (page_index, page) in pages.iter().enumerate() {
         let win_name = format!("page-{}", page_index + 1);
         if page_index > 0 {
-            tmux.new_window(OVERVIEW_SESSION, &win_name)?;
+            tmux.new_window(
+                OVERVIEW_SESSION,
+                &win_name,
+                &overview_mirror_cmd(&page[0], port),
+            )?;
         }
         let window_target = format!("{OVERVIEW_SESSION}:{win_name}");
         for (pane_index, target) in page.iter().enumerate() {
             if pane_index > 0 {
-                tmux.split_window(&window_target)?;
+                tmux.split_window(&window_target, &overview_mirror_cmd(target, port))?;
             }
             let global_index = page_index * OVERVIEW_PANES_PER_PAGE + pane_index;
             let pane_target = format!("{window_target}.{pane_index}");
             tmux.select_pane(&pane_target, &overview_pane_title(target, global_index))?;
-            tmux.send_command(&pane_target, &overview_mirror_cmd(target, port))?;
             if pane_index > 0 {
                 tmux.select_layout(&window_target, "tiled")?;
             }
@@ -412,13 +418,13 @@ mod overview_tests {
             self.sessions.clone()
         }
 
-        fn new_session(&mut self, name: &str, window: &str) -> Result<(), String> {
-            self.calls.push(format!("new-session {name} {window}"));
+        fn new_session(&mut self, name: &str, window: &str, command: &str) -> Result<(), String> {
+            self.calls.push(format!("new-session {name} {window} {command}"));
             Ok(())
         }
 
-        fn new_window(&mut self, session: &str, name: &str) -> Result<(), String> {
-            self.calls.push(format!("new-window {session} {name}"));
+        fn new_window(&mut self, session: &str, name: &str, command: &str) -> Result<(), String> {
+            self.calls.push(format!("new-window {session} {name} {command}"));
             Ok(())
         }
 
@@ -432,13 +438,8 @@ mod overview_tests {
             Ok(())
         }
 
-        fn send_command(&mut self, target: &str, command: &str) -> Result<(), String> {
-            self.calls.push(format!("send {target} {command}"));
-            Ok(())
-        }
-
-        fn split_window(&mut self, target: &str) -> Result<(), String> {
-            self.calls.push(format!("split-window {target}"));
+        fn split_window(&mut self, target: &str, command: &str) -> Result<(), String> {
+            self.calls.push(format!("split-window {target} {command}"));
             Ok(())
         }
 
@@ -528,10 +529,57 @@ mod overview_tests {
             out,
             include_str!("../../tests/fixtures/native-orchestration/overview.stdout")
         );
-        assert!(tmux.calls.iter().any(|call| call == "new-session 0-overview page-1"));
+        assert!(tmux.calls.iter().any(|call| call.starts_with("new-session 0-overview page-1 watch ")));
         assert!(tmux.calls.iter().any(|call| call == "select-layout 0-overview:page-1 even-horizontal"));
         assert!(tmux.calls.iter().any(|call| call.contains("target=01-wish%3A2")));
         assert!(tmux.calls.iter().any(|call| call.contains("target=02-bigboy%3A1")));
+    }
+
+    #[test]
+    fn overview_starts_every_watch_pane_without_send_keys() {
+        let mut tmux = FakeOverviewTmux {
+            sessions: (1..=10)
+                .map(|index| session(&format!("{index:02}-oracle"), 1))
+                .collect(),
+            calls: vec![],
+        };
+
+        run_overview_with_tmux(
+            &mut tmux,
+            &OverviewArgs {
+                kill: false,
+                filters: vec![],
+            },
+            31_745,
+        )
+        .expect("overview succeeds");
+
+        assert!(
+            !tmux.calls.iter().any(|call| call.starts_with("send ")),
+            "watch commands must be pane start-commands: {:#?}",
+            tmux.calls
+        );
+        assert!(
+            tmux.calls.iter().any(|call| {
+                call == "new-session 0-overview page-1 watch --color -t -n0.5 'curl -s \"http://localhost:31745/api/mirror?target=01-oracle%3A1&lines=$(tput lines)\"'"
+            }),
+            "pane 0 must receive its watch command with new-session: {:#?}",
+            tmux.calls
+        );
+        assert!(
+            tmux.calls.iter().any(|call| {
+                call == "new-window 0-overview page-2 watch --color -t -n0.5 'curl -s \"http://localhost:31745/api/mirror?target=10-oracle%3A1&lines=$(tput lines)\"'"
+            }),
+            "first pane of subsequent pages must receive its watch command with new-window: {:#?}",
+            tmux.calls
+        );
+        assert!(
+            tmux.calls.iter().any(|call| {
+                call == "split-window 0-overview:page-1 watch --color -t -n0.5 'curl -s \"http://localhost:31745/api/mirror?target=02-oracle%3A1&lines=$(tput lines)\"'"
+            }),
+            "subsequent panes must receive their watch command with split-window: {:#?}",
+            tmux.calls
+        );
     }
 
     #[test]
