@@ -97,6 +97,15 @@ impl MawWasmHost {
                     Path::new(home).join(".claude").join("teams").to_string_lossy().into_owned()
                 })
             }),
+            "claude-projects" => {
+                if !self.has_exact_cap("fs:read:claude-projects") {
+                    return HostResult::err(
+                        HostErrorCode::CapabilityDenied,
+                        "capability denied: fs:read:claude-projects",
+                    );
+                }
+                self.fs_roots.get("claude-projects").map(|root| root.to_string_lossy().into_owned())
+            }
             "vault" => {
                 if !self.has_exact_cap("fs:read:vault") {
                     return HostResult::err(
@@ -123,7 +132,7 @@ impl MawWasmHost {
             _ => {
                 return HostResult::err(
                     HostErrorCode::InvalidArgs,
-                    format!("unknown path name '{name}'; allowed: home, cwd, teams, vault"),
+                    format!("unknown path name '{name}'; allowed: home, cwd, teams, claude-projects, vault"),
                 );
             }
         };

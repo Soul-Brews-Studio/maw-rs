@@ -196,6 +196,7 @@ fn known_fs_root(
 ) -> Option<PathBuf> {
     match scope {
         "teams" => Some(home.join(".claude").join("teams")),
+        "claude-projects" => Some(configured_claude_projects_root(home)),
         "vault" => configured_vault_root(home, config_root, vault_root).ok(),
         _ => None,
     }
@@ -203,6 +204,16 @@ fn known_fs_root(
 
 fn known_fs_root_should_create(scope: &str) -> bool {
     scope == "teams"
+}
+
+fn configured_claude_projects_root(home: &Path) -> PathBuf {
+    if let Some(path) = std::env::var_os("MAW_CLAUDE_PROJECTS_DIR").filter(|value| !value.is_empty()) {
+        return resolve_configured_path(PathBuf::from(path), home);
+    }
+    if let Some(path) = std::env::var_os("CLAUDE_HOME").filter(|value| !value.is_empty()) {
+        return resolve_configured_path(PathBuf::from(path), home).join("projects");
+    }
+    home.join(".claude").join("projects")
 }
 
 fn configured_vault_root(
