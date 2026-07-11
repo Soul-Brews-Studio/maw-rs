@@ -131,7 +131,7 @@ impl MawWasmHost {
         };
         let capability = if matches!(
             args.command.as_str(),
-            "display-message" | "show-options" | "list-windows"
+            "display-message" | "show-options" | "list-windows" | "list-panes"
         ) {
             "tmux:read".to_owned()
         } else {
@@ -244,13 +244,15 @@ impl MawWasmHost {
 
 }
 
+fn valid_tmux_value(value: &str) -> bool {
+    !value.is_empty()
+        && value == value.trim()
+        && !value.starts_with('-')
+        && !value.chars().any(char::is_control)
+}
+
 fn valid_tmux_command_argv(command: &str, args: &[String]) -> bool {
-    let safe = |value: &str| {
-        !value.is_empty()
-            && value == value.trim()
-            && !value.starts_with('-')
-            && !value.chars().any(char::is_control)
-    };
+    let safe = valid_tmux_value;
     let token = |value: &str| safe(value) && value.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'));
     let layout = |value: &str| matches!(value, "even-horizontal" | "even-vertical" | "main-horizontal" | "main-vertical" | "tiled");
     match (command, args) {
@@ -259,6 +261,19 @@ fn valid_tmux_command_argv(command: &str, args: &[String]) -> bool {
         }
         ("display-message", [target_flag, target, print, format]) => {
             target_flag == "-t" && safe(target) && print == "-p" && matches!(format.as_str(), "#{pane_current_command}" | "#{session_name}:#{window_index}.#{pane_index}" | "#{session_name}:#{window_index}")
+        }
+        ("list-panes", [all, format_flag, format]) => {
+            all == "-a" && format_flag == "-F" && format == "#{pane_id}"
+        }
+        ("split-window", [target_flag, target, orientation, size_flag, size, shell]) => {
+            target_flag == "-t"
+                && safe(target)
+                && matches!(orientation.as_str(), "-h" | "-v")
+                && size_flag == "-l"
+                && size == "50%"
+                && safe(shell)
+                && shell.starts_with("bash -lc ")
+                && shell.len() <= 16_384
         }
         ("show-options", [target, session, global, option]) => {
             target == "-t" && safe(session) && global == "-gv" && option == "base-index"
