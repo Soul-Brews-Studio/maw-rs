@@ -703,6 +703,10 @@ fn send_local_message_with_audit(
     from: Option<&str>,
     audit_args: &[String],
 ) -> CliOutput {
+    let signature = match send_message_signature(config, sender_oracle, from, text) {
+        Ok(signature) => signature,
+        Err(message) => return CliOutput { code: 2, stdout: String::new(), stderr: format!("{command}: {message}\n") },
+    };
     let outbound = format_local_hey_message(text, config, sender_oracle, from);
     if let Err(error) = tmux.send_text(target, &outbound) {
         return CliOutput {
@@ -711,7 +715,7 @@ fn send_local_message_with_audit(
             stderr: format!("{command}: tmux send-text failed: {error}\n"),
         };
     }
-    send_record_success(command, audit_args, config, sender_oracle, from, query, &outbound, "local");
+    send_record_success(command, audit_args, config, sender_oracle, from, query, &outbound, "local", signature.as_ref());
     CliOutput {
         code: 0,
         stdout: format!("delivered {target}\n"),
@@ -739,6 +743,10 @@ async fn send_peer_message(
                 stderr: format!("{command}: {message}\n"),
             }
         }
+    };
+    let signature = match send_message_signature(config, sender_oracle, args.from.as_deref(), &args.text) {
+        Ok(signature) => signature,
+        Err(message) => return CliOutput { code: 2, stdout: String::new(), stderr: format!("{command}: {message}\n") },
     };
     let peer_key = match load_peer_key() {
         Ok(key) => key,
@@ -783,7 +791,7 @@ async fn send_peer_message(
     match client.send_peer(&request).await {
         Ok(response) => {
             let outbound = format_local_hey_message(&args.text, config, sender_oracle, args.from.as_deref());
-            send_record_success(command, audit_args, config, sender_oracle, args.from.as_deref(), &args.target, &outbound, &format!("peer:{node}"));
+            send_record_success(command, audit_args, config, sender_oracle, args.from.as_deref(), &args.target, &outbound, &format!("peer:{node}"), signature.as_ref());
             CliOutput {
                 code: 0,
                 stdout: format!(
@@ -813,6 +821,7 @@ fn send_record_success(
     to: &str,
     msg: &str,
     route: &str,
+    signature: Option<&MessageSignature>,
 ) {
     if audit_args.is_empty() {
         return;
@@ -828,6 +837,7 @@ fn send_record_success(
         to,
         msg,
         route,
+        signature,
     };
     for sink in message_sink_registry() {
         sink.record(&record);
@@ -842,7 +852,11 @@ struct MessageSinkRecord<'a> {
     to: &'a str,
     msg: &'a str,
     route: &'a str,
+    signature: Option<&'a MessageSignature>,
 }
+
+#[derive(Debug)]
+struct MessageSignature;
 
 trait MessageSink {
     fn record(&self, record: &MessageSinkRecord<'_>);
@@ -986,7 +1000,7 @@ fn send_write_message_ledger_record(record: &MessageSinkRecord<'_>, from: &str) 
     let ts = cli_dispatch_now_iso();
     let id = format!("{}:{}:{}:{}", ts, from, record.to, record.route);
     let sql = format!(
-        "{} INSERT OR REPLACE INTO messages (id, ts, direction, state, channel, route, from_id, to_id, target, peer_url, text, error, last_line, signed) VALUES ({}, {}, 'outbound', 'delivered', 'hey', {}, {}, {}, {}, NULL, {}, NULL, NULL, 0);",
+        "{} INSERT OR REPLACE INTO messages (id, ts, direction, state, channel, route, from_id, to_id, target, peer_url, text, error, last_line, signed) VALUES ({}, {}, 'outbound', 'delivered', 'hey', {}, {}, {}, {}, NULL, {}, NULL, NULL, {});",
         send_message_ledger_schema_sql(),
         send_sqlite_quote(&id),
         send_sqlite_quote(&ts),
@@ -995,6 +1009,7 @@ fn send_write_message_ledger_record(record: &MessageSinkRecord<'_>, from: &str) 
         send_sqlite_quote(record.to),
         send_sqlite_quote(record.to),
         send_sqlite_quote(record.msg),
+        i32::from(record.signature.is_some()),
     );
     let _ = std::process::Command::new("sqlite3").arg(path).arg(sql).output();
 }
@@ -1166,6 +1181,32 @@ async fn wake_peer_target(
     }
 }
 
+fn send_message_signature(
+    config: &HeyConfig,
+    sender_oracle: &str,
+    from: Option<&str>,
+    text: &str,
+) -> Result<Option<MessageSignature>, String> {
+    if text.starts_with('[') {
+        return Err("bracket-prefixed hey text is reserved for signed transport prefixes".to_owned());
+    }
+    let node = config.node.as_deref().filter(|value| !value.is_empty()).unwrap_or("local");
+    let expected = format!("{sender_oracle}:{node}");
+    if let Some(explicit) = from {
+        if validate_wire_from(explicit)? != expected {
+            return Err(format!("--from {explicit} does not match signing identity {expected}"));
+        }
+    }
+    let Ok(peer_key) = load_peer_key() else { return Ok(None); };
+    let headers = maw_auth::sign_ed25519_headers_at(&peer_key, &expected, "POST", "/api/send", Some(text.as_bytes()), i64::try_from(current_epoch_seconds()).unwrap_or(i64::MAX))?;
+    if headers.get("X-Maw-Ed25519-Signature").unwrap_or_default().is_empty()
+        || headers.get("X-Maw-Ed25519-Pubkey").unwrap_or_default().is_empty()
+    {
+        return Ok(None);
+    }
+    Ok(Some(MessageSignature))
+}
+
 fn resolve_hey_wire_from(
     explicit: Option<&str>,
     config: &HeyConfig,
@@ -1207,7 +1248,7 @@ fn format_local_hey_message(
     sender_oracle: &str,
     from: Option<&str>,
 ) -> String {
-    if text.starts_with('/') || text.starts_with('[') {
+    if text.starts_with('/') {
         return text.to_owned();
     }
     let display = from.map_or_else(
@@ -1872,7 +1913,7 @@ mod send_acl_hotpath_tests {
         );
         assert_eq!(
             format_local_hey_message("[pretagged] hello", &config, "maw-rs", None),
-            "[pretagged] hello"
+            "[m5:maw-rs] [pretagged] hello"
         );
     }
 
@@ -1883,7 +1924,7 @@ mod send_acl_hotpath_tests {
         let config = HeyConfig { node: Some("m5".to_owned()), oracle: Some("atlas".to_owned()), route: RouteConfig::default() };
         let args = send_audit_args("hey", &send_acl_vec(&["agent", "hello"]));
 
-        send_record_success("hey", &args, &config, "atlas", None, "agent", "[m5:atlas] hello", "local");
+        send_record_success("hey", &args, &config, "atlas", None, "agent", "[m5:atlas] hello", "local", None);
 
         let audit: serde_json::Value = serde_json::from_str(std::fs::read_to_string(root.join("maw/audit.jsonl")).unwrap().trim()).unwrap();
         assert_eq!(audit["cmd"], "hey");
@@ -1907,7 +1948,7 @@ mod send_acl_hotpath_tests {
 
         let (actual_root, _actual_restores) = send_audit_test_env("sink-actual");
         std::env::set_var("MAW_MESSAGE_LEDGER_DISABLE", "1");
-        send_record_success("hey", &args, &config, "atlas", None, "agent", "[m5:atlas] hello", "local");
+        send_record_success("hey", &args, &config, "atlas", None, "agent", "[m5:atlas] hello", "local", None);
         let actual_audit = std::fs::read(actual_root.join("maw/audit.jsonl")).unwrap();
         let actual_log = std::fs::read(actual_root.join("maw/maw-log.jsonl")).unwrap();
 
@@ -1926,7 +1967,7 @@ mod send_acl_hotpath_tests {
         let config = HeyConfig { node: Some("m5".to_owned()), oracle: Some("atlas".to_owned()), route: RouteConfig::default() };
         let args = send_audit_args("hey", &send_acl_vec(&["agent", "hello"]));
 
-        send_record_success("hey", &args, &config, "atlas", None, "agent", "[m5:atlas] hello", "local");
+        send_record_success("hey", &args, &config, "atlas", None, "agent", "[m5:atlas] hello", "local", None);
 
         let output = std::process::Command::new("sqlite3")
             .arg(root.join("maw/message-ledger.sqlite"))
@@ -1935,6 +1976,32 @@ mod send_acl_hotpath_tests {
             .unwrap();
         assert!(output.status.success());
         assert_eq!(String::from_utf8(output.stdout).unwrap(), "m5:atlas|agent|[m5:atlas] hello|local|0\n");
+    }
+
+    #[test]
+    fn message_ledger_sink_marks_signed_records() {
+        let _lock = env_test_lock().lock().unwrap();
+        if std::process::Command::new("sqlite3").arg("-version").output().is_err() { return; }
+        let (root, _restores) = send_audit_test_env("ledger-signed");
+        let config = HeyConfig { node: Some("m5".to_owned()), oracle: Some("atlas".to_owned()), route: RouteConfig::default() };
+        let args = send_audit_args("hey", &send_acl_vec(&["agent", "hello"]));
+        send_record_success("hey", &args, &config, "atlas", None, "agent", "[m5:atlas] hello", "local", Some(&MessageSignature));
+        let output = std::process::Command::new("sqlite3")
+            .arg(root.join("maw/message-ledger.sqlite"))
+            .arg("select signed from messages;")
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8(output.stdout).unwrap(), "1\n");
+    }
+
+    #[test]
+    fn send_message_signature_rejects_forged_from_and_prefix_bypass() {
+        let _lock = env_test_lock().lock().unwrap();
+        let (_root, _restores) = send_audit_test_env("signature-forge");
+        let config = HeyConfig { node: Some("m5".to_owned()), oracle: Some("atlas".to_owned()), route: RouteConfig::default() };
+        assert!(send_message_signature(&config, "atlas", None, "hello").unwrap().is_some());
+        assert!(send_message_signature(&config, "atlas", Some("other:m5"), "hello").unwrap_err().contains("does not match"));
+        assert!(send_message_signature(&config, "atlas", None, "[fake] hello").unwrap_err().contains("bracket-prefixed"));
     }
 
     #[test]
@@ -1951,7 +2018,7 @@ mod send_acl_hotpath_tests {
                 scope.spawn(move || {
                     let raw_args = vec!["agent".to_owned(), format!("canary-{index}")];
                     let args = send_audit_args("hey", &raw_args);
-                    send_record_success("hey", &args, &config, "atlas", None, "agent", &format!("[m5:atlas] canary-{index}"), "local");
+                    send_record_success("hey", &args, &config, "atlas", None, "agent", &format!("[m5:atlas] canary-{index}"), "local", None);
                 });
             }
         });

@@ -61,6 +61,50 @@ pub fn sign_request_v3(
     })
 }
 
+
+/// Derive this node's Ed25519 request signature from the local peer key.
+///
+/// The existing maw identity secret is the peer key; hashing it yields a stable
+/// 32-byte Ed25519 seed without introducing a second private-key file.
+///
+/// # Errors
+///
+/// Returns an error when `peer_key` or `from_address` is empty.
+pub fn sign_ed25519_headers_at(
+    peer_key: &str,
+    from_address: &str,
+    method: &str,
+    path: &str,
+    body: Option<&[u8]>,
+    timestamp: i64,
+) -> Result<Headers, String> {
+    use ed25519_dalek::{Signer, SigningKey};
+    if peer_key.is_empty() {
+        return Err("signEd25519: peerKey is required".to_owned());
+    }
+    if from_address.is_empty() {
+        return Err("signEd25519: fromAddress is required (<oracle>:<node>)".to_owned());
+    }
+    let method = if method.is_empty() { "GET" } else { method }.to_uppercase();
+    let body_hash = body.map_or_else(String::new, |body| hash_body(Some(body)));
+    let payload = build_from_sign_payload(from_address, timestamp, &method, path, &body_hash);
+    let seed = sha256_bytes(peer_key.as_bytes());
+    let signing_key = SigningKey::from_bytes(&seed);
+    let signature = signing_key.sign(payload.as_bytes());
+    Ok(Headers::new([
+        ("X-Maw-From", from_address.to_owned()),
+        ("X-Maw-Timestamp", timestamp.to_string()),
+        ("X-Maw-Auth-Version", "ed25519".to_owned()),
+        ("X-Maw-Ed25519-Signature", hex_lower(&signature.to_bytes())),
+        ("X-Maw-Ed25519-Pubkey", hex_lower(signing_key.verifying_key().as_bytes())),
+    ]))
+}
+
+fn sha256_bytes(input: &[u8]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(input).into()
+}
+
 /// Produce outbound auth headers with transitional v1 + v3 signatures.
 /// The legacy `X-Maw-Signature` slot is fleet-token HMAC for maw-js
 /// compatibility; `X-Maw-Signature-V3` remains peer-key from-signing.

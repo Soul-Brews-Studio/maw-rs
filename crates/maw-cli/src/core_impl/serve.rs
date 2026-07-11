@@ -2468,6 +2468,30 @@ fn extract_auth_headers(headers: &HeaderMap) -> Headers {
             "x-maw-auth-version",
             header_to_string(headers, "x-maw-auth-version"),
         ),
+        (
+            "x-maw-ed25519-signature",
+            header_to_string(headers, "x-maw-ed25519-signature"),
+        ),
+        (
+            "x-maw-signature-ed25519",
+            header_to_string(headers, "x-maw-signature-ed25519"),
+        ),
+        (
+            "x-maw-from-signature-ed25519",
+            header_to_string(headers, "x-maw-from-signature-ed25519"),
+        ),
+        (
+            "x-maw-ed25519-pubkey",
+            header_to_string(headers, "x-maw-ed25519-pubkey"),
+        ),
+        (
+            "x-maw-pubkey",
+            header_to_string(headers, "x-maw-pubkey"),
+        ),
+        (
+            "x-maw-peer-pubkey",
+            header_to_string(headers, "x-maw-peer-pubkey"),
+        ),
     ])
 }
 
@@ -3383,6 +3407,28 @@ mod serve_tests {
         request
     }
 
+
+
+    fn unsigned_json_request(method: &str, uri: &str, body: &'static str) -> axum::http::Request<Body> {
+        let mut request = axum::http::Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body))
+            .expect("request");
+        request.extensions_mut().insert(ConnectInfo(NON_LOOPBACK_TEST_PEER));
+        request
+    }
+
+    fn signed_api_send_json_request(
+        body: &'static str,
+        key: &str,
+        from: &str,
+        now: i64,
+    ) -> axum::http::Request<Body> {
+        signed_json_request("POST", "/api/send", body, key, from, now)
+    }
+
     fn signed_json_request(
         method: &str,
         path: &str,
@@ -3403,6 +3449,36 @@ mod serve_tests {
         let mut request = builder.body(Body::from(body)).expect("request");
         request.extensions_mut().insert(ConnectInfo(NON_LOOPBACK_TEST_PEER));
         request
+    }
+
+
+    #[tokio::test]
+    async fn serve_send_accepts_signed_and_prefixes_bracket_text() {
+        let body = r#"{"target":"capture-agent","text":"[fake:node] signed"}"#;
+        let app = serve_test_app(serve_test_trust_store_path("signed-send"));
+        let response = app.oneshot(signed_api_send_json_request(body, KEY, FROM, 1_782_277_200)).await.expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = response_json(response).await;
+        assert_eq!(json["ok"], true);
+    }
+
+    #[tokio::test]
+    async fn serve_send_flags_not_rejects_unsigned_legacy_loopback() {
+        let app = serve_test_app_with_o6_keys(vec![], 1_782_277_200, Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 49_152)));
+        let mut unsigned_from = unsigned_json_request("POST", "/api/send", r#"{"target":"capture-agent","text":"[fake] hello"}"#);
+        unsigned_from.headers_mut().insert("x-maw-from", axum::http::HeaderValue::from_static(FROM));
+        let response = app.oneshot(unsigned_from).await.expect("unsigned legacy");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn serve_send_rejects_mismatched_signature() {
+        let signed_body = r#"{"target":"capture-agent","text":"hello"}"#;
+        let mut request = signed_api_send_json_request(signed_body, KEY, FROM, 1_782_277_200);
+        *request.body_mut() = Body::from(r#"{"target":"capture-agent","text":"tampered"}"#);
+        let app = serve_test_app(serve_test_trust_store_path("v3-mismatch"));
+        let response = app.oneshot(request).await.expect("mismatch");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[test]

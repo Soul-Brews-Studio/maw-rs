@@ -135,3 +135,42 @@ fn verify_request_ed25519_accepts_api_path_when_receiver_path_is_stripped() {
     );
 }
 
+
+#[test]
+fn sign_ed25519_headers_round_trip_verify_request() {
+    use maw_auth::{hash_body, sign_ed25519_headers_at, Headers, RequestAuthParts};
+    use std::net::{IpAddr, Ipv4Addr};
+
+    let body = br#"{"target":"agent","text":"hello"}"#;
+    let headers = sign_ed25519_headers_at(PEER_KEY, FROM, "POST", "/api/send", Some(body), NOW)
+        .expect("sign ed25519");
+    assert!(!headers.get("x-maw-ed25519-signature").unwrap_or_default().is_empty());
+    assert!(!headers.get("x-maw-ed25519-pubkey").unwrap_or_default().is_empty());
+
+    let decision = maw_auth::verify_request(&RequestAuthParts {
+        method: "POST".to_owned(),
+        path: "/api/send".to_owned(),
+        headers: Headers::new(headers.to_btree_map()),
+        body: Some(body.to_vec()),
+        peer_ip: Some(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 10))),
+        workspace_key: None,
+        cached_pubkey: headers.get("x-maw-ed25519-pubkey").map(str::to_owned),
+        ed25519_pins: None,
+        now: NOW,
+    });
+    assert_eq!(decision, maw_auth::RequestAuthDecision::Accept { who: format!("ed25519:{FROM}") });
+
+    let tampered = maw_auth::verify_request(&RequestAuthParts {
+        method: "POST".to_owned(),
+        path: "/api/send".to_owned(),
+        headers,
+        body: Some(format!("{}x", std::str::from_utf8(body).unwrap()).into_bytes()),
+        peer_ip: Some(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 10))),
+        workspace_key: None,
+        cached_pubkey: Some(maw_auth::hash_body(Some(body))[..64].to_owned()),
+        ed25519_pins: None,
+        now: NOW,
+    });
+    assert!(matches!(tampered, maw_auth::RequestAuthDecision::Reject { .. }));
+    assert_eq!(hash_body(Some(body)).len(), 64);
+}
