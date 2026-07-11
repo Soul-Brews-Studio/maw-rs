@@ -249,7 +249,8 @@ fn valid_tmux_command_argv(command: &str, args: &[String]) -> bool {
             && !value.chars().any(char::is_control)
     };
     match (command, args) {
-        ("display-message", [print, format]) => print == "-p" && format == "#{session_name}",
+        ("display-message", [print, format]) => print == "-p" && matches!(format.as_str(), "#{session_name}" | "#{window_name}"),
+        ("display-message", [target_flag, target, print, format]) => target_flag == "-t" && safe(target) && print == "-p" && format == "#{pane_current_command}",
         ("show-options", [target, session, global, option]) => {
             target == "-t" && safe(session) && global == "-gv" && option == "base-index"
         }
