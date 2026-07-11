@@ -626,7 +626,17 @@ fn plugin_emit_wasm_dist(dir: &std::path::Path, wasm_path: &std::path::Path) -> 
 }
 
 fn plugin_cargo_build_args() -> Vec<String> {
-    ["build", "--release", "--target", "wasm32-unknown-unknown"].iter().map(|value| (*value).to_owned()).collect()
+    [
+        "build",
+        "--release",
+        "--target",
+        "wasm32-unknown-unknown",
+        "--target-dir",
+        "target",
+    ]
+    .iter()
+    .map(|value| (*value).to_owned())
+    .collect()
 }
 
 fn plugin_assemblyscript_args(

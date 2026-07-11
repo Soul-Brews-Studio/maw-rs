@@ -817,12 +817,76 @@ fn send_record_success(
     if audit_args.is_empty() {
         return;
     }
-    send_write_js_audit_record(command, audit_args);
     let normalized_from = from
         .map(ToOwned::to_owned)
         .or_else(|| config.node.as_deref().map(|node| format!("{node}:{sender_oracle}")));
-    if let Some(normalized_from) = normalized_from {
-        send_write_js_maw_log_record(&normalized_from, to, msg, route);
+    let record = MessageSinkRecord {
+        command,
+        audit_args,
+        normalized_from: normalized_from.as_deref(),
+        sender_oracle,
+        to,
+        msg,
+        route,
+    };
+    for sink in message_sink_registry() {
+        sink.record(&record);
+    }
+}
+
+struct MessageSinkRecord<'a> {
+    command: &'a str,
+    audit_args: &'a [String],
+    normalized_from: Option<&'a str>,
+    sender_oracle: &'a str,
+    to: &'a str,
+    msg: &'a str,
+    route: &'a str,
+}
+
+trait MessageSink {
+    fn record(&self, record: &MessageSinkRecord<'_>);
+}
+
+struct AuditJsonlSink;
+struct MawLogJsonlSink;
+struct MqttMessageSink;
+struct MessageLedgerSqliteSink;
+
+fn message_sink_registry() -> Vec<Box<dyn MessageSink>> {
+    vec![
+        Box::new(AuditJsonlSink),
+        Box::new(MawLogJsonlSink),
+        Box::new(MqttMessageSink),
+        Box::new(MessageLedgerSqliteSink),
+    ]
+}
+
+impl MessageSink for AuditJsonlSink {
+    fn record(&self, record: &MessageSinkRecord<'_>) {
+        send_write_js_audit_record(record.command, record.audit_args);
+    }
+}
+
+impl MessageSink for MawLogJsonlSink {
+    fn record(&self, record: &MessageSinkRecord<'_>) {
+        if let Some(from) = record.normalized_from {
+            send_write_js_maw_log_record(from, record.to, record.msg, record.route);
+        }
+    }
+}
+
+impl MessageSink for MqttMessageSink {
+    fn record(&self, record: &MessageSinkRecord<'_>) {
+        send_publish_mqtt_message(record);
+    }
+}
+
+impl MessageSink for MessageLedgerSqliteSink {
+    fn record(&self, record: &MessageSinkRecord<'_>) {
+        if let Some(from) = record.normalized_from {
+            send_write_message_ledger_record(record, from);
+        }
     }
 }
 
@@ -878,6 +942,69 @@ fn send_audit_user() -> String {
 
 fn send_hostname() -> String {
     std::env::var("HOSTNAME").ok().filter(|value| !value.is_empty()).unwrap_or_else(|| "unknown".to_owned())
+}
+
+fn send_publish_mqtt_message(record: &MessageSinkRecord<'_>) {
+    let Some(from) = record.normalized_from else { return; };
+    let value = merged_config_value_for_env(&real_xdg_env());
+    let broker = value
+        .get("mqttPublish")
+        .and_then(|mqtt| mqtt.get("broker"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|broker| !broker.is_empty());
+    let Some(broker) = broker else { return; };
+    let Some(node) = value.get("node").and_then(serde_json::Value::as_str) else { return; };
+    let payload = serde_json::json!({
+        "event": "message",
+        "oracle": record.sender_oracle,
+        "host": node,
+        "message": record.msg,
+        "ts": cli_dispatch_now_millis(),
+        "data": {"from": from, "to": record.to, "route": record.route},
+    })
+    .to_string();
+    for topic in [
+        format!("maw/v1/oracle/{}/feed", record.sender_oracle),
+        format!("maw/v1/node/{node}/feed"),
+    ] {
+        let _ = std::process::Command::new("mosquitto_pub")
+            .args(["-L", broker, "-t", &topic, "-m", &payload])
+            .output();
+    }
+}
+
+fn send_write_message_ledger_record(record: &MessageSinkRecord<'_>, from: &str) {
+    if std::env::var("MAW_MESSAGE_LEDGER_DISABLE").ok().as_deref() == Some("1") {
+        return;
+    }
+    let path = maw_data_path(&real_xdg_env(), &["message-ledger.sqlite"]);
+    if let Some(parent) = path.parent() {
+        if std::fs::create_dir_all(parent).is_err() { return; }
+    } else {
+        return;
+    }
+    let ts = cli_dispatch_now_iso();
+    let id = format!("{}:{}:{}:{}", ts, from, record.to, record.route);
+    let sql = format!(
+        "{} INSERT OR REPLACE INTO messages (id, ts, direction, state, channel, route, from_id, to_id, target, peer_url, text, error, last_line, signed) VALUES ({}, {}, 'outbound', 'delivered', 'hey', {}, {}, {}, {}, NULL, {}, NULL, NULL, 0);",
+        send_message_ledger_schema_sql(),
+        send_sqlite_quote(&id),
+        send_sqlite_quote(&ts),
+        send_sqlite_quote(record.route),
+        send_sqlite_quote(from),
+        send_sqlite_quote(record.to),
+        send_sqlite_quote(record.to),
+        send_sqlite_quote(record.msg),
+    );
+    let _ = std::process::Command::new("sqlite3").arg(path).arg(sql).output();
+}
+
+fn send_message_ledger_schema_sql() -> &'static str {
+    "CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, ts TEXT NOT NULL, direction TEXT NOT NULL, state TEXT NOT NULL, channel TEXT NOT NULL, route TEXT NOT NULL, from_id TEXT NOT NULL, to_id TEXT NOT NULL, target TEXT, peer_url TEXT, text TEXT NOT NULL, error TEXT, last_line TEXT, signed INTEGER NOT NULL DEFAULT 0); CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(ts); CREATE INDEX IF NOT EXISTS idx_messages_from ON messages(from_id); CREATE INDEX IF NOT EXISTS idx_messages_to ON messages(to_id); CREATE INDEX IF NOT EXISTS idx_messages_direction ON messages(direction); CREATE INDEX IF NOT EXISTS idx_messages_state ON messages(state); PRAGMA busy_timeout=1000;"
+}
+
+fn send_sqlite_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
 }
 
 
@@ -1583,14 +1710,14 @@ mod send_acl_hotpath_tests {
         HeyConfig { node: Some("node-a".to_owned()), oracle: Some(oracle.to_owned()), route: RouteConfig::default() }
     }
 
-    fn send_audit_test_env(name: &str) -> (std::path::PathBuf, [EnvVarRestore; 9]) {
+    fn send_audit_test_env(name: &str) -> (std::path::PathBuf, [EnvVarRestore; 10]) {
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos());
         let root = std::env::temp_dir().join(format!("maw-send-audit-{name}-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(root.join("maw/config")).expect("config");
-        let restores = ["HOME", "MAW_HOME", "MAW_CONFIG_DIR", "MAW_DATA_DIR", "MAW_STATE_DIR", "USER", "LOGNAME", "HOSTNAME", "MAW_AUDIT_TEST_NOW_MS"].map(EnvVarRestore::capture);
+        let restores = ["HOME", "MAW_HOME", "MAW_CONFIG_DIR", "MAW_DATA_DIR", "MAW_STATE_DIR", "USER", "LOGNAME", "HOSTNAME", "MAW_AUDIT_TEST_NOW_MS", "MAW_MESSAGE_LEDGER_DISABLE"].map(EnvVarRestore::capture);
         std::env::set_var("HOME", root.join("home"));
         std::env::set_var("MAW_HOME", root.join("maw"));
-        for key in ["MAW_CONFIG_DIR", "MAW_DATA_DIR", "MAW_STATE_DIR", "LOGNAME"] { std::env::remove_var(key); }
+        for key in ["MAW_CONFIG_DIR", "MAW_DATA_DIR", "MAW_STATE_DIR", "LOGNAME", "MAW_MESSAGE_LEDGER_DISABLE"] { std::env::remove_var(key); }
         std::env::set_var("USER", "nat");
         std::env::set_var("HOSTNAME", "m5");
         std::env::set_var("MAW_AUDIT_TEST_NOW_MS", "1783565423347");
@@ -1773,9 +1900,48 @@ mod send_acl_hotpath_tests {
     }
 
     #[test]
+    fn sink_registry_preserves_audit_and_maw_log_bytes() {
+        let _lock = env_test_lock().lock().unwrap();
+        let config = HeyConfig { node: Some("m5".to_owned()), oracle: Some("atlas".to_owned()), route: RouteConfig::default() };
+        let args = send_audit_args("hey", &send_acl_vec(&["agent", "hello"]));
+
+        let (actual_root, _actual_restores) = send_audit_test_env("sink-actual");
+        std::env::set_var("MAW_MESSAGE_LEDGER_DISABLE", "1");
+        send_record_success("hey", &args, &config, "atlas", None, "agent", "[m5:atlas] hello", "local");
+        let actual_audit = std::fs::read(actual_root.join("maw/audit.jsonl")).unwrap();
+        let actual_log = std::fs::read(actual_root.join("maw/maw-log.jsonl")).unwrap();
+
+        let (expected_root, _expected_restores) = send_audit_test_env("sink-expected");
+        send_write_js_audit_record("hey", &args);
+        send_write_js_maw_log_record("m5:atlas", "agent", "[m5:atlas] hello", "local");
+        assert_eq!(actual_audit, std::fs::read(expected_root.join("maw/audit.jsonl")).unwrap());
+        assert_eq!(actual_log, std::fs::read(expected_root.join("maw/maw-log.jsonl")).unwrap());
+    }
+
+    #[test]
+    fn message_ledger_sink_writes_signed_column_default() {
+        let _lock = env_test_lock().lock().unwrap();
+        if std::process::Command::new("sqlite3").arg("-version").output().is_err() { return; }
+        let (root, _restores) = send_audit_test_env("ledger");
+        let config = HeyConfig { node: Some("m5".to_owned()), oracle: Some("atlas".to_owned()), route: RouteConfig::default() };
+        let args = send_audit_args("hey", &send_acl_vec(&["agent", "hello"]));
+
+        send_record_success("hey", &args, &config, "atlas", None, "agent", "[m5:atlas] hello", "local");
+
+        let output = std::process::Command::new("sqlite3")
+            .arg(root.join("maw/message-ledger.sqlite"))
+            .arg("select from_id || '|' || to_id || '|' || text || '|' || route || '|' || signed from messages;")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8(output.stdout).unwrap(), "m5:atlas|agent|[m5:atlas] hello|local|0\n");
+    }
+
+    #[test]
     fn concurrent_send_audit_appends_remain_parseable_jsonl() {
         let _lock = env_test_lock().lock().unwrap();
         let (root, _restores) = send_audit_test_env("concurrent");
+        std::env::set_var("MAW_MESSAGE_LEDGER_DISABLE", "1");
         let config = HeyConfig { node: Some("m5".to_owned()), oracle: Some("atlas".to_owned()), route: RouteConfig::default() };
         let workers = 64;
 
