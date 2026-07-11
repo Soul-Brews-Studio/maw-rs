@@ -160,32 +160,7 @@ impl MawWasmHost {
                     .get("psi")
                     .map(|root| root.to_string_lossy().into_owned())
             }
-            "maw-cache" => {
-                if !self.has_exact_cap("fs:read:maw-cache") {
-                    return HostResult::err(
-                        HostErrorCode::CapabilityDenied,
-                        "capability denied: fs:read:maw-cache",
-                    );
-                }
-                let Some(root) = self.fs_roots.get("maw-cache") else {
-                    return HostResult::err(
-                        HostErrorCode::NotFound,
-                        "path 'maw-cache' is not available in this context",
-                    );
-                };
-                let mut value = json!({"name": name, "path": root});
-                if std::env::var_os("MAW_HOME").is_none()
-                    && std::env::var_os("MAW_CACHE_DIR").is_none()
-                {
-                    if let Some(legacy) = self.fs_roots.get("maw-legacy") {
-                        if legacy != root {
-                            value["legacyPath"] = json!(legacy.join("artifacts"));
-                        }
-                    }
-                }
-                self.audit("maw.paths.get", "paths:get", name, "ok", start);
-                return HostResult::ok(value);
-            }
+            "maw-cache" => return self.paths_get_maw_cache(name, start),
             "vault" => {
                 if !self.has_exact_cap("fs:read:vault") {
                     return HostResult::err(
@@ -233,6 +208,33 @@ impl MawWasmHost {
             start,
         );
         result
+    }
+
+    fn paths_get_maw_cache(&self, name: &str, start: Instant) -> HostResult<Value> {
+        if !self.has_exact_cap("fs:read:maw-cache") {
+            return HostResult::err(
+                HostErrorCode::CapabilityDenied,
+                "capability denied: fs:read:maw-cache",
+            );
+        }
+        let Some(root) = self.fs_roots.get("maw-cache") else {
+            return HostResult::err(
+                HostErrorCode::NotFound,
+                "path 'maw-cache' is not available in this context",
+            );
+        };
+        let mut value = json!({"name": name, "path": root});
+        if std::env::var_os("MAW_HOME").is_none()
+            && std::env::var_os("MAW_CACHE_DIR").is_none()
+        {
+            if let Some(legacy) = self.fs_roots.get("maw-legacy") {
+                if legacy != root {
+                    value["legacyPath"] = json!(legacy.join("artifacts"));
+                }
+            }
+        }
+        self.audit("maw.paths.get", "paths:get", name, "ok", start);
+        HostResult::ok(value)
     }
 
     fn config_get(&self, input: &str) -> HostResult<Value> {
