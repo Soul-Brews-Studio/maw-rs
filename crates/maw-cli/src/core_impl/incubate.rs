@@ -308,6 +308,7 @@ fn incubate_bud_options(stem: &str, options: &IncubateOptions) -> Result<BudOpti
         sync_peers: options.sync_peers,
         parent_session_id: None,
         session_id: None,
+        session: None,
     })
 }
 

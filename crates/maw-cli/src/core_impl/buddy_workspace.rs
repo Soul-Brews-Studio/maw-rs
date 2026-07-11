@@ -3,7 +3,7 @@ const DISPATCH_121: &[DispatcherEntry] = &[
     DispatcherEntry { command: "buddy", handler: Handler::Sync(bud_run_command) },
 ];
 
-const BUD_USAGE: &str = "usage: maw bud <name> [--from <oracle>] [--root] [--seed] [--org <org>] [--repo org/repo] [--issue N] [--issue-repo owner/repo] [--note <text>] [--nickname <pretty>] [--engine <name>|-e <name>] [--fast] [--split] [--scaffold-only] [--dry-run]\n       Or: maw bud --from-repo <path|url> --stem <stem> [--pr] [--from <parent>] [--seed] [--sync-peers] [--force] [--track-vault] [--dry-run]";
+const BUD_USAGE: &str = "usage: maw bud <name> [--from <oracle>] [--root] [--seed] [--org <org>] [--repo org/repo] [--issue N] [--issue-repo owner/repo] [--note <text>] [--nickname <pretty>] [--engine <name>|-e <name>] [--session <N>-<name>] [--fast] [--split] [--scaffold-only] [--dry-run]\n       Or: maw bud --from-repo <path|url> --stem <stem> [--pr] [--from <parent>] [--seed] [--sync-peers] [--force] [--track-vault] [--dry-run]";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)]
@@ -33,6 +33,7 @@ struct BudOptions {
     sync_peers: bool,
     parent_session_id: Option<String>,
     session_id: Option<String>,
+    session: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +64,7 @@ trait BudFs {
     fn bud_exists(&self, path: &std::path::Path) -> bool;
     fn bud_create_dir_all(&mut self, path: &std::path::Path) -> Result<(), String>;
     fn bud_read(&self, path: &std::path::Path) -> Result<Vec<u8>, String>;
+    fn bud_read_dir_names(&self, path: &std::path::Path) -> Result<Vec<String>, String>;
     fn bud_write_atomic(&mut self, path: &std::path::Path, bytes: &[u8]) -> Result<(), String>;
     fn bud_append_atomic(&mut self, path: &std::path::Path, text: &str) -> Result<(), String>;
     fn bud_copy_atomic(&mut self, from: &std::path::Path, to: &std::path::Path) -> Result<(), String>;
@@ -145,6 +147,18 @@ impl BudFs for BudSystemFs {
         std::fs::read(path).map_err(|error| error.to_string())
     }
 
+    fn bud_read_dir_names(&self, path: &std::path::Path) -> Result<Vec<String>, String> {
+        let entries = match std::fs::read_dir(path) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error.to_string()),
+        };
+        Ok(entries
+            .flatten()
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .collect())
+    }
+
     fn bud_write_atomic(&mut self, path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
         bud_write_atomic_path(path, bytes)
     }
@@ -203,7 +217,7 @@ fn bud_parse(argv: &[String]) -> Result<BudOptions, String> {
             "--force" => options.force = true,
             "--track-vault" => options.track_vault = true,
             "--sync-peers" => options.sync_peers = true,
-            flag @ ("--from" | "--from-repo" | "--stem" | "--org" | "--repo" | "--issue" | "--issue-repo" | "--note" | "--nickname" | "--engine" | "-e" | "--parent" | "--parent-session-id" | "--session-id") => { bud_assign_value(&mut options, flag, &bud_take_value(argv, &mut index, flag)?)?; }
+            flag @ ("--from" | "--from-repo" | "--stem" | "--org" | "--repo" | "--issue" | "--issue-repo" | "--note" | "--nickname" | "--engine" | "-e" | "--parent" | "--parent-session-id" | "--session-id" | "--session") => { bud_assign_value(&mut options, flag, &bud_take_value(argv, &mut index, flag)?)?; }
             value if value.starts_with('-') => return Err(bud_flag_like(value)),
             value => bud_set_name(&mut options, value)?,
         }
@@ -225,6 +239,7 @@ fn bud_assign_value(options: &mut BudOptions, flag: &str, value: &str) -> Result
         "--engine" | "-e" => options.engine = Some(bud_validate_id(value, flag)?),
         "--parent" | "--parent-session-id" => options.parent_session_id = Some(bud_validate_id(value, flag)?),
         "--session-id" => options.session_id = Some(bud_validate_id(value, flag)?),
+        "--session" => options.session = Some(bud_validate_session_name(value)?),
         _ => return Err(format!("bud: unknown flag {flag}")),
     }
     Ok(())
@@ -340,7 +355,7 @@ fn bud_write_skeleton(ctx: &BudContext, options: &BudOptions, fs: &mut impl BudF
     fs.bud_write_atomic(&ctx.repo_path.join(".claude/settings.json"), bud_settings().as_bytes())?;
     if let Some(nickname) = &options.nickname { fs.bud_write_atomic(&ctx.repo_path.join("ψ/nickname"), format!("{nickname}\n").as_bytes())?; }
     if let Some(note) = &options.note { fs.bud_write_atomic(&ctx.repo_path.join("ψ/memory/birth-note.md"), format!("# Birth note\n\n{note}\n").as_bytes())?; }
-    bud_write_fleet(ctx, fs)
+    bud_write_fleet(ctx, options, fs)
 }
 
 fn bud_create_vault(root: &std::path::Path, fs: &mut impl BudFs) -> Result<(), String> {
@@ -348,16 +363,17 @@ fn bud_create_vault(root: &std::path::Path, fs: &mut impl BudFs) -> Result<(), S
     Ok(())
 }
 
-fn bud_write_fleet(ctx: &BudContext, fs: &mut impl BudFs) -> Result<(), String> {
+fn bud_write_fleet(ctx: &BudContext, options: &BudOptions, fs: &mut impl BudFs) -> Result<(), String> {
     let dir = maw_config_path(&current_xdg_env(), &["fleet"]);
     fs.bud_create_dir_all(&dir)?;
-    let file = dir.join(format!("99-{}.json", ctx.stem));
+    let session = bud_resolve_session_name(&dir, &ctx.stem, options.session.as_deref(), fs)?;
+    let file = dir.join(format!("{session}.json"));
     let mut value = if fs.bud_exists(&file) {
         serde_json::from_slice(&fs.bud_read(&file)?).map_err(|error| error.to_string())?
     } else {
-        serde_json::json!({ "name": format!("99-{}", ctx.stem), "windows": [], "sync_peers": [] })
+        serde_json::json!({ "name": session, "windows": [], "sync_peers": [] })
     };
-    value["name"] = serde_json::json!(format!("99-{}", ctx.stem));
+    value["name"] = serde_json::json!(session);
     bud_fleet_ensure_window(&mut value, ctx)?;
     if let Some(parent) = &ctx.parent {
         bud_fleet_ensure_sync_peer(&mut value, parent)?;
@@ -374,6 +390,40 @@ fn bud_write_fleet(ctx: &BudContext, fs: &mut impl BudFs) -> Result<(), String> 
         )
         .as_bytes(),
     )
+}
+
+fn bud_resolve_session_name(dir: &std::path::Path, stem: &str, requested: Option<&str>, fs: &impl BudFs) -> Result<String, String> {
+    if let Some(session) = requested {
+        if fs.bud_exists(&dir.join(format!("{session}.json"))) {
+            return Err(format!("bud: session {session} already exists"));
+        }
+        return Ok(session.to_owned());
+    }
+    let used = bud_used_session_numbers(dir, fs)?;
+    let next = (1..=99)
+        .find(|number| !used.contains(number))
+        .ok_or_else(|| "bud: no free fleet session prefix in 01-99".to_owned())?;
+    Ok(format!("{next:02}-{stem}"))
+}
+
+fn bud_used_session_numbers(dir: &std::path::Path, fs: &impl BudFs) -> Result<BTreeSet<u32>, String> {
+    Ok(fs
+        .bud_read_dir_names(dir)?
+        .into_iter()
+        .filter_map(|name| name.strip_suffix(".json").map(str::to_owned))
+        .filter_map(|name| name.split_once('-').and_then(|(prefix, _)| prefix.parse::<u32>().ok()))
+        .collect())
+}
+
+fn bud_validate_session_name(value: &str) -> Result<String, String> {
+    let Some((prefix, stem)) = value.split_once('-') else { return Err("bud: --session must look like <N>-<name>".to_owned()); };
+    if prefix.is_empty() || !prefix.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err("bud: --session prefix must be numeric".to_owned());
+    }
+    let number = prefix.parse::<u32>().map_err(|_| "bud: --session prefix must be numeric".to_owned())?;
+    if !(1..=99).contains(&number) { return Err("bud: --session prefix must be between 1 and 99".to_owned()); }
+    let stem = bud_validate_oracle_stem(stem).map_err(|_| "bud: --session name is invalid".to_owned())?;
+    Ok(format!("{number:02}-{stem}"))
 }
 
 fn bud_fleet_ensure_window(value: &mut serde_json::Value, ctx: &BudContext) -> Result<(), String> {
@@ -591,6 +641,16 @@ mod bud_tests {
         fn bud_exists(&self, path: &std::path::Path) -> bool { self.files.contains_key(path) || self.dirs.contains(path) }
         fn bud_create_dir_all(&mut self, path: &std::path::Path) -> Result<(), String> { self.dirs.insert(path.to_path_buf()); Ok(()) }
         fn bud_read(&self, path: &std::path::Path) -> Result<Vec<u8>, String> { self.files.get(path).cloned().ok_or_else(|| "missing".to_owned()) }
+        fn bud_read_dir_names(&self, path: &std::path::Path) -> Result<Vec<String>, String> {
+            let mut names = self
+                .files
+                .keys()
+                .filter(|file| file.parent() == Some(path))
+                .filter_map(|file| file.file_name().and_then(std::ffi::OsStr::to_str).map(str::to_owned))
+                .collect::<Vec<_>>();
+            names.sort();
+            Ok(names)
+        }
         fn bud_write_atomic(&mut self, path: &std::path::Path, bytes: &[u8]) -> Result<(), String> { self.files.insert(path.to_path_buf(), bytes.to_vec()); Ok(()) }
         fn bud_append_atomic(&mut self, path: &std::path::Path, text: &str) -> Result<(), String> { self.files.entry(path.to_path_buf()).or_default().extend_from_slice(text.as_bytes()); Ok(()) }
         fn bud_copy_atomic(&mut self, from: &std::path::Path, to: &std::path::Path) -> Result<(), String> { let data = self.bud_read(from)?; self.bud_write_atomic(to, &data) }
@@ -643,6 +703,33 @@ mod bud_tests {
         let mut gh = FakeGh::default(); let mut fs = FakeFs::default(); let mut wake = FakeWake::default(); let mut http = FakeHttp::default();
         let out = bud_run_with(&bud_args(&["../bad", "--dry-run"]), &mut gh, &mut fs, &mut wake, &mut http);
         assert_ne!(out.code, 0); assert!(gh.calls.is_empty()); assert!(fs.files.is_empty());
+    }
+
+    #[test]
+    fn bud_session_default_scans_lowest_free_prefix() {
+        let mut fs = FakeFs::default();
+        let dir = std::path::Path::new("/fleet");
+        for name in ["01-root.json", "02-watch.json", "99-legacy.json", "notes.txt"] {
+            fs.files.insert(dir.join(name), b"{}".to_vec());
+        }
+        assert_eq!(bud_resolve_session_name(dir, "sprout", None, &fs).unwrap(), "03-sprout");
+    }
+
+    #[test]
+    fn bud_session_override_validates_and_normalizes_prefix() {
+        let options = bud_parse(&bud_args(&["sprout", "--session", "7-custom"])).unwrap();
+        let fs = FakeFs::default();
+        assert_eq!(bud_resolve_session_name(std::path::Path::new("/fleet"), "sprout", options.session.as_deref(), &fs).unwrap(), "07-custom");
+        assert!(bud_parse(&bud_args(&["sprout", "--session", "custom"])).unwrap_err().contains("<N>-<name>"));
+    }
+
+    #[test]
+    fn bud_session_override_reports_collision() {
+        let mut fs = FakeFs::default();
+        let dir = std::path::Path::new("/fleet");
+        fs.files.insert(dir.join("07-custom.json"), b"{}".to_vec());
+        let error = bud_resolve_session_name(dir, "sprout", Some("07-custom"), &fs).unwrap_err();
+        assert_eq!(error, "bud: session 07-custom already exists");
     }
 
     #[test]
