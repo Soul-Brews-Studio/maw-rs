@@ -10,6 +10,7 @@ struct NativeFleetMember {
     #[serde(default, skip_serializing_if = "Option::is_none")] node: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")] role: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")] joined_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")] token: Option<String>,
 }
 
 struct FleetRosterMemberView { member: NativeFleetMember, node: Option<String>, is_live: Option<bool> }
@@ -307,6 +308,10 @@ mod fleet_roster_tests {
         assert_eq!(value["legacy"], false);
         assert_eq!(value["memberCount"], 0);
 
+        let session: NativeFleetSession = serde_json::from_str(r#"{"name":"01-core","squadName":"core","token":"duo","windows":[],"members":[{"handle":"atlas","token":"dd2"}]}"#).expect("token fields parse");
+        assert_eq!(session.token.as_deref(), Some("duo"));
+        assert_eq!(session.members.expect("members")[0].token.as_deref(), Some("dd2"));
+
         let roster_json = r#"{"name":"05-ccdc","squadName":"ccdc","windows":[],"members":[{"handle":"atlas","role":"lead"},{"handle":"drift","node":"mba"}]}"#;
         std::fs::create_dir_all(root.join("state/fleet/squads/05-ccdc")).expect("squad dir");
         std::fs::write(root.join("state/fleet/squads/05-ccdc/squad.json"), roster_json).expect("squad file");
@@ -363,7 +368,7 @@ mod fleet_roster_tests {
         std::fs::create_dir_all(root.join("state/fleet")).expect("fleet dir");
         std::fs::write(
             root.join("state/fleet/05-ccdc.json"),
-            r#"{"name":"05-ccdc","squadName":"ccdc","windows":[],"members":[{"handle":"atlas","role":"lead"},{"handle":"drift","node":"mba"},{"handle":"ghost"}]}"#,
+            r#"{"name":"05-ccdc","squadName":"ccdc","token":"duo","extra":"keep","windows":[],"members":[{"handle":"atlas","role":"lead","token":"dd2","extraMember":"keep"},{"handle":"drift","node":"mba"},{"handle":"ghost"}]}"#,
         ).expect("squad file");
 
         let removed = run_fleet_command(&roster_args(&["remove", "ccdc", "ghost"]));
@@ -379,6 +384,11 @@ mod fleet_roster_tests {
         let value: serde_json::Value = serde_json::from_str(&shown.stdout).expect("json");
         assert_eq!(value["memberCount"], 1);
         assert_eq!(value["members"][0]["handle"], "atlas");
+        assert_eq!(value["members"][0]["token"], "dd2");
+        let file: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(root.join("state/fleet/squads/05-ccdc/squad.json")).expect("roster file")).expect("roster json");
+        assert_eq!(file["token"], "duo");
+        assert_eq!(file["extra"], "keep");
+        assert_eq!(file["members"][0]["extraMember"], "keep");
     }
 
     #[test]

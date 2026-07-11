@@ -235,6 +235,7 @@ fn fleet_join_append_member(env: &MawXdgEnv, fleet: &str, invite: &RecruitInvite
         node: invite.node.clone(),
         role: None,
         joined_at: Some(fleet_registry_now_iso()),
+        token: None,
     };
     let member = serde_json::to_value(&member).map_err(|error| error.to_string())?;
     let object = value.as_object_mut().ok_or_else(|| "fleet join: squad file is not a JSON object".to_owned())?;

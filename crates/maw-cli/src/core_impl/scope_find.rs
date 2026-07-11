@@ -26,6 +26,8 @@ struct NativeFleetSession {
     #[serde(default, alias = "buddedFrom")]
     budded_from: Option<String>,
     #[serde(default)]
+    token: Option<String>,
+    #[serde(default)]
     members: Option<Vec<NativeFleetMember>>,
 }
 

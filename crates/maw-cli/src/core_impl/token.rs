@@ -159,6 +159,7 @@ fn token_dispatch(argv: &[String], runner: &mut dyn TokenRunner) -> Result<Token
         "help" | "--help" | "-h" => Ok(token_ok(format!("{}\n", token_help()))),
         "list" | "ls" | "tokens" => token_cmd_list(runner).map(token_ok),
         "current" => Ok(token_ok(token_current().map_or_else(String::new, |name| format!("{name}\n")))),
+        "resolve" => token_cmd_resolve().map(token_ok),
         "use" => token_cmd_use(&parsed, runner),
         "apply" => {
             let mut tmux = TokenSystemApplyTmux::new();
@@ -360,6 +361,63 @@ fn token_cmd_scan(runner: &mut dyn TokenRunner) -> Result<String, String> {
     Ok(token_format_scan(&rows))
 }
 
+fn token_cmd_resolve() -> Result<String, String> {
+    let cwd = std::env::current_dir().map_err(|_| "maw token resolve: current directory unavailable".to_owned())?;
+    if let Some(oracle) = token_resolve_oracle_from_cwd(&cwd) {
+        if let Some(name) = token_resolve_assigned_token(&oracle)? { return Ok(format!("{name}\n")); }
+    }
+    if let Some(name) = token_current() { return Ok(format!("{name}\n")); }
+    if let Some(name) = token_current_file() { return Ok(format!("{name}\n")); }
+    Err("maw token resolve: no token assignment found".to_owned())
+}
+
+fn token_resolve_oracle_from_cwd(cwd: &std::path::Path) -> Option<String> {
+    if let Some(cache) = locate_load_registry_cache() {
+        let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+        let mut matches = cache.oracles.into_iter()
+            .filter_map(|oracle| {
+                if oracle.local_path.trim().is_empty() { return None; }
+                let path = std::path::PathBuf::from(oracle.local_path);
+                let path = path.canonicalize().unwrap_or(path);
+                cwd.starts_with(&path).then_some((path.components().count(), oracle.name))
+            })
+            .collect::<Vec<_>>();
+        matches.sort_by_key(|item| std::cmp::Reverse(item.0));
+        if let Some((_, name)) = matches.into_iter().next() { return Some(name); }
+    }
+    cwd.file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .map(|name| name.strip_suffix("-oracle").unwrap_or(name).to_owned())
+        .filter(|name| !name.is_empty())
+}
+
+fn token_resolve_assigned_token(oracle: &str) -> Result<Option<String>, String> {
+    for entry in fleet_load_entries_result("token resolve")? {
+        let Some(members) = entry.session.members.as_ref() else { continue; };
+        let Some(member) = members.iter().find(|member| token_oracle_matches(&member.handle, oracle)) else { continue; };
+        if let Some(name) = member.token.as_deref().filter(|name| !name.trim().is_empty()) {
+            token_validate_name("token name", name)?;
+            return Ok(Some(name.to_owned()));
+        }
+        if let Some(name) = entry.session.token.as_deref().filter(|name| !name.trim().is_empty()) {
+            token_validate_name("token name", name)?;
+            return Ok(Some(name.to_owned()));
+        }
+    }
+    Ok(None)
+}
+
+fn token_oracle_matches(handle: &str, oracle: &str) -> bool {
+    let normalize = |value: &str| value.trim().strip_suffix("-oracle").unwrap_or(value.trim()).to_owned();
+    normalize(handle) == normalize(oracle)
+}
+
+fn token_current_file() -> Option<String> {
+    let value = std::fs::read_to_string(maw_state_path(&current_xdg_env(), &["token-current"])).ok()?;
+    let name = value.trim();
+    (!name.is_empty()).then(|| name.to_owned())
+}
+
 fn token_apply_scope_sessions(args: &TokenArgs) -> Result<Option<Vec<String>>, String> {
     if let Some(session) = args.session.as_ref() { return Ok(Some(vec![session.clone()])); }
     if let Some(squad) = args.squad.as_ref() {
@@ -410,7 +468,7 @@ fn token_error(message: &str) -> CliOutput {
 }
 
 fn token_help() -> &'static str {
-    "usage: maw token <list|use|current|apply|save|load|scan> [...]\n  list                                  — list vault tokens + saved .envrcs (active marked)\n  use <name> [--no-team]                — switch active Claude token in local .envrc\n  current                               — print active token name (for statuslines)\n  apply <name> [--session X|--squad S|--all] [--dry-run]\n                                        — restart idle Claude panes onto token\n  save [name] [-f|--force]              — save .envrc to pass vault (default name = cwd basename)\n  load [name] [-f|--force]              — restore .envrc from pass vault + direnv allow\n  scan                                  — scan ghq repos, map tokens to oracles\n\naliases:\n  tokens                                — same as `list`\n  ls                                    — same as `list`\n\nsecurity: token values are never printed, logged, or stored outside\n          memory. See README.md for the full threat model."
+    "usage: maw token <list|use|current|resolve|apply|save|load|scan> [...]\n  list                                  — list vault tokens + saved .envrcs (active marked)\n  use <name> [--no-team]                — switch active Claude token in local .envrc\n  current                               — print active token name (for statuslines)\n  resolve                               — print assigned token name for cwd oracle/squad, then legacy fallbacks\n  apply <name> [--session X|--squad S|--all] [--dry-run]\n                                        — restart idle Claude panes onto token\n  save [name] [-f|--force]              — save .envrc to pass vault (default name = cwd basename)\n  load [name] [-f|--force]              — restore .envrc from pass vault + direnv allow\n  scan                                  — scan ghq repos, map tokens to oracles\n\naliases:\n  tokens                                — same as `list`\n  ls                                    — same as `list`\n\nsecurity: token values are never printed, logged, or stored outside\n          memory. See README.md for the full threat model."
 }
 
 fn token_current() -> Option<String> {
@@ -710,6 +768,47 @@ mod token_apply_tests {
         std::fs::create_dir_all(root.join("pass/claude")).expect("pass dir");
         std::fs::write(root.join(format!("pass/claude/token-{name}")), "secret\n").expect("token");
         TokenFakeRunner { root, fail: None }
+    }
+
+
+    #[test]
+    fn token_resolve_prefers_member_then_squad_then_legacy_fallbacks() {
+        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let root = temp("resolve-root");
+        let cwd = root.join("atlas-oracle");
+        std::fs::create_dir_all(&cwd).expect("cwd");
+        let _restore = ["HOME", "MAW_HOME", "MAW_CONFIG_DIR", "MAW_STATE_DIR", "MAW_CACHE_DIR", "GHQ_ROOT"].map(EnvVarRestore::capture);
+        for (key, dir) in [("HOME", "home"), ("MAW_CONFIG_DIR", "config"), ("MAW_STATE_DIR", "state"), ("MAW_CACHE_DIR", "cache"), ("GHQ_ROOT", "ghq")] {
+            std::env::set_var(key, root.join(dir));
+        }
+        std::env::remove_var("MAW_HOME");
+        let old = std::env::current_dir().expect("old cwd");
+        std::env::set_current_dir(&cwd).expect("chdir");
+        let squad_dir = root.join("state/fleet/squads/01-core");
+        std::fs::create_dir_all(&squad_dir).expect("squad dir");
+        std::fs::write(
+            squad_dir.join("squad.json"),
+            r#"{"name":"01-core","squadName":"core","token":"duo","members":[{"handle":"atlas","token":"dd2"}]}"#,
+        ).expect("squad file");
+        assert_eq!(token_cmd_resolve().expect("member token"), "dd2\n");
+
+        std::fs::write(
+            squad_dir.join("squad.json"),
+            r#"{"name":"01-core","squadName":"core","token":"duo","members":[{"handle":"atlas"}]}"#,
+        ).expect("squad file");
+        assert_eq!(token_cmd_resolve().expect("squad token"), "duo\n");
+
+        std::fs::write(
+            squad_dir.join("squad.json"),
+            r#"{"name":"01-core","squadName":"core","members":[{"handle":"atlas"}]}"#,
+        ).expect("squad file");
+        std::fs::write(cwd.join(".envrc"), "export CLAUDE_TOKEN_NAME=\"legacy\"\n").expect("envrc");
+        assert_eq!(token_cmd_resolve().expect("legacy envrc"), "legacy\n");
+
+        std::fs::remove_file(cwd.join(".envrc")).expect("remove envrc");
+        std::fs::write(root.join("state/token-current"), "current\n").expect("token-current");
+        assert_eq!(token_cmd_resolve().expect("token-current"), "current\n");
+        std::env::set_current_dir(old).expect("restore cwd");
     }
 
     #[test]
