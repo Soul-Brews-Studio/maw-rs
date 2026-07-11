@@ -1,12 +1,9 @@
-const DISPATCH_283: &[DispatcherEntry] = &[DispatcherEntry { command: "layout", handler: Handler::Sync(run_layout_command) }];
-
 const TMUX_SUB_283: &[TmuxSubcommandEntry] = &[TmuxSubcommandEntry {
     names: &["layout"],
     handler: run_tmux_layout_command,
 }];
 
 const TMUX_LAYOUT_USAGE: &str = "usage: maw tmux layout <target> <preset>\n  presets: even-horizontal, even-vertical, main-horizontal, main-vertical, tiled";
-const LAYOUT_USAGE: &str = "usage: maw layout <name> [--to <session:window>]";
 const TMUX_LAYOUT_PRESETS: &[&str] = &[
     "even-horizontal",
     "even-vertical",
@@ -20,7 +17,6 @@ struct TmuxLayoutOptions {
     target: String,
     preset: String,
 }
-struct LayoutOptions { preset: String, target: Option<String> }
 
 fn run_tmux_layout_command(argv: &[String]) -> CliOutput {
     match tmux_layout_with_runner(argv, &mut maw_tmux::CommandTmuxRunner::new()) {
@@ -29,45 +25,15 @@ fn run_tmux_layout_command(argv: &[String]) -> CliOutput {
     }
 }
 
-fn run_layout_command(argv: &[String]) -> CliOutput {
-    match layout_with_runner(argv, &mut maw_tmux::CommandTmuxRunner::new()) {
-        Ok(stdout) => CliOutput { code: 0, stdout, stderr: String::new() },
-        Err((code, message)) => CliOutput { code, stdout: String::new(), stderr: format!("{message}\n") },
-    }
-}
-
-fn layout_with_runner<R: maw_tmux::TmuxRunner>(argv: &[String], runner: &mut R) -> Result<String, (i32, String)> {
-    let opts = layout_parse(argv)?;
-    tmux_layout_validate_preset(&opts.preset)?;
-    let mut tmux_args = Vec::new();
-    let target = if let Some(target) = opts.target {
-        tmux_layout_validate_target(&target).map_err(|message| (1, message.replace("tmux layout", "layout")))?;
-        let window = tmux_layout_window_target(&target);
-        tmux_args.extend(["-t".to_owned(), window.clone()]);
-        window
-    } else { "current window".to_owned() };
-    tmux_args.push(opts.preset.clone());
-    runner.run("select-layout", &tmux_args).map_err(|error| (1, format!("layout: select-layout failed: {}", error.message)))?;
-    Ok(format!("layout {} applied to {target}\n", opts.preset))
-}
-
-fn layout_parse(argv: &[String]) -> Result<LayoutOptions, (i32, String)> {
-    let mut preset = None;
-    let mut target = None;
-    let mut iter = argv.iter();
-    while let Some(arg) = iter.next() {
-        match arg.as_str() {
-            "--help" | "-h" => return Err((0, LAYOUT_USAGE.to_owned())),
-            "--to" => target = Some(iter.next().ok_or_else(|| (2, "layout: --to requires a target".to_owned()))?.clone()),
-            value if value.starts_with("--to=") => target = Some(value[5..].to_owned()),
-            value if value.starts_with('-') => return Err((2, format!("layout: unknown argument {value}"))),
-            value => {
-                if preset.is_some() { return Err((2, "layout: expected exactly one layout name".to_owned())); }
-                preset = Some(value.to_owned());
-            }
-        }
-    }
-    Ok(LayoutOptions { preset: preset.ok_or_else(|| (2, LAYOUT_USAGE.to_owned()))?, target })
+fn tmux_layout_current_with_runner<R: maw_tmux::TmuxRunner>(
+    preset: &str,
+    runner: &mut R,
+) -> Result<(), (i32, String)> {
+    tmux_layout_validate_preset(preset)?;
+    runner
+        .run("select-layout", &[preset.to_owned()])
+        .map_err(|error| (1, format!("layout: select-layout failed: {}", error.message)))?;
+    Ok(())
 }
 
 fn tmux_layout_with_runner<R: maw_tmux::TmuxRunner>(
@@ -158,18 +124,8 @@ mod tmux_layout_tests {
 
     #[test]
     fn tmux_layout_fragment_is_part283_only() {
-        assert_eq!(DISPATCH_283[0].command, "layout");
         assert_eq!(TMUX_SUB_283.len(), 1);
         assert_eq!(TMUX_SUB_283[0].names, &["layout"]);
-    }
-
-    #[test]
-    fn layout_top_level_defaults_to_current_window_and_supports_to() {
-        let mut runner = LayoutFakeRunner::default();
-        assert_eq!(layout_with_runner(&strings(&["main-vertical"]), &mut runner).expect("layout"), "layout main-vertical applied to current window\n");
-        assert_eq!(layout_with_runner(&strings(&["tiled", "--to", "team:work.2"]), &mut runner).expect("layout target"), "layout tiled applied to team:work\n");
-        assert_eq!(runner.calls[0], ("select-layout".to_owned(), strings(&["main-vertical"])));
-        assert_eq!(runner.calls[1], ("select-layout".to_owned(), strings(&["-t", "team:work", "tiled"])));
     }
 
     #[test]
@@ -181,6 +137,13 @@ mod tmux_layout_tests {
             runner.calls,
             vec![("select-layout".to_owned(), strings(&["-t", "session:1", "tiled"]))]
         );
+    }
+
+    #[test]
+    fn tmux_layout_current_helper_keeps_internal_fleet_path_native() {
+        let mut runner = LayoutFakeRunner::default();
+        tmux_layout_current_with_runner("main-vertical", &mut runner).expect("current layout");
+        assert_eq!(runner.calls, vec![("select-layout".to_owned(), strings(&["main-vertical"]))]);
     }
 
     #[test]

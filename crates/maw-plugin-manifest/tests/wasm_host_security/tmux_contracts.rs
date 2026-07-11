@@ -224,3 +224,23 @@ fn tmux_command_host_manages_tile_shapes_exactly() {
         assert_eq!(result["code"], "invalid_args", "{request}: {result}");
     }
 }
+
+#[test]
+fn tmux_command_host_manages_select_layout_exactly() {
+    let dir = temp("tmux-select-layout");
+    let host = host(&dir, &["tmux:raw:select-layout"]).with_tmux_dry_run();
+
+    for args in [json!(["main-vertical"]), json!(["-t", "team:work", "tiled"])] {
+        let allowed = call(&host, "maw.tmux.command", &json!({"command":"select-layout","args":args}));
+        assert_eq!(allowed["ok"], true, "{allowed}");
+    }
+
+    for args in [
+        json!(["broken"]),
+        json!(["-t", "bad\ntarget", "tiled"]),
+        json!(["-t", "team:work", "tiled", "extra"]),
+    ] {
+        let denied = call(&host, "maw.tmux.command", &json!({"command":"select-layout","args":args}));
+        assert_eq!(denied["code"], "invalid_args", "{denied}");
+    }
+}

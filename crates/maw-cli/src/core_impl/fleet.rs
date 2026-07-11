@@ -1229,7 +1229,8 @@ fn fleet_run_gather(
         changed = true;
     }
     if changed && !options.scatter {
-        layout_with_runner(&["main-vertical".to_owned()], &mut runner).map_err(|(_, message)| format!("fleet gather: {message}"))?;
+        tmux_layout_current_with_runner("main-vertical", &mut runner)
+            .map_err(|(_, message)| format!("fleet gather: {message}"))?;
     }
     Ok((0, fleet_render_gather(state, group, options, &plan, Some(&target))))
 }

@@ -265,7 +265,6 @@ fn completions_usage_sources() -> Vec<(&'static str, String)> {
         ("inbox", INBOX_USAGE.to_owned()),
         ("join", JOIN_USAGE.to_owned()),
         ("kill", KILL_USAGE.to_owned()),
-        ("layout", LAYOUT_USAGE.to_owned()),
         ("more", MORE_USAGE.to_owned()),
         ("new", NEW_USAGE.to_owned()),
         ("notify", NOTIFY_USAGE.to_owned()),

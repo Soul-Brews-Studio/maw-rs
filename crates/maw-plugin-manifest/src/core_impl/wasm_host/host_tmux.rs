@@ -327,6 +327,7 @@ fn valid_tmux_command_argv(command: &str, args: &[String]) -> bool {
         ("send-keys", [target_flag, target, literal, value]) => {
             target_flag == "-t" && safe(target) && literal == "-l" && token(value)
         }
+        ("select-layout", [preset]) => layout(preset),
         ("select-layout", [target_flag, target, preset]) => {
             target_flag == "-t" && safe(target) && layout(preset)
         }
