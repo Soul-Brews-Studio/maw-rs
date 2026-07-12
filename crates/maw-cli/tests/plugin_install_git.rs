@@ -206,6 +206,53 @@ fn plugin_install_git_root_manifest_repo_regression() {
 }
 
 #[test]
+fn plugin_install_git_existing_plugin_requires_force_to_reinstall() {
+    let root = temp_dir("git-reinstall");
+    let repo = fixture_repo(&root, "reinstall-fixture");
+    let install_root = root.join("plugins");
+    let file_url = format!(
+        "file://{}",
+        repo.canonicalize().expect("repo path").display()
+    );
+    let run = |force: bool| {
+        let mut command = Command::new(maw_bin());
+        command.args([
+            "plugin",
+            "install",
+            &file_url,
+            "--root",
+            install_root.to_str().expect("install root utf8"),
+        ]);
+        if force {
+            command.arg("--force");
+        }
+        with_host_plugin_env(&mut command, &root)
+            .output()
+            .expect("maw plugin reinstall")
+    };
+
+    assert_success(&run(false), "initial install");
+    let install_dir = install_root.join("reinstall-fixture");
+    fs::write(install_dir.join("stale.txt"), "stale\n").expect("stale file");
+
+    let refused = run(false);
+    assert_eq!(refused.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&refused.stdout).is_empty());
+    assert_eq!(
+        String::from_utf8_lossy(&refused.stderr),
+        "plugin 'reinstall-fixture' is already installed; use --force to reinstall\n"
+    );
+
+    let forced = run(true);
+    assert_success(&forced, "forced reinstall");
+    assert!(String::from_utf8_lossy(&forced.stderr).is_empty());
+    assert!(install_dir.join("plugin.json").is_file());
+    assert!(!install_dir.join("stale.txt").exists());
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn plugin_install_git_subpath_builds_selected_package() {
     let root = temp_dir("git-subpath");
     let (repo, _) = monorepo_fixture(&root, "subpath-fixture");

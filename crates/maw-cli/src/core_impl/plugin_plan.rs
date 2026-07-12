@@ -60,13 +60,13 @@ fn run_plugin_plan(argv: &[String]) -> CliOutput {
             },
             Err(message) => plugin_usage_error(&message),
         },
-        PluginAction::Install { source, install_root, plan_json } => {
+        PluginAction::Install { source, install_root, plan_json, force } => {
             let install_root = install_root.unwrap_or_else(resolve_default_plugin_root);
             let result = match source {
-                InstallSource::Local(source_dir) => install_built_plugin_dir(&source_dir, &install_root)
+                InstallSource::Local(source_dir) => install_plugin_dir(&source_dir, &install_root, force)
                     .map(|summary| PluginInstallOutcome { summary, warning: None }),
                 InstallSource::Git { url, reference, sha256, warn_unpinned, subpath } => {
-                    install_from_git(&url, reference.as_deref(), sha256.as_deref(), warn_unpinned, subpath.as_deref(), &install_root)
+                    install_from_git(&url, reference.as_deref(), sha256.as_deref(), warn_unpinned, subpath.as_deref(), &install_root, force)
                 }
             };
             match result {
@@ -75,7 +75,7 @@ fn run_plugin_plan(argv: &[String]) -> CliOutput {
                     stdout: render_plugin_install_summary(&outcome.summary, plan_json),
                     stderr: outcome.warning.map_or_else(String::new, |warning| format!("{warning}\n")),
                 },
-                Err(message) => plugin_usage_error(&message),
+                Err(message) => plugin_install_error(&message),
             }
         }
     }
@@ -106,7 +106,7 @@ enum PluginAction {
     InferCapabilities { source: String, plan_json: bool },
     Build { dir: std::path::PathBuf, emit_types: bool, plan_json: bool },
     Init { name: String, dir: std::path::PathBuf, plan_json: bool },
-    Install { source: InstallSource, install_root: Option<std::path::PathBuf>, plan_json: bool },
+    Install { source: InstallSource, install_root: Option<std::path::PathBuf>, plan_json: bool, force: bool },
 }
 
 #[derive(Default)]
@@ -216,10 +216,12 @@ fn parse_plugin_install_args(argv: &[String]) -> Result<PluginAction, PluginPars
     let mut sha256 = None;
     let mut subpath = None;
     let mut plan_json = false;
+    let mut force = false;
     let mut index = 0;
     while index < argv.len() {
         match argv[index].as_str() {
             "--plan-json" => plan_json = true,
+            "--force" => force = true,
             "--root" => {
                 install_root = Some(take_plugin_manifest_path(argv, index, "--root").map_err(PluginParseError::Usage)?);
                 index += 1;
@@ -248,6 +250,7 @@ fn parse_plugin_install_args(argv: &[String]) -> Result<PluginAction, PluginPars
             .map_err(PluginParseError::Usage)?,
         install_root,
         plan_json,
+        force,
     })
 }
 
@@ -366,6 +369,31 @@ fn resolve_default_plugin_root() -> std::path::PathBuf {
     maw_data_path(&real_xdg_env(), &["plugins"])
 }
 
+fn install_plugin_dir(
+    source: &std::path::Path,
+    root: &std::path::Path,
+    force: bool,
+) -> Result<maw_plugin_manifest::PluginInstallSummary, String> {
+    let plugin = load_manifest_from_dir(source)?
+        .ok_or_else(|| format!("no plugin.json in {}", source.display()))?;
+    let destination = root.join(&plugin.manifest.name);
+    match std::fs::symlink_metadata(&destination) {
+        Ok(_) if !force => {
+            return Err(format!(
+                "plugin '{}' is already installed; use --force to reinstall",
+                plugin.manifest.name
+            ));
+        }
+        Ok(metadata) if metadata.file_type().is_dir() => std::fs::remove_dir_all(&destination)
+            .map_err(|error| format!("plugin install: remove existing failed: {error}"))?,
+        Ok(_) => std::fs::remove_file(&destination)
+            .map_err(|error| format!("plugin install: remove existing failed: {error}"))?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("plugin install: inspect destination failed: {error}")),
+    }
+    install_built_plugin_dir(source, root)
+}
+
 fn install_from_git(
     url: &str,
     reference: Option<&str>,
@@ -373,9 +401,11 @@ fn install_from_git(
     warn_unpinned: bool,
     subpath: Option<&std::path::Path>,
     root: &std::path::Path,
+    force: bool,
 ) -> Result<PluginInstallOutcome, String> {
     let tmp = create_plugin_install_temp_dir()?;
-    let result = install_from_git_in_temp(url, reference, expected_sha256, warn_unpinned, subpath, root, &tmp);
+    let target = PluginInstallTarget { root, force };
+    let result = install_from_git_in_temp(url, reference, expected_sha256, warn_unpinned, subpath, target, &tmp);
     let cleanup = std::fs::remove_dir_all(&tmp);
     match (result, cleanup) {
         (Ok(summary), Ok(())) => Ok(summary),
@@ -384,13 +414,19 @@ fn install_from_git(
     }
 }
 
+#[derive(Clone, Copy)]
+struct PluginInstallTarget<'a> {
+    root: &'a std::path::Path,
+    force: bool,
+}
+
 fn install_from_git_in_temp(
     url: &str,
     reference: Option<&str>,
     expected_sha256: Option<&str>,
     warn_unpinned: bool,
     subpath: Option<&std::path::Path>,
-    root: &std::path::Path,
+    target: PluginInstallTarget<'_>,
     tmp: &std::path::Path,
 ) -> Result<PluginInstallOutcome, String> {
     git_clone_plugin_repo(url, reference, tmp)?;
@@ -406,7 +442,7 @@ fn install_from_git_in_temp(
         expected_sha256,
         warn_unpinned,
     )?;
-    let summary = install_built_plugin_dir(&source, root)?;
+    let summary = install_plugin_dir(&source, target.root, target.force)?;
     Ok(PluginInstallOutcome { summary, warning })
 }
 
@@ -761,6 +797,14 @@ fn plugin_usage_error(message: &str) -> CliOutput {
         stderr: format!(
             "{message}\nusage: maw-rs plugin ls [-v|--verbose] [--core] [--standard] [--extra] [--api] [--scan-dir <dir>]... [--disabled <name>]... [--runtime-version <version>] [--use-cache]\n       maw-rs plugin <infer-capabilities|build|init|install> [args]\n"
         ),
+    }
+}
+
+fn plugin_install_error(message: &str) -> CliOutput {
+    CliOutput {
+        code: 2,
+        stdout: String::new(),
+        stderr: format!("{message}\n"),
     }
 }
 
