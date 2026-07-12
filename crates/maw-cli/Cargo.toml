@@ -27,6 +27,8 @@ maw-plugin-manifest = { path = "../maw-plugin-manifest" }
 maw-plugin-scaffold = { path = "../maw-plugin-scaffold" }
 maw-policy = { path = "../maw-policy" }
 maw-routing = { path = "../maw-routing" }
+maw-schedule = { path = "../maw-schedule" }
+maw-schedule-runner = { path = "../maw-schedule-runner" }
 maw-split = { path = "../maw-split" }
 maw-tmux = { path = "../maw-tmux" }
 maw-transport = { path = "../maw-transport" }

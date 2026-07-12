@@ -1898,6 +1898,8 @@ dependencies = [
  "maw-plugin-scaffold",
  "maw-policy",
  "maw-routing",
+ "maw-schedule",
+ "maw-schedule-runner",
  "maw-split",
  "maw-tmux",
  "maw-transport",
