@@ -2042,6 +2042,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "maw-schedule-launchd"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "maw-schedule",
+]
+
+[[package]]
 name = "maw-split"
 version = "0.1.0-alpha.1"
 dependencies = [
