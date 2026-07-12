@@ -109,7 +109,8 @@ fn absolute_dir(value: &str, name: &str) -> Result<PathBuf, String> {
 #[rustfmt::skip]
 fn expected_path(root: &Path, template: Option<&str>, today: &str, hour: &str) -> Result<Option<PathBuf>, String> {
     let Some(template) = template else { return Ok(None); };
-    let expanded = template.replace("$TODAY", today).replace("$HOUR", hour);
+    let yesterday = previous_date(today)?;
+    let expanded = template.replace("$TODAY", today).replace("$YESTERDAY", &yesterday).replace("$HOUR", hour);
     let relative = Path::new(&expanded);
     if relative.is_absolute() || relative.components().any(|part| matches!(part, Component::ParentDir | Component::RootDir | Component::Prefix(_))) { return Err("expected_output escapes repository".to_owned()); }
     let path = root.join(relative);
@@ -117,6 +118,27 @@ fn expected_path(root: &Path, template: Option<&str>, today: &str, hour: &str) -
     while !ancestor.exists() { ancestor = ancestor.parent().ok_or_else(|| "expected_output has no existing ancestor".to_owned())?; }
     if !ancestor.canonicalize().map_err(|e| format!("resolve expected_output: {e}"))?.starts_with(root) { return Err("expected_output escapes repository".to_owned()); }
     Ok(Some(path))
+}
+#[rustfmt::skip]
+fn previous_date(today: &str) -> Result<String, String> {
+    let invalid = || format!("invalid scheduled local date {today}");
+    if today.len() != 10 { return Err(invalid()); }
+    let mut parts = today.split('-');
+    let year = parts.next().and_then(|part| part.parse::<u32>().ok()).ok_or_else(&invalid)?;
+    let month = parts.next().and_then(|part| part.parse::<u32>().ok()).ok_or_else(&invalid)?;
+    let day = parts.next().and_then(|part| part.parse::<u32>().ok()).ok_or_else(&invalid)?;
+    if parts.next().is_some() || !(1..=days_in_month(year, month).ok_or_else(&invalid)?).contains(&day) { return Err(invalid()); }
+    let (year, month, day) = if day > 1 { (year, month, day - 1) } else if month > 1 {
+        let month = month - 1; (year, month, days_in_month(year, month).ok_or_else(&invalid)?)
+    } else { (year.checked_sub(1).ok_or_else(invalid)?, 12, 31) };
+    Ok(format!("{year:04}-{month:02}-{day:02}"))
+}
+const fn days_in_month(year: u32, month: u32) -> Option<u32> {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => Some(31), 4 | 6 | 9 | 11 => Some(30),
+        2 if year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400)) => Some(29),
+        2 => Some(28), _ => None,
+    }
 }
 fn fingerprint(path: &Path) -> Option<(u64, u64)> {
     let meta = path.metadata().ok()?;

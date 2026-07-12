@@ -64,6 +64,19 @@ fn credential_and_child_failures_finalize_and_log_before_returning() {
     assert!(std::fs::read_to_string(shell_root.join("job.log")).unwrap().contains("ERROR child exited 7"));
 }
 #[test]
+#[rustfmt::skip]
+fn expected_output_expands_yesterday_across_month_and_year_end() {
+    for (today, yesterday) in [("2026-03-01", "2026-02-28"), ("2026-01-01", "2025-12-31")] {
+        let root = root(); std::fs::create_dir_all(root.join(format!("repo/digest/{yesterday}"))).unwrap();
+        let mut request = request(&root, ExecMode::Shell, "true");
+        request.expected_output = Some("digest/$YESTERDAY/result.md".into());
+        let store = FireStore::new(root.join("state")); store.reserve(request).unwrap();
+        let run = execute(&store, "run-1", today, "00", None).unwrap();
+        let expected = root.join("repo").canonicalize().unwrap().join(format!("digest/{yesterday}/result.md"));
+        assert_eq!(run.outcome.expected_output.as_deref(), expected.to_str());
+    }
+}
+#[test]
 fn fixed_path_resolution_never_needs_ambient_path() {
     let root = root(); let binary = root.join("claude"); script(&binary, "#!/bin/sh\n");
     assert_eq!(resolve_binary_in("claude", std::slice::from_ref(&root)).unwrap(), binary);

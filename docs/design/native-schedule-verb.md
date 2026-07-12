@@ -147,8 +147,9 @@ without acquiring a lock. Rust must provide real cross-process exclusion.
 
 Transport success requires exit zero and, for `claude-headless`, a created, non-empty
 session output file; empty shell stdout remains valid. When `expected_output` is set,
-finalize expands literal `$TODAY` (`YYYY-MM-DD`) and `$HOUR` (`HH`) tokens from the run's
-scheduled local time, without a shell. For example:
+finalize expands literal `$TODAY` (`YYYY-MM-DD`), `$YESTERDAY` (the previous local
+`YYYY-MM-DD`), and `$HOUR` (`HH`) tokens from the run's scheduled local time, without a
+shell. For example:
 
 ```toml
 expected_output = "ψ/memory/huginn/$TODAY/$HOUR00_works.md"
