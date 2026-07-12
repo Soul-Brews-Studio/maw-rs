@@ -49,6 +49,7 @@ struct WakeResolvedNative {
     window: String,
     repo_path: std::path::PathBuf,
     repo_fuzzy_match: Option<String>,
+    repo_warning: Option<String>,
     command: String,
     target: String,
 }
@@ -57,6 +58,7 @@ struct WakeResolvedNative {
 struct WakeRepoResolution {
     path: std::path::PathBuf,
     fuzzy_match: Option<String>,
+    warning: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -471,7 +473,16 @@ fn wake_resolve(options: &WakeOptionsNative, sessions: &[TmuxSession]) -> Result
     let window = wake_window_name(options, &oracle);
     let target = format!("{session}:{window}");
     let command = wake_command(&window, &repo_path, options);
-    Ok(WakeResolvedNative { oracle, session, window, repo_path, repo_fuzzy_match: repo.fuzzy_match, command, target })
+    Ok(WakeResolvedNative {
+        oracle,
+        session,
+        window,
+        repo_path,
+        repo_fuzzy_match: repo.fuzzy_match,
+        repo_warning: repo.warning,
+        command,
+        target,
+    })
 }
 
 fn wake_oracle(options: &WakeOptionsNative) -> Result<String, String> {
@@ -537,7 +548,7 @@ fn wake_normalize_repo_path(path: &std::path::Path) -> Result<std::path::PathBuf
 fn wake_ghq_root() -> std::path::PathBuf { ghq_root() }
 
 fn wake_exact_repo_resolution(path: std::path::PathBuf) -> WakeRepoResolution {
-    WakeRepoResolution { path, fuzzy_match: None }
+    WakeRepoResolution { path, fuzzy_match: None, warning: None }
 }
 
 fn wake_resolve_workon_repo(input: &str) -> Result<WakeRepoResolution, String> {
@@ -548,6 +559,7 @@ fn wake_resolve_workon_repo(input: &str) -> Result<WakeRepoResolution, String> {
 fn wake_find_repo(oracle: &str, fleet_entries: &[NativeFleetEntry]) -> Result<WakeRepoResolution, String> {
     if let Some(path) = wake_registry_repo_for_oracle(oracle, fleet_entries) {
         if path.is_dir() { return Ok(wake_exact_repo_resolution(path)); }
+        if let Some((_, fallback)) = wake_oracles_repo_fallback(&[oracle]) { return Ok(fallback); }
         return Err(wake_registry_missing_repo_message(oracle, &path));
     }
     wake_resolve_repo_target(oracle, fleet_entries).map(|resolution| resolution.repo)
@@ -565,13 +577,16 @@ fn wake_resolve_exact_registry_session(target: &str, fleet_entries: &[NativeFlee
     let stem = maw_identity::parse_session_name(&entry.session.name).stem;
     let Some(window) = wake_primary_registry_window(entry, &stem) else { return Ok(None); };
     let Some(path) = native_fleet_repo_path(&window.repo) else { return Ok(None); };
-    if !path.is_dir() {
-        return Err(wake_registry_missing_repo_message(&entry.session.name, &path));
-    }
     let oracle = wake_oracle_from_repo_slug(&window.repo).unwrap_or_else(|| stem.clone());
+    let (oracle, repo) = if path.is_dir() {
+        (oracle, wake_exact_repo_resolution(path))
+    } else {
+        wake_oracles_repo_fallback(&[&stem, &oracle])
+            .ok_or_else(|| wake_registry_missing_repo_message(&entry.session.name, &path))?
+    };
     Ok(Some(WakeTypedResolution {
         oracle,
-        repo: WakeRepoResolution { path, fuzzy_match: None },
+        repo,
         session_hint: Some(entry.session.name.clone()),
     }))
 }
@@ -595,12 +610,16 @@ fn wake_resolve_registry_target(target: &str, fleet_entries: &[NativeFleetEntry]
                 .into_iter()
                 .find(|candidate| candidate.candidate == matched.candidate)
                 .ok_or_else(|| format!("wake: internal resolver mismatch for {target}"))?;
-            if !candidate.repo_path.is_dir() {
-                return Err(wake_registry_missing_repo_message(&candidate.session, &candidate.repo_path));
-            }
+            let stem = maw_identity::parse_session_name(&candidate.session).stem;
+            let (oracle, repo) = if candidate.repo_path.is_dir() {
+                (candidate.oracle, wake_exact_repo_resolution(candidate.repo_path))
+            } else {
+                wake_oracles_repo_fallback(&[target, &stem, &candidate.oracle])
+                    .ok_or_else(|| wake_registry_missing_repo_message(&candidate.session, &candidate.repo_path))?
+            };
             Ok(Some(WakeTypedResolution {
-                oracle: candidate.oracle,
-                repo: WakeRepoResolution { path: candidate.repo_path, fuzzy_match: None },
+                oracle,
+                repo,
                 session_hint: Some(candidate.session),
             }))
         }
@@ -622,7 +641,11 @@ fn wake_resolve_repo_target(oracle: &str, fleet_entries: &[NativeFleetEntry]) ->
                 .ok_or_else(|| format!("wake: internal resolver mismatch for {oracle}"))?;
             let fuzzy_match = (matched.rank == maw_matcher::ResolveMatchRank::Fuzzy).then_some(candidate.candidate.name);
             let oracle = wake_oracle_from_repo_path(&candidate.path).unwrap_or_else(|| oracle.to_owned());
-            Ok(WakeTypedResolution { oracle, repo: WakeRepoResolution { path: candidate.path, fuzzy_match }, session_hint: None })
+            Ok(WakeTypedResolution {
+                oracle,
+                repo: WakeRepoResolution { path: candidate.path, fuzzy_match, warning: None },
+                session_hint: None,
+            })
         }
         maw_matcher::ResolveTypedResult::Ambiguous { candidates } => Err(format!(
             "wake: ambiguous fuzzy repo for {oracle}: {}",
@@ -741,6 +764,17 @@ fn wake_registry_repo_for_oracle(oracle: &str, fleet_entries: &[NativeFleetEntry
     } else {
         None
     }
+}
+
+fn wake_oracles_repo_fallback(names: &[&str]) -> Option<(String, WakeRepoResolution)> {
+    let entry = locate_load_registry_cache()?.oracles.into_iter().find(|entry| {
+        names.iter().any(|name| entry.name.eq_ignore_ascii_case(name))
+    })?;
+    let path = std::path::PathBuf::from(entry.local_path.trim());
+    if !path.is_dir() { return None; }
+    let path = wake_canonicalize_path(&path);
+    let warning = format!("registry repo stale, using oracles.json: {}", path.display());
+    Some((entry.name, WakeRepoResolution { path, fuzzy_match: None, warning: Some(warning) }))
 }
 
 fn wake_registry_session_hint(oracle: &str, repo_path: &std::path::Path, fleet_entries: &[NativeFleetEntry]) -> Option<String> {
@@ -980,6 +1014,7 @@ fn wake_shell_quote(value: &str) -> String {
 
 fn wake_render_dry_run(options: &WakeOptionsNative, resolved: &WakeResolvedNative) -> String {
     let mut out = String::new();
+    if let Some(warning) = &resolved.repo_warning { let _ = writeln!(out, "\x1b[33mwarning:\x1b[0m {warning}"); }
     if let Some(name) = &resolved.repo_fuzzy_match {
         let _ = writeln!(out, "\x1b[36m→\x1b[0m fuzzy match: {name}");
     }
@@ -1026,6 +1061,7 @@ fn wake_apply(
     let started = std::time::Instant::now();
     if !resolved.repo_path.is_dir() { return Err(format!("wake: repo path missing: {}", resolved.repo_path.display())); }
     wake_record_phase(resolved, "repo-check", wake_elapsed_ms(started), out, true);
+    if let Some(warning) = &resolved.repo_warning { let _ = writeln!(out, "\x1b[33mwarning:\x1b[0m {warning}"); }
     if let Some(name) = &resolved.repo_fuzzy_match {
         let _ = writeln!(out, "\x1b[36m→\x1b[0m fuzzy match: {name}");
     }
@@ -1637,6 +1673,43 @@ mod wake_tests {
             assert!(err.contains("probed"), "{err}");
             assert!(err.contains(&wake_ghq_root().display().to_string()), "{err}");
             assert!(err.contains(&root.join("ghq/github.com/laris-co/mother-oracle").display().to_string()), "{err}");
+            assert!(tmux.actions.is_empty());
+        });
+    }
+
+    #[test]
+    fn wake_stale_registry_repo_falls_back_to_oracles_local_path() {
+        wake_with_fixture(|root| {
+            let canonical = root.join("repos/token-oracle");
+            std::fs::create_dir_all(&canonical).expect("canonical repo");
+            let canonical = canonical.canonicalize().expect("canonical path");
+            let fleet = root.join("home/.maw/fleet");
+            std::fs::create_dir_all(&fleet).expect("fleet");
+            std::fs::write(
+                fleet.join("59-token.json"),
+                r#"{"name":"59-token","windows":[{"name":"token","repo":"github.com/Soul-Brews-Studio/token-oracle-oracle"}]}"#,
+            )
+            .expect("stale registry");
+            let cache = serde_json::json!({
+                "schema": 1,
+                "oracles": [{
+                    "org": "laris-co",
+                    "repo": "token-oracle",
+                    "name": "token",
+                    "local_path": canonical,
+                    "has_psi": true,
+                    "has_fleet_config": true
+                }]
+            });
+            std::fs::write(root.join("home/.maw/oracles.json"), cache.to_string()).expect("oracles cache");
+
+            let mut tmux = WakeMockTmux::default();
+            let (code, stdout) = wake_run(&wake_strings(&["token", "--dry-run"]), &mut tmux).expect("fallback");
+
+            assert_eq!(code, 0, "{stdout}");
+            assert!(stdout.contains(&format!("registry repo stale, using oracles.json: {}", canonical.display())), "{stdout}");
+            assert_eq!(stdout.matches(&canonical.display().to_string()).count(), 2, "{stdout}");
+            assert!(!stdout.contains("token-oracle-oracle"), "{stdout}");
             assert!(tmux.actions.is_empty());
         });
     }
