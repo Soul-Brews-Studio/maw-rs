@@ -609,10 +609,11 @@ fn fleet_render_add(session: &str, result: &FleetRegistryWrite) -> String {
 
 fn fleet_run_doctor(state: &FleetState, options: &FleetOptions, runtime: &mut impl FleetRuntime) -> Result<(i32, String), String> {
     let apply_fix = options.fix && !options.dry_run;
-    let repairs = if apply_fix { fleet_fix_duplicate_windows(&state.fleet_entries)? } else { Vec::new() };
+    let live = runtime.fleet_list_all();
+    let repairs = if apply_fix { fleet_fix_duplicate_windows(&state.fleet_entries, &live)? } else { Vec::new() };
     let refreshed = if apply_fix { Some(fleet_load_state_with(runtime)?) } else { None };
     let state = refreshed.as_ref().unwrap_or(state);
-    let mut findings = fleet_findings(state);
+    let mut findings = fleet_findings(state, &live);
     if options.reboot { findings.extend(fleet_reboot_findings(state)); }
     let code = fleet_exit_code(&findings);
     if options.json { return Ok((code, fleet_json_doctor(state, apply_fix, &findings, &repairs)?)); }
@@ -660,26 +661,22 @@ fn fleet_write_findings(out: &mut String, findings: &[FleetFinding]) {
     }
 }
 
-fn fleet_findings(state: &FleetState) -> Vec<FleetFinding> {
+fn fleet_findings(state: &FleetState, live: &[TmuxSession]) -> Vec<FleetFinding> {
     let mut findings = Vec::new();
     fleet_duplicate_peer_findings(state, &mut findings);
     fleet_self_peer_findings(state, &mut findings);
     fleet_agent_findings(state, &mut findings);
     fleet_repo_findings(state, &mut findings);
-    fleet_duplicate_window_findings(state, &mut findings);
+    fleet_duplicate_window_findings(state, live, &mut findings);
     fleet_duplicate_session_findings(state, &mut findings);
     findings
 }
 
-fn fleet_duplicate_window_findings(state: &FleetState, findings: &mut Vec<FleetFinding>) {
+fn fleet_duplicate_window_findings(state: &FleetState, live: &[TmuxSession], findings: &mut Vec<FleetFinding>) {
     for entry in &state.fleet_entries {
-        let mut by_repo = BTreeMap::<String, Vec<&NativeFleetWindow>>::new();
-        for window in &entry.session.windows {
-            if !window.repo.trim().is_empty() {
-                by_repo.entry(fleet_repo_canonical_key(&window.repo)).or_default().push(window);
-            }
-        }
+        let by_repo = fleet_windows_by_repo(entry);
         for windows in by_repo.values().filter(|windows| windows.len() > 1) {
+            if !fleet_windows_share_alias(windows) || fleet_distinct_live_window_ids(entry, windows, live).len() > 1 { continue; }
             let kept = windows.iter().rev().find(|window| window.kind.is_some()).unwrap_or(&windows[windows.len() - 1]);
             let names = windows.iter().map(|window| window.name.as_str()).collect::<Vec<_>>().join(", ");
             findings.push(fleet_finding(
@@ -687,7 +684,7 @@ fn fleet_duplicate_window_findings(state: &FleetState, findings: &mut Vec<FleetF
                 "duplicate-window-repo",
                 &entry.session.name,
                 &format!(
-                    "{} windows ({names}) share repo {}; --fix keeps {} (last entry with explicit kind, otherwise last entry)",
+                    "{} aliases ({names}) share repo {} and resolve to at most one live window; --fix keeps {} (last entry with explicit kind, otherwise last entry)",
                     windows.len(),
                     fleet_repo_storage_slug(&windows[0].repo),
                     kept.name,
@@ -695,6 +692,68 @@ fn fleet_duplicate_window_findings(state: &FleetState, findings: &mut Vec<FleetF
             ));
         }
     }
+}
+
+fn fleet_windows_by_repo(entry: &NativeFleetEntry) -> BTreeMap<String, Vec<&NativeFleetWindow>> {
+    let mut by_repo = BTreeMap::new();
+    for window in &entry.session.windows {
+        if !window.repo.trim().is_empty() {
+            by_repo.entry(fleet_repo_canonical_key(&window.repo)).or_insert_with(Vec::new).push(window);
+        }
+    }
+    by_repo
+}
+
+fn fleet_windows_share_alias(windows: &[&NativeFleetWindow]) -> bool {
+    let Some(first) = windows.first() else { return false };
+    let mut common = locate_normalized_names(&first.name);
+    for window in &windows[1..] {
+        let aliases = locate_normalized_names(&window.name);
+        common.retain(|alias| aliases.contains(alias));
+    }
+    !common.is_empty()
+}
+
+fn fleet_distinct_live_window_ids(entry: &NativeFleetEntry, windows: &[&NativeFleetWindow], live: &[TmuxSession]) -> BTreeSet<u32> {
+    let Some(session) = live.iter().find(|session| session.name.eq_ignore_ascii_case(&entry.session.name)) else { return BTreeSet::new() };
+    windows
+        .iter()
+        .flat_map(|window| fleet_live_window_candidates(&session.name, &window.name, &session.windows))
+        .collect()
+}
+
+fn fleet_live_window_candidates(session: &str, registry: &str, live: &[maw_tmux::TmuxWindow]) -> BTreeSet<u32> {
+    let wanted = fleet_doctor_window_name(registry);
+    let exact = live
+        .iter()
+        .filter(|window| fleet_live_window_names(session, &window.name).contains(&wanted))
+        .map(|window| window.index)
+        .collect::<BTreeSet<_>>();
+    if !exact.is_empty() { return exact; }
+    let wanted = locate_normalized_names(&wanted);
+    live.iter()
+        .filter(|window| {
+            fleet_live_window_names(session, &window.name)
+                .iter()
+                .any(|name| locate_normalized_names(name).iter().any(|alias| wanted.contains(alias)))
+        })
+        .map(|window| window.index)
+        .collect()
+}
+
+fn fleet_live_window_names(session: &str, window: &str) -> BTreeSet<String> {
+    let name = fleet_doctor_window_name(window);
+    let stem = fleet_doctor_window_name(fleet_session_stem(session));
+    let mut names = BTreeSet::from([name.clone()]);
+    if let Some(tail) = name.strip_prefix(&format!("{stem}-")) {
+        names.insert(fleet_doctor_window_name(tail));
+    }
+    names
+}
+
+fn fleet_doctor_window_name(name: &str) -> String {
+    let normalized = name.trim().to_lowercase();
+    normalized.strip_suffix('-').unwrap_or(&normalized).to_owned()
 }
 
 fn fleet_duplicate_peer_findings(state: &FleetState, findings: &mut Vec<FleetFinding>) {
@@ -1459,13 +1518,22 @@ fn fleet_repo_canonical_key(repo: &str) -> String {
     )
 }
 
-fn fleet_fix_duplicate_windows(entries: &[NativeFleetEntry]) -> Result<Vec<FleetWindowRepair>, String> {
+fn fleet_fix_duplicate_windows(entries: &[NativeFleetEntry], live: &[TmuxSession]) -> Result<Vec<FleetWindowRepair>, String> {
     let mut repairs = Vec::new();
     for entry in entries {
         let text = std::fs::read_to_string(&entry.path).map_err(|error| format!("fleet doctor: read {}: {error}", entry.path.display()))?;
         let mut value: serde_json::Value = serde_json::from_str(&text).map_err(|error| format!("fleet doctor: parse {}: {error}", entry.path.display()))?;
         let Some(windows) = value.get("windows").and_then(serde_json::Value::as_array) else { continue };
-        let (deduped, removed) = fleet_dedupe_window_values(windows);
+        let mergeable = fleet_windows_by_repo(entry)
+            .into_iter()
+            .filter(|(_, windows)| {
+                windows.len() > 1
+                    && fleet_windows_share_alias(windows)
+                    && fleet_distinct_live_window_ids(entry, windows, live).len() <= 1
+            })
+            .map(|(repo, _)| repo)
+            .collect::<BTreeSet<_>>();
+        let (deduped, removed) = fleet_dedupe_window_values(windows, &mergeable);
         if removed == 0 { continue; }
         fleet_registry_object(&mut value).insert("windows".to_owned(), serde_json::json!(deduped));
         fleet_write_json_atomic(&entry.path, &value)?;
@@ -1474,7 +1542,7 @@ fn fleet_fix_duplicate_windows(entries: &[NativeFleetEntry]) -> Result<Vec<Fleet
     Ok(repairs)
 }
 
-fn fleet_dedupe_window_values(windows: &[serde_json::Value]) -> (Vec<serde_json::Value>, usize) {
+fn fleet_dedupe_window_values(windows: &[serde_json::Value], mergeable: &BTreeSet<String>) -> (Vec<serde_json::Value>, usize) {
     let mut by_repo = BTreeMap::<String, Vec<usize>>::new();
     for (index, window) in windows.iter().enumerate() {
         if let Some(repo) = window.get("repo").and_then(serde_json::Value::as_str).filter(|repo| !repo.trim().is_empty()) {
@@ -1482,7 +1550,7 @@ fn fleet_dedupe_window_values(windows: &[serde_json::Value]) -> (Vec<serde_json:
         }
     }
     let mut remove = BTreeSet::new();
-    for indices in by_repo.values().filter(|indices| indices.len() > 1) {
+    for indices in by_repo.iter().filter(|(repo, indices)| mergeable.contains(*repo) && indices.len() > 1).map(|(_, indices)| indices) {
         // Prefer descriptive typed metadata; array order breaks ties because
         // auto-registration appends newer observations after older ones.
         let kept = indices
@@ -1715,6 +1783,22 @@ mod fleet_tests {
         }
     }
 
+    fn fleet_live_session(name: &str, windows: &[&str]) -> TmuxSession {
+        TmuxSession {
+            name: name.to_owned(),
+            windows: windows
+                .iter()
+                .enumerate()
+                .map(|(index, window)| maw_tmux::TmuxWindow {
+                    index: u32::try_from(index).expect("window index"),
+                    name: (*window).to_owned(),
+                    active: index == 0,
+                    cwd: None,
+                })
+                .collect(),
+        }
+    }
+
     fn fleet_temp_root(name: &str) -> std::path::PathBuf {
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let seq = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1838,7 +1922,7 @@ mod fleet_tests {
     }
 
     #[test]
-    fn fleet_doctor_detects_and_opt_in_fixes_duplicate_windows_across_files() {
+    fn fleet_doctor_detects_and_fixes_aliases_for_the_same_live_window() {
         fleet_with_fixture(|root| {
             let fleet_dir = root.join("config/fleet");
             for (file, session) in [("04-agora.json", "04-agora"), ("05-bud.json", "05-bud")] {
@@ -1850,9 +1934,16 @@ mod fleet_tests {
                 )
                 .expect("duplicate registry");
             }
+            let mut runtime = FleetFakeRuntime {
+                sessions: vec![
+                    fleet_live_session("04-agora", &["04-agora"]),
+                    fleet_live_session("05-bud", &["05-bud"]),
+                ],
+                ..Default::default()
+            };
 
-            let dry_run = run_fleet_command(&fleet_strings(&["doctor", "--json"]));
-            let dry_json: serde_json::Value = serde_json::from_str(&dry_run.stdout).expect("dry json");
+            let (_, dry_run) = fleet_run_with(&fleet_strings(&["doctor", "--json"]), &mut runtime).expect("dry run");
+            let dry_json: serde_json::Value = serde_json::from_str(&dry_run).expect("dry json");
             assert_eq!(
                 dry_json["findings"]
                     .as_array()
@@ -1868,9 +1959,8 @@ mod fleet_tests {
             .expect("dry-run json");
             assert_eq!(unchanged["windows"].as_array().expect("windows").len(), 2);
 
-            let fixed = run_fleet_command(&fleet_strings(&["doctor", "--fix", "--json"]));
-            assert!(fixed.stderr.is_empty(), "{}", fixed.stderr);
-            let fixed_json: serde_json::Value = serde_json::from_str(&fixed.stdout).expect("fixed json");
+            let (_, fixed) = fleet_run_with(&fleet_strings(&["doctor", "--fix", "--json"]), &mut runtime).expect("fix");
+            let fixed_json: serde_json::Value = serde_json::from_str(&fixed).expect("fixed json");
             assert_eq!(fixed_json["repairs"].as_array().expect("repairs").len(), 2);
             for file in ["04-agora.json", "05-bud.json"] {
                 let registry: serde_json::Value = serde_json::from_str(
@@ -1883,6 +1973,34 @@ mod fleet_tests {
                 assert_eq!(windows[0]["preferred"], true);
                 assert!(windows[0].get("legacy").is_none());
             }
+        });
+    }
+
+    #[test]
+    fn fleet_doctor_preserves_distinct_live_windows_sharing_one_repo() {
+        fleet_with_fixture(|root| {
+            std::fs::create_dir_all(root.join("ghq/github.com/acme/missing")).expect("seed missing repo");
+            let path = root.join("config/fleet/41-team.json");
+            std::fs::write(
+                &path,
+                r#"{"name":"41-team","windows":[{"name":"coder-one","repo":"acme/maw-rs"},{"name":"coder-two","repo":"github.com/acme/maw-rs"},{"name":"coder-three","repo":"acme/maw-rs"}]}"#,
+            )
+            .expect("team registry");
+            let mut runtime = FleetFakeRuntime {
+                sessions: vec![fleet_live_session("41-team", &["coder-one", "coder-two", "coder-three"])],
+                ..Default::default()
+            };
+
+            let (code, dry_run) = fleet_run_with(&fleet_strings(&["doctor", "--json"]), &mut runtime).expect("dry run");
+            let dry_json: serde_json::Value = serde_json::from_str(&dry_run).expect("dry json");
+            assert_eq!(code, 0, "{dry_run}");
+            assert_eq!(dry_json["findings"], serde_json::json!([]));
+
+            let (_, fixed) = fleet_run_with(&fleet_strings(&["doctor", "--fix", "--json"]), &mut runtime).expect("fix");
+            let fixed_json: serde_json::Value = serde_json::from_str(&fixed).expect("fixed json");
+            assert_eq!(fixed_json["repairs"], serde_json::json!([]));
+            let registry: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).expect("registry")).expect("json");
+            assert_eq!(registry["windows"].as_array().expect("windows").len(), 3);
         });
     }
 
