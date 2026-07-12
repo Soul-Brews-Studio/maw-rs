@@ -171,7 +171,7 @@ The legacy counter remains byte-shape compatible:
 {"2026-07-12":{"odin-oracle.daily-who":1}}
 ```
 
-`~/.maw/state/schedule/runs/` is a stable, machine-readable v1 interface, not private
+`~/.maw/schedule/runs/` is a stable, machine-readable v1 interface, not private
 scratch space. Each `<run-id>.json` atomically exposes `schema_version`, job/run identity,
 cadence, boot identity, timestamps, status/error/exit code, cap/forced flags, output
 metadata, expected deliverable path, and `deliverable_written`. Terminal records are
