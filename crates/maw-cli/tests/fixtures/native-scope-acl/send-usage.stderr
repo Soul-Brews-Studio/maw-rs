@@ -1,2 +1,15 @@
 hey: --trust requires --approve
-usage: maw-rs hey <target> <message> [--inbox|--no-inbox] [--from <oracle:node>] [--approve] [--trust] [--dry-run]
+usage: maw hey <target> <message> [--inbox] [--force deprecated] [--approve] [--trust]
+  default: write receiver inbox and inject into the target pane
+  --inbox: write receiver inbox only; skip pane injection
+  --force: deprecated compatibility alias; delivery is already forced by default
+  target forms:
+    <oracle-window>              same-node window name (local-only)
+    local:<agent>                explicit same-node target
+    <session>:<window>[.<pane>]  paste a TARGET from maw ls -v
+    <node>:<session>             canonical cross-node form (window 1)
+    <node>:<session>:<window>    target a specific tmux window (#410)
+  e.g. maw hey mawjs-oracle "hello from neo"
+       maw hey local:mawjs "hello from neo"
+       maw hey phaith:01-hojo:3 "hello hojo-hermes"
+       run `maw locate <agent>` to enumerate across federation

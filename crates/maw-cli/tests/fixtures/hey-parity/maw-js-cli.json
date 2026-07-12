@@ -1,0 +1,21 @@
+{
+  "source": "/tmp/ft-hey/golden-js field-test capture, normalized per docs/parity/scorecard.json",
+  "noArgs": {
+    "code": 1,
+    "stdout": "",
+    "stderr": "usage: maw hey <target> <message> [--inbox] [--force deprecated] [--approve] [--trust]\n  default: write receiver inbox and inject into the target pane\n  --inbox: write receiver inbox only; skip pane injection\n  --force: deprecated compatibility alias; delivery is already forced by default\n  target forms:\n    <oracle-window>              same-node window name (local-only)\n    local:<agent>                explicit same-node target\n    <session>:<window>[.<pane>]  paste a TARGET from maw ls -v\n    <node>:<session>             canonical cross-node form (window 1)\n    <node>:<session>:<window>    target a specific tmux window (#410)\n  e.g. maw hey mawjs-oracle \"hello from neo\"\n       maw hey local:mawjs \"hello from neo\"\n       maw hey phaith:01-hojo:3 \"hello hojo-hermes\"\n       run `maw locate <agent>` to enumerate across federation\n"
+  },
+  "routeError": {
+    "target": "nonexistent-target-xyz",
+    "code": 1,
+    "stdout": "",
+    "stderr": "error: bare target 'nonexistent-target-xyz' not found locally\n\n  same-node targets:\n    maw hey local:nonexistent-target-xyz \"...\"\n    or copy a TARGET from `maw ls -v`\n\n  cross-node targets:\n    maw hey <node>:nonexistent-target-xyz \"...\"\n    maw hey <node>:<session>:<window> \"...\"\n\n  bare names are local-only; run `maw locate nonexistent-target-xyz` to enumerate federation candidates\n"
+  },
+  "localSuccess": {
+    "target": "ft-hey-scratch:<WINDOW>",
+    "outbound": "[m5:atlas] FT-HEY-CANARY-12345-JS",
+    "code": 0,
+    "stdout": "delivered → ft-hey-scratch:<WINDOW>: [m5:atlas] FT-HEY-CANARY-12345-JS\n",
+    "stderr": ""
+  }
+}

@@ -135,13 +135,9 @@ async fn run_send_like_async_with_args(
             .await
         }
         RouteResult::Error { detail, hint, .. } => CliOutput {
-            code: 2,
+            code: send_error_code(command),
             stdout: String::new(),
-            stderr: if let Some(hint) = hint {
-                format!("{command}: {detail}; {hint}\n")
-            } else {
-                format!("{command}: {detail}\n")
-            },
+            stderr: send_route_error(command, &send_args.target, &detail, hint.as_deref()),
         },
     }
 }
@@ -242,7 +238,7 @@ fn send_acl_gate_peer(
 ) -> SendAclGateResult {
     if args.trust && !args.approve {
         return SendAclGateResult::Reject(CliOutput {
-            code: 2,
+            code: send_error_code(command),
             stdout: String::new(),
             stderr: format!("{command}: --trust requires --approve\n"),
         });
@@ -251,7 +247,7 @@ fn send_acl_gate_peer(
         Ok(sender) => sender,
         Err(message) => {
             return SendAclGateResult::Reject(CliOutput {
-                code: 2,
+                code: send_error_code(command),
                 stdout: String::new(),
                 stderr: format!("{command}: {message}\n"),
             })
@@ -444,8 +440,11 @@ fn parse_send_args(command: &str, argv: &[String]) -> Result<SendArgs, String> {
     if trust && !approve {
         return Err(format!("{command}: --trust requires --approve"));
     }
-    if positional.len() < 2 {
+    if positional.is_empty() {
         return Err(format!("{command}: target and message are required"));
+    }
+    if positional.len() == 1 {
+        return Err(format!("{command}: missing message for '{}'", positional[0]));
     }
     Ok(SendArgs {
         target: positional[0].clone(),
@@ -463,17 +462,45 @@ fn send_audit_args(command: &str, raw_args: &[String]) -> Vec<String> {
 }
 
 fn send_usage_error(command: &str, message: &str) -> CliOutput {
+    if command == "hey" {
+        if message == "hey: target and message are required" {
+            return CliOutput { code: 1, stdout: String::new(), stderr: format!("{}\n", send_usage(command)) };
+        }
+        if let Some(target) = message.strip_prefix("hey: missing message for '").and_then(|message| message.strip_suffix('\'')) {
+            return CliOutput {
+                code: 1,
+                stdout: String::new(),
+                stderr: format!("✗ missing message for target '{target}'\n  maw hey {target} <message>\n  (if '{target}' isn't a valid target, run 'maw ls' to see available ones)\n"),
+            };
+        }
+    }
     CliOutput {
-        code: 2,
+        code: send_error_code(command),
         stdout: String::new(),
         stderr: format!("{message}\n{}\n", send_usage(command)),
     }
 }
 
 fn send_usage(command: &str) -> String {
+    if command == "hey" {
+        return "usage: maw hey <target> <message> [--inbox] [--force deprecated] [--approve] [--trust]\n  default: write receiver inbox and inject into the target pane\n  --inbox: write receiver inbox only; skip pane injection\n  --force: deprecated compatibility alias; delivery is already forced by default\n  target forms:\n    <oracle-window>              same-node window name (local-only)\n    local:<agent>                explicit same-node target\n    <session>:<window>[.<pane>]  paste a TARGET from maw ls -v\n    <node>:<session>             canonical cross-node form (window 1)\n    <node>:<session>:<window>    target a specific tmux window (#410)\n  e.g. maw hey mawjs-oracle \"hello from neo\"\n       maw hey local:mawjs \"hello from neo\"\n       maw hey phaith:01-hojo:3 \"hello hojo-hermes\"\n       run `maw locate <agent>` to enumerate across federation".to_owned();
+    }
     format!(
         "usage: maw-rs {command} <target> <message> [--inbox|--no-inbox] [--from <oracle:node>] [--approve] [--trust] [--dry-run]"
     )
+}
+
+fn send_error_code(command: &str) -> i32 { if command == "hey" { 1 } else { 2 } }
+
+fn send_route_error(command: &str, query: &str, detail: &str, hint: Option<&str>) -> String {
+    if command == "hey" {
+        if !query.is_empty() && !query.contains(':') && !query.contains('/') {
+            return format!("error: bare target '{query}' not found locally\n\n  same-node targets:\n    maw hey local:{query} \"...\"\n    or copy a TARGET from `maw ls -v`\n\n  cross-node targets:\n    maw hey <node>:{query} \"...\"\n    maw hey <node>:<session>:<window> \"...\"\n\n  bare names are local-only; run `maw locate {query}` to enumerate federation candidates\n");
+        }
+        let hint = hint.map_or_else(String::new, |hint| format!("hint:  {hint}\n"));
+        return format!("error: {detail}\n{hint}");
+    }
+    hint.map_or_else(|| format!("{command}: {detail}\n"), |hint| format!("{command}: {detail}; {hint}\n"))
 }
 
 fn hey_log_command(raw_args: &[String]) -> CliOutput {
@@ -656,13 +683,9 @@ fn send_dry_run_output(command: &str, args: &SendArgs, result: &RouteResult) -> 
             stderr: String::new(),
         },
         RouteResult::Error { detail, hint, .. } => CliOutput {
-            code: 2,
+            code: send_error_code(command),
             stdout: String::new(),
-            stderr: if let Some(hint) = hint {
-                format!("{command}: {detail}; {hint}\n")
-            } else {
-                format!("{command}: {detail}\n")
-            },
+            stderr: send_route_error(command, &args.target, detail, hint.as_deref()),
         },
     }
 }
@@ -705,7 +728,7 @@ fn send_local_message_with_audit(
 ) -> CliOutput {
     let signature = match send_message_signature(config, sender_oracle, from, text) {
         Ok(signature) => signature,
-        Err(message) => return CliOutput { code: 2, stdout: String::new(), stderr: format!("{command}: {message}\n") },
+        Err(message) => return CliOutput { code: send_error_code(command), stdout: String::new(), stderr: format!("{command}: {message}\n") },
     };
     let outbound = format_local_hey_message(text, config, sender_oracle, from);
     if let Err(error) = tmux.send_text(target, &outbound) {
@@ -718,9 +741,13 @@ fn send_local_message_with_audit(
     send_record_success(command, audit_args, config, sender_oracle, from, query, &outbound, "local", signature.as_ref());
     CliOutput {
         code: 0,
-        stdout: format!("delivered {target}\n"),
+        stdout: send_success_output(command, target, &outbound),
         stderr: String::new(),
     }
+}
+
+fn send_success_output(command: &str, target: &str, outbound: &str) -> String {
+    if command == "hey" { format!("delivered → {target}: {outbound}\n") } else { format!("delivered {target}\n") }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -738,7 +765,7 @@ async fn send_peer_message(
         Ok(from) => from,
         Err(message) => {
             return CliOutput {
-                code: 2,
+                code: send_error_code(command),
                 stdout: String::new(),
                 stderr: format!("{command}: {message}\n"),
             }
@@ -746,7 +773,7 @@ async fn send_peer_message(
     };
     let signature = match send_message_signature(config, sender_oracle, args.from.as_deref(), &args.text) {
         Ok(signature) => signature,
-        Err(message) => return CliOutput { code: 2, stdout: String::new(), stderr: format!("{command}: {message}\n") },
+        Err(message) => return CliOutput { code: send_error_code(command), stdout: String::new(), stderr: format!("{command}: {message}\n") },
     };
     let peer_key = match load_peer_key() {
         Ok(key) => key,
@@ -1854,7 +1881,7 @@ mod send_acl_hotpath_tests {
             .block_on(run_send_like_async_impl("hey", &send_acl_vec(&["--help"])));
 
         assert_eq!(output.code, 0);
-        assert!(output.stdout.contains("usage: maw-rs hey <target> <message>"));
+        assert!(output.stdout.contains("usage: maw hey <target> <message>"));
         assert!(output.stderr.is_empty());
         assert!(!wants_help_before_positionals(&send_acl_vec(&["bob", "hello", "--help"]), &["--from"]));
     }
@@ -2184,8 +2211,35 @@ mod send_acl_hotpath_tests {
         assert!(parsed.approve);
         assert!(parsed.trust);
         let output = send_usage_error("hey", "hey: --trust requires --approve");
-        assert_eq!(output.code, 2);
+        assert_eq!(output.code, 1);
         assert!(output.stderr.contains("[--approve] [--trust]"));
+    }
+
+    #[test]
+    fn hey_cli_matches_committed_maw_js_golden() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!("../../tests/fixtures/hey-parity/maw-js-cli.json")).expect("valid maw-js hey fixture");
+        let assert_output = |case: &serde_json::Value, output: CliOutput| {
+            assert_eq!(output.code, i32::try_from(case["code"].as_i64().unwrap()).unwrap());
+            assert_eq!(output.stdout, case["stdout"].as_str().unwrap());
+            assert_eq!(output.stderr, case["stderr"].as_str().unwrap());
+        };
+
+        let no_args = tokio::runtime::Runtime::new().unwrap().block_on(run_send_like_async_impl("hey", &[]));
+        assert_output(&fixture["noArgs"], no_args);
+
+        let route = &fixture["routeError"];
+        assert_output(route, CliOutput {
+            code: send_error_code("hey"),
+            stdout: String::new(),
+            stderr: send_route_error("hey", route["target"].as_str().unwrap(), "", None),
+        });
+
+        let success = &fixture["localSuccess"];
+        assert_output(success, CliOutput {
+            code: 0,
+            stdout: send_success_output("hey", success["target"].as_str().unwrap(), success["outbound"].as_str().unwrap()),
+            stderr: String::new(),
+        });
     }
 
     #[test]
