@@ -112,7 +112,7 @@ fn pulse_plugin_list_matches_committed_native_golden() {
 }
 
 #[test]
-fn pulse_plugin_preserves_maw_pulse_repo_override() {
+fn pulse_plugin_ignores_legacy_context_override() {
     let _guard = env_lock();
     let previous = std::env::var_os("MAW_PULSE_REPO");
     std::env::set_var("MAW_PULSE_REPO", "acme/pulse-board");
@@ -123,12 +123,12 @@ fn pulse_plugin_preserves_maw_pulse_repo_override() {
     let host = plugin_host()
         .with_fake_response(
             "maw.exec.run",
-            exec_input("gh", &args, false),
+            exec_input("gh", &issue_list_args("laris-co/pulse-oracle"), false),
             exec_ok(ISSUES),
         )
         .with_fake_response(
             "maw.exec.run",
-            exec_input("gh", &issue_list_args("laris-co/pulse-oracle"), false),
+            exec_input("gh", &args, false),
             exec_ok("[]"),
         );
 

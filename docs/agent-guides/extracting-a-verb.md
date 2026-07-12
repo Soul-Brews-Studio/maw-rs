@@ -79,6 +79,11 @@ Port I/O to the narrowest existing JSON ABI: `maw.fs.*`, `maw.tmux.*`, `maw.exec
 access inside the guest. Declare command-specific process capabilities such as
 `proc:exec:git`, not broad process access.
 
+Rust plugins should depend on `maw-plugin-pdk = "1"`, parse only its byte-frozen
+`InvokeContext { args, source }`, return `InvokeResult`, and use `host_call!` for
+typed host responses. Paths, time, and test overrides belong behind host ABIs, never
+as extra invoke-context fields. A breaking host ABI requires a new PDK major version.
+
 Install the published SDK in the plugin worktree and point the build at that local
 toolchain root:
 

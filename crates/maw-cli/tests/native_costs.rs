@@ -28,7 +28,7 @@ fn run(args: &[&str], cwd: &Path, maw_home: &Path, projects_dir: &Path, plugins_
         .env("MAW_JS_REF_DIR", "/nonexistent")
         .env("MAW_PLUGINS_DIR", plugins_dir)
         .env("MAW_CLAUDE_PROJECTS_DIR", projects_dir)
-        .env("MAW_COSTS_TODAY", "2026-06-25")
+        .env("MAW_TIME_TEST_NOW_MS", "1782345600000")
         .output()
         .expect("run maw-rs")
 }

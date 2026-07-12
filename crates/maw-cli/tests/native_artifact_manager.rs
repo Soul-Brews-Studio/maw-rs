@@ -43,7 +43,6 @@ fn run(root: &Path, plugins: &Path, args: &[&str]) -> Output {
         .env("MAW_HOME", root.join("maw-home"))
         .env("MAW_PLUGINS_DIR", plugins)
         .env("MAW_JS_REF_DIR", "/nonexistent")
-        .env("MAW_TEST_NOW", "2026-06-24T00:00:00.000Z")
         .output()
         .expect("run maw-rs")
 }
@@ -116,6 +115,10 @@ fn artifact_manager_plugin_fallthrough_preserves_native_lifecycle_output() {
     );
 
     let listed = stdout(run(&root, &plugins, &["art", "list", "team-b", "--json"]));
+    let parsed: serde_json::Value = serde_json::from_str(&listed).expect("list json");
+    let created_at = parsed[0]["createdAt"].as_str().expect("createdAt");
+    assert!(created_at.ends_with('Z'));
+    let listed = listed.replace(created_at, "2026-06-24T00:00:00.000Z");
     assert_eq!(
         listed,
         "[\n  {\n    \"team\": \"team-b\",\n    \"taskId\": \"t9\",\n    \"subject\": \"Subject\",\n    \"status\": \"completed\",\n    \"files\": 5,\n    \"hasResult\": true,\n    \"createdAt\": \"2026-06-24T00:00:00.000Z\"\n  }\n]\n"

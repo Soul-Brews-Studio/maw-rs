@@ -1988,6 +1988,7 @@ dependencies = [
  "base64",
  "extism",
  "libc",
+ "maw-plugin-pdk",
  "maw-tmux",
  "maw-transport",
  "rustix 1.1.4",

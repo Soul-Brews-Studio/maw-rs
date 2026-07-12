@@ -11,6 +11,23 @@ use serde_json::Value;
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+#[test]
+fn pdk_golden_envelope_stays_byte_compatible() {
+    let context = maw_plugin_pdk::parse_context(r#"{"args":["alpha","beta"],"source":"cli"}"#)
+        .expect("PDK context");
+    let encoded = maw_plugin_pdk::encode_result(&maw_plugin_pdk::InvokeResult::output(
+        context.args.join(" "),
+    ))
+    .expect("PDK result");
+    let result: maw_plugin_pdk::InvokeResult = serde_json::from_str(&encoded).expect("PDK JSON");
+    let actual = maw_plugin_pdk::OutputEnvelope::from(result);
+    let golden: maw_plugin_pdk::OutputEnvelope = serde_json::from_str(include_str!(
+        "fixtures/wasm-parity/pdk-envelope.golden.json"
+    ))
+    .expect("PDK golden");
+    assert_eq!(actual, golden);
+}
+
 const PROFILE_CURRENT_TRANSCRIPT: &[ExpectedHostCall] = &[ExpectedHostCall::new(
     "maw.fs.read",
     "fs:read:config",

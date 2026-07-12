@@ -57,7 +57,7 @@ fn common_host() -> MawWasmHost {
 
 #[test]
 fn tile_plugin_spawn_uses_managed_split_plan_and_layout() {
-    let shell = "cd '/repo' || exit $?; export MAW_TILE_PARENT='alpha-main:1.0' MAW_TILE_ROLE='alpha-main-tile-1' MAW_TILE_INDEX='1' MAW_TILE_TOTAL='1' MAW_TILE_WINDOW='alpha-main:1' MAW_SESSION_ID='solo'; exec zsh -ic 'echo ok; exec zsh'";
+    let shell = "cd '.' || exit $?; export MAW_TILE_PARENT='alpha-main:1.0' MAW_TILE_ROLE='alpha-main-tile-1' MAW_TILE_INDEX='1' MAW_TILE_TOTAL='1' MAW_TILE_WINDOW='alpha-main:1' MAW_SESSION_ID='solo'; exec zsh -ic 'echo ok; exec zsh'";
     let mut host = common_host();
     for (command, args, stdout) in [
         ("display-message", vec!["-p", "#{window_id}"], "@7\n"),

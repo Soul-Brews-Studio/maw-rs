@@ -44,31 +44,11 @@ fn optional_string_field(
 }
 
 fn invoke_context_json(ctx: &InvokeContext) -> String {
-    // cwd/home are additive maw-rs context fields. Emit them only when known so
-    // the default `{source,args}` shape stays byte-identical to maw-js (and the
-    // committed wasm-parity goldens) for plugins that don't need them.
-    let mut value = serde_json::json!({
+    serde_json::json!({
         "source": ctx.source.as_str(),
         "args": ctx.args,
-    });
-    if let Some(map) = value.as_object_mut() {
-        if let Some(cwd) = &ctx.cwd {
-            map.insert("cwd".to_owned(), serde_json::Value::from(cwd.as_str()));
-        }
-        if let Some(home) = &ctx.home {
-            map.insert("home".to_owned(), serde_json::Value::from(home.as_str()));
-        }
-        if let Ok(today) = std::env::var("MAW_COSTS_TODAY") {
-            if today.len() >= 10 { map.insert("today".to_owned(), serde_json::Value::from(&today[..10])); }
-        }
-        if let Ok(now) = std::env::var("MAW_TEST_NOW") {
-            map.insert("now".to_owned(), serde_json::Value::from(now));
-        }
-        if let Ok(repo) = std::env::var("MAW_PULSE_REPO") {
-            map.insert("pulseRepo".to_owned(), serde_json::Value::from(repo));
-        }
-    }
-    value.to_string()
+    })
+    .to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -675,18 +655,17 @@ mod part03_coverage_tests {
     }
 
     #[test]
-    fn invoke_context_json_includes_cwd_and_home() {
+    fn invoke_context_json_ignores_host_process_fields() {
         let ctx = InvokeContext {
             source: InvokeSource::Cli,
             args: vec!["start".to_owned()],
             cwd: Some("/work/here".to_owned()),
             home: Some("/home/nat".to_owned()),
         };
-        let value: serde_json::Value =
-            serde_json::from_str(&invoke_context_json(&ctx)).expect("context json");
-        assert_eq!(value["source"], "cli");
-        assert_eq!(value["cwd"], "/work/here");
-        assert_eq!(value["home"], "/home/nat");
+        assert_eq!(
+            invoke_context_json(&ctx),
+            r#"{"args":["start"],"source":"cli"}"#
+        );
     }
 
     #[test]

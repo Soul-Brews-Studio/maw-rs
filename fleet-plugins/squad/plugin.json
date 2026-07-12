@@ -10,7 +10,7 @@
   },
   "artifact": {
     "path": "plugin.wasm",
-    "sha256": "sha256:324b2f55964ed7f2fa3d70d0ef12d05260fc932eebbc3317e7f0074c449b59dd"
+    "sha256": "sha256:e756b39fef9fb314c5412b296c3a9ddae97ec080932e71a29c7d2272ff319d6c"
   },
   "capabilities": ["fs:read:teams", "fs:write:teams", "tmux:read", "tmux:send", "proc:exec:date"],
   "description": "The lead IS the team. Run from the lead oracle's repo — start / join / say / ls, no team name typed. Loud & clear, no ceremony. Ship tier: WASM (dev fallback: impl.ts, runtime=bun-dev).",
