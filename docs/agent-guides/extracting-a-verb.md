@@ -79,12 +79,19 @@ Port I/O to the narrowest existing JSON ABI: `maw.fs.*`, `maw.tmux.*`, `maw.exec
 access inside the guest. Declare command-specific process capabilities such as
 `proc:exec:git`, not broad process access.
 
-Build from the plugin worktree using this repository's SDK:
+Install the published SDK in the plugin worktree and point the build at that local
+toolchain root:
 
 ```bash
-MAW_WASM_SDK_DIR=<maw-rs-worktree>/packages/wasm-sdk \
+npm install --save-dev @maw-rs/wasm-sdk@^1.0.0
+MAW_WASM_SDK_DIR="$PWD" \
   maw plugin build packages/NN-<verb>
 ```
+
+For SDK development, `MAW_WASM_SDK_DIR=<maw-rs-worktree>/packages/wasm-sdk`
+continues to override the published package. The npm SDK version follows the maw host
+ABI contract; keep `plugin.json`'s `sdk` range aligned with the compatibility table in
+`packages/wasm-sdk/README.md`.
 
 Copy the final artifact into the package, update its manifest SHA-256, and use that
 same pair in PR-B's fixture.

@@ -43,6 +43,19 @@ The tap repository layout is `Formula/maw.rb` plus its top-level `README.md`. Se
 automation fails, download `maw.rb` from the stable GitHub release and commit it to the
 tap; do not hand-edit its version or checksum.
 
+## WASM SDK release checklist
+
+When the maw host ABI changes, update `packages/wasm-sdk` in the same release:
+
+1. bump its semver according to the host ABI contract;
+2. update the compatibility table and `CHANGELOG.md` for every added or changed ABI;
+3. run `npm ci && npm run build` in `packages/wasm-sdk`;
+4. publish with `npm publish --access public` if that version is not already present.
+
+The tag workflow performs the final publish only when the repository `NPM_TOKEN`
+secret is configured. Never reuse an npm version: the workflow safely skips a version
+that already exists.
+
 ## macOS install note
 
 When installing a replacement binary on macOS, remove the old file before copying the new

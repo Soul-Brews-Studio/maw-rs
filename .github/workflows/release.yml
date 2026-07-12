@@ -9,6 +9,28 @@ permissions:
   contents: write
 
 jobs:
+  publish-wasm-sdk:
+    name: Publish @maw-rs/wasm-sdk
+    runs-on: ubuntu-latest
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+          cache: npm
+          cache-dependency-path: packages/wasm-sdk/package-lock.json
+      - name: Publish SDK when npm token is configured
+        if: env.NODE_AUTH_TOKEN != ''
+        working-directory: packages/wasm-sdk
+        run: |
+          npm ci
+          npm run build
+          VERSION=$(node -p "require('./package.json').version")
+          npm view "@maw-rs/wasm-sdk@$VERSION" version >/dev/null 2>&1 || npm publish --access public
+
   build-linux-musl:
     name: Build linux x86_64-musl (static)
     runs-on: ubuntu-latest
