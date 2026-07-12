@@ -23,16 +23,22 @@ cargo test -p maw-cli --test fleet_plugins_pin_check
 If you intentionally run the ignored deterministic rebuild check, install the AssemblyScript
 toolchain first with `npm ci` in `packages/wasm-sdk`.
 
-## Cargo queue rule
+## Cargo isolation rule (replaces the old "cargo queue rule", 2026-07-11)
 
-This repo's worktrees share cargo caches/target state. Before running test or clippy gates:
+Do NOT wait for other cargo processes on the machine — the lead runs full-workspace
+gates continuously and other coders run in parallel; a machine-wide queue deadlocks
+everyone (observed repeatedly on 2026-07-11: coders stalled 20-45 min for nothing).
+
+Instead, isolate your target dir and run immediately:
 
 ```bash
-ps aux | grep '[b]in/cargo'
+CARGO_TARGET_DIR=/tmp/maw-rs-target-<your-worktree-name> cargo test ...
+CARGO_TARGET_DIR=/tmp/maw-rs-target-<your-worktree-name> cargo clippy ...
 ```
 
-If another worktree's cargo is live, wait. This avoids shared-cache contention observed on
-2026-07-06.
+The only shared resource is the package cache lock, which cargo resolves itself in
+seconds. The 2026-07-06 contention was shared `./target` state — fixed by the
+per-worktree CARGO_TARGET_DIR above, not by queueing.
 
 ## Branch and PR rules
 
