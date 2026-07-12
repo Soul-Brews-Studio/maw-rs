@@ -1814,7 +1814,7 @@ mod wake_tests {
             assert_eq!(first["auto_registered"], true);
             assert_eq!(first["windows"].as_array().expect("windows").len(), 1);
             assert_eq!(first["windows"][0]["name"], "neo");
-            assert_eq!(first["windows"][0]["repo"], "github.com/acme/neo-oracle");
+            assert_eq!(first["windows"][0]["repo"], "acme/neo-oracle");
             assert_eq!(first["windows"][0]["kind"], "project");
 
             let (code, stdout) = wake_run(&wake_strings(&["neo", "--task", "issue-90", "--no-attach"]), &mut tmux).expect("task wake");

@@ -1431,23 +1431,56 @@ fn fleet_registry_merge_windows(
             };
             let repo = item.get("repo").and_then(serde_json::Value::as_str).unwrap_or_default();
             let kind = item.get("kind").and_then(serde_json::Value::as_str).and_then(native_repo_kind_from_role);
-            windows.push(FleetWindowSummary { name: name.to_owned(), repo: repo.to_owned(), kind });
+            windows.push(FleetWindowSummary {
+                name: name.to_owned(),
+                repo: fleet_repo_storage_slug(repo),
+                kind,
+            });
         }
     }
+    let existing_repo_counts = windows.iter().fold(BTreeMap::<String, usize>::new(), |mut counts, window| {
+        *counts.entry(fleet_repo_canonical_key(&window.repo)).or_default() += 1;
+        counts
+    });
+    let update_repo_counts = updates
+        .iter()
+        .filter(|window| !window.name.trim().is_empty())
+        .fold(BTreeMap::<String, usize>::new(), |mut counts, window| {
+            *counts.entry(fleet_repo_canonical_key(&window.repo)).or_default() += 1;
+            counts
+        });
     for update in updates.iter().filter(|window| !window.name.trim().is_empty()) {
+        let mut update = update.clone();
+        update.repo = fleet_repo_storage_slug(&update.repo);
+        let repo_key = fleet_repo_canonical_key(&update.repo);
+        // A single live tmux window and a single registry window for the
+        // same canonical repo are two names for one physical window, not a
+        // reason to append a second entry (#457).
+        let lone_repo_alias =
+            existing_repo_counts.get(&repo_key) == Some(&1) && update_repo_counts.get(&repo_key) == Some(&1);
         if let Some(existing) = windows.iter_mut().find(|window| window.name == update.name) {
             existing.repo.clone_from(&update.repo);
             if update.kind.is_some() {
                 existing.kind = update.kind;
             }
+        } else if lone_repo_alias {
+            let existing = windows
+                .iter_mut()
+                .find(|window| fleet_repo_canonical_key(&window.repo) == repo_key)
+                .expect("single canonical repo counted above");
+            *existing = update;
         } else {
-            windows.push(update.clone());
+            windows.push(update);
         }
     }
     windows
         .into_iter()
         .map(|window| fleet_json_window(&window))
         .collect()
+}
+
+fn fleet_repo_storage_slug(repo: &str) -> String {
+    repo.trim().strip_prefix("github.com/").unwrap_or(repo.trim()).to_owned()
 }
 
 fn fleet_registry_windows_from_tmux(
@@ -1782,7 +1815,7 @@ mod fleet_tests {
         assert_eq!(json["auto_registered"], true);
         assert_eq!(json["windows"].as_array().expect("windows").len(), 1);
         assert_eq!(json["windows"][0]["name"], "maw-rs-oracle");
-        assert_eq!(json["windows"][0]["repo"], "github.com/Soul-Brews-Studio/maw-rs");
+        assert_eq!(json["windows"][0]["repo"], "Soul-Brews-Studio/maw-rs");
         assert_eq!(json["windows"][0]["kind"], "oracle");
     }
 
@@ -2060,7 +2093,7 @@ mod fleet_tests {
         let merged = serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(&written.path).expect("registry")).expect("json");
         assert_eq!(merged["name"], "158-homekeeper");
         assert_eq!(merged["windows"].as_array().expect("windows").len(), 1);
-        assert_eq!(merged["windows"][0]["repo"], "github.com/acme/homekeeper-oracle");
+        assert_eq!(merged["windows"][0]["repo"], "acme/homekeeper-oracle");
     }
 
     #[test]
@@ -2100,9 +2133,58 @@ mod fleet_tests {
         let merged = serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(&written.path).expect("registry")).expect("json");
         assert_eq!(merged["name"], "158-homelab");
         assert_eq!(merged["windows"].as_array().expect("windows").len(), 1);
-        assert_eq!(merged["windows"][0]["repo"], "github.com/acme/homelab");
+        assert_eq!(merged["windows"][0]["repo"], "acme/homelab");
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn fleet_upsert_deduplicates_bud_and_wake_names_for_one_live_window() {
+        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _home = EnvVarRestore::capture("HOME");
+        let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
+        let _ghq = EnvVarRestore::capture("GHQ_ROOT");
+
+        let root = fleet_temp_root("upsert-bud-wake-dedup");
+        std::fs::create_dir_all(root.join("config/fleet")).expect("fleet dir");
+        let path = root.join("config/fleet/10-oracle-dig-ui.json");
+        let bud = BudContext {
+            stem: "oracle-dig-ui".to_owned(),
+            org: "Soul-Brews-Studio".to_owned(),
+            parent: None,
+            repo_name: "oracle-dig-ui-oracle".to_owned(),
+            slug: "Soul-Brews-Studio/oracle-dig-ui-oracle".to_owned(),
+            repo_path: root.join("ghq/github.com/Soul-Brews-Studio/oracle-dig-ui-oracle"),
+        };
+        let mut registered = serde_json::json!({
+            "name": "10-oracle-dig-ui",
+            "windows": [],
+        });
+        bud_fleet_ensure_window(&mut registered, &bud).expect("bud registration");
+        std::fs::write(&path, serde_json::to_string_pretty(&registered).expect("bud json"))
+            .expect("bud fleet file");
+        std::env::set_var("HOME", root.join("home"));
+        std::env::set_var("MAW_CONFIG_DIR", root.join("config"));
+        std::env::set_var("GHQ_ROOT", root.join("ghq"));
+
+        let live_windows = vec![FleetWindowSummary {
+            name: "oracle-dig-ui".to_owned(),
+            repo: "github.com/Soul-Brews-Studio/oracle-dig-ui-oracle".to_owned(),
+            kind: Some(NativeRepoKind::Project),
+        }];
+        fleet_registry_upsert_session_for_env(
+            &current_xdg_env(),
+            "10-oracle-dig-ui",
+            &live_windows,
+            "maw wake",
+        )
+        .expect("wake registration");
+
+        let merged: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).expect("registry")).expect("json");
+        assert_eq!(merged["windows"].as_array().expect("windows").len(), 1);
+        assert_eq!(merged["windows"][0]["name"], "oracle-dig-ui");
+        assert_eq!(merged["windows"][0]["repo"], "Soul-Brews-Studio/oracle-dig-ui-oracle");
     }
 
     #[test]
