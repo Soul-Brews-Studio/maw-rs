@@ -361,7 +361,9 @@ fn is_ls_team_session(session: &str) -> bool {
 
 fn is_ls_agent_command(command: &str) -> bool {
     let command = command.to_lowercase();
-    command.contains("claude") || command.contains("codex") || command.contains("node")
+    maw_split::is_claude_like_pane(Some(&command))
+        || command.contains("codex")
+        || command.contains("node")
 }
 
 fn ls_pane_status(age_sec: Option<u64>) -> &'static str {
