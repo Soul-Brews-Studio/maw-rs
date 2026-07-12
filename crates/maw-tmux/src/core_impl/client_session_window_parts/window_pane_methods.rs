@@ -26,6 +26,27 @@ where
         self.runner.run("new-window", &args).map(|_| ())
     }
 
+    /// Create a tmux window with its initial pane running `command`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the runner error when tmux rejects the request.
+    pub fn new_window_with_command(
+        &mut self,
+        session: &str,
+        name: &str,
+        command: &str,
+    ) -> Result<(), TmuxError> {
+        let args = vec![
+            "-t".to_owned(),
+            format!("{session}:"),
+            "-n".to_owned(),
+            name.to_owned(),
+            command.to_owned(),
+        ];
+        self.runner.run("new-window", &args).map(|_| ())
+    }
+
     /// Select a tmux window best-effort.
     pub fn select_window(&mut self, target: &str) {
         self.try_run("select-window", &["-t".to_owned(), target.to_owned()]);
