@@ -1,5 +1,7 @@
 //! Pure schedule configuration and fire lifecycle transitions.
 
+pub mod plist;
+
 use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct ScheduleFile {

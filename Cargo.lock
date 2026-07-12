@@ -2037,6 +2037,7 @@ name = "maw-schedule"
 version = "0.1.0-alpha.1"
 dependencies = [
  "serde",
+ "serde_json",
  "toml",
 ]
 
