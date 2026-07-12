@@ -2049,6 +2049,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "maw-schedule-runner"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "fd-lock",
+ "maw-schedule",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "maw-split"
 version = "0.1.0-alpha.1"
 dependencies = [

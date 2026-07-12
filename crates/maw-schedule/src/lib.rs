@@ -162,7 +162,8 @@ pub fn abandon_if_stale(run: &mut OutcomeRecord, now: u64, boot_identity: &str) 
     true
 }
 impl RunStatus {
-    const fn is_active(self) -> bool {
+    #[must_use]
+    pub const fn is_active(self) -> bool {
         matches!(self, Self::Reserved | Self::Spawned)
     }
 }
