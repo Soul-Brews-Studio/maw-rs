@@ -2,6 +2,7 @@ use maw_cli::{dispatcher_status, DispatchKind};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn bin() -> PathBuf {
@@ -9,11 +10,16 @@ fn bin() -> PathBuf {
 }
 
 fn temp_dir(name: &str) -> PathBuf {
+    static NEXT_DIR: AtomicU64 = AtomicU64::new(0);
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock")
         .as_nanos();
-    let path = std::env::temp_dir().join(format!("maw-rs-native-oracle-skills-{name}-{stamp}"));
+    let path = std::env::temp_dir().join(format!(
+        "maw-rs-native-oracle-skills-{name}-{}-{stamp}-{}",
+        std::process::id(),
+        NEXT_DIR.fetch_add(1, Ordering::Relaxed)
+    ));
     fs::create_dir_all(&path).expect("temp dir");
     path
 }
