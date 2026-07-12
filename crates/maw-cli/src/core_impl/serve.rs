@@ -4636,7 +4636,7 @@ mod serve_tests {
             assert_eq!(ws.next().await.expect("frame").expect("ok").into_text().expect("text"), "ping");
             ws.send(tokio_tungstenite::tungstenite::Message::Text("pong".to_owned())).await.expect("send pong");
         });
-        let child = Command::new("sleep").arg("5").spawn().expect("sleep child");
+        let child = Command::new("/bin/sleep").arg("5").spawn().expect("sleep child");
         let addr = spawn_plugin_proxy_server(serve_test_proxy_route(port, child)).await;
         let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/api/testext/ws?room=1")).await.expect("connect proxy ws");
         ws.send(tokio_tungstenite::tungstenite::Message::Text("ping".to_owned())).await.expect("send ping");
@@ -4660,7 +4660,7 @@ mod serve_tests {
                 stream.write_all(response).await.expect("write response");
             }
         });
-        let child = Command::new("sleep").arg("5").spawn().expect("sleep child");
+        let child = Command::new("/bin/sleep").arg("5").spawn().expect("sleep child");
         let app = serve_test_app_with_plugin_routes(vec![serve_test_proxy_route(port, child)]);
         let response = app.oneshot(axum::http::Request::get("/api/testext/board/42").body(Body::empty()).unwrap()).await.expect("proxy response");
         assert_eq!(response.status(), StatusCode::OK);
@@ -4682,7 +4682,7 @@ mod serve_tests {
             assert!(request.starts_with("GET /api/testext/assets/app.js?x=1 "));
             stream.write_all(b"HTTP/1.1 202 Accepted\r\ncontent-type: text/plain\r\ncontent-length: 7\r\n\r\nproxied").await.expect("write response");
         });
-        let child = Command::new("sleep").arg("60").spawn().expect("sleep child");
+        let child = Command::new("/bin/sleep").arg("60").spawn().expect("sleep child");
         let app = serve_test_app_with_plugin_routes(vec![serve_test_proxy_route(port, child)]);
         let response = app.oneshot(axum::http::Request::get("/api/testext/assets/app.js?x=1").body(Body::empty()).unwrap()).await.expect("proxy response");
         assert_eq!(response.status(), StatusCode::ACCEPTED);
