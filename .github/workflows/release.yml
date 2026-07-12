@@ -67,6 +67,11 @@ jobs:
           mkdir -p release
           find artifacts -type f -exec cp {} release/ \;
           cp install.sh release/install.sh
+          if [[ "$GITHUB_REF_NAME" != *-* ]]; then
+            scripts/generate-homebrew-formula.sh \
+              "$GITHUB_REF_NAME" release/maw-rs-macos-arm64.sha256 > release/maw.rb
+            ruby -c release/maw.rb
+          fi
           ls -la release/
       - name: Create release
         uses: softprops/action-gh-release@v2
@@ -81,3 +86,33 @@ jobs:
 
             - `maw-rs-macos-arm64` — macOS Apple Silicon
             - `maw-rs-linux-x86_64-musl` — Linux x86_64 (static, no libc dependency)
+
+            **Homebrew (stable releases):** `brew install soul-brews-studio/maw/maw`
+
+  update-homebrew-tap:
+    name: Update Homebrew tap
+    if: ${{ !contains(github.ref_name, '-') }}
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download generated formula
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern maw.rb
+      - name: Check out tap
+        uses: actions/checkout@v4
+        with:
+          repository: Soul-Brews-Studio/homebrew-maw
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+      - name: Publish formula
+        run: |
+          mkdir -p tap/Formula
+          cp maw.rb tap/Formula/maw.rb
+          cd tap
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Formula/maw.rb
+          git diff --cached --quiet && exit 0
+          git commit -m "maw ${GITHUB_REF_NAME}"
+          git push

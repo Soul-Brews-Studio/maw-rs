@@ -8,6 +8,16 @@ Rust port of the maw-js portable core.
 
 ## Install maw-rs
 
+On macOS Apple Silicon, install the stable prebuilt binary and zsh completions without a
+Rust toolchain:
+
+```bash
+brew install soul-brews-studio/maw/maw
+```
+
+See [`docs/install.md`](docs/install.md) for upgrades, pinned CI installs, the release
+installer, and source builds.
+
 macOS Apple Silicon and Linux x86_64 prebuilt binaries are published on tagged releases.
 The installer downloads the matching asset, verifies its `.sha256` sidecar, backs
 up any existing `maw`, and installs to `~/.local/bin/maw` by default.

@@ -22,9 +22,26 @@ to the next calendar base. `maw --version` embeds the exact commit and build tim
 2. Release promotion moves `alpha` to `main` by a merge-commit PR.
 3. Tag the promoted commit as stable (`v<YY>.<M>.<DD>`) or prerelease
    (`v<YY>.<M>.<DD>-alpha.<HMM>` / beta equivalent).
-4. Publish the GitHub release.
-5. Issues with `Fixes #N` in alpha PRs are closed by hand because GitHub only auto-closes
+4. Publish the GitHub release. The tag workflow uploads the macOS arm64 binary and
+   checksum. For stable tags it also generates `maw.rb` from that checksum and pushes the
+   formula to `Soul-Brews-Studio/homebrew-maw` using the `HOMEBREW_TAP_TOKEN` repository
+   secret. Alpha and beta tags do not update the stable formula.
+5. Verify the tap after the workflow finishes:
+
+   ```bash
+   brew update
+   brew upgrade maw # or: brew install soul-brews-studio/maw/maw
+   maw --version
+   maw ls
+   ```
+
+6. Issues with `Fixes #N` in alpha PRs are closed by hand because GitHub only auto-closes
    on default-branch merges.
+
+The tap repository layout is `Formula/maw.rb` plus its top-level `README.md`. See
+`docs/install.md` for user installation and version-pinning commands. If formula
+automation fails, download `maw.rb` from the stable GitHub release and commit it to the
+tap; do not hand-edit its version or checksum.
 
 ## macOS install note
 
