@@ -111,6 +111,10 @@ optional expected-output template and token name are also separate arguments. Th
 plist also contains `HOME` and the legacy compatibility `PATH`, but correctness never
 depends on a login shell, shell profile, or direnv.
 
+Detached private execution carries the absolute schedule state root as an explicit
+argument. It does not recompute that root from the tmux server's `MAW_HOME` or
+`TMUX_TMPDIR`; an ambient mismatch is recorded in the job log before execution continues.
+
 At sync time, resolve required executables (`maw-rs`, `tmux`, `claude`, `pass`, and
 `/bin/bash` where applicable) to absolute paths and reject installation if a required
 binary is missing. Pass only paths and a token name to the fire process; never put a

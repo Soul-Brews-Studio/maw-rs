@@ -1,5 +1,5 @@
 const DISPATCH_334: &[DispatcherEntry] = &[DispatcherEntry { command: "schedule", handler: Handler::Sync(schedule_run_command334) }];
-const SCHEDULE_USAGE334: &str = "usage: maw schedule add <id> <command> --every <cadence> [--at <time>] [--max-fires <N>] [--exec <mode>]\n       maw schedule ls | rm <id> | sync [--check|--dry-run] | run <id> [--force]\n       maw schedule peek|pause|resume <id> | logs <id> [-n N] | cost\nprivate: maw schedule fire <oracle> <id> <repo> [--force] | exec <run-id>";
+const SCHEDULE_USAGE334: &str = "usage: maw schedule add <id> <command> --every <cadence> [--at <time>] [--max-fires <N>] [--exec <mode>]\n       maw schedule ls | rm <id> | sync [--check|--dry-run] | run <id> [--force]\n       maw schedule peek|pause|resume <id> | logs <id> [-n N] | cost\nprivate: maw schedule fire <oracle> <id> <repo> [--force] | exec <run-id> <state-root>";
 
 fn schedule_run_command334(argv: &[String]) -> CliOutput {
     match schedule_dispatch334(argv) {
@@ -191,6 +191,8 @@ fn schedule_fire334(argv: &[String]) -> Result<String, String> {
     {
         let (oracle, id, repo, forced) = schedule_fire_args334(argv)?;
         let state = maw_state_dir(&current_xdg_env());
+        std::fs::create_dir_all(&state).map_err(|error| format!("create schedule state root: {error}"))?;
+        let state = state.canonicalize().map_err(|error| format!("resolve schedule state root: {error}"))?;
         let log = state.join("logs").join(format!("{oracle}.{id}.log"));
         schedule_log334(&log, "FIRE_START")?;
         let result = (|| {
@@ -209,7 +211,7 @@ fn schedule_fire334(argv: &[String]) -> Result<String, String> {
         let claude = (job.exec == maw_schedule::ExecMode::ClaudeHeadless).then(|| maw_schedule_runner::exec::resolve_binary("claude")).transpose()?;
         let pass = (job.exec == maw_schedule::ExecMode::ClaudeHeadless).then(|| maw_schedule_runner::exec::resolve_binary("pass")).transpose()?;
         let tmux = (job.exec == maw_schedule::ExecMode::ClaudeHeadless).then(|| maw_schedule_runner::exec::resolve_binary("tmux")).transpose()?;
-        let store = maw_schedule_runner::FireStore::new(state);
+        let store = maw_schedule_runner::FireStore::new(state.clone());
         let run = store.reserve(maw_schedule_runner::StartRequest { run_id: run_id.clone(), oracle, job_id: id,
             local_date, reserved_at: now, cadence_seconds, boot_identity: schedule_boot334()?, cap: job.max_fires_per_day,
             forced, exec: job.exec, expected_output: job.expected_output, command: job.command,
@@ -224,7 +226,7 @@ fn schedule_fire334(argv: &[String]) -> Result<String, String> {
         }
         let maw = std::env::current_exe().map_err(|error| format!("resolve maw executable: {error}"))?;
         let mut runner = maw_tmux::CommandTmuxRunner::with_program(tmux.expect("headless run resolves tmux"));
-        if let Err(error) = schedule_handoff334(&mut runner, &run_id, &repo, &maw) {
+        if let Err(error) = schedule_handoff334(&mut runner, &run_id, &repo, &maw, &state) {
             store.finalize(&run_id, maw_schedule_runner::FinishRequest { exited_at: current_epoch_seconds(), exit_code: 1,
                 output_file_written: false, output_bytes: 0, deliverable_written: None, expected_output: None, error: Some(error.clone()) })?;
             return Err(error);
@@ -237,23 +239,41 @@ fn schedule_fire334(argv: &[String]) -> Result<String, String> {
 }
 
 fn schedule_exec334(argv: &[String]) -> Result<String, String> {
-    let [run_id] = argv else { return Err(SCHEDULE_USAGE334.to_owned()); };
+    let [run_id, state] = argv else { return Err(SCHEDULE_USAGE334.to_owned()); };
     schedule_safe334(run_id, "run id")?;
-    let store = maw_schedule_runner::FireStore::new(maw_state_dir(&current_xdg_env()));
-    let run = store.load(run_id)?;
+    let state_arg = Path::new(state); if !state_arg.is_absolute() { return Err("schedule state root must be absolute".to_owned()); }
+    let state = match state_arg.canonicalize() { Ok(state) => state, Err(error) => {
+        let message = format!("resolve explicit schedule state root {}: {error}", state_arg.display());
+        let _ = schedule_log334(&state_arg.join("logs/schedule-exec.log"), &format!("ERROR {message}")); return Err(message);
+    }};
+    let store = maw_schedule_runner::FireStore::new(state.clone());
+    let run = match store.load(run_id) { Ok(run) => run, Err(error) => {
+        let message = format!("load run {run_id} from explicit state root {}: {error}", state.display());
+        let _ = schedule_log334(&state.join("logs/schedule-exec.log"), &format!("ERROR {message}")); return Err(message);
+    }};
+    let ambient = maw_state_dir(&current_xdg_env()); let ambient = ambient.canonicalize().unwrap_or(ambient);
+    if ambient != state {
+        let message = format!("STATE_ROOT_OVERRIDE explicit={} ambient={}", state.display(), ambient.display());
+        if let Err(log_error) = schedule_log334(Path::new(&run.log_path), &message) {
+            let error = format!("{message}; log failed: {log_error}");
+            store.finalize(run_id, maw_schedule_runner::FinishRequest { exited_at: current_epoch_seconds(), exit_code: 1,
+                output_file_written: false, output_bytes: 0, deliverable_written: None, expected_output: None, error: Some(error.clone()) })?;
+            return Err(error);
+        }
+    }
     let (_, hour) = schedule_local_time334()?;
     let finished = maw_schedule_runner::exec::execute(&store, run_id, &run.local_date, &hour,
         std::env::var("CLAUDE_CODE_OAUTH_TOKEN").ok().as_deref())?;
     serde_json::to_string(&finished).map(|value| format!("{value}\n")).map_err(|error| format!("encode outcome: {error}"))
 }
 
-fn schedule_handoff334<R: maw_tmux::TmuxRunner>(runner: &mut R, run_id: &str, repo: &Path, maw: &Path) -> Result<(), String> {
+fn schedule_handoff334<R: maw_tmux::TmuxRunner>(runner: &mut R, run_id: &str, repo: &Path, maw: &Path, state: &Path) -> Result<(), String> {
     schedule_safe334(run_id, "run id")?;
     let maw = maw.to_str().filter(|value| value.starts_with('/') && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"/_+.-".contains(&byte)))
         .ok_or_else(|| "maw executable path is not shell-safe".to_owned())?;
     let session = format!("maw-schedule-{run_id}");
     let args = vec!["-d".into(), "-s".into(), session, "-n".into(), "fire".into(), "-c".into(), repo.to_string_lossy().into_owned(),
-        format!("exec {maw} schedule exec {run_id}")];
+        format!("exec {maw} schedule exec {run_id} {}", maw_tmux::shell_quote(state.display()))];
     runner.run("new-session", &args).map(|_| ()).map_err(|error| format!("tmux handoff failed: {}", error.message))
 }
 
@@ -296,7 +316,7 @@ fn schedule_log334(path: &Path, message: &str) -> Result<(), String> {
     impl maw_tmux::TmuxRunner for Fake { fn run(&mut self, subcommand: &str, args: &[String]) -> Result<String, maw_tmux::TmuxError> { self.calls.push((subcommand.into(), args.to_vec())); Ok(String::new()) } }
     #[test] fn schedule_registers_and_rejects_bad_private_ids() {
         assert_eq!(DISPATCH_334[0].command, "schedule");
-        let output = schedule_run_command334(&["exec".into(), "../bad".into()]); assert_eq!(output.code, 1); assert!(output.stderr.contains("invalid run id"));
+        let output = schedule_run_command334(&["exec".into(), "../bad".into(), "/tmp".into()]); assert_eq!(output.code, 1); assert!(output.stderr.contains("invalid run id"));
         assert!(schedule_run_command334(&["--help".into()]).stdout.contains("schedule add"));
     }
     #[test] fn management_config_append_remove_round_trips_existing_bytes() {
@@ -315,9 +335,9 @@ fn schedule_log334(path: &Path, message: &str) -> Result<(), String> {
         assert!(maw_schedule::plist::parse_cadence(&job).is_err());
     }
     #[test] fn headless_handoff_contains_only_safe_run_identity_not_prompt() {
-        let mut fake = Fake::default(); schedule_handoff334(&mut fake, "odin-daily-1", Path::new("/tmp/repo"), Path::new("/opt/bin/maw-rs")).unwrap();
+        let mut fake = Fake::default(); schedule_handoff334(&mut fake, "odin-daily-1", Path::new("/tmp/repo"), Path::new("/opt/bin/maw-rs"), Path::new("/tmp/custom state")).unwrap();
         assert_eq!(fake.calls[0].0, "new-session"); let joined = fake.calls[0].1.join(" ");
-        assert!(joined.contains("exec /opt/bin/maw-rs schedule exec odin-daily-1")); assert!(!joined.contains("WHO Matrix"));
+        assert!(joined.contains("exec /opt/bin/maw-rs schedule exec odin-daily-1 '/tmp/custom state'")); assert!(!joined.contains("WHO Matrix"));
     }
     #[test] fn shell_fire_loads_config_reserves_executes_and_publishes_outcome() {
         let _lock = env_test_lock().lock().unwrap(); let _home = EnvVarRestore::capture("MAW_HOME");
@@ -327,5 +347,22 @@ fn schedule_log334(path: &Path, message: &str) -> Result<(), String> {
         let output = schedule_fire334(&["odin-oracle".into(), "canary".into(), repo.to_string_lossy().into_owned(), "--force".into()]).unwrap();
         assert!(output.contains("\"status\":\"succeeded\"")); assert_eq!(std::fs::read_to_string(repo.join("artifact")).unwrap(), "ok");
         assert!(root.join("home/schedule/runs/latest.json").is_file()); let _ = std::fs::remove_dir_all(root);
+    }
+    #[test] fn private_exec_uses_explicit_state_root_when_tmux_environment_is_stale() {
+        let _lock = env_test_lock().lock().unwrap(); let _home = EnvVarRestore::capture("MAW_HOME"); let _tmux = EnvVarRestore::capture("TMUX_TMPDIR");
+        let root = std::env::temp_dir().join(format!("maw-schedule-state-root-{}", std::process::id()));
+        let correct = root.join("custom-home"); let wrong = root.join("wrong-home"); let repo = root.join("repo");
+        let _ = std::fs::remove_dir_all(&root); std::fs::create_dir_all(&repo).unwrap(); std::fs::create_dir_all(&wrong).unwrap();
+        let log = correct.join("logs/odin.canary.log"); let store = maw_schedule_runner::FireStore::new(correct.clone());
+        store.reserve(maw_schedule_runner::StartRequest { run_id: "run-1".into(), oracle: "odin".into(), job_id: "canary".into(),
+            local_date: "2026-07-13".into(), reserved_at: 1, cadence_seconds: 60, boot_identity: "boot-a".into(), cap: 1, forced: false,
+            exec: maw_schedule::ExecMode::Shell, expected_output: None, command: "true".into(), cwd: repo.to_string_lossy().into_owned(),
+            log_path: log.to_string_lossy().into_owned(), output_path: None, token_name: "t2".into(), bash_path: "/bin/bash".into(),
+            claude_path: None, pass_path: None }).unwrap();
+        std::env::set_var("MAW_HOME", &wrong); std::env::set_var("TMUX_TMPDIR", root.join("wrong-tmux"));
+        let output = schedule_exec334(&["run-1".into(), correct.to_string_lossy().into_owned()]).unwrap();
+        assert!(output.contains("\"status\":\"succeeded\"")); assert_eq!(store.load("run-1").unwrap().outcome.status, maw_schedule::RunStatus::Succeeded);
+        assert!(std::fs::read_to_string(log).unwrap().contains("STATE_ROOT_OVERRIDE")); assert!(!wrong.join("schedule/runs/run-1.json").exists());
+        let _ = std::fs::remove_dir_all(root);
     }
 }
