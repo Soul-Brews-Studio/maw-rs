@@ -27,6 +27,7 @@ The native dispatcher is `maw schedule` and mirrors the actual Python parser:
 ```text
 maw schedule add <id> <command> --every <cadence> [--at <value>]
                  [--max-fires <N>] [--exec claude-headless|shell]
+                 [--expected-output <template>] [--token-name <name>]
 maw schedule ls
 maw schedule peek <id>
 maw schedule rm <id>
@@ -60,6 +61,8 @@ The root contains `[[schedule]]` array-of-table entries:
 | `cadence` | string | required |
 | `max_fires_per_day` | integer | default `24` |
 | `exec` | string | default `claude-headless`; `shell` is the other v1 mode |
+| `expected_output` | string | optional repository-relative deliverable template |
+| `token_name` | string | optional per-job `pass` token name; default `t2` |
 | `created` | RFC 3339 string | written by `add`, optional when reading |
 | `at_minute` | integer | optional |
 | `at_hour` | integer | optional |
@@ -104,6 +107,7 @@ schedule.
 
 `ProgramArguments` invokes an absolute maw-rs binary with a private `schedule fire`
 entrypoint and separate arguments for oracle, id, command, cwd, cap, and exec mode. The
+optional expected-output template and token name are also separate arguments. The
 plist also contains `HOME` and the legacy compatibility `PATH`, but correctness never
 depends on a login shell, shell profile, or direnv.
 
@@ -141,14 +145,25 @@ without acquiring a lock. Rust must provide real cross-process exclusion.
    a corrected job can retry immediately. Atomic temp-file + flush + rename updates
    `fires.json`; corruption fails closed and is logged rather than reset silently.
 
-For `claude-headless`, success means exit zero plus a created, non-empty session output
-file. For `shell`, success means exit zero; an empty stdout is valid, but the scheduler
-log still records the exit. All other terminal states release the cap slot.
+Transport success requires exit zero and, for `claude-headless`, a created, non-empty
+session output file; empty shell stdout remains valid. When `expected_output` is set,
+finalize expands literal `$TODAY` (`YYYY-MM-DD`) and `$HOUR` (`HH`) tokens from the run's
+scheduled local time, without a shell. For example:
+
+```toml
+expected_output = "ψ/memory/huginn/$TODAY/$HOUR00_works.md"
+```
+
+The resolved path must remain inside the repository. `deliverable_written` is true only
+when that file is non-empty and was created or changed after `reserved_at`; false records
+`completed-without-deliverable`, warns, and does not commit the cap. It is null when no
+check is configured.
 
 Reservations prevent concurrent fires from overshooting a cap while still allowing a
-failed fire to release its slot. Each reservation stores run id, pid/tmux session, and
-start time. Reconciliation removes it only when the process/session is gone (with a
-bounded stale fallback after reboot), recording `abandoned` before releasing the slot.
+failed fire to release its slot. Each stores run id, pid/tmux session, start time, cadence,
+and boot identity. Reconciliation records `abandoned` and releases the slot when the
+process/session is gone, reservation age is `> 2 × cadence`, or the machine boot
+identity differs from the one captured at reservation time.
 
 The legacy counter remains byte-shape compatible:
 
@@ -156,8 +171,19 @@ The legacy counter remains byte-shape compatible:
 {"2026-07-12":{"odin-oracle.daily-who":1}}
 ```
 
-Pending state lives separately under `~/.maw/state/schedule/runs/`; Python rollback can
-continue reading `fires.json`.
+`~/.maw/state/schedule/runs/` is a stable, machine-readable v1 interface, not private
+scratch space. Each `<run-id>.json` atomically exposes `schema_version`, job/run identity,
+cadence, boot identity, timestamps, status/error/exit code, cap/forced flags, output
+metadata, expected deliverable path, and `deliverable_written`. Terminal records are
+immutable. `runs/latest.json` is an atomically replaced index with `schema_version`,
+`generated_at`, and jobs keyed by `<oracle>.<id>`; each value includes cadence seconds,
+latest run id/status/update time, `deliverable_written`, and outcome path. Readers must
+tolerate additive fields; incompatible changes require a new schema version. External
+oracles watch this outcome freshness instead of logs, including detecting a controller
+that is loaded but no longer producing outcomes. `sync` seeds configured jobs as
+`never-fired`; only configuration and lifecycle transitions update the index, so reads
+cannot mask staleness. A watcher alerts when `never-fired` passes its first due time or
+`updated_at` age exceeds `2 × cadence`. Python rollback can still read `fires.json`.
 
 ## Required failure behavior
 
@@ -166,6 +192,8 @@ continue reading `fires.json`.
 launchd provides an almost empty environment and no direnv. For `claude-headless`, keep
 an existing non-empty `CLAUDE_CODE_OAUTH_TOKEN`; otherwise resolve the absolute `pass`
 binary and read `pass show claude/token-$CLAUDE_TOKEN_NAME`, defaulting the name to `t2`.
+The per-job TOML `token_name` overrides `CLAUDE_TOKEN_NAME`, allowing different accounts
+to rotate independently without changing the controller or global launchd environment.
 Command substitution semantics trim trailing newlines. Empty/nonzero output records a
 credential failure and releases the cap reservation. The token is passed only through
 the child environment and is never rendered or persisted.
@@ -189,9 +217,10 @@ stdout/stderr point at the same log as a last-resort diagnostic path.
 
 Every fire has an atomic record with `reserved_at`, `spawned_at`, `exited_at`, status,
 exit code/error, `forced`, `cap_committed`, output path, `output_file_written`, and output
-byte count. `ls` and `peek` show configured/plist/loaded health plus the latest outcome;
-they never equate `launchctl` loaded state with a working job. A missing outcome after a
-launchd trigger, a nonzero exit, or missing output is visible and testable.
+byte count, expected deliverable path, and `deliverable_written`. `ls` and `peek` show
+configured/plist/loaded health plus the latest outcome; they never equate `launchctl`
+loaded state with a working job. A missing outcome after a launchd trigger, a nonzero
+exit, or missing output is visible and testable.
 
 ## Rollout and rollback
 
@@ -200,7 +229,8 @@ launchd trigger, a nonzero exit, or missing output is visible and testable.
 3. Run native `sync --dry-run` against every live TOML; compare parsed plist plans with
    Python without bootstrapping anything.
 4. Run manual shell and headless canaries under an empty environment. Prove pass
-   hydration, quote-safe daily-who delivery, failure slot release, and outcome records.
+   hydration, quote-safe delivery, expected-output checks, failure slot release, and the
+   stable outcome feed.
 5. Run one separate canary label for seven days; never activate Python and Rust jobs for
    the same production schedule concurrently.
 6. Cut over one oracle at a time: back up TOML/plists, boot out its Python-generated
