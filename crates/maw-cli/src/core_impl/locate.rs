@@ -15,6 +15,7 @@ struct LocateOptions {
 #[serde(rename_all = "camelCase")]
 struct LocateResult {
     name: String,
+    session: String,
     handle: String,
     repo_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -237,6 +238,10 @@ fn locate_gather_info(
         name: aliases
             .last()
             .cloned()
+            .unwrap_or_else(|| oracle.to_owned()),
+        session: session_name
+            .clone()
+            .or_else(|| manifest_entry.as_ref().and_then(|entry| entry.session.clone()))
             .unwrap_or_else(|| oracle.to_owned()),
         handle: aliases
             .last()
@@ -940,18 +945,20 @@ mod locate_tests {
         let repo = env.ghq.join("github.com/acme/track-oracle");
         std::fs::create_dir_all(&repo).expect("repo");
         locate_write(
-            &env.maw_config_path(&["fleet", "99-track.json"]),
-            r#"{"name":"99-track","windows":[{"name":"track-oracle","repo":"acme/track-oracle"}]}"#,
+            &env.maw_config_path(&["fleet", "81-track.json"]),
+            r#"{"name":"81-track","windows":[{"name":"track-oracle","repo":"acme/track-oracle"}]}"#,
         );
         let options = LocateOptions { path: true, json: false };
         assert_eq!(
-            locate_cmd_with_sessions("99-track", &options, &[]).expect("track path"),
+            locate_cmd_with_sessions("81-track", &options, &[]).expect("track path"),
             format!("{}\n", repo.display())
         );
-        let info = locate_gather_info("99-track", true, &[]).expect("prefixed locate info");
+        let info = locate_gather_info("81-track", true, &[]).expect("prefixed locate info");
         let info_plain = locate_gather_info("track", true, &[]).expect("plain locate info");
         assert_eq!(info.repo_path, info_plain.repo_path);
         assert_eq!(info.name, info_plain.name);
+        assert_eq!(info.session, "81-track");
+        assert_eq!(info.session, info_plain.session);
         assert_eq!(info.handle, "track");
         assert_eq!(info.session_name, info_plain.session_name);
         assert_eq!(info.fleet_config_path, info_plain.fleet_config_path);
