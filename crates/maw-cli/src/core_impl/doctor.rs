@@ -197,6 +197,7 @@ fn doctor_collect_checks(options: &DoctorOptions) -> Vec<DoctorCheckNative> {
     if doctor_should_run(only, &["hub", "all"]) { checks.push(doctor_check_hub()); }
     if doctor_should_run(only, &["hub", "all"]) {
         if let Some(check) = doctor_check_config_shadow() { checks.push(check); }
+        if let Some(check) = doctor_check_config_backup_loss() { checks.push(check); }
     }
     if doctor_should_run(only, &["scout"]) { checks.push(doctor_ok("scout", "scout check is native-noop on maw-rs")); }
     if doctor_should_run(only, &["federation"]) { checks.push(doctor_ok("federation", "federation reachability skipped without configured peers")); }
@@ -308,6 +309,57 @@ fn doctor_check_config_shadow() -> Option<DoctorCheckNative> {
         ),
         &["move those keys into a weighted maw.config.<N>.json layer"],
     ))
+}
+
+fn doctor_check_config_backup_loss() -> Option<DoctorCheckNative> {
+    let config_dir = maw_config_dir(&doctor_xdg_env());
+    let entries = std::fs::read_dir(&config_dir).ok()?;
+    let mut losses = std::collections::BTreeSet::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Some((current_name, _)) = name.split_once(".bak-pre-") else { continue };
+        if current_name != "maw.config.json" && !doctor_is_weighted_config_name(current_name) { continue; }
+        let Ok(backup) = doctor_read_json(&entry.path()) else { continue };
+        let current_path = config_dir.join(current_name);
+        let Ok(current) = doctor_read_json(&current_path) else { continue };
+        let mut missing = std::collections::BTreeSet::new();
+        if let (Some(backup), Some(current)) = (backup.as_object(), current.as_object()) {
+            for (key, value) in backup {
+                if !current.contains_key(key) { missing.insert(key.clone()); }
+                doctor_collect_missing_json_paths(key, value, current.get(key), &mut missing);
+            }
+        }
+        if !missing.is_empty() {
+            losses.insert(format!("{} missing {}", current_path.display(), missing.into_iter().collect::<Vec<_>>().join(", ")));
+        }
+    }
+    (!losses.is_empty()).then(|| doctor_warn(
+        "config:backup-key-loss",
+        &format!("backup contains config keys absent from current file: {}", losses.into_iter().collect::<Vec<_>>().join("; ")),
+        &["restore the missing keys from the newest .bak-pre-* sibling"],
+    ))
+}
+
+fn doctor_read_json(path: &std::path::Path) -> Result<serde_json::Value, ()> {
+    let raw = std::fs::read_to_string(path).map_err(|_| ())?;
+    serde_json::from_str(&raw).map_err(|_| ())
+}
+
+fn doctor_collect_missing_json_paths(
+    prefix: &str,
+    backup: &serde_json::Value,
+    current: Option<&serde_json::Value>,
+    missing: &mut std::collections::BTreeSet<String>,
+) {
+    if let Some(object) = backup.as_object() {
+        for (key, value) in object {
+            let path = format!("{prefix}.{key}");
+            doctor_collect_missing_json_paths(&path, value, current.and_then(|item| item.get(key)), missing);
+        }
+    } else if current.is_none() {
+        missing.insert(prefix.to_owned());
+    }
 }
 
 fn doctor_has_weighted_config_layer(config_dir: &std::path::Path) -> bool {
@@ -726,6 +778,26 @@ mod doctor_tests {
             shadow["message"],
             "legacy maw.config.json is ignored (weighted layers present); keys found there: hooks.postWake, node"
         );
+    }
+
+    #[test]
+    fn doctor_warns_when_backup_has_lost_post_wake_hook() {
+        let (_lock, temp, _restore) = doctor_seed_env("config-backup-loss");
+        let config = temp.join("config-backup-loss/xdg-config/maw");
+        fs::write(config.join("maw.config.50.json"), r#"{"node":"current"}"#).expect("current");
+        fs::write(
+            config.join("maw.config.50.json.bak-pre-postwake-1783545408"),
+            r#"{"node":"current","hooks":{"postWake":["echo arrange"]}}"#,
+        )
+        .expect("backup");
+
+        let output = run_doctor_command(&doctor_strings(&["--json", "hub"]));
+
+        assert_eq!(output.code, 1);
+        let parsed: serde_json::Value = serde_json::from_str(&output.stdout).expect("json");
+        let loss = parsed["checks"].as_array().expect("checks").iter()
+            .find(|check| check["name"] == "config:backup-key-loss").expect("backup warning");
+        assert!(loss["message"].as_str().expect("message").contains("hooks.postWake"));
     }
 
     #[test]

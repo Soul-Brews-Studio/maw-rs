@@ -51,6 +51,7 @@ fn config_set(argv: &[String], json: bool) -> Result<String, String> {
         _ => return Err("maw config: native set currently supports node|port".to_owned()),
     };
     let mut config = config_read_target()?;
+    let before = config.clone();
     let object = config
         .as_object_mut()
         .ok_or_else(|| "maw config: root config must be a JSON object".to_owned())?;
@@ -63,6 +64,7 @@ fn config_set(argv: &[String], json: bool) -> Result<String, String> {
                 .map_err(|error| format!("maw config: failed to render JSON: {error}"))?
         ),
     )?;
+    config_audit_write(&config_target_path(), &before, &config);
     if json {
         Ok(format!(
             "{}\n",
@@ -404,6 +406,23 @@ fn config_atomic_write(path: &std::path::Path, body: &str) -> Result<(), String>
         .map_err(|error| format!("maw config: failed to write temp file: {error}"))?;
     std::fs::rename(&tmp, path)
         .map_err(|error| format!("maw config: failed to replace config: {error}"))
+}
+
+fn config_audit_write(path: &std::path::Path, before: &serde_json::Value, after: &serde_json::Value) {
+    let before_keys = before.as_object().map_or_else(Vec::new, |map| map.keys().cloned().collect::<Vec<_>>());
+    let after_keys = after.as_object().map_or_else(Vec::new, |map| map.keys().cloned().collect::<Vec<_>>());
+    let added = after_keys.iter().filter(|key| !before_keys.contains(key)).cloned().collect::<Vec<_>>();
+    let removed = before_keys.iter().filter(|key| !after_keys.contains(key)).cloned().collect::<Vec<_>>();
+    let changed = after_keys.iter().filter(|key| before.get(*key) != after.get(*key) && before.get(*key).is_some()).cloned().collect::<Vec<_>>();
+    let row = serde_json::json!({
+        "ts": cli_dispatch_now_iso(),
+        "cmd": "config-write",
+        "path": path.display().to_string(),
+        "keysDiff": { "added": added, "removed": removed, "changed": changed },
+        "binary": "maw-rs",
+        "version": MAW_RS_BUILD_VERSION,
+    });
+    let _ = append_jsonl_atomic(&audit_jsonl_path(&current_xdg_env()), &row);
 }
 
 fn config_validate_node(raw: &str) -> Result<String, String> {

@@ -108,6 +108,38 @@ fn init_non_interactive_writes_maw_home_bounded_config_atomically() {
 }
 
 #[test]
+fn init_force_preserves_unknown_config_keys() {
+    let root = temp_dir("init-round-trip");
+    fs::create_dir_all(root.join("config")).expect("config dir");
+    fs::write(
+        root.join("config/maw.config.json"),
+        r#"{"node":"old","hooks":{"postWake":["echo arrange"]}}"#,
+    )
+    .expect("seed config");
+
+    let output = run(
+        &["init", "--non-interactive", "--node", "new-node", "--force"],
+        &root,
+    );
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let config: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(root.join("config/maw.config.json")).expect("config body"),
+    )
+    .expect("config json");
+    assert_eq!(config["node"], "new-node");
+    assert_eq!(config["hooks"]["postWake"][0], "echo arrange");
+    let audit = fs::read_to_string(root.join("audit.jsonl")).expect("audit log");
+    let write: serde_json::Value = audit
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("audit row"))
+        .find(|row: &serde_json::Value| row["cmd"] == "config-write")
+        .expect("config-write row");
+    assert!(write["path"].as_str().expect("path").ends_with("maw.config.json"));
+    assert!(write["keysDiff"]["changed"].as_array().expect("changed").contains(&serde_json::json!("node")));
+}
+
+#[test]
 fn init_refuses_existing_config_without_force_or_backup() {
     let root = temp_dir("init-refuse");
     let first = run(
