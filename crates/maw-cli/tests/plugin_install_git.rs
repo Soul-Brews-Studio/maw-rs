@@ -100,17 +100,31 @@ fn fixture_repo(root: &Path, name: &str) -> PathBuf {
     fs::create_dir_all(&repo).expect("repo dir");
     write_js_plugin(&repo, name);
 
+    commit_fixture_repo(&repo);
+    repo
+}
+
+fn monorepo_fixture(root: &Path, name: &str) -> (PathBuf, PathBuf) {
+    let repo = root.join("repo");
+    let package = repo.join("packages").join(name);
+    write_js_plugin(&package, name);
+    fs::write(repo.join("README.md"), "# fixture monorepo\n").expect("readme");
+    commit_fixture_repo(&repo);
+    (repo, package)
+}
+
+fn commit_fixture_repo(repo: &Path) {
     let init = Command::new("git")
         .arg("init")
         .arg("-q")
-        .arg(&repo)
+        .arg(repo)
         .output()
         .expect("git init");
     assert_success(&init, "git init");
-    git(&repo, &["add", "."]);
+    git(repo, &["add", "."]);
     let commit = Command::new("git")
         .arg("-C")
-        .arg(&repo)
+        .arg(repo)
         .args([
             "-c",
             "user.name=maw-rs test",
@@ -124,8 +138,6 @@ fn fixture_repo(root: &Path, name: &str) -> PathBuf {
         .output()
         .expect("git commit");
     assert_success(&commit, "git commit");
-
-    repo
 }
 
 fn with_host_plugin_env<'a>(command: &'a mut Command, root: &Path) -> &'a mut Command {
@@ -140,7 +152,7 @@ fn with_host_plugin_env<'a>(command: &'a mut Command, root: &Path) -> &'a mut Co
 }
 
 #[test]
-fn plugin_install_git_file_url_clones_builds_and_installs_to_default_root() {
+fn plugin_install_git_root_manifest_repo_regression() {
     let root = temp_dir("git-file");
     let repo = fixture_repo(&root, "git-fixture");
     let maw_home = root.join("maw-home");
@@ -189,6 +201,97 @@ fn plugin_install_git_file_url_clones_builds_and_installs_to_default_root() {
         "stderr: {}",
         String::from_utf8_lossy(&verb.stderr)
     );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn plugin_install_git_subpath_builds_selected_package() {
+    let root = temp_dir("git-subpath");
+    let (repo, _) = monorepo_fixture(&root, "subpath-fixture");
+    let install_root = root.join("plugins");
+    let file_url = format!(
+        "file://{}",
+        repo.canonicalize().expect("repo path").display()
+    );
+
+    let output = with_host_plugin_env(
+        Command::new(maw_bin()).args([
+            "plugin",
+            "install",
+            &file_url,
+            "--path",
+            "packages/subpath-fixture",
+            "--root",
+            install_root.to_str().expect("install root utf8"),
+        ]),
+        &root,
+    )
+    .output()
+    .expect("maw plugin install subpath");
+
+    assert_success(&output, "plugin install subpath");
+    assert!(String::from_utf8_lossy(&output.stderr).is_empty());
+    assert!(install_root.join("subpath-fixture/plugin.json").is_file());
+    assert!(install_root.join("subpath-fixture/index.js").is_file());
+    assert!(!install_root.join("README.md").exists());
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn plugin_install_git_sha256_pin_combines_with_subpath() {
+    let root = temp_dir("git-subpath-sha");
+    let (repo, _) = monorepo_fixture(&root, "pinned-subpath");
+    let file_url = format!(
+        "file://{}",
+        repo.canonicalize().expect("repo path").display()
+    );
+    let probe_root = root.join("probe-plugins");
+    let probe = with_host_plugin_env(
+        Command::new(maw_bin()).args([
+            "plugin",
+            "install",
+            &file_url,
+            "--path",
+            "packages/pinned-subpath",
+            "--root",
+            probe_root.to_str().expect("probe root utf8"),
+        ]),
+        &root,
+    )
+    .output()
+    .expect("probe install");
+    assert_success(&probe, "probe install");
+    let installed_manifest: serde_json::Value = serde_json::from_slice(
+        &fs::read(probe_root.join("pinned-subpath/plugin.json")).expect("installed manifest"),
+    )
+    .expect("manifest json");
+    let sha256 = installed_manifest["artifact"]["sha256"]
+        .as_str()
+        .expect("artifact sha256");
+
+    let install_root = root.join("plugins");
+    let pinned = with_host_plugin_env(
+        Command::new(maw_bin()).args([
+            "plugin",
+            "install",
+            &file_url,
+            "--path",
+            "packages/pinned-subpath",
+            "--sha256",
+            sha256,
+            "--root",
+            install_root.to_str().expect("install root utf8"),
+        ]),
+        &root,
+    )
+    .output()
+    .expect("pinned subpath install");
+
+    assert_success(&pinned, "pinned subpath install");
+    assert!(String::from_utf8_lossy(&pinned.stderr).is_empty());
+    assert!(install_root.join("pinned-subpath/plugin.json").is_file());
 
     let _ = fs::remove_dir_all(root);
 }
