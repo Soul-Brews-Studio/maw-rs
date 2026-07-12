@@ -122,7 +122,7 @@ fn audit_read_lines(count: usize) -> Vec<String> {
 }
 
 fn audit_file_path() -> std::path::PathBuf {
-    maw_state_path(&audit_xdg_env(), &["audit.jsonl"])
+    audit_jsonl_path(&audit_xdg_env())
 }
 
 fn audit_parse_rows(lines: &[String]) -> Vec<AuditRowNative> {

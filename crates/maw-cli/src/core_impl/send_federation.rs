@@ -512,7 +512,7 @@ fn hey_log_parse_limit(value: &str) -> Result<usize, String> {
 
 fn hey_log_render(options: &HeyLogOptions) -> String {
     let env = real_xdg_env();
-    let audits = hey_log_read_audits(&maw_state_path(&env, &["audit.jsonl"]));
+    let audits = hey_log_read_audits(&audit_jsonl_path(&env));
     let events = hey_log_read_events(&maw_data_path(&env, &["maw-log.jsonl"]));
     let mut rows = hey_log_correlate(&events, &audits);
     rows.retain(|row| {
@@ -912,7 +912,7 @@ fn send_write_js_audit_record(command: &str, audit_args: &[String]) {
         "user": send_audit_user(),
         "pid": std::process::id(),
     });
-    send_append_jsonl(&maw_state_path(&real_xdg_env(), &["audit.jsonl"]), &row);
+    send_append_jsonl(&audit_jsonl_path(&real_xdg_env()), &row);
 }
 
 fn send_write_js_maw_log_record(from: &str, to: &str, msg: &str, route: &str) {
@@ -928,26 +928,7 @@ fn send_write_js_maw_log_record(from: &str, to: &str, msg: &str, route: &str) {
 }
 
 fn send_append_jsonl(path: &std::path::Path, row: &serde_json::Value) {
-    if let Some(parent) = path.parent() {
-        if std::fs::create_dir_all(parent).is_err() { return; }
-    } else {
-        return;
-    }
-    let _ = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .and_then(|mut file| {
-            use std::io::Write as _;
-            let line = format!("{row}\n");
-            file.write(line.as_bytes()).and_then(|written| {
-                if written == line.len() {
-                    Ok(())
-                } else {
-                    Err(std::io::Error::new(std::io::ErrorKind::WriteZero, "short jsonl append"))
-                }
-            })
-        });
+    let _ = append_jsonl_atomic(path, row);
 }
 
 fn send_audit_user() -> String {

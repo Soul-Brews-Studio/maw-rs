@@ -85,6 +85,7 @@ use maw_xdg::{
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
 use std::future::Future;
+use std::io::Write as _;
 use std::path::Path;
 use std::pin::Pin;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -241,7 +242,7 @@ mod async_dispatch_tests {
 
 #[cfg(test)]
 mod dispatcher_fragment_tests {
-    use super::{cli_dispatch_now_iso, current_xdg_env, env_test_lock};
+    use super::{cli_dispatch_log_command, cli_dispatch_now_iso, current_xdg_env, env_test_lock};
     use super::{
         dispatcher_entries, dispatcher_status, run_cli, DispatchKind, MAW_RS_VERSION_STRING,
     };
@@ -296,7 +297,7 @@ mod dispatcher_fragment_tests {
         let (_state_root, _restores) = cli_dispatch_test_env();
         let output = run_cli(&["version".to_owned()]);
         assert_eq!(output.code, 0, "{output:?}");
-        let path = super::maw_state_path(&current_xdg_env(), &["audit.jsonl"]);
+        let path = super::audit_jsonl_path(&current_xdg_env());
         let text = fs::read_to_string(path).expect("audit log");
         let rows: Vec<_> = text
             .lines()
@@ -314,6 +315,43 @@ mod dispatcher_fragment_tests {
             row.get("version").and_then(serde_json::Value::as_str),
             Some(super::MAW_RS_BUILD_VERSION)
         );
+        let config_path = super::maw_config_path(&current_xdg_env(), &["audit.jsonl"]);
+        assert!(!config_path.exists(), "audit must use state, not config: {config_path:?}");
+    }
+
+    #[test]
+    fn concurrent_dispatch_audit_appends_remain_parseable_jsonl() {
+        let _guard = env_test_lock().lock().expect("env lock");
+        let (_state_root, _restores) = cli_dispatch_test_env();
+        let workers = 32;
+        let rows_per_worker = 32;
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(workers));
+        let payload = "x".repeat(2_048);
+
+        std::thread::scope(|scope| {
+            for worker in 0..workers {
+                let barrier = std::sync::Arc::clone(&barrier);
+                let payload = &payload;
+                scope.spawn(move || {
+                    barrier.wait();
+                    for row in 0..rows_per_worker {
+                        cli_dispatch_log_command(
+                            "audit-concurrency-test",
+                            &[format!("{worker}-{row}-{payload}")],
+                        );
+                    }
+                });
+            }
+        });
+
+        let path = super::audit_jsonl_path(&current_xdg_env());
+        let text = fs::read_to_string(path).expect("audit log");
+        let rows: Vec<_> = text.lines().collect();
+        assert_eq!(rows.len(), workers * rows_per_worker, "{text}");
+        for (line, row) in rows.iter().enumerate() {
+            serde_json::from_str::<serde_json::Value>(row)
+                .unwrap_or_else(|error| panic!("audit line {line} is corrupt: {error}: {row}"));
+        }
     }
 
     #[test]
@@ -351,6 +389,7 @@ mod dispatcher_fragment_tests {
         std::fs::create_dir_all(root.join("state").join("maw")).expect("state dir");
         let restores = [
             "HOME",
+            "XDG_CONFIG_HOME",
             "XDG_STATE_HOME",
             "MAW_STATE_DIR",
             "MAW_HOME",
@@ -360,8 +399,10 @@ mod dispatcher_fragment_tests {
         .map(super::EnvVarRestore::capture)
         .collect::<Vec<_>>();
         let home = root.join("home");
+        let config = root.join("config");
         let state = root.join("state");
         std::env::set_var("HOME", &home);
+        std::env::set_var("XDG_CONFIG_HOME", &config);
         std::env::set_var("XDG_STATE_HOME", &state);
         std::env::set_var("MAW_XDG", "1");
         std::env::remove_var("MAW_HOME");
@@ -480,22 +521,35 @@ fn cli_dispatch_log_command(command: &str, args: &[String]) {
         "binary": "maw-rs",
         "version": MAW_RS_BUILD_VERSION,
     });
-    let path = maw_state_path(&current_xdg_env(), &["audit.jsonl"]);
+    let path = audit_jsonl_path(&current_xdg_env());
+    let _ = append_jsonl_atomic(&path, &row);
+}
+
+fn audit_jsonl_path(env: &MawXdgEnv) -> std::path::PathBuf {
+    maw_state_path(env, &["audit.jsonl"])
+}
+
+fn append_jsonl_atomic(path: &Path, row: &serde_json::Value) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
-        if std::fs::create_dir_all(parent).is_err() {
-            return;
-        }
+        std::fs::create_dir_all(parent)?;
     } else {
-        return;
+        return Err(std::io::Error::other("jsonl path has no parent"));
     }
-    let _ = std::fs::OpenOptions::new()
+    let mut line = serde_json::to_vec(row).map_err(std::io::Error::other)?;
+    line.push(b'\n');
+    let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(path)
-        .and_then(|mut file| {
-            use std::io::Write as _;
-            writeln!(file, "{row}")
-        });
+        .open(path)?;
+    let written = file.write(&line)?;
+    if written == line.len() {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::WriteZero,
+            "short jsonl append",
+        ))
+    }
 }
 
 fn cli_dispatch_now_iso() -> String {

@@ -1013,13 +1013,7 @@ fn wake_write_phase_audit(resolved: &WakeResolvedNative, phase: &str, ms: u64) {
         "binary": "maw-rs",
         "version": MAW_RS_BUILD_VERSION,
     });
-    let path = maw_state_path(&current_xdg_env(), &["audit.jsonl"]);
-    let Some(parent) = path.parent() else { return; };
-    if std::fs::create_dir_all(parent).is_err() { return; }
-    let _ = std::fs::OpenOptions::new().create(true).append(true).open(path).and_then(|mut file| {
-        use std::io::Write as _;
-        writeln!(file, "{row}")
-    });
+    let _ = append_jsonl_atomic(&audit_jsonl_path(&current_xdg_env()), &row);
 }
 
 fn wake_apply(
