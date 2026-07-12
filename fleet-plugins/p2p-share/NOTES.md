@@ -32,6 +32,8 @@ No `plugin.wasm` or `plugin.source.json` is committed yet. Per `fleet-plugins/RE
 - Default signaling URL is preserved: `wss://phd-signaling.laris.workers.dev/ws`.
 - Default viewer port is preserved: `7742`.
 - Auth key lookup is runtime-only: `P2P_SHARE_KEY` or `AUTH_KEY`. No secrets are committed.
+- Without an auth key, startup is blocked unless the operator passes
+  `--i-understand-the-risk`; the override prints an authentication-disabled warning.
 - The viewer asset is copied from the reference and served from `viewer.html`.
 - `src/plugin.ts` lazy-loads `werift` so `status` and argument validation work before `bun install`; starting a share still requires the dependency.
 

@@ -1,10 +1,13 @@
 import { expect, test } from "bun:test";
 import handler, {
   DEFAULT_SIGNAL_URL,
+  UNAUTHENTICATED_RISK_FLAG,
   VIEWER_PORT,
   getFlag,
+  handleP2pShare,
   loadWerift,
   parseShareOptions,
+  requiresUnauthenticatedRiskAcknowledgement,
   sendDataChannelTextToPane,
 } from "./plugin";
 
@@ -33,6 +36,21 @@ test("share without pane prints pane usage error", async () => {
   expect(result.exitCode).toBe(1);
   expect(result.output).toContain("Usage: maw p2p-share share <pane>");
   expect(result.error).toContain("Usage: maw p2p-share share <pane>");
+});
+
+test("unauthenticated share requires explicit risk acknowledgement", async () => {
+  const output: string[] = [];
+  const exitCode = await handleP2pShare(["share", "session:0.0"], (line) => output.push(line), "");
+
+  expect(exitCode).toBe(1);
+  expect(output.join("\n")).toContain("SECURITY BLOCK");
+  expect(output.join("\n")).toContain("Remote viewers can send keystrokes");
+  expect(output.join("\n")).toContain(UNAUTHENTICATED_RISK_FLAG);
+  expect(requiresUnauthenticatedRiskAcknowledgement(["share", "pane"], "secret")).toBe(false);
+  expect(requiresUnauthenticatedRiskAcknowledgement(
+    ["share", "pane", UNAUTHENTICATED_RISK_FLAG],
+    "",
+  )).toBe(false);
 });
 
 test("flag and share option parsing returns explicit values and defaults", () => {

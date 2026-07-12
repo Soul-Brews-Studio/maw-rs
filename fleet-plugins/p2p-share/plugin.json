@@ -22,11 +22,12 @@
   ],
   "cli": {
     "command": "p2p-share",
-    "help": "maw p2p-share share <pane> [--signal <url>] [--name <name>] [--port <port>]",
+    "help": "maw p2p-share share <pane> [--signal <url>] [--name <name>] [--port <port>] [--i-understand-the-risk]",
     "flags": {
       "--signal": "string",
       "--name": "string",
-      "--port": "number"
+      "--port": "number",
+      "--i-understand-the-risk": "boolean"
     }
   }
 }

@@ -23,6 +23,7 @@ type Werift = {
 
 export const VIEWER_PORT = 7742;
 export const DEFAULT_SIGNAL_URL = "wss://phd-signaling.laris.workers.dev/ws";
+export const UNAUTHENTICATED_RISK_FLAG = "--i-understand-the-risk";
 
 export const command = {
   name: "p2p-share",
@@ -36,6 +37,7 @@ function usage(log: Log): void {
   log("");
   log("Usage:");
   log("  maw p2p-share share <pane> [--signal <url>] [--name <name>] [--port <port>]");
+  log(`    [${UNAUTHENTICATED_RISK_FLAG}]`);
   log("  maw p2p-share status");
 }
 
@@ -63,6 +65,10 @@ export function parseShareOptions(args: string[]): {
   const parsedPort = Number.parseInt(getFlag(args, "--port") || String(VIEWER_PORT), 10);
   const port = Number.isFinite(parsedPort) && parsedPort > 0 ? parsedPort : VIEWER_PORT;
   return { target, signalUrl, peerName, port };
+}
+
+export function requiresUnauthenticatedRiskAcknowledgement(args: string[], authKey: string): boolean {
+  return !authKey && !args.includes(UNAUTHENTICATED_RISK_FLAG);
 }
 
 function sanitizeTmpSuffix(value: string): string {
@@ -353,7 +359,11 @@ async function startSharePeer(opts: {
   await new Promise(() => {});
 }
 
-async function handleP2pShare(args: string[], log: Log): Promise<number> {
+export async function handleP2pShare(
+  args: string[],
+  log: Log,
+  authKey = process.env.P2P_SHARE_KEY || process.env.AUTH_KEY || "",
+): Promise<number> {
   const subcommand = args[0] || "status";
 
   if (subcommand === "status" || subcommand === "help" || subcommand === "-h" || subcommand === "--help") {
@@ -374,8 +384,17 @@ async function handleP2pShare(args: string[], log: Log): Promise<number> {
     return 1;
   }
 
+  if (requiresUnauthenticatedRiskAcknowledgement(args, authKey)) {
+    log("SECURITY BLOCK: p2p-share has no authentication key.");
+    log("Remote viewers can send keystrokes directly to the live pane.");
+    log(`Set P2P_SHARE_KEY (recommended), or rerun with ${UNAUTHENTICATED_RISK_FLAG}.`);
+    return 1;
+  }
+
   const { signalUrl, peerName, port } = parseShareOptions(args);
-  const authKey = process.env.P2P_SHARE_KEY || process.env.AUTH_KEY || "";
+  if (!authKey) {
+    log("WARNING: AUTHENTICATION DISABLED. Remote viewers can type into the live pane.");
+  }
 
   log("P2P Share starting...");
   log(`  Pane:   ${target}`);
