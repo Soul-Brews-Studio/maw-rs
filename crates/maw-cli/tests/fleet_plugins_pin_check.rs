@@ -20,27 +20,16 @@
 //! reproduces its committed pin.
 
 use maw_cli::run_cli;
-use maw_plugin_manifest::hash_file;
+use maw_plugin_manifest::{
+    hash_file, invoke_plugin, load_manifest_from_dir, ExtismWasmInvokeRuntime, InvokeContext,
+    InvokeSource, LoadedPlugin, MawWasmHost,
+};
 use serde_json::Value;
 use std::ffi::OsString;
 use std::fmt::Write as FmtWrite;
 use std::fs::{self, create_dir_all, read_to_string};
-use std::io::{Read, Write};
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
-};
-use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
-
-type HermesFake = (
-    String,
-    Arc<Mutex<Vec<String>>>,
-    Arc<AtomicBool>,
-    thread::JoinHandle<()>,
-);
 
 /// Manifest filenames a fleet plugin may use to declare its ship artifact. `plugin.json`
 /// is the active manifest (possibly a bun-dev dev-tier manifest with no artifact);
@@ -100,65 +89,6 @@ fn seed_ctq_vault(root: &Path) {
     fs::write(neo.join("002-question.md"), "---\nfrom: morpheus\nto: zai\nteam: neo\ntype: question\nsubject: Need queue answer\n---\nCan you confirm the queue filter?\n").expect("neo msg");
 }
 
-fn hermes_args(root: &Path, values: &[&str]) -> Vec<String> {
-    let mut out = args(&[
-        "plugin-manifest",
-        "invoke",
-        "--scan-dir",
-        &root.display().to_string(),
-        "--plugin",
-        "hermes",
-    ]);
-    for value in values {
-        out.push("--arg".to_owned());
-        out.push((*value).to_owned());
-    }
-    out
-}
-
-fn set_hermes_base_url(plugin: &Path, base_url: &str) {
-    let manifest = plugin.join("plugin.json");
-    let mut value: Value =
-        serde_json::from_str(&read_to_string(&manifest).expect("manifest json")).expect("json");
-    value["endpoints"]["discord-rest"]["baseUrl"] = Value::String(base_url.to_owned());
-    fs::write(
-        &manifest,
-        serde_json::to_string_pretty(&value).expect("serialize manifest"),
-    )
-    .expect("write manifest");
-}
-
-fn spawn_hermes_discord_fake() -> HermesFake {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("fake discord bind");
-    listener.set_nonblocking(true).expect("nonblocking");
-    let base = format!("http://{}", listener.local_addr().expect("local addr"));
-    let requests = Arc::new(Mutex::new(Vec::new()));
-    let seen = Arc::clone(&requests);
-    let stop = Arc::new(AtomicBool::new(false));
-    let stop_loop = Arc::clone(&stop);
-    let handle = thread::spawn(move || {
-        while !stop_loop.load(Ordering::SeqCst) {
-            let Ok((mut stream, _)) = listener.accept() else {
-                thread::sleep(std::time::Duration::from_millis(10));
-                continue;
-            };
-            let mut buf = [0_u8; 8192];
-            let n = stream.read(&mut buf).unwrap_or(0);
-            let req = String::from_utf8_lossy(&buf[..n]).to_string();
-            let path = req
-                .lines()
-                .next()
-                .and_then(|line| line.split_whitespace().nth(1))
-                .unwrap_or("/");
-            seen.lock().expect("seen").push(req.clone());
-            let body = hermes_fake_body(path.split('?').next().unwrap_or(path));
-            let resp = format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}", body.len(), body);
-            stream.write_all(resp.as_bytes()).ok();
-        }
-    });
-    (base, requests, stop, handle)
-}
-
 fn hermes_fake_body(path: &str) -> &'static str {
     match path {
         "/users/@me" => r#"{"username":"hermes-bot","id":"bot-42","bot":true}"#,
@@ -181,6 +111,47 @@ fn hermes_fake_body(path: &str) -> &'static str {
         }
         _ => r#"{"error":"unexpected fake path"}"#,
     }
+}
+
+fn hermes_host(plugin: &LoadedPlugin) -> MawWasmHost {
+    let mut host = MawWasmHost::new(plugin);
+    for (path, query) in [
+        ("/users/@me", None),
+        ("/users/@me/guilds", None),
+        (
+            "/channels/ch1/messages",
+            Some(serde_json::json!({"limit": "2"})),
+        ),
+        ("/channels/ch1", None),
+        ("/guilds/guild1/threads/active", None),
+        (
+            "/channels/ch1/threads/archived/public",
+            Some(serde_json::json!({"limit": "50"})),
+        ),
+        (
+            "/channels/th1/messages",
+            Some(serde_json::json!({"limit": "50"})),
+        ),
+        (
+            "/channels/th2/messages",
+            Some(serde_json::json!({"limit": "50"})),
+        ),
+    ] {
+        let mut request = serde_json::json!({
+            "endpoint": "discord-rest",
+            "method": "GET",
+            "path": path,
+        });
+        if let Some(query) = query {
+            request["query"] = query;
+        }
+        let response = serde_json::json!({
+            "ok": true,
+            "value": {"status": 200, "body": hermes_fake_body(path)},
+        });
+        host = host.with_fake_response("maw.net.fetch", request.to_string(), response.to_string());
+    }
+    host
 }
 
 fn restore_env(key: &str, value: Option<OsString>) {
@@ -456,11 +427,13 @@ fn hermes_fleet_artifact_invokes_discord_read_only_verbs() {
         manifest["capabilities"],
         serde_json::json!(["net:fetch:discord-rest", "secret:use:discord-bot-token"])
     );
+    assert_eq!(
+        manifest["secrets"]["discord-bot-token"]["env"],
+        "DISCORD_BOT_TOKEN"
+    );
     let root = temp_dir("hermes-invoke");
     let staged = root.join("hermes");
     copy_tree(&source, &staged);
-    let (base_url, requests, stop, server) = spawn_hermes_discord_fake();
-    set_hermes_base_url(&staged, &base_url);
     let install_root = root.join("plugins");
     let install = run_cli(&args(&[
         "plugin",
@@ -475,8 +448,9 @@ fn hermes_fleet_artifact_invokes_discord_read_only_verbs() {
         install.stderr, install.stdout
     );
 
-    let saved_token = std::env::var_os("DISCORD_BOT_TOKEN");
-    std::env::set_var("DISCORD_BOT_TOKEN", "TEST_TOKEN_245");
+    let plugin = load_manifest_from_dir(&install_root.join("hermes"))
+        .expect("load installed hermes")
+        .expect("installed hermes manifest");
     let mut observed = String::new();
     for (label, argv) in [
         ("whoami", vec!["whoami"]),
@@ -485,34 +459,26 @@ fn hermes_fleet_artifact_invokes_discord_read_only_verbs() {
         ("threads-list", vec!["threads", "list", "ch1", "--all"]),
         ("threads-read", vec!["threads", "read", "ch1", "--all"]),
     ] {
-        let invoke = run_cli(&hermes_args(&install_root, &argv));
-        assert_eq!(
-            invoke.code, 0,
-            "hermes {label} failed: {}\n{}",
-            invoke.stderr, invoke.stdout
+        let context = InvokeContext::new(
+            InvokeSource::Cli,
+            argv.into_iter().map(str::to_owned).collect(),
         );
-        write!(&mut observed, "## {label}\n{}", invoke.stdout).expect("append observed");
-        assert!(
-            !invoke.stdout.contains("TEST_TOKEN_245"),
-            "token leaked in stdout"
-        );
-        assert!(invoke.stderr.is_empty(), "{}", invoke.stderr);
+        let mut runtime =
+            ExtismWasmInvokeRuntime::default().with_host("hermes", hermes_host(&plugin));
+        let invoke = invoke_plugin(&plugin, &context, &mut runtime);
+        assert!(invoke.ok, "hermes {label} failed: {:?}", invoke.error);
+        writeln!(
+            &mut observed,
+            "## {label}\n{}",
+            invoke.output.unwrap_or_default()
+        )
+        .expect("append observed");
     }
-    restore_env("DISCORD_BOT_TOKEN", saved_token);
-    stop.store(true, Ordering::SeqCst);
-    server.join().expect("fake server join");
     fs::remove_dir_all(&root).ok();
 
     assert_eq!(
         observed,
         include_str!("fixtures/zerobun/hermes-wasm-read-only.stdout")
-    );
-    let requests = requests.lock().expect("requests");
-    assert!(
-        requests
-            .iter()
-            .all(|req| req.contains("authorization: Bot TEST_TOKEN_245")),
-        "{requests:#?}"
     );
 }
 

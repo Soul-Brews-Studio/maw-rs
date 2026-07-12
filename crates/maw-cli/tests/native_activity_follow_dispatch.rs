@@ -1,4 +1,9 @@
-use std::{path::PathBuf, process::Command};
+use std::{
+    path::PathBuf,
+    process::Command,
+    sync::atomic::{AtomicU64, Ordering},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 fn epic55_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_maw-rs"))
@@ -11,9 +16,17 @@ fn epic55_base() -> Command {
 }
 
 fn epic55_follow() -> (Command, PathBuf) {
-    let root = std::env::temp_dir().join(format!("maw-rs-follow-plugin-{}", std::process::id()));
+    static NEXT_DIR: AtomicU64 = AtomicU64::new(0);
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "maw-rs-follow-plugin-{}-{nonce}-{}",
+        std::process::id(),
+        NEXT_DIR.fetch_add(1, Ordering::Relaxed)
+    ));
     let plugin = root.join("follow");
-    let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&plugin).expect("plugin dir");
     let fixture =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/epic55/follow-plugin");
