@@ -12,12 +12,13 @@ fn request(id: &str, at: u64) -> StartRequest {
     StartRequest { run_id: id.into(), oracle: "odin".into(), job_id: "digest".into(),
         local_date: "2026-07-13".into(), reserved_at: at, cadence_seconds: 60,
         boot_identity: "boot-a".into(), cap: 1, forced: false, exec: ExecMode::Shell,
-        expected_output: None }
+        expected_output: None, command: "true".into(), cwd: "/tmp".into(), log_path: "/tmp/schedule.log".into(),
+        output_path: None, token_name: "t2".into(), bash_path: "/bin/bash".into(), claude_path: None, pass_path: None }
 }
 #[rustfmt::skip]
 fn finish(at: u64, exit: i32) -> FinishRequest {
     FinishRequest { exited_at: at, exit_code: exit, output_file_written: false,
-        output_bytes: 0, deliverable_written: None, error: (exit != 0).then(|| "child failed".into()) }
+        output_bytes: 0, deliverable_written: None, expected_output: None, error: (exit != 0).then(|| "child failed".into()) }
 }
 #[test]
 #[rustfmt::skip]

@@ -1,3 +1,4 @@
+pub mod exec;
 use fd_lock::RwLock;
 use maw_schedule::{
     abandon_if_stale, finalize, mark_spawned, reserve, ExecMode, OutcomeRecord, ReserveRequest,
@@ -7,11 +8,11 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{collections::BTreeMap, fs::OpenOptions, io::Write, path::{Path, PathBuf}};
 type Counters = BTreeMap<String, BTreeMap<String, u32>>;
 #[rustfmt::skip] #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StartRequest { pub run_id: String, pub oracle: String, pub job_id: String, pub local_date: String, pub reserved_at: u64, pub cadence_seconds: u64, pub boot_identity: String, pub cap: u32, pub forced: bool, pub exec: ExecMode, pub expected_output: Option<String> }
+pub struct StartRequest { pub run_id: String, pub oracle: String, pub job_id: String, pub local_date: String, pub reserved_at: u64, pub cadence_seconds: u64, pub boot_identity: String, pub cap: u32, pub forced: bool, pub exec: ExecMode, pub expected_output: Option<String>, pub command: String, pub cwd: String, pub log_path: String, pub output_path: Option<String>, pub token_name: String, pub bash_path: String, pub claude_path: Option<String>, pub pass_path: Option<String> }
 #[rustfmt::skip] #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FinishRequest { pub exited_at: u64, pub exit_code: i32, pub output_file_written: bool, pub output_bytes: u64, pub deliverable_written: Option<bool>, pub error: Option<String> }
+pub struct FinishRequest { pub exited_at: u64, pub exit_code: i32, pub output_file_written: bool, pub output_bytes: u64, pub deliverable_written: Option<bool>, pub expected_output: Option<String>, pub error: Option<String> }
 #[rustfmt::skip] #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct StoredRun { #[serde(flatten)] pub outcome: OutcomeRecord, pub oracle: String, pub job_id: String, pub local_date: String, pub error: Option<String>, pub output_path: Option<String>, pub output_bytes: u64 }
+pub struct StoredRun { #[serde(flatten)] pub outcome: OutcomeRecord, pub oracle: String, pub job_id: String, pub local_date: String, pub command: String, pub cwd: String, pub log_path: String, pub output_path: Option<String>, pub token_name: String, pub bash_path: String, pub claude_path: Option<String>, pub pass_path: Option<String>, pub error: Option<String>, pub output_bytes: u64 }
 #[rustfmt::skip] #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LatestRun { pub cadence_seconds: u64, pub run_id: String, pub status: RunStatus, pub updated_at: u64, pub deliverable_written: Option<bool>, pub outcome_path: String }
 #[rustfmt::skip] #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -45,10 +46,21 @@ impl FireStore {
                 cap: request.cap, committed, active_reservations: active, forced: request.forced,
                 exec: request.exec, expected_output: request.expected_output });
             let run = StoredRun { outcome, oracle: request.oracle, job_id: request.job_id,
-                local_date: request.local_date, error: None, output_path: None, output_bytes: 0 };
+                local_date: request.local_date, command: request.command, cwd: request.cwd,
+                log_path: request.log_path, output_path: request.output_path, token_name: request.token_name,
+                bash_path: request.bash_path, claude_path: request.claude_path, pass_path: request.pass_path,
+                error: None, output_bytes: 0 };
             self.publish(&run)?;
             Ok(run)
         })
+    }
+    /// Load one atomic run plan/outcome record.
+    ///
+    /// # Errors
+    /// Returns invalid identifiers, missing records, or corrupt JSON.
+    pub fn load(&self, run_id: &str) -> Result<StoredRun, String> {
+        validate(run_id)?;
+        read_json(&self.run_path(run_id))
     }
     /// Publish the spawned transition before waiting for child completion.
     ///
@@ -74,6 +86,7 @@ impl FireStore {
         validate(run_id)?;
         self.locked(|| {
             let mut run: StoredRun = read_json(&self.run_path(run_id))?;
+            if finish.expected_output.is_some() { run.outcome.expected_output = finish.expected_output; }
             let commit = finalize(&mut run.outcome, finish.exited_at, finish.exit_code,
                 finish.output_file_written, finish.deliverable_written)
                 .ok_or_else(|| format!("run {run_id} is already terminal"))?;
