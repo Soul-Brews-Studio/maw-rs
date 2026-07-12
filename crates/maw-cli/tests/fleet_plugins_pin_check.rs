@@ -25,10 +25,10 @@ use maw_plugin_manifest::{
     InvokeSource, LoadedPlugin, MawWasmHost,
 };
 use serde_json::Value;
-use std::ffi::OsString;
 use std::fmt::Write as FmtWrite;
 use std::fs::{self, create_dir_all, read_to_string};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Manifest filenames a fleet plugin may use to declare its ship artifact. `plugin.json`
@@ -54,13 +54,15 @@ fn args(values: &[&str]) -> Vec<String> {
 }
 
 fn temp_dir(label: &str) -> PathBuf {
+    static NEXT_DIR: AtomicU64 = AtomicU64::new(0);
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock")
         .as_nanos();
     let dir = std::env::temp_dir().join(format!(
-        "maw-rs-fleet-pin-{label}-{}-{nonce}",
-        std::process::id()
+        "maw-rs-fleet-pin-{label}-{}-{nonce}-{}",
+        std::process::id(),
+        NEXT_DIR.fetch_add(1, Ordering::Relaxed)
     ));
     create_dir_all(&dir).expect("temp dir");
     dir
@@ -152,13 +154,6 @@ fn hermes_host(plugin: &LoadedPlugin) -> MawWasmHost {
         host = host.with_fake_response("maw.net.fetch", request.to_string(), response.to_string());
     }
     host
-}
-
-fn restore_env(key: &str, value: Option<OsString>) {
-    match value {
-        Some(value) => std::env::set_var(key, value),
-        None => std::env::remove_var(key),
-    }
 }
 
 fn normalize_root(root: &Path, output: &str) -> String {
@@ -361,60 +356,38 @@ fn cross_team_queue_fleet_artifact_installs_and_scans_vault() {
         install.stderr, install.stdout
     );
 
-    let saved_home = std::env::var_os("HOME");
-    let saved_vault = std::env::var_os("MAW_VAULT_ROOT");
-    std::env::set_var("HOME", &root);
-    std::env::set_var("MAW_VAULT_ROOT", root.join("vault"));
-    let invoke = run_cli(&args(&[
-        "plugin-manifest",
-        "invoke",
-        "--scan-dir",
-        &install_root.display().to_string(),
-        "--plugin",
-        "cross-team-queue",
-        "--arg",
-        "--json",
-    ]));
-    let filtered = run_cli(&args(&[
-        "plugin-manifest",
-        "invoke",
-        "--scan-dir",
-        &install_root.display().to_string(),
-        "--plugin",
-        "cross-team-queue",
-        "--arg",
-        "--json",
-        "--arg",
-        "--recipient",
-        "--arg",
-        "nat",
-    ]));
-    restore_env("MAW_VAULT_ROOT", saved_vault);
-    restore_env("HOME", saved_home);
-    fs::remove_dir_all(&root).ok();
+    let plugin = load_manifest_from_dir(&install_root.join("cross-team-queue"))
+        .expect("load installed cross-team-queue")
+        .expect("installed cross-team-queue manifest");
+    let invoke_ctq = |argv: &[&str]| {
+        let context = InvokeContext::new(
+            InvokeSource::Cli,
+            argv.iter().map(|value| (*value).to_owned()).collect(),
+        );
+        let host = MawWasmHost::new(&plugin)
+            .with_vault_config_roots(Some(root.join("vault")), None)
+            .with_manifest_fs_roots_from(&root);
+        let mut runtime = ExtismWasmInvokeRuntime::default().with_host("cross-team-queue", host);
+        invoke_plugin(&plugin, &context, &mut runtime)
+    };
+    let invoke = invoke_ctq(&["--json"]);
+    let filtered = invoke_ctq(&["--json", "--recipient", "nat"]);
 
+    assert!(invoke.ok, "plugin invoke failed: {:?}", invoke.error);
+    let stdout = invoke.output.unwrap_or_default();
     assert_eq!(
-        invoke.code, 0,
-        "plugin invoke failed: {}\n{}",
-        invoke.stderr, invoke.stdout
-    );
-    assert_eq!(
-        normalize_root(&root, &invoke.stdout),
+        normalize_root(&root, &format!("{stdout}\n")),
         include_str!("fixtures/zerobun/cross-team-queue-scan.stdout")
     );
-    assert!(invoke.stderr.is_empty(), "{}", invoke.stderr);
-    assert_eq!(
-        filtered.code, 0,
-        "filtered invoke failed: {}\n{}",
-        filtered.stderr, filtered.stdout
-    );
-    let filtered = normalize_root(&root, &filtered.stdout);
+    assert!(filtered.ok, "filtered invoke failed: {:?}", filtered.error);
+    let filtered = normalize_root(&root, &filtered.output.unwrap_or_default());
     assert!(
         filtered.contains("\"totalItems\":1")
             && filtered.contains("\"recipient\":\"nat\"")
             && !filtered.contains("\"recipient\":\"zai\""),
         "{filtered}"
     );
+    fs::remove_dir_all(&root).ok();
 }
 
 #[test]
