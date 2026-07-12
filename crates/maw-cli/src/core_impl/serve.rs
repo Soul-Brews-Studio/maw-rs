@@ -2475,10 +2475,16 @@ fn verify_protected_request_outcome(
         cached_pubkey,
         now,
     });
-    if maw_auth::is_refuse_decision(&decision) {
-        let kind = decision.kind().to_owned();
+    let refusal = if matches!(&decision, FromVerifyDecision::AcceptLegacy { .. }) {
+        Some("refuse-unsigned")
+    } else if maw_auth::is_refuse_decision(&decision) {
+        Some(decision.kind())
+    } else {
+        None
+    };
+    if let Some(kind) = refusal {
         return ProtectedRequestOutcome::Reject {
-            decision: kind.clone(),
+            decision: kind.to_owned(),
             response: (
                 StatusCode::UNAUTHORIZED,
                 Json(json!({"error": "unauthorized", "decision": kind})),
@@ -3869,6 +3875,38 @@ mod serve_tests {
         assert_eq!(payload["ok"], true);
         assert_eq!(payload["state"], "delivered");
         assert_eq!(payload["target"], "capture-agent:0");
+    }
+
+    #[tokio::test]
+    async fn serve_o6_send_rejects_unsigned_but_accepts_registered_maw_js_peer() {
+        let delivery = Arc::new(FakeServeDelivery::with_capture_agent());
+        let app = serve_test_app_with_o6_keys_and_delivery(
+            vec![captured_send_key()],
+            1_782_553_858,
+            Some(NON_LOOPBACK_TEST_PEER),
+            delivery.clone(),
+        );
+        let unsigned = unsigned_json_request(
+            "POST",
+            "/api/send",
+            r#"{"target":"capture-agent","text":"unsigned"}"#,
+        );
+
+        let response = app.clone().oneshot(unsigned).await.expect("unsigned send");
+        let status = response.status();
+        let payload = response_json(response).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{payload}");
+        assert_eq!(payload["decision"], "refuse-unsigned");
+        assert!(delivery.sends().is_empty());
+
+        let response = app
+            .oneshot(captured_send_request())
+            .await
+            .expect("registered peer send");
+        let status = response.status();
+        let payload = response_json(response).await;
+        assert_eq!(status, StatusCode::OK, "{payload}");
+        assert_eq!(delivery.sends().len(), 1);
     }
 
     #[tokio::test]
