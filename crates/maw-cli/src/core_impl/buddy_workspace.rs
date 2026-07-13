@@ -284,8 +284,11 @@ fn bud_run_options(options: &BudOptions, gh: &mut impl BudGhGitRunner, fs: &mut 
     bud_create_repo(&ctx, gh, fs)?;
     bud_write_skeleton(&ctx, options, fs)?;
     let _ = bud_reload(http);
-    if options.scaffold_only { return Ok(bud_scaffold_summary(&ctx)); }
-    Ok(bud_finalize(&ctx, options, gh, fs, wake))
+    if options.scaffold_only {
+        let env_ready = bud_prepare_env(&ctx.repo_path, options, gh, fs)?;
+        return Ok(format!("{env_ready}{}", bud_scaffold_summary(&ctx)));
+    }
+    bud_finalize(&ctx, options, gh, fs, wake)
 }
 
 fn bud_context(options: &BudOptions, gh: &mut impl BudGhGitRunner) -> Result<BudContext, String> {
@@ -302,23 +305,25 @@ fn bud_context(options: &BudOptions, gh: &mut impl BudGhGitRunner) -> Result<Bud
 fn bud_from_repo(options: &BudOptions, gh: &mut impl BudGhGitRunner, fs: &mut impl BudFs) -> Result<String, String> {
     let stem = options.stem.clone().ok_or_else(|| "--from-repo requires --stem <stem>".to_owned())?;
     let target = options.from_repo.clone().ok_or_else(|| "--from-repo requires a target".to_owned())?;
-    if bud_looks_like_url(&target) { return bud_from_repo_url(options, &stem, &target, gh); }
+    if bud_looks_like_url(&target) { return bud_from_repo_url(options, &stem, &target, gh, fs); }
     let path = std::path::PathBuf::from(&target);
     let plan = bud_from_repo_plan(&stem, &path, options);
     if options.dry_run { return Ok(plan); }
     if !options.force && fs.bud_exists(&path.join("ψ")) { return Err(format!("ψ/ already present at {} — pass --force to merge", path.display())); }
     bud_write_from_repo_scaffold(&stem, &path, options, fs)?;
     if options.sync_peers { let _ = bud_sync_peers(&path, fs); }
-    Ok(format!("{plan}\n  \x1b[32m✓ done\x1b[0m — run `maw wake {stem}` to start a session\n"))
+    let env_ready = bud_prepare_env(&path, options, gh, fs)?;
+    Ok(format!("{plan}\n{env_ready}  \x1b[32m✓ done\x1b[0m — run `maw wake {stem}` to start a session\n"))
 }
 
-fn bud_from_repo_url(options: &BudOptions, stem: &str, target: &str, gh: &mut impl BudGhGitRunner) -> Result<String, String> {
+fn bud_from_repo_url(options: &BudOptions, stem: &str, target: &str, gh: &mut impl BudGhGitRunner, fs: &mut impl BudFs) -> Result<String, String> {
     let plan = format!("\n  \x1b[36m🧪 Oracle scaffold plan\x1b[0m — {stem} → {target}\n\n  clone url, inject scaffold, optionally push PR\n");
     if options.dry_run { return Ok(plan); }
     let tmp = std::env::temp_dir().join(format!("maw-bud-from-repo-{}", bud_epoch_seconds()));
     let clone_args = vec!["clone".to_owned(), "--depth".to_owned(), "1".to_owned(), target.to_owned(), path_string(&tmp)];
     if !gh.bud_run("git", &clone_args).ok { return Err("bud: git clone failed".to_owned()); }
-    Ok(format!("{plan}  \x1b[32m✓\x1b[0m cloned → {}\n", tmp.display()))
+    let env_ready = bud_prepare_env(&tmp, options, gh, fs)?;
+    Ok(format!("{plan}  \x1b[32m✓\x1b[0m cloned → {}\n{env_ready}", tmp.display()))
 }
 
 fn bud_dry_run(ctx: &BudContext, options: &BudOptions) -> String {
@@ -462,15 +467,47 @@ fn bud_scaffold_summary(ctx: &BudContext) -> String {
     format!("\n  \x1b[32m▧ Scaffold complete!\x1b[0m {}\n  \x1b[90m  repo: {}\n  \x1b[90m  path: {}\n  \x1b[90m  skipped: git commit/push, wake, attach, parent sync_peers, /awaken\n\n", ctx.stem, ctx.slug, ctx.repo_path.display())
 }
 
-fn bud_finalize(ctx: &BudContext, options: &BudOptions, gh: &mut impl BudGhGitRunner, fs: &mut impl BudFs, wake: &mut impl BudWakeRunner) -> String {
+fn bud_finalize(ctx: &BudContext, options: &BudOptions, gh: &mut impl BudGhGitRunner, fs: &mut impl BudFs, wake: &mut impl BudWakeRunner) -> Result<String, String> {
     let mut out = String::new();
     let _ = writeln!(out, "  \x1b[90m○\x1b[0m {}", ctx.parent.as_deref().map_or("root oracle — no parent".to_owned(), |p| format!("born blank — pull memory when ready: maw soul-sync {p} --from")));
     bud_git_commit(ctx, gh, &mut out);
+    out.push_str(&bud_prepare_env(&ctx.repo_path, options, gh, fs)?);
     let _ = bud_update_parent_peers(ctx, fs, &mut out);
     bud_wake(ctx, options, wake, &mut out);
     if options.signal_on_birth { let _ = bud_birth_signal(ctx, gh, fs, &mut out); }
     let _ = writeln!(out, "\n  \x1b[32m{} complete!\x1b[0m {}", if ctx.parent.is_some() { "🧬 Bud" } else { "🌱 Root bud" }, ctx.stem);
-    out
+    Ok(out)
+}
+
+fn bud_prepare_env(target: &std::path::Path, options: &BudOptions, gh: &mut impl BudGhGitRunner, fs: &mut impl BudFs) -> Result<String, String> {
+    if options.engine.as_deref().is_some_and(|engine| engine != "claude") { return Ok(String::new()); }
+    let target_envrc = target.join(".envrc");
+    let existing = if fs.bud_exists(&target_envrc) {
+        String::from_utf8(fs.bud_read(&target_envrc)?).map_err(|_| format!("bud: {} is not UTF-8", target_envrc.display()))?
+    } else {
+        String::new()
+    };
+    if token_detect_active_token(&existing).is_none() {
+        let source = std::env::current_dir().ok()
+            .and_then(|cwd| fs.bud_read(&cwd.join(".envrc")).ok())
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .unwrap_or_default();
+        let name = token_detect_active_token(&source)
+            .or_else(|| std::env::var("CLAUDE_TOKEN_NAME").ok().filter(|value| !value.is_empty()))
+            .ok_or_else(|| "bud: no Claude token assignment found; run `maw token use <name>` in the current repo, then retry".to_owned())?;
+        token_validate_name("token name", &name).map_err(|error| format!("bud: {error}"))?;
+        let no_team = !source.contains("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
+            && std::env::var_os("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS").is_none();
+        fs.bud_write_atomic(&target_envrc, token_build_envrc_content(&existing, &name, no_team).as_bytes())?;
+    }
+    let allow = gh.bud_run("direnv", &["allow".to_owned(), path_string(target)]);
+    if !allow.ok {
+        return Err(format!(
+            "bud: direnv allow failed for {}: {}\n  run: cd {} && direnv allow .",
+            target.display(), allow.stderr.trim(), target.display()
+        ));
+    }
+    Ok(format!("  \x1b[32m✓\x1b[0m token environment allowed: {}\n", target.display()))
 }
 
 fn bud_git_commit(ctx: &BudContext, gh: &mut impl BudGhGitRunner, out: &mut String) {
@@ -753,9 +790,44 @@ mod bud_tests {
     #[test]
     fn bud_scaffold_only_skips_git_and_wake() {
         let mut gh = FakeGh::default(); let mut fs = FakeFs::default(); let mut wake = FakeWake::default(); let mut http = FakeHttp::default();
+        fs.files.insert(std::env::current_dir().unwrap().join(".envrc"), b"export CLAUDE_TOKEN_NAME=\"duo\"\n".to_vec());
         let out = bud_run_with(&bud_args(&["sprout", "--org", "Org", "--scaffold-only"]), &mut gh, &mut fs, &mut wake, &mut http);
         assert_eq!(out.code, 0); assert!(out.stdout.contains("Scaffold complete"));
         assert!(!gh.calls.iter().any(|(p, _)| p == "git")); assert!(wake.calls.is_empty()); assert_eq!(http.ports, [3456]);
+    }
+
+    #[test]
+    fn bud_flow_bootstraps_env_and_allows_before_wake() {
+        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _restore_ghq = EnvVarRestore::capture("GHQ_ROOT");
+        std::env::set_var("GHQ_ROOT", "/repos");
+        let mut gh = FakeGh::default(); let mut fs = FakeFs::default(); let mut wake = FakeWake::default(); let mut http = FakeHttp::default();
+        fs.files.insert(std::env::current_dir().unwrap().join(".envrc"), b"export CLAUDE_TOKEN_NAME=\"duo\"\nexport CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1\n".to_vec());
+
+        let out = bud_run_with(&bud_args(&["sprout", "--org", "Org"]), &mut gh, &mut fs, &mut wake, &mut http);
+
+        let repo = std::path::Path::new("/repos/github.com/Org/sprout-oracle");
+        assert_eq!(out.code, 0);
+        assert!(String::from_utf8(fs.files[&repo.join(".envrc")].clone()).unwrap().contains("CLAUDE_TOKEN_NAME=\"duo\""));
+        assert!(gh.calls.iter().any(|(program, args)| program == "direnv" && args == &["allow".to_owned(), path_string(repo)]));
+        assert_eq!(wake.calls.len(), 1);
+    }
+
+    #[test]
+    fn bud_flow_hard_fails_direnv_before_wake() {
+        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _restore_ghq = EnvVarRestore::capture("GHQ_ROOT");
+        std::env::set_var("GHQ_ROOT", "/repos");
+        let mut gh = FakeGh { fail: ["direnv allow".to_owned()].into(), ..Default::default() };
+        let mut fs = FakeFs::default(); let mut wake = FakeWake::default(); let mut http = FakeHttp::default();
+        fs.files.insert(std::env::current_dir().unwrap().join(".envrc"), b"export CLAUDE_TOKEN_NAME=\"duo\"\n".to_vec());
+
+        let out = bud_run_with(&bud_args(&["sprout", "--org", "Org"]), &mut gh, &mut fs, &mut wake, &mut http);
+
+        assert_eq!(out.code, 1);
+        assert!(out.stderr.contains("direnv allow failed"));
+        assert!(out.stderr.contains("run: cd /repos/github.com/Org/sprout-oracle && direnv allow ."));
+        assert!(wake.calls.is_empty());
     }
 
     #[test]

@@ -38,7 +38,7 @@ fn write_shell(path: &Path, body: &str) {
 }
 
 fn write_fake_bud_tools(bin_dir: &Path) {
-    for program in ["gh", "ghq", "git"] {
+    for program in ["gh", "ghq", "git", "direnv"] {
         write_shell(
             &bin_dir.join(program),
             &format!(
@@ -120,6 +120,7 @@ fn run(root: &Path, args: &[&str]) -> std::process::Output {
         .env("XDG_STATE_HOME", &xdg_state)
         .env("GHQ_ROOT", &ghq_root)
         .env("MAW_BUD_OWNER", "org")
+        .env("CLAUDE_TOKEN_NAME", "duo")
         .env("TMUX", root.join("tmux-socket"))
         .env("MAW_JS_REF_DIR", "/nonexistent")
         .env("MAW_RS_SELF_BIN", bin_dir.join("fake-self"))
@@ -201,6 +202,7 @@ fn incubate_plugin_preserves_bud_subdispatch_tmux_send_and_guards() {
     assert!(bud_log.contains("gh repo view org/widgets-oracle --json name"));
     assert!(bud_log.contains("ghq get github.com/org/widgets-oracle"));
     assert!(bud_log.contains("git -C "));
+    assert!(bud_log.contains("direnv allow "));
     assert!(
         !bud_log.contains(" maw ") && !bud_log.starts_with("maw "),
         "incubate must not shell PATH maw; bud_log={bud_log}"
