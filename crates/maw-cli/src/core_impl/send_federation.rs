@@ -926,7 +926,7 @@ fn send_normalized_from(config: &HeyConfig, sender_oracle: &str, from: Option<&s
     }
     let node = config.node.as_deref().filter(|node| !node.is_empty())?;
     let handle = resolve_hey_canonical_sender_oracle(config)
-        .unwrap_or_else(|| format!("pane/{sender_oracle}"));
+        .unwrap_or_else(|| sender_oracle.to_owned());
     Some(format!("{node}:{handle}"))
 }
 
@@ -1344,10 +1344,24 @@ fn explicit_wire_sender_oracle(from: &str) -> Option<String> {
 }
 
 fn resolve_hey_sender_oracle(config: &HeyConfig) -> String {
-    resolve_hey_canonical_sender_oracle(config).unwrap_or_else(|| {
-        let tmux_window_name = current_tmux_window_name();
-        resolve_sender_oracle(None, tmux_window_name.as_deref(), None)
-    })
+    let mut runner = CommandTmuxRunner::new();
+    let tmux_pane = std::env::var("TMUX_PANE").ok();
+    resolve_hey_sender_oracle_with(config, tmux_pane.as_deref(), &mut runner)
+}
+
+fn resolve_hey_sender_oracle_with<R: maw_tmux::TmuxRunner>(
+    config: &HeyConfig,
+    tmux_pane: Option<&str>,
+    runner: &mut R,
+) -> String {
+    tmux_pane
+        .filter(|pane| !pane.trim().is_empty())
+        .and_then(|pane| tmux_window_name_with(runner, Some(pane)))
+        .or_else(|| resolve_hey_canonical_sender_oracle(config))
+        .unwrap_or_else(|| {
+            let focused = tmux_window_name_with(runner, None);
+            format!("pane/{}", resolve_sender_oracle(None, focused.as_deref(), None))
+        })
 }
 
 fn resolve_hey_canonical_sender_oracle(config: &HeyConfig) -> Option<String> {
@@ -1366,12 +1380,19 @@ fn resolve_hey_canonical_sender_oracle(config: &HeyConfig) -> Option<String> {
 
 fn current_tmux_window_name() -> Option<String> {
     let mut runner = CommandTmuxRunner::new();
-    let raw = maw_tmux::TmuxRunner::run(
-        &mut runner,
-        "display-message",
-        &["-p".to_owned(), "#{window_name}".to_owned()],
-    )
-    .ok()?;
+    tmux_window_name_with(&mut runner, None)
+}
+
+fn tmux_window_name_with<R: maw_tmux::TmuxRunner>(
+    runner: &mut R,
+    target: Option<&str>,
+) -> Option<String> {
+    let mut args = Vec::with_capacity(if target.is_some() { 4 } else { 2 });
+    if let Some(target) = target {
+        args.extend(["-t".to_owned(), target.to_owned()]);
+    }
+    args.extend(["-p".to_owned(), "#{window_name}".to_owned()]);
+    let raw = runner.run("display-message", &args).ok()?;
     let window = raw.trim();
     (!window.is_empty()).then(|| window.to_owned())
 }
@@ -1770,6 +1791,8 @@ mod send_acl_hotpath_tests {
     #[derive(Debug, Default)]
     struct SendFakeTmuxRunner {
         current_session: Option<Result<String, String>>,
+        caller_window: Option<Result<String, String>>,
+        focused_window: Option<Result<String, String>>,
         calls: Vec<(String, Vec<String>)>,
     }
 
@@ -1781,6 +1804,13 @@ mod send_acl_hotpath_tests {
         ) -> Result<String, maw_tmux::TmuxError> {
             self.calls.push((subcommand.to_owned(), args.to_vec()));
             match subcommand {
+                "display-message" if args.last().is_some_and(|arg| arg == "#{window_name}") => args
+                    .windows(2)
+                    .find(|pair| pair[0] == "-t")
+                    .map_or(&self.focused_window, |_| &self.caller_window)
+                    .clone()
+                    .unwrap_or_else(|| Ok(String::new()))
+                    .map_err(maw_tmux::TmuxError::new),
                 "display-message" => self
                     .current_session
                     .clone()
@@ -2044,6 +2074,42 @@ mod send_acl_hotpath_tests {
     }
 
     #[test]
+    fn send_identity_targets_callers_non_active_tmux_pane_and_marks_focused_fallback() {
+        let _lock = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (root, _restores) = send_audit_test_env("sender-pane");
+        let _pane = EnvVarRestore::capture("TMUX_PANE");
+        let _session = EnvVarRestore::capture("MAW_SESSION_WINDOW");
+        std::env::set_var("TMUX_PANE", "%42");
+        std::env::remove_var("MAW_SESSION_WINDOW");
+        let repo = root.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let _cwd = SendCwdRestore::enter(&repo);
+        let config = HeyConfig { node: Some("m5".to_owned()), oracle: None, route: RouteConfig::default() };
+        let mut runner = SendFakeTmuxRunner {
+            caller_window: Some(Ok("agora\n".to_owned())),
+            focused_window: Some(Ok("nh\n".to_owned())),
+            ..SendFakeTmuxRunner::default()
+        };
+
+        let sender = resolve_hey_sender_oracle_with(&config, std::env::var("TMUX_PANE").ok().as_deref(), &mut runner);
+
+        assert_eq!(sender, "agora");
+        assert_eq!(format_local_hey_message("hello", &config, &sender, None), "[m5:agora] hello");
+        assert_eq!(resolve_hey_wire_from(None, &config, &sender).as_deref(), Ok("agora:m5"));
+        assert_eq!(send_normalized_from(&config, &sender, None).as_deref(), Some("m5:agora"));
+        assert_eq!(runner.calls, vec![("display-message".to_owned(), send_acl_vec(&["-t", "%42", "-p", "#{window_name}"]))]);
+
+        let mut fallback = SendFakeTmuxRunner {
+            focused_window: Some(Ok("nh\n".to_owned())),
+            ..SendFakeTmuxRunner::default()
+        };
+        let sender = resolve_hey_sender_oracle_with(&config, None, &mut fallback);
+        assert_eq!(sender, "pane/nh");
+        assert_eq!(send_normalized_from(&config, &sender, None).as_deref(), Some("m5:pane/nh"));
+        assert_eq!(fallback.calls, vec![("display-message".to_owned(), send_acl_vec(&["-p", "#{window_name}"]))]);
+    }
+
+    #[test]
     fn send_success_writes_sane_audit_records() {
         let _lock = env_test_lock().lock().unwrap();
         let (root, _restores) = send_audit_test_env("schema");
@@ -2088,8 +2154,10 @@ mod send_acl_hotpath_tests {
         let _lock = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if std::process::Command::new("sqlite3").arg("-version").output().is_err() { return; }
         let (root, _restores) = send_audit_test_env("identity-spelling");
+        let _pane = EnvVarRestore::capture("TMUX_PANE");
         let _session = EnvVarRestore::capture("MAW_SESSION_WINDOW");
         let _sender = EnvVarRestore::capture("MAW_SENDER");
+        std::env::remove_var("TMUX_PANE");
         std::env::remove_var("MAW_SENDER");
         std::env::set_var("MAW_SESSION_WINDOW", "41-arra:arraoraclev3");
         let repo = root.join("repo");
@@ -2119,7 +2187,7 @@ mod send_acl_hotpath_tests {
         let _cwd = SendCwdRestore::enter(&repo);
         let config = HeyConfig { node: Some("m5".to_owned()), oracle: None, route: RouteConfig::default() };
 
-        send_record_success("hey", &send_audit_args("hey", &send_acl_vec(&["agent", "hello"])), &config, "window-arranger", None, "agent", "hello", "local", None);
+        send_record_success("hey", &send_audit_args("hey", &send_acl_vec(&["agent", "hello"])), &config, "pane/window-arranger", None, "agent", "hello", "local", None);
 
         assert_message_sink_from(&root, "m5:pane/window-arranger");
     }
