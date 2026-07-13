@@ -1,0 +1,10 @@
+{
+  "name": "maw-fleet-menubar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test src/plugin.test.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  }
+}
