@@ -1,0 +1,7 @@
+
+  [36;1mTEAM                          STORE  MEMBERS  STATUS          ZOMBIES[0m
+  alpha                         tool   2        [32m1 alive[0m          [90m1 exited[0m
+  quiet                         tool   1        [90mno live panes[0m    0
+  vault-only                    vault  2        [90mprep-only[0m        [90m—[0m
+
+  [90m1 vault-only team(s) — resume via [36mmaw team resume <name>[90m or remove via [36mrm -rf ψ/memory/mailbox/teams/<name>/[0m

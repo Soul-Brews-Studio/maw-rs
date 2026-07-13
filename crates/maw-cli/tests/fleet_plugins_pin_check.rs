@@ -391,6 +391,73 @@ fn cross_team_queue_fleet_artifact_installs_and_scans_vault() {
 }
 
 #[test]
+fn team_fleet_artifact_locks_contract_and_lists_read_only_stores() {
+    let source = fleet_plugins_dir().join("team");
+    let manifest: Value =
+        serde_json::from_str(&read_to_string(source.join("plugin.json")).expect("team manifest"))
+            .expect("manifest json");
+    let contract: Value =
+        serde_json::from_str(&read_to_string(source.join("contract.json")).expect("team contract"))
+            .expect("contract json");
+    assert_eq!(manifest["cli"]["command"], contract["command"]);
+    assert_eq!(manifest["cli"]["aliases"], contract["aliases"]);
+    assert_eq!(manifest["cli"]["help"], contract["usage"]);
+    assert_eq!(
+        manifest["capabilities"],
+        serde_json::json!(["fs:read:teams", "fs:read:vault", "tmux:read"])
+    );
+
+    let root = temp_dir("team-list");
+    for (path, body) in [
+        (
+            ".claude/teams/alpha/config.json",
+            r#"{"name":"alpha","members":[{"name":"lead","agentType":"team-lead","tmuxPaneId":"%0"},{"name":"scout","tmuxPaneId":"%1"},{"name":"reviewer","tmuxPaneId":"%dead"}]}"#,
+        ),
+        (
+            ".claude/teams/quiet/config.json",
+            r#"{"name":"quiet","members":[{"name":"builder","tmuxPaneId":""}]}"#,
+        ),
+        (
+            "vault/memory/mailbox/teams/vault-only/manifest.json",
+            r#"{"members":["archivist",{"name":"scribe"}]}"#,
+        ),
+        (
+            "vault/memory/mailbox/teams/alpha/manifest.json",
+            r#"{"members":["duplicate"]}"#,
+        ),
+    ] {
+        let path = root.join(path);
+        create_dir_all(path.parent().expect("fixture parent")).expect("fixture dir");
+        fs::write(path, body).expect("fixture file");
+    }
+    let plugin = load_manifest_from_dir(&source)
+        .expect("load team")
+        .expect("team manifest");
+    for args in [vec![], vec!["list".to_owned()], vec!["ls".to_owned()]] {
+        let host = MawWasmHost::new(&plugin)
+            .with_vault_config_roots(Some(root.join("vault")), None)
+            .with_manifest_fs_roots_from(&root)
+            .with_fake_response(
+                "maw.tmux.command",
+                r##"{"command":"list-panes","args":["-a","-F","#{pane_id}"]}"##,
+                r#"{"ok":true,"value":{"command":"list-panes","args":[],"stdout":"%0\n%1\n"}}"#,
+            );
+        let mut runtime = ExtismWasmInvokeRuntime::default().with_host("team", host);
+        let invoke = invoke_plugin(
+            &plugin,
+            &InvokeContext::new(InvokeSource::Cli, args.clone()),
+            &mut runtime,
+        );
+        assert!(invoke.ok, "team {args:?} failed: {:?}", invoke.error);
+        assert_eq!(
+            normalize_root(&root, &invoke.output.unwrap_or_default()),
+            include_str!("fixtures/zerobun/team-wasm-list.stdout")
+        );
+    }
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn hermes_fleet_artifact_invokes_discord_read_only_verbs() {
     let source = fleet_plugins_dir().join("hermes");
     let manifest: Value =

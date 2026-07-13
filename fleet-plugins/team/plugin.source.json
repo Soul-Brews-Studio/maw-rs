@@ -1,0 +1,11 @@
+{
+  "name": "team", "version": "2.0.1", "sdk": "^1.0.0",
+  "description": "Read-only team inventory (slice 1 of the maw-js team plugin port).",
+  "author": "Soul-Brews-Studio", "license": "MIT", "weight": 30, "schemaVersion": 1,
+  "entry": "src/plugin.ts",
+  "capabilities": ["fs:read:teams", "fs:read:vault", "tmux:read"],
+  "cli": {
+    "command": "team", "aliases": ["t"],
+    "help": "maw team <create|plan|preflight|load|spawn-from|spawn|bring|send|shutdown|resume|lives|list|status|add|tasks|done|assign|delete|invite|oracle-invite|oracle-remove|members|enter>"
+  }
+}

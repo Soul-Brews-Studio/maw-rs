@@ -1,0 +1,8 @@
+{
+  "reference": "maw-js@746df172:src/vendor/mpr-plugins/team",
+  "manifestVersion": "2.0.1",
+  "command": "team", "aliases": ["t"],
+  "usage": "maw team <create|plan|preflight|load|spawn-from|spawn|bring|send|shutdown|resume|lives|list|status|add|tasks|done|assign|delete|invite|oracle-invite|oracle-remove|members|enter>",
+  "slice1": { "default": "list", "implemented": ["list", "ls"] },
+  "deferred": ["create", "plan", "preflight", "load", "spawn-from", "spawn", "bring", "send", "shutdown", "resume", "lives", "status", "add", "tasks", "done", "assign", "delete", "invite", "oracle-invite", "oracle-remove", "members", "enter"]
+}
