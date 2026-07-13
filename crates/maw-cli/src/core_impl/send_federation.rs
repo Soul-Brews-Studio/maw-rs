@@ -901,9 +901,7 @@ fn send_record_success(
     if audit_args.is_empty() {
         return;
     }
-    let normalized_from = from
-        .map(ToOwned::to_owned)
-        .or_else(|| config.node.as_deref().map(|node| format!("{node}:{sender_oracle}")));
+    let normalized_from = send_normalized_from(config, sender_oracle, from);
     let record = MessageSinkRecord {
         command,
         audit_args,
@@ -917,6 +915,24 @@ fn send_record_success(
     for sink in message_sink_registry() {
         sink.record(&record);
     }
+}
+
+fn send_normalized_from(config: &HeyConfig, sender_oracle: &str, from: Option<&str>) -> Option<String> {
+    if let Some(from) = from {
+        return wire_sender_to_human(from);
+    }
+    if let Ok(sender) = std::env::var("MAW_SENDER") {
+        return human_sender_to_wire_from(&sender).ok().and_then(|wire| wire_sender_to_human(&wire));
+    }
+    let node = config.node.as_deref().filter(|node| !node.is_empty())?;
+    let handle = resolve_hey_canonical_sender_oracle(config)
+        .unwrap_or_else(|| format!("pane/{sender_oracle}"));
+    Some(format!("{node}:{handle}"))
+}
+
+fn wire_sender_to_human(from: &str) -> Option<String> {
+    let (oracle, node) = from.split_once(':')?;
+    (!oracle.is_empty() && !node.is_empty()).then(|| format!("{node}:{oracle}"))
 }
 
 struct MessageSinkRecord<'a> {
@@ -1328,15 +1344,24 @@ fn explicit_wire_sender_oracle(from: &str) -> Option<String> {
 }
 
 fn resolve_hey_sender_oracle(config: &HeyConfig) -> String {
+    resolve_hey_canonical_sender_oracle(config).unwrap_or_else(|| {
+        let tmux_window_name = current_tmux_window_name();
+        resolve_sender_oracle(None, tmux_window_name.as_deref(), None)
+    })
+}
+
+fn resolve_hey_canonical_sender_oracle(config: &HeyConfig) -> Option<String> {
+    if let Ok(cwd) = std::env::current_dir() {
+        if let Some(oracle) = footer_claude_oracle263(&cwd) { return Some(oracle); }
+    }
     let session_window = std::env::var("MAW_SESSION_WINDOW").ok();
     if session_window
         .as_deref()
         .is_some_and(|value| !value.trim().is_empty())
     {
-        return resolve_sender_oracle(session_window.as_deref(), None, config.oracle.as_deref());
+        return Some(resolve_sender_oracle(session_window.as_deref(), None, None));
     }
-    let tmux_window_name = current_tmux_window_name();
-    resolve_sender_oracle(None, tmux_window_name.as_deref(), config.oracle.as_deref())
+    config.oracle.as_deref().filter(|oracle| !oracle.trim().is_empty()).map(|oracle| oracle.trim().to_owned())
 }
 
 fn current_tmux_window_name() -> Option<String> {
@@ -1821,6 +1846,32 @@ mod send_acl_hotpath_tests {
         (root, restores)
     }
 
+    struct SendCwdRestore(std::path::PathBuf);
+
+    impl SendCwdRestore {
+        fn enter(path: &std::path::Path) -> Self {
+            let previous = std::env::current_dir().expect("current dir");
+            std::env::set_current_dir(path).expect("set current dir");
+            Self(previous)
+        }
+    }
+
+    impl Drop for SendCwdRestore {
+        fn drop(&mut self) { std::env::set_current_dir(&self.0).expect("restore current dir"); }
+    }
+
+    fn assert_message_sink_from(root: &std::path::Path, expected: &str) {
+        let log: serde_json::Value = serde_json::from_str(std::fs::read_to_string(root.join("maw/maw-log.jsonl")).unwrap().trim()).unwrap();
+        assert_eq!(log["from"], expected);
+        let output = std::process::Command::new("sqlite3")
+            .arg(root.join("maw/message-ledger.sqlite"))
+            .arg("select from_id from messages;")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), expected);
+    }
+
     fn send_acl_args(target: &str, text: &str) -> SendArgs {
         SendArgs { target: target.to_owned(), text: text.to_owned(), inbox: None, from: None, approve: false, trust: false, dry_run: false }
     }
@@ -2013,6 +2064,64 @@ mod send_acl_hotpath_tests {
         assert_eq!(log["msg"], "[m5:atlas] hello");
         assert_eq!(log["host"], "m5");
         assert_eq!(log["route"], "local");
+    }
+
+    #[test]
+    fn message_sinks_normalize_explicit_wire_from_to_host_handle() {
+        let _lock = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if std::process::Command::new("sqlite3").arg("-version").output().is_err() { return; }
+        let (root, _restores) = send_audit_test_env("identity-order");
+        let config = HeyConfig { node: Some("m5".to_owned()), oracle: None, route: RouteConfig::default() };
+        let args = send_audit_args("hey", &send_acl_vec(&["agent", "hello", "--from", "atlas:m5"]));
+
+        assert_eq!(resolve_hey_sender_oracle_for_from(&config, Some("atlas:m5")), "atlas");
+        assert_eq!(resolve_hey_wire_from(Some("atlas:m5"), &config, "atlas").unwrap(), "atlas:m5");
+        assert!(send_message_signature(&config, "atlas", Some("atlas:m5"), "hello").is_ok());
+
+        send_record_success("hey", &args, &config, "atlas", Some("atlas:m5"), "agent", "[atlas:m5] hello", "local", None);
+
+        assert_message_sink_from(&root, "m5:atlas");
+    }
+
+    #[test]
+    fn message_sinks_prefer_claude_handle_spelling_over_pane_label() {
+        let _lock = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if std::process::Command::new("sqlite3").arg("-version").output().is_err() { return; }
+        let (root, _restores) = send_audit_test_env("identity-spelling");
+        let _session = EnvVarRestore::capture("MAW_SESSION_WINDOW");
+        let _sender = EnvVarRestore::capture("MAW_SENDER");
+        std::env::remove_var("MAW_SENDER");
+        std::env::set_var("MAW_SESSION_WINDOW", "41-arra:arraoraclev3");
+        let repo = root.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::write(repo.join("CLAUDE.md"), "# arra-oracle-v3-oracle\n").unwrap();
+        let _cwd = SendCwdRestore::enter(&repo);
+        let config = HeyConfig { node: Some("m5".to_owned()), oracle: Some("configured".to_owned()), route: RouteConfig::default() };
+        let sender = resolve_hey_sender_oracle(&config);
+
+        send_record_success("hey", &send_audit_args("hey", &send_acl_vec(&["agent", "hello"])), &config, &sender, None, "agent", "hello", "local", None);
+
+        assert_eq!(sender, "arra-oracle-v3");
+        assert_message_sink_from(&root, "m5:arra-oracle-v3");
+    }
+
+    #[test]
+    fn message_sinks_mark_unresolved_pane_fallback() {
+        let _lock = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if std::process::Command::new("sqlite3").arg("-version").output().is_err() { return; }
+        let (root, _restores) = send_audit_test_env("identity-pane-fallback");
+        let _session = EnvVarRestore::capture("MAW_SESSION_WINDOW");
+        let _sender = EnvVarRestore::capture("MAW_SENDER");
+        std::env::remove_var("MAW_SESSION_WINDOW");
+        std::env::remove_var("MAW_SENDER");
+        let repo = root.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let _cwd = SendCwdRestore::enter(&repo);
+        let config = HeyConfig { node: Some("m5".to_owned()), oracle: None, route: RouteConfig::default() };
+
+        send_record_success("hey", &send_audit_args("hey", &send_acl_vec(&["agent", "hello"])), &config, "window-arranger", None, "agent", "hello", "local", None);
+
+        assert_message_sink_from(&root, "m5:pane/window-arranger");
     }
 
     #[test]
