@@ -156,6 +156,23 @@ fn hermes_host(plugin: &LoadedPlugin) -> MawWasmHost {
     host
 }
 
+#[rustfmt::skip]
+fn atlas_host(plugin: &LoadedPlugin) -> MawWasmHost {
+    let responses = [
+        ("/users/@me", None, r#"{"username":"atlas-bot","id":"bot-72","bot":true}"#),
+        ("/users/@me/guilds", None, r#"[{"name":"Fleet Lab","id":"guild1"}]"#),
+        ("/guilds/guild1/channels", None, r#"[{"id":"ch1","name":"ops","type":0},{"id":"vc1","name":"Lounge","type":2}]"#),
+        ("/channels/ch1/messages", Some(serde_json::json!({"limit": "2"})), r#"[{"id":"m2","author":{"username":"atlas-bot","bot":true},"content":"ack","timestamp":"2026-07-13T10:02:00Z"},{"id":"m1","author":{"username":"nat","bot":false},"content":"hello","timestamp":"2026-07-13T10:01:00Z"}]"#),
+        ("/guilds/guild1/threads/active", None, r#"{"threads":[{"id":"th1","name":"ops-thread","parent_id":"ch1"}]}"#),
+    ];
+    responses.into_iter().fold(MawWasmHost::new(plugin), |host, (path, query, body)| {
+        let mut request = serde_json::json!({"endpoint":"discord-rest","method":"GET","path":path});
+        if let Some(query) = query { request["query"] = query; }
+        let response = serde_json::json!({"ok":true,"value":{"status":200,"body":body}});
+        host.with_fake_response("maw.net.fetch", request.to_string(), response.to_string())
+    })
+}
+
 fn normalize_root(root: &Path, output: &str) -> String {
     let raw = root.display().to_string();
     let mut normalized = output.replace(&format!("/private{raw}"), "$ROOT");
@@ -453,6 +470,31 @@ fn hermes_fleet_artifact_invokes_discord_read_only_verbs() {
         observed,
         include_str!("fixtures/zerobun/hermes-wasm-read-only.stdout")
     );
+}
+
+#[test]
+#[rustfmt::skip]
+fn atlas_fleet_artifact_invokes_read_only_state_verbs() {
+    let source = fleet_plugins_dir().join("atlas");
+    let manifest: Value = serde_json::from_str(&read_to_string(source.join("plugin.json")).expect("atlas manifest")).expect("json");
+    assert_eq!(manifest["capabilities"], serde_json::json!(["net:fetch:discord-rest", "secret:use:atlas-bot-token"]));
+    assert_eq!(manifest["secrets"]["atlas-bot-token"]["pass"], "discord/atlas-oracle-token");
+    assert_eq!(manifest["cli"]["aliases"], serde_json::json!(["at"]));
+    let root = temp_dir("atlas-invoke");
+    let install_root = root.join("plugins");
+    let install = run_cli(&args(&["plugin", "install", &source.display().to_string(), "--root", &install_root.display().to_string()]));
+    assert_eq!(install.code, 0, "plugin install failed: {}\n{}", install.stderr, install.stdout);
+    let plugin = load_manifest_from_dir(&install_root.join("atlas")).expect("load installed atlas").expect("installed atlas manifest");
+    let mut observed = String::new();
+    for (label, argv) in [("whoami", vec!["whoami"]), ("ls", vec!["ls"]), ("read", vec!["read", "ops", "--limit=2"]), ("threads", vec!["threads", "--json"])] {
+        let context = InvokeContext::new(InvokeSource::Cli, argv.into_iter().map(str::to_owned).collect());
+        let mut runtime = ExtismWasmInvokeRuntime::default().with_host("atlas", atlas_host(&plugin));
+        let invoke = invoke_plugin(&plugin, &context, &mut runtime);
+        assert!(invoke.ok, "atlas {label} failed: {:?}", invoke.error);
+        writeln!(&mut observed, "## {label}\n{}", invoke.output.unwrap_or_default()).expect("append observed");
+    }
+    fs::remove_dir_all(&root).ok();
+    assert_eq!(observed, include_str!("fixtures/zerobun/atlas-wasm-read-only.stdout"));
 }
 
 #[test]

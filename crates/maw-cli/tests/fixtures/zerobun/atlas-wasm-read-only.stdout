@@ -1,0 +1,15 @@
+## whoami
+atlas-bot (bot-72) — bot: true
+1 guild(s):
+  Fleet Lab (guild1)
+## ls
+Fleet Lab — 1 text, 1 voice
+  💬 #ops (ch1)
+  🔊 Lounge (vc1)
+## read
+2026-07-13T10:01 nat: hello
+2026-07-13T10:02 atlas-bot 🤖: ack
+
+2 messages
+## threads
+[{"id":"th1","name":"ops-thread","guild":"Fleet Lab","parent_id":"ch1"}]
