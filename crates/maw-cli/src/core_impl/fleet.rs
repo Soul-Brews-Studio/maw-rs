@@ -711,9 +711,9 @@ fn fleet_windows_by_repo(entry: &NativeFleetEntry) -> BTreeMap<String, Vec<&Nati
 
 fn fleet_windows_share_alias(windows: &[&NativeFleetWindow]) -> bool {
     let Some(first) = windows.first() else { return false };
-    let mut common = locate_normalized_names(&first.name);
+    let mut common = maw_matcher::normalized_match_names(&first.name);
     for window in &windows[1..] {
-        let aliases = locate_normalized_names(&window.name);
+        let aliases = maw_matcher::normalized_match_names(&window.name);
         common.retain(|alias| aliases.contains(alias));
     }
     !common.is_empty()
@@ -735,12 +735,12 @@ fn fleet_live_window_candidates(session: &str, registry: &str, live: &[maw_tmux:
         .map(|window| window.index)
         .collect::<BTreeSet<_>>();
     if !exact.is_empty() { return exact; }
-    let wanted = locate_normalized_names(&wanted);
+    let wanted = maw_matcher::normalized_match_names(&wanted);
     live.iter()
         .filter(|window| {
             fleet_live_window_names(session, &window.name)
                 .iter()
-                .any(|name| locate_normalized_names(name).iter().any(|alias| wanted.contains(alias)))
+                .any(|name| maw_matcher::normalized_match_names(name).iter().any(|alias| wanted.contains(alias)))
         })
         .map(|window| window.index)
         .collect()
@@ -1234,8 +1234,8 @@ fn fleet_run_group_action(
     Ok((0, out))
 }
 
-// Registry resolution mirrors locate's hash-slot rules: `NN-` prefixes and `-oracle` suffixes are
-// stripped on both sides, and window names count (a member can live as a window of a shared session).
+// Registry resolution uses the shared resolver's `NN-` prefix and `-oracle` suffix normalization.
+// Window names count because a member can live as a window of a shared session.
 
 fn fleet_run_group_post_wake_hooks(resolved: &[(&str, &FleetSessionSummary)]) {
     let hooks = wake_config_post_wake_hooks();
@@ -1249,23 +1249,33 @@ fn fleet_run_group_post_wake_hooks(resolved: &[(&str, &FleetSessionSummary)]) {
 }
 
 fn fleet_member_hook_window(handle: &str, session: &FleetSessionSummary) -> String {
-    let wanted = locate_normalized_names(handle);
+    let wanted = maw_matcher::normalized_match_names(handle);
     session
         .windows
         .iter()
-        .find(|window| locate_normalized_names(&window.name).iter().any(|name| wanted.contains(name)))
+        .find(|window| {
+            maw_matcher::normalized_match_names(&window.name)
+                .iter()
+                .any(|name| wanted.contains(name))
+        })
         .or_else(|| session.windows.first())
         .map_or_else(|| session.name.clone(), |window| window.name.clone())
 }
 
 fn fleet_member_session<'a>(handle: &str, sessions: &'a [FleetSessionSummary]) -> Option<&'a FleetSessionSummary> {
-    let wanted = locate_normalized_names(handle);
+    let wanted = maw_matcher::normalized_match_names(handle);
     sessions.iter().find(|session| {
-        locate_normalized_names(&session.name).iter().any(|name| wanted.contains(name))
+        maw_matcher::normalized_match_names(&session.name)
+            .iter()
+            .any(|name| wanted.contains(name))
             || session
                 .windows
                 .iter()
-                .any(|window| locate_normalized_names(&window.name).iter().any(|name| wanted.contains(name)))
+                .any(|window| {
+                    maw_matcher::normalized_match_names(&window.name)
+                        .iter()
+                        .any(|name| wanted.contains(name))
+                })
     })
 }
 

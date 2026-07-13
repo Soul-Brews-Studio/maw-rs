@@ -235,9 +235,11 @@ fn locate_gather_info(
     sessions: &[TmuxSession],
 ) -> Result<LocateResult, String> {
     locate_validate_name(oracle)?;
-    let aliases = locate_lookup_aliases(oracle);
-    let repo_path = locate_find_oracle_path_with_aliases(&aliases);
-    let (session_name, window_count) = locate_resolve_session_with_aliases(&aliases, sessions)
+    let aliases = locate_enrichment_names(oracle);
+    let repo_path = aliases.iter().find_map(|alias| locate_find_oracle_repo_path(alias));
+    let (session_name, window_count) = aliases
+        .iter()
+        .find_map(|alias| locate_resolve_session(alias, sessions))
         .map_or((None, 0), |session| (Some(session.name.clone()), session.windows.len()));
     let fleet_config_path = aliases
         .iter()
@@ -346,24 +348,15 @@ fn locate_find_oracle_repo_path(oracle: &str) -> Option<String> {
     .or_else(|| locate_ghq_find(&format!("/{oracle}")).filter(|path| native_repo_path_is_oracle(std::path::Path::new(path), oracle)))
 }
 
-fn locate_lookup_aliases(oracle: &str) -> Vec<String> {
+// Keep raw/stem ordering for stable output fields and filesystem/config enrichment.
+// Match normalization belongs to `maw_matcher`.
+fn locate_enrichment_names(oracle: &str) -> Vec<String> {
     let parsed = maw_identity::parse_session_name(oracle);
     let mut aliases = vec![oracle.to_owned()];
     if parsed.stem != oracle && !aliases.contains(&parsed.stem) {
         aliases.push(parsed.stem);
     }
     aliases
-}
-
-fn locate_find_oracle_path_with_aliases(aliases: &[String]) -> Option<String> {
-    aliases.iter().find_map(|alias| locate_find_oracle_repo_path(alias.as_str()))
-}
-
-fn locate_resolve_session_with_aliases<'a>(
-    aliases: &[String],
-    sessions: &'a [TmuxSession],
-) -> Option<&'a TmuxSession> {
-    aliases.iter().find_map(|alias| locate_resolve_session(alias, sessions))
 }
 
 fn locate_declared_oracle_repo_path(oracle: &str) -> Option<String> {
@@ -391,36 +384,19 @@ fn locate_ghq_find_oracle_suffix(oracle: &str) -> Option<String> {
 }
 
 fn locate_resolve_session<'a>(oracle: &str, sessions: &'a [TmuxSession]) -> Option<&'a TmuxSession> {
-    let wanted = locate_normalized_names(oracle);
+    let wanted = maw_matcher::normalized_match_names(oracle);
     sessions.iter().find(|session| locate_session_matches(session, &wanted))
 }
 
-fn locate_session_matches(session: &TmuxSession, wanted: &BTreeSet<String>) -> bool {
-    locate_normalized_names(&session.name)
+fn locate_session_matches(session: &TmuxSession, wanted: &[String]) -> bool {
+    maw_matcher::normalized_match_names(&session.name)
         .iter()
         .any(|name| wanted.contains(name))
         || session.windows.iter().any(|locate_window| {
-            locate_normalized_names(&locate_window.name)
+            maw_matcher::normalized_match_names(&locate_window.name)
                 .iter()
                 .any(|name| wanted.contains(name))
         })
-}
-
-fn locate_normalized_names(name: &str) -> BTreeSet<String> {
-    let raw = name.trim().to_lowercase();
-    let unnumbered = raw
-        .split_once('-')
-        .filter(|(prefix, _)| prefix.chars().all(|ch| ch.is_ascii_digit()))
-        .map_or(raw.as_str(), |(_, tail)| tail);
-    [
-        raw.clone(),
-        raw.strip_suffix("-oracle").unwrap_or(&raw).to_owned(),
-        unnumbered.to_owned(),
-        unnumbered.strip_suffix("-oracle").unwrap_or(unnumbered).to_owned(),
-    ]
-    .into_iter()
-    .filter(|value| !value.is_empty())
-    .collect()
 }
 
 fn locate_find_fleet_config_path(oracle: &str, session_name: Option<&str>) -> Option<String> {
@@ -999,6 +975,23 @@ mod locate_tests {
         assert_eq!(info.handle, "track");
         assert_eq!(info.session_name, info_plain.session_name);
         assert_eq!(info.fleet_config_path, info_plain.fleet_config_path);
+
+        let sessions = vec![TmuxSession {
+            name: "81-track".to_owned(),
+            windows: vec![locate_window(1, "track-oracle")],
+        }];
+        let output = run_locate_command_with_sessions(
+            &["81-track".to_owned(), "--json".to_owned()],
+            &sessions,
+        );
+        assert_eq!(output.code, 0, "{}", output.stderr);
+        let rendered: serde_json::Value = serde_json::from_str(&output.stdout).expect("json");
+        assert_eq!(rendered["name"], "track");
+        assert_eq!(rendered["handle"], "track");
+        assert_eq!(rendered["session"], "81-track");
+        assert_eq!(rendered["sessionName"], "81-track");
+        assert_eq!(rendered["windowCount"], 1);
+        assert_eq!(rendered["repoPath"], path_string(&repo));
     }
 
     #[test]
