@@ -12,6 +12,49 @@ enum PickerSelection {
     Invalid,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TypedPickerPlan {
+    Target(String),
+    Pick { context: &'static str, rows: Vec<PickerRow> },
+}
+
+fn typed_picker_plan(
+    target: &str,
+    candidates: &[maw_matcher::ResolveTypedCandidate],
+    priority: fn(maw_matcher::ResolveCandidateKind) -> u8,
+    row: fn(maw_matcher::ResolveMatch) -> PickerRow,
+) -> TypedPickerPlan {
+    let (context, mut matches) = match maw_matcher::resolve_typed_target(target, candidates) {
+        maw_matcher::ResolveTypedResult::Match { matched }
+            if matched.rank != maw_matcher::ResolveMatchRank::Fuzzy =>
+        {
+            return TypedPickerPlan::Target(matched.candidate.name);
+        }
+        maw_matcher::ResolveTypedResult::Match { matched } => ("matched fuzzily", vec![matched]),
+        maw_matcher::ResolveTypedResult::Ambiguous { candidates } => {
+            let best = candidates.iter().map(|item| priority(item.candidate.kind)).min().unwrap_or(u8::MAX);
+            let preferred = candidates.into_iter().filter(|item| priority(item.candidate.kind) == best).collect::<Vec<_>>();
+            if preferred.len() == 1 && preferred[0].rank != maw_matcher::ResolveMatchRank::Fuzzy {
+                return TypedPickerPlan::Target(preferred[0].candidate.name.clone());
+            }
+            ("matches multiple targets", preferred)
+        }
+        maw_matcher::ResolveTypedResult::None => ("was not found exactly", deadend_closest_matches(target, candidates)),
+    };
+    matches.sort_by(|left, right| left.candidate.name.cmp(&right.candidate.name));
+    let rows = matches.into_iter().map(row).collect::<Vec<_>>();
+    if rows.is_empty() { TypedPickerPlan::Target(target.to_owned()) } else { TypedPickerPlan::Pick { context, rows } }
+}
+
+fn picker_choose_target(command: &str, target: &str, context: &str, rows: &[PickerRow], json: bool) -> Result<String, CliOutput> {
+    use std::io::IsTerminal as _;
+    if !std::io::stdin().is_terminal() {
+        return Err(CliOutput { code: 1, stdout: if json { picker_render_json(command, target, context, rows) } else { picker_render_text(command, target, context, rows) }, stderr: String::new() });
+    }
+    let row = picker_prompt(command, target, context, rows).ok_or_else(|| CliOutput { code: 1, stdout: String::new(), stderr: format!("{command}: picker cancelled\n") })?;
+    Ok(row.matched.candidate.name)
+}
+
 fn picker_parse_selection(input: &str, len: usize) -> PickerSelection {
     let trimmed = input.trim();
     if len == 1

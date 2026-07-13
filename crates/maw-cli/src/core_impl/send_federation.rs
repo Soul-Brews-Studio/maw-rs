@@ -91,9 +91,17 @@ async fn run_send_like_async_with_args(
     let sender_oracle = resolve_hey_sender_oracle_for_from(&config, send_args.from.as_deref());
     let mut tmux = TmuxClient::local();
     let sessions = route_sessions_from_tmux(&mut tmux);
+    let routing_target = if command == "hey" {
+        match hey_picker_target(&send_args.target, &config.route, &sessions) {
+            Ok(target) => target,
+            Err(output) => return output,
+        }
+    } else {
+        send_args.target.clone()
+    };
     let mut runner = maw_tmux::CommandTmuxRunner::new();
     let result = resolve_send_route_target(
-        &send_args.target,
+        &routing_target,
         &config.route,
         &sessions,
         std::env::var_os("TMUX").is_some(),
@@ -634,6 +642,46 @@ fn resolve_send_route_target<R: maw_tmux::TmuxRunner>(
         None
     };
     resolve_route_target_with_current_session(query, config, sessions, current_session.as_deref())
+}
+
+fn hey_picker_target(target: &str, config: &RouteConfig, sessions: &[RouteSession]) -> Result<String, CliOutput> {
+    if target.contains(':') || target.contains('/') || is_self_target_alias(target) { return Ok(target.to_owned()); }
+    match typed_picker_plan(target, &hey_typed_candidates(config, sessions), hey_kind_priority, hey_picker_row) {
+        TypedPickerPlan::Target(target) => Ok(target),
+        TypedPickerPlan::Pick { context, rows } => picker_choose_target("hey", target, context, &rows, false),
+    }
+}
+
+fn hey_typed_candidates(config: &RouteConfig, sessions: &[RouteSession]) -> Vec<maw_matcher::ResolveTypedCandidate> {
+    let alive = sessions.iter().filter(|session| !session.name.ends_with("-view") && session.source.as_deref().is_none_or(|source| source == "local"))
+        .map(|session| session.name.clone()).collect::<BTreeSet<_>>();
+    let mut candidates = resolver_live_candidates(&alive);
+    for session in sessions.iter().filter(|session| !session.name.ends_with("-view") && session.source.as_deref().is_none_or(|source| source == "local")) {
+        candidates.extend(session.windows.iter().map(|window| maw_matcher::ResolveTypedCandidate {
+            kind: maw_matcher::ResolveCandidateKind::Window,
+            name: format!("{}:{}", session.name, window.index),
+            aliases: vec![window.name.clone()],
+        }));
+    }
+    candidates.extend(config.agents.keys().map(|agent| maw_matcher::ResolveTypedCandidate {
+        kind: maw_matcher::ResolveCandidateKind::Peer, name: agent.clone(), aliases: Vec::new(),
+    }));
+    candidates
+}
+
+fn hey_kind_priority(kind: maw_matcher::ResolveCandidateKind) -> u8 {
+    match kind {
+        maw_matcher::ResolveCandidateKind::Window => 0,
+        maw_matcher::ResolveCandidateKind::LiveSession => 1,
+        maw_matcher::ResolveCandidateKind::Peer => 2,
+        _ => 3,
+    }
+}
+
+fn hey_picker_row(matched: maw_matcher::ResolveMatch) -> PickerRow {
+    let detail = (matched.candidate.kind == maw_matcher::ResolveCandidateKind::Window)
+        .then(|| matched.candidate.aliases.first().cloned()).flatten();
+    PickerRow { action: format!("maw hey {} <message>", matched.candidate.name), detail, matched }
 }
 
 fn send_current_session_name<R: maw_tmux::TmuxRunner>(
@@ -1872,6 +1920,25 @@ mod send_acl_hotpath_tests {
         );
         assert_eq!(output.code, 0);
         assert_eq!(output.stdout, "dry-run: hey me -> local 188-maw-rs:1\n");
+    }
+
+    #[test]
+    fn hey_typed_inventory_routes_exact_and_asks_on_fuzzy() {
+        let sessions = vec![send_route_session(
+            "41-atlas",
+            vec![send_route_window(1, "atlas-oracle")],
+        )];
+        let config = RouteConfig::default();
+
+        assert_eq!(hey_picker_target("atlas-oracle", &config, &sessions).expect("exact"), "41-atlas:1");
+        match typed_picker_plan("atla", &hey_typed_candidates(&config, &sessions), hey_kind_priority, hey_picker_row) {
+            TypedPickerPlan::Pick { rows, .. } => {
+                assert_eq!(rows.len(), 1);
+                assert_eq!(rows[0].matched.candidate.name, "41-atlas:1");
+                assert_eq!(rows[0].action, "maw hey 41-atlas:1 <message>");
+            }
+            plan @ TypedPickerPlan::Target(_) => panic!("expected fuzzy picker, got {plan:?}"),
+        }
     }
 
     #[test]

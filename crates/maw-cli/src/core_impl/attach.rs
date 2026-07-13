@@ -217,14 +217,7 @@ fn attach_resolve_typed_target(target: &str, alive: &BTreeSet<String>) -> Attach
 }
 
 fn local_resolver_candidates(alive: &BTreeSet<String>) -> Vec<maw_matcher::ResolveTypedCandidate> {
-    let mut candidates = alive
-        .iter()
-        .map(|name| maw_matcher::ResolveTypedCandidate {
-            kind: maw_matcher::ResolveCandidateKind::LiveSession,
-            name: name.clone(),
-            aliases: Vec::new(),
-        })
-        .collect::<Vec<_>>();
+    let mut candidates = resolver_live_candidates(alive);
     for entry in fleet_load_entries() {
         if let Some(group) = fleet_roster_squad_name(&entry) {
             candidates.push(maw_matcher::ResolveTypedCandidate {
@@ -242,6 +235,17 @@ fn local_resolver_candidates(alive: &BTreeSet<String>) -> Vec<maw_matcher::Resol
     }
     candidates.extend(deadend_oracle_candidates());
     candidates
+}
+
+fn resolver_live_candidates(alive: &BTreeSet<String>) -> Vec<maw_matcher::ResolveTypedCandidate> {
+    alive
+        .iter()
+        .map(|name| maw_matcher::ResolveTypedCandidate {
+            kind: maw_matcher::ResolveCandidateKind::LiveSession,
+            name: name.clone(),
+            aliases: Vec::new(),
+        })
+        .collect()
 }
 
 fn attach_not_found_output(target: &str, candidates: &[maw_matcher::ResolveMatch]) -> Result<String, CliOutput> {
@@ -306,7 +310,7 @@ fn attach_picker_output(
             stderr: String::new(),
         });
     }
-    attach_prompt_picker(target, context, &rows).map_or_else(
+    picker_prompt("attach", target, context, &rows).map_or_else(
         || {
             Err(CliOutput {
                 code: 1,
@@ -367,9 +371,9 @@ fn attach_picker_detail(matched: &maw_matcher::ResolveMatch) -> Option<String> {
         })
 }
 
-fn attach_prompt_picker(target: &str, context: &str, rows: &[PickerRow]) -> Option<PickerRow> {
+fn picker_prompt(command: &str, target: &str, context: &str, rows: &[PickerRow]) -> Option<PickerRow> {
     use std::io::Write as _;
-    eprint!("{}", picker_render_text("attach", target, context, rows));
+    eprint!("{}", picker_render_text(command, target, context, rows));
     let yes_hint = if rows.len() == 1 { ", Enter/y" } else { "" };
     loop {
         eprint!("pick [1-{}]{yes_hint} or q: ", rows.len());
@@ -382,7 +386,7 @@ fn attach_prompt_picker(target: &str, context: &str, rows: &[PickerRow]) -> Opti
             PickerSelection::Pick(index) => return rows.get(index).cloned(),
             PickerSelection::Quit => return None,
             PickerSelection::Invalid => {
-                eprintln!("attach: enter a number from 1 to {} or q", rows.len());
+                eprintln!("{command}: enter a number from 1 to {} or q", rows.len());
             }
         }
     }

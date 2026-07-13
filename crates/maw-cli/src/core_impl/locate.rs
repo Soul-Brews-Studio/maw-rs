@@ -104,18 +104,21 @@ struct LocateOracleCacheEntry {
 }
 
 fn run_locate_command(argv: &[String]) -> CliOutput {
+    let mut tmux = TmuxClient::local();
+    run_locate_command_with_sessions(argv, &tmux.list_all())
+}
+
+fn run_locate_command_with_sessions(argv: &[String], sessions: &[TmuxSession]) -> CliOutput {
     match locate_parse_args(argv) {
-        Ok((oracle, opts)) => match locate_cmd(&oracle, &opts) {
+        Ok((oracle, opts)) => match locate_picker_target(&oracle, &opts, sessions)
+            .and_then(|target| locate_cmd_with_sessions(&target, &opts, sessions).map_err(|message| CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") }))
+        {
             Ok(stdout) => CliOutput {
                 code: 0,
                 stdout,
                 stderr: String::new(),
             },
-            Err(message) => CliOutput {
-                code: 1,
-                stdout: String::new(),
-                stderr: format!("{message}\n"),
-            },
+            Err(output) => output,
         },
         Err(message) => CliOutput {
             code: 1,
@@ -149,12 +152,6 @@ fn locate_parse_args(argv: &[String]) -> Result<(String, LocateOptions), String>
     };
     locate_validate_name(&oracle)?;
     Ok((oracle, opts))
-}
-
-fn locate_cmd(oracle: &str, opts: &LocateOptions) -> Result<String, String> {
-    let mut tmux = TmuxClient::local();
-    let sessions = tmux.list_all();
-    locate_cmd_with_sessions(oracle, opts, &sessions)
 }
 
 fn locate_cmd_with_sessions(
@@ -191,6 +188,45 @@ fn locate_cmd_with_sessions(
     }
 
     Ok(locate_render_text(oracle, &info))
+}
+
+fn locate_picker_target(target: &str, opts: &LocateOptions, sessions: &[TmuxSession]) -> Result<String, CliOutput> {
+    match typed_picker_plan(target, &locate_typed_candidates(sessions), locate_kind_priority, locate_picker_row) {
+        TypedPickerPlan::Target(target) => Ok(target),
+        TypedPickerPlan::Pick { context, rows } => picker_choose_target("locate", target, context, &rows, opts.json),
+    }
+}
+
+fn locate_typed_candidates(sessions: &[TmuxSession]) -> Vec<maw_matcher::ResolveTypedCandidate> {
+    let alive = sessions.iter().map(|session| session.name.clone()).collect::<BTreeSet<_>>();
+    let mut candidates = local_resolver_candidates(&alive);
+    candidates.retain(|candidate| candidate.kind != maw_matcher::ResolveCandidateKind::FleetSquad && candidate.kind != maw_matcher::ResolveCandidateKind::Peer);
+    candidates.extend(sessions.iter().flat_map(|session| session.windows.iter().map(|window| maw_matcher::ResolveTypedCandidate {
+        kind: maw_matcher::ResolveCandidateKind::Window, name: window.name.clone(), aliases: Vec::new(),
+    })));
+    for entry in locate_load_manifest() {
+        let aliases = [entry.session, entry.window, entry.repo].into_iter().flatten().collect::<Vec<_>>();
+        if let Some(candidate) = candidates.iter_mut().find(|candidate| candidate.kind == maw_matcher::ResolveCandidateKind::Oracle && candidate.name.eq_ignore_ascii_case(&entry.name)) {
+            candidate.aliases.extend(aliases);
+        } else {
+            candidates.push(maw_matcher::ResolveTypedCandidate { kind: maw_matcher::ResolveCandidateKind::Oracle, name: entry.name, aliases });
+        }
+    }
+    candidates
+}
+
+fn locate_kind_priority(kind: maw_matcher::ResolveCandidateKind) -> u8 {
+    match kind {
+        maw_matcher::ResolveCandidateKind::Oracle => 0,
+        maw_matcher::ResolveCandidateKind::SleepingRegistry => 1,
+        maw_matcher::ResolveCandidateKind::Repo => 2,
+        maw_matcher::ResolveCandidateKind::LiveSession | maw_matcher::ResolveCandidateKind::Window => 3,
+        _ => 4,
+    }
+}
+
+fn locate_picker_row(matched: maw_matcher::ResolveMatch) -> PickerRow {
+    PickerRow { action: format!("maw locate {}", matched.candidate.name), detail: None, matched }
 }
 
 fn locate_gather_info(
@@ -962,5 +998,28 @@ mod locate_tests {
         assert_eq!(info.handle, "track");
         assert_eq!(info.session_name, info_plain.session_name);
         assert_eq!(info.fleet_config_path, info_plain.fleet_config_path);
+    }
+
+    #[test]
+    fn locate_typed_inventory_routes_exact_and_asks_on_fuzzy() {
+        let _guard = env_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let env = LocateHermeticEnv::new("typed-picker");
+        let repo = env.ghq.join("github.com/acme/track-oracle");
+        std::fs::create_dir_all(&repo).expect("repo");
+        locate_write(
+            &env.maw_config_path(&["fleet", "81-track.json"]),
+            r#"{"name":"81-track","windows":[{"name":"track-oracle","repo":"acme/track-oracle"}]}"#,
+        );
+        let options = LocateOptions { path: true, json: false };
+        assert_eq!(locate_picker_target("81-track", &options, &[]).expect("exact"), "track");
+
+        match typed_picker_plan("trac", &locate_typed_candidates(&[]), locate_kind_priority, locate_picker_row) {
+            TypedPickerPlan::Pick { rows, .. } => {
+                assert_eq!(rows.len(), 1);
+                assert_eq!(rows[0].matched.candidate.name, "track");
+                assert_eq!(rows[0].action, "maw locate track");
+            }
+            plan @ TypedPickerPlan::Target(_) => panic!("expected fuzzy picker, got {plan:?}"),
+        }
     }
 }
