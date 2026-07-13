@@ -95,6 +95,29 @@ fn write_built_js_plugin(dir: &Path, name: &str) {
     .expect("dist entry");
 }
 
+fn write_serve_only_plugin(dir: &Path, name: &str) {
+    fs::create_dir_all(dir).expect("plugin dir");
+    fs::write(
+        dir.join("plugin.json"),
+        format!(
+            r#"{{
+  "name": "{name}",
+  "version": "0.1.0",
+  "sdk": "*",
+  "cli": {{ "command": "{name}" }},
+  "engine": {{
+    "serve": {{
+      "command": "bun run server-demo.ts",
+      "prefix": "/api/{name}"
+    }}
+  }}
+}}
+"#
+        ),
+    )
+    .expect("manifest");
+}
+
 fn fixture_repo(root: &Path, name: &str) -> PathBuf {
     let repo = root.join("repo");
     fs::create_dir_all(&repo).expect("repo dir");
@@ -376,6 +399,35 @@ fn plugin_install_local_dir_with_explicit_root_still_works() {
     );
     assert!(install_dir.join("plugin.json").is_file());
     assert!(install_dir.join("index.js").is_file());
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn plugin_install_then_bare_invoke_serve_only_prints_mounted_url() {
+    let root = temp_dir("serve-only");
+    let source = root.join("source");
+    write_serve_only_plugin(&source, "agora-fixture");
+
+    let install = with_host_plugin_env(
+        Command::new(maw_bin()).args(["plugin", "install", source.to_str().expect("source utf8")]),
+        &root,
+    )
+    .output()
+    .expect("maw plugin install");
+    assert_success(&install, "install serve-only plugin");
+
+    let invoke = with_host_plugin_env(Command::new(maw_bin()).arg("agora-fixture"), &root)
+        .env("MAW_PORT", "4567")
+        .output()
+        .expect("maw agora-fixture");
+
+    assert_success(&invoke, "invoke serve-only plugin");
+    assert_eq!(
+        String::from_utf8_lossy(&invoke.stdout),
+        "http://localhost:4567/api/agora-fixture/\n"
+    );
+    assert!(String::from_utf8_lossy(&invoke.stderr).is_empty());
 
     let _ = fs::remove_dir_all(root);
 }

@@ -5,8 +5,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use maw_plugin_manifest::{
     invoke_plugin, ApiMethod, CliFlagKind, InvokeContext, InvokeResult, InvokeSource, LoadedPlugin,
-    LoadedPluginKind, PluginApi, PluginCli, PluginHooks, PluginInvokeRuntime, PluginManifest,
-    PluginTransport,
+    LoadedPluginKind, PluginApi, PluginCli, PluginEngine, PluginEngineServe, PluginHooks,
+    PluginInvokeRuntime, PluginManifest, PluginTransport,
 };
 
 fn make_temp_dir(label: &str) -> PathBuf {
@@ -192,6 +192,7 @@ fn invoke_plugin_ts_dispatches_through_injected_runtime() {
     write(&entry, b"export default () => ({ ok: true });\n").expect("entry");
     let mut plugin = make_plugin(&root, LoadedPluginKind::Ts);
     plugin.entry_path = Some(entry);
+    plugin.manifest.engine = Some(serve_engine("/api/ts-runtime"));
     let mut runtime = FakeRuntime {
         ts_result: InvokeResult::output("args=a|b"),
         ..FakeRuntime::default()
@@ -242,6 +243,7 @@ fn invoke_plugin_wasm_reads_bytes_and_hands_off_to_runtime() {
     write(&wasm, b"wasm bytes").expect("wasm");
     let mut plugin = make_plugin(&root, LoadedPluginKind::Wasm);
     plugin.wasm_path = wasm;
+    plugin.manifest.engine = Some(serve_engine("/api/wasm-runtime"));
     let mut runtime = FakeRuntime {
         wasm_result: InvokeResult::output("HELLO"),
         ..FakeRuntime::default()
@@ -253,6 +255,48 @@ fn invoke_plugin_wasm_reads_bytes_and_hands_off_to_runtime() {
     assert_eq!(runtime.ts_calls, 0);
     assert_eq!(runtime.wasm_calls, 1);
     assert_eq!(runtime.last_wasm_bytes, b"wasm bytes");
+    remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn invoke_plugin_bare_cli_for_serve_only_manifest_prints_mounted_url() {
+    let root = make_temp_dir("serve-only");
+    let mut plugin = make_plugin(&root, LoadedPluginKind::Wasm);
+    plugin.manifest.name = "agora".to_owned();
+    plugin.wasm_path = PathBuf::new();
+    plugin.manifest.engine = Some(serve_engine("/api/agora"));
+    let expected_port = std::env::var("MAW_PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .filter(|port| *port > 0)
+        .unwrap_or(3456);
+    let mut runtime = FakeRuntime::default();
+
+    let result = invoke_plugin(&plugin, &cli(&[]), &mut runtime);
+
+    assert_eq!(
+        result,
+        InvokeResult::output(format!("http://localhost:{expected_port}/api/agora/"))
+    );
+    assert_eq!(runtime.ts_calls, 0);
+    assert_eq!(runtime.wasm_calls, 0);
+    remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn invoke_plugin_serve_only_help_keeps_universal_help_behavior() {
+    let root = make_temp_dir("serve-only-help");
+    let mut plugin = make_plugin(&root, LoadedPluginKind::Wasm);
+    plugin.manifest.name = "agora".to_owned();
+    plugin.wasm_path = PathBuf::new();
+    plugin.manifest.engine = Some(serve_engine("/api/agora"));
+
+    let result = invoke_plugin(&plugin, &cli(&["--help"]), &mut FakeRuntime::default());
+
+    assert!(result.ok);
+    let output = result.output.expect("help output");
+    assert!(output.contains("agora v1.0.0"));
+    assert!(!output.starts_with("http://"));
     remove_dir_all(root).expect("cleanup");
 }
 
@@ -340,6 +384,18 @@ fn make_plugin(dir: &Path, kind: LoadedPluginKind) -> LoadedPlugin {
         wasm_export: "handle".to_owned(),
         kind,
         disabled: false,
+    }
+}
+
+fn serve_engine(prefix: &str) -> PluginEngine {
+    PluginEngine {
+        serve: Some(PluginEngineServe {
+            command: Some("bun run server-demo.ts".to_owned()),
+            prefix: Some(prefix.to_owned()),
+            health: None,
+            events: None,
+            event_path: None,
+        }),
     }
 }
 

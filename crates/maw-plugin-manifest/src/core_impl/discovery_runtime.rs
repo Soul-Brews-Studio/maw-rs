@@ -444,10 +444,39 @@ where
         return runtime.invoke_ts(plugin, ctx);
     }
 
+    if let Some(url) = serve_only_plugin_url(plugin, ctx) {
+        return InvokeResult::output(url);
+    }
+
     match std::fs::read(&plugin.wasm_path) {
         Ok(wasm_bytes) => runtime.invoke_wasm(plugin, ctx, &wasm_bytes),
         Err(error) => InvokeResult::error(format!("failed to read wasm: {error}")),
     }
+}
+
+fn serve_only_plugin_url(plugin: &LoadedPlugin, ctx: &InvokeContext) -> Option<String> {
+    if ctx.source != InvokeSource::Cli
+        || !ctx.args.is_empty()
+        || plugin.entry_path.is_some()
+        || !plugin.wasm_path.as_os_str().is_empty()
+    {
+        return None;
+    }
+    let prefix = plugin
+        .manifest
+        .engine
+        .as_ref()?
+        .serve
+        .as_ref()?
+        .prefix
+        .as_deref()?
+        .trim_end_matches('/');
+    let port = std::env::var("MAW_PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .filter(|port| *port > 0)
+        .unwrap_or(3456);
+    Some(format!("http://localhost:{port}{prefix}/"))
 }
 
 /// Default plugin scan roots.
