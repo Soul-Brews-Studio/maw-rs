@@ -6,19 +6,18 @@ Reference impl: `Soul-Brews-Studio/maw-cross-team-queue`.
 
 | file | tier | role |
 |------|------|------|
-| `plugin.json` | ship (wasm) | active manifest — `cross-team-queue` scaffold artifact |
-| `plugin.wasm` | ship (wasm) | built Extism artifact, pinned by `artifact.sha256` |
+| `plugin.json` | ship (wasm) | active manifest for the queue scanner |
+| `plugin.wasm` | ship (wasm) | scanner artifact, pinned by `artifact.sha256` |
 | `plugin.source.json` | ship (wasm) | source manifest for `maw plugin build` |
-| `src/plugin.ts` | ship (wasm) | AssemblyScript source of the scaffold artifact |
+| `src/plugin.ts` | ship (wasm) | AssemblyScript source of the queue scanner |
 
-## Slice 1 behavior
+## Shipped behavior
 
-The artifact returns the scaffold queue contract only:
-`{items:[], stats:{...}, errors:[], schemaVersion:1}`. It accepts `--json` and optional
-`--recipient <name>` without mutation or filtering because there is no scanning yet.
+The artifact resolves the host-provided vault root, scans each oracle's `inbox/*.md`,
+parses message metadata and body text, and returns the unified queue contract. Optional
+`--recipient <name>` filters the scanned items.
 
-## Deferred to slice 2
-
-Read-only inbox scanning is intentionally out of scope until the vault-root capability is
-settled (`MAW_VAULT_ROOT` input vs a named manifest root). No write, spawn, network, or
-filesystem capability is used in this slice.
+The scanner uses only `fs:read:vault`: it does not write files, spawn processes, or use
+the network. `cross_team_queue_fleet_artifact_installs_and_scans_vault` installs and
+invokes the real artifact against a seeded vault, checking both the golden queue output
+and recipient filtering. The fleet pin check covers the committed artifact hash.
