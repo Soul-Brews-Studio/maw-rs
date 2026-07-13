@@ -33,5 +33,11 @@
   "cli": {
     "command": "menubar",
     "help": "maw menubar <install|start|stop|status|uninstall|run>"
-  }
+  },
+  "bundledArtifacts": [
+    {
+      "path": "bin/maw-menubar",
+      "sha256": "sha256:f8df31fb2ed01936768505608a7c47a2bf50b76e965ce4a571f16ed386b4394a"
+    }
+  ]
 }

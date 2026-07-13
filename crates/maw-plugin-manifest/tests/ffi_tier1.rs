@@ -79,6 +79,59 @@ fn build_js_plugin_dir_writes_dist_manifest_with_inferred_caps_and_dts() {
 }
 
 #[test]
+fn build_and_install_preserve_checksum_pinned_bundled_artifacts() {
+    let root = temp_dir("bundled-artifact");
+    let plugin = root.join("native-plugin");
+    let install_root = root.join("installed");
+    std::fs::create_dir_all(plugin.join("src")).expect("plugin src");
+    std::fs::create_dir_all(plugin.join("bin")).expect("plugin bin");
+    std::fs::write(
+        plugin.join("plugin.json"),
+        r#"{"name":"native-plugin","version":"1.0.0","target":"js","sdk":"^1.0.0","entry":"./src/index.ts","bundledArtifacts":[{"path":"bin/helper","sha256":"sha256:c2d728ea3e369c2e2c93b86cbb1e6cbd61240492bb609b0eefaecec9a15c044c"}]}"#,
+    ).expect("manifest");
+    std::fs::write(plugin.join("src/index.ts"), "export default {};\n").expect("entry");
+    std::fs::write(plugin.join("bin/helper"), b"native helper").expect("helper");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            plugin.join("bin/helper"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .expect("helper permissions");
+    }
+
+    build_js_plugin_dir(&plugin, false).expect("build plugin");
+    assert_eq!(
+        std::fs::read(plugin.join("dist/bin/helper")).expect("dist helper"),
+        b"native helper"
+    );
+    let install = install_built_plugin_dir(&plugin, &install_root).expect("install plugin");
+    assert_eq!(
+        std::fs::read(install.install_dir.join("bin/helper")).expect("installed helper"),
+        b"native helper"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(install.install_dir.join("bin/helper"))
+            .expect("installed helper metadata")
+            .permissions()
+            .mode();
+        assert_ne!(mode & 0o111, 0, "installed helper must remain executable");
+    }
+    assert!(install
+        .copied_files
+        .contains(&std::path::PathBuf::from("bin/helper")));
+
+    std::fs::write(plugin.join("bin/helper"), b"tampered").expect("tamper helper");
+    assert!(build_js_plugin_dir(&plugin, false)
+        .expect_err("checksum mismatch")
+        .contains("sha256 mismatch"));
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn init_and_install_plugin_are_host_authoritative_filesystem_operations() {
     let root = temp_dir("init-install");
     let source = root.join("src-plugin");

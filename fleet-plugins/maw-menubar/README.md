@@ -42,3 +42,19 @@ swift build -c release
 The Swift/AppKit helper source lives under `native/`. A release helper must be placed at
 `bin/maw-menubar` before `install`; normal installation never compiles Swift on the
 operator's machine.
+
+## Distribution build
+
+The distributable plugin contains a checked, universal helper at `bin/maw-menubar`;
+installing it does not run Swift or require a Swift toolchain. Rebuild the helper on
+macOS whenever `native/` changes:
+
+```console
+bun run build:native
+```
+
+The script performs separate release builds for `arm64` and `x86_64`, combines them
+with `lipo`, applies an ad-hoc signature, and rejects output missing either slice.
+`plugin.json` pins the resulting helper SHA-256 in `bundledArtifacts`. The native JS
+plugin packer verifies that checksum
+and copies the helper to `dist/bin/maw-menubar`, which the installer preserves.

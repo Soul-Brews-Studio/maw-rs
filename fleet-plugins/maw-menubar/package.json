@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "bun test src/plugin.test.ts",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "build:native": "./scripts/build-universal.sh"
   }
 }

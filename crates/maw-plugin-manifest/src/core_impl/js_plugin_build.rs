@@ -102,6 +102,7 @@ pub fn build_js_plugin_dir(dir: &Path, emit_types: bool) -> Result<PluginBuildSu
     std::fs::create_dir_all(&dist_dir).map_err(|error| format!("dist create failed: {error}"))?;
     let bundle_path = dist_dir.join("index.js");
     std::fs::write(&bundle_path, &source).map_err(|error| format!("bundle write failed: {error}"))?;
+    copy_bundled_artifacts(dir, &dist_dir, &raw)?;
     let size_bytes = source.len() as u64;
     let sha256 = format!("sha256:{}", sha256_hex(source.as_bytes()));
 
@@ -150,6 +151,30 @@ pub fn build_js_plugin_dir(dir: &Path, emit_types: bool) -> Result<PluginBuildSu
         manifest_path: dist_manifest_path,
         dts_path,
     })
+}
+
+fn copy_bundled_artifacts(dir: &Path, dist_dir: &Path, manifest: &Value) -> Result<(), String> {
+    let Some(artifacts) = manifest.get("bundledArtifacts") else { return Ok(()); };
+    let artifacts = artifacts.as_array().ok_or_else(|| "bundledArtifacts must be an array".to_owned())?;
+    for artifact in artifacts {
+        let object = artifact.as_object().ok_or_else(|| "bundledArtifacts entries must be objects".to_owned())?;
+        let path = object.get("path").and_then(Value::as_str).ok_or_else(|| "bundledArtifacts entry requires path".to_owned())?;
+        let expected = object.get("sha256").and_then(Value::as_str).ok_or_else(|| format!("bundled artifact {path} requires sha256"))?;
+        let relative = Path::new(path);
+        if path.is_empty() || relative.is_absolute() || relative.components().any(|component| matches!(component, std::path::Component::ParentDir)) {
+            return Err(format!("bundled artifact path must stay inside plugin dir: {path}"));
+        }
+        let source = dir.join(relative);
+        let metadata = std::fs::symlink_metadata(&source).map_err(|_| format!("bundled artifact not found: {}", source.display()))?;
+        if !metadata.file_type().is_file() { return Err(format!("bundled artifact must be a regular file: {}", source.display())); }
+        let bytes = std::fs::read(&source).map_err(|error| format!("bundled artifact read failed: {error}"))?;
+        let observed = format!("sha256:{}", sha256_hex(&bytes));
+        if observed != expected { return Err(format!("bundled artifact sha256 mismatch for {path}: expected {expected}, got {observed}")); }
+        let destination = dist_dir.join(relative);
+        if let Some(parent) = destination.parent() { std::fs::create_dir_all(parent).map_err(|error| format!("bundled artifact mkdir failed: {error}"))?; }
+        std::fs::copy(&source, &destination).map_err(|error| format!("bundled artifact copy failed: {error}"))?;
+    }
+    Ok(())
 }
 
 /// Initialize a native JS plugin source directory.
