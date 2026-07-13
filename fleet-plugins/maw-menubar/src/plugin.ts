@@ -1,3 +1,5 @@
+import { lifecycle } from "./launchagent";
+
 type Log = (line: string) => void;
 
 declare const process: { argv: string[]; exit(code: number): never };
@@ -44,7 +46,9 @@ function isLifecycleCommand(value: string): value is LifecycleCommand {
   return (LIFECYCLE_COMMANDS as readonly string[]).includes(value);
 }
 
-export function handleMenubar(args: string[], log: Log): number {
+export async function handleMenubar(
+  args: string[], log: Log, runLifecycle = lifecycle,
+): Promise<number> {
   const subcommand = args[0] || "status";
   if (["help", "-h", "--help"].includes(subcommand)) {
     usage(log);
@@ -55,26 +59,25 @@ export function handleMenubar(args: string[], log: Log): number {
     usage(log);
     return 1;
   }
-  if (args.length !== 1) {
+  if (args.length > 1) {
     log(`maw menubar ${subcommand}: unexpected arguments`);
     return 1;
   }
-  log(`maw menubar ${subcommand}: native lifecycle is not available in the PR-A skeleton`);
-  return 1;
+  return runLifecycle(subcommand, log);
 }
 
-export default function handler(ctx: InvokeContext): InvokeResult {
+export default async function handler(ctx: InvokeContext): Promise<InvokeResult> {
   const lines: string[] = [];
   const log = (line: string) => (ctx.writer ? ctx.writer(line) : lines.push(line));
   const args = ctx.source === "cli" || !ctx.source ? (ctx.args || []) : [];
-  const exitCode = handleMenubar(args, log);
+  const exitCode = await handleMenubar(args, log);
   const output = ctx.writer ? "" : lines.join("\n");
   return { ok: exitCode === 0, output, error: exitCode === 0 ? undefined : output, exitCode };
 }
 
 if ((import.meta as ImportMeta & { main?: boolean }).main) {
   const lines: string[] = [];
-  const exitCode = handleMenubar(process.argv.slice(2), (line) => lines.push(line));
+  const exitCode = await handleMenubar(process.argv.slice(2), (line) => lines.push(line));
   if (lines.length) console.log(lines.join("\n"));
   process.exit(exitCode);
 }

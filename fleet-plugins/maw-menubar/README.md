@@ -4,11 +4,11 @@ Native macOS menu bar companion for glanceable local maw fleet status and explic
 actions. This package follows the `bun-dev` native-subprocess tier: TypeScript owns CLI
 lifecycle orchestration and a Swift/AppKit helper will own the long-running UI.
 
-## PR-A status
+## Status
 
-This first slice freezes the package, manifest, capabilities, and lifecycle command
-surface. Every mutating/runtime command currently fails closed with an explicit skeleton
-message. It does not write a plist, call `launchctl`, compile Swift, or start a process.
+The plugin renders and atomically installs a dedicated user LaunchAgent, validates it
+with `plutil`, and manages it through structural `launchctl` argv. `status` reports the
+plist, launchd, process, and API states independently.
 
 ```console
 maw menubar install
@@ -39,6 +39,6 @@ swift test
 swift build -c release
 ```
 
-The dependency-free Swift/AppKit helper, typed API models, polling, and structural quick
-actions live under `native/`. PR-C will add deterministic LaunchAgent rendering and
-lifecycle mutation after the native UI has been reviewed independently.
+The Swift/AppKit helper source lives under `native/`. A release helper must be placed at
+`bin/maw-menubar` before `install`; normal installation never compiles Swift on the
+operator's machine.
