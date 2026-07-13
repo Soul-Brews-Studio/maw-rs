@@ -15,8 +15,10 @@ Apply the lean-core criterion:
 
 Do not extract a verb merely because it is cold. First check the current extraction
 plan and ADRs. Daemon, PTY, FFI, transport-runtime, or tightly coupled verbs remain
-native until a safe WASM ABI exists. The end state must be ZERO-BUN: a ship-tier WASM
-artifact, not a Bun-only plugin.
+native until a safe WASM ABI exists. A core-verb extraction must end in a ship-tier
+artifact loadable by maw-rs's pinned WASM runtime; a Bun-only artifact does not yet
+satisfy that deployment contract. This requirement does not restrict first-class Bun/JS
+fleet plugins or dev-tier surfaces.
 
 For a composite command, prefer extracting only cold subverbs. Keep fleet-critical
 subverbs native and let the native dispatcher return the documented fallthrough code

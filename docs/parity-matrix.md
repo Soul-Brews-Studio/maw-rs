@@ -106,7 +106,7 @@ Legend: **native ✅** = Rust dispatcher/implementation exists; **WASM ✅** = w
 
 | command | subcommand(s) / notable flags | maw-js | maw-rs status | notes |
 | --- | --- | --- | --- | --- |
-| `plugin` | init\|build\|dev\|install\|create\|ls\|info\|remove\|enable\|disable; many lifecycle flags | maw-js + maw-rs source | stub ⚠️ | Rust plugin/plugin-scaffold/plugin-manifest cover manifests/scaffold and Rust-WASM build/dev. JS/TS source build/dev is intentionally deferred/fail-closed for ZERO-BUN (#59); full maw-js lifecycle install/search/lock remains partial. |
+| `plugin` | init\|build\|dev\|install\|create\|ls\|info\|remove\|enable\|disable; many lifecycle flags | maw-js + maw-rs source | stub ⚠️ | Rust plugin/plugin-scaffold/plugin-manifest cover manifests/scaffold and Rust-WASM build/dev. The ship-tier host does not yet provide a reviewed JS/TS-to-WASM build path, so that path fails closed; Bun/JS fleet-plugin and dev-tier surfaces remain first-class. Full maw-js lifecycle install/search/lock remains partial. |
 | `plugins` | ls\|info\|remove\|lean\|standard\|full\|nuke\|enable\|disable; --json --all -v filters | maw-js + maw-rs source | NOT-PORTED ❌ | maw-js core route; no Rust dispatcher entry named plugins. |
 | `plugin-manifest` | parse\|load\|discover\|import-symbol\|invoke; --scan-dir --plugin --source --arg --disabled --runtime-version --plan-json | maw-js + maw-rs source | native ✅ | Rust-native manifest/registry/WASM host CLI exists; supports test fixtures and import/invoke plan output. |
 | `plugin-scaffold` | scaffold plugin dirs | maw-js + maw-rs source | native ✅ | Rust-native plugin scaffold exists. |
