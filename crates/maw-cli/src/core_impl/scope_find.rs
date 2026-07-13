@@ -750,7 +750,7 @@ fn fleet_parse_entry(path: &std::path::Path, strict: bool, label: &str) -> Resul
 }
 
 fn load_native_fleet() -> Vec<NativeFleetSession> {
-    fleet_load_entries().into_iter().map(|entry| entry.session).collect()
+    fleet_load_entries().into_iter().filter(fleet_entry_is_session).map(|entry| entry.session).collect()
 }
 
 fn native_fleet_apply_role_markers(session: &mut NativeFleetSession) {
@@ -790,7 +790,7 @@ fn native_fleet_repo_path(repo: &str) -> Option<std::path::PathBuf> {
 
 fn native_repo_kind_for_path(path: &std::path::Path) -> Option<NativeRepoKind> {
     let slugs = native_repo_slugs_for_path(path);
-    for entry in fleet_load_entries() {
+    for entry in fleet_load_entries().into_iter().filter(fleet_entry_is_session) {
         for window in &entry.session.windows {
             if window.kind.is_some() && native_fleet_window_matches_slugs(window, &slugs) {
                 return window.kind;
@@ -965,6 +965,25 @@ mod native_fleet_loader_tests {
             assert_eq!(entries.len(), 2);
             assert_eq!(entries[0].session.name, "01-alpha");
             assert_eq!(entries[1].session.name, "01-alpha");
+        });
+    }
+
+    #[test]
+    fn native_fleet_session_loader_excludes_squad_rosters() {
+        let root = fleet_loader_temp_root("session-boundary");
+        fleet_loader_write(
+            &root.join("state/fleet/01-session.json"),
+            r#"{"name":"01-session","windows":[]}"#,
+        );
+        fleet_loader_write(
+            &root.join("state/fleet/squads/02-squad/squad.json"),
+            r#"{"name":"02-squad","windows":[{"name":"stale","repo":"acme/stale"}],"members":[]}"#,
+        );
+
+        fleet_loader_env(&root, || {
+            let sessions = load_native_fleet();
+            assert_eq!(sessions.len(), 1);
+            assert_eq!(sessions[0].name, "01-session");
         });
     }
 

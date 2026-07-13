@@ -72,7 +72,7 @@ fn archive_validate_oracle(value: &str) -> Result<(), String> {
 }
 
 fn archive_find_entry(oracle: &str) -> Result<Option<ArchiveFleetEntry>, String> {
-    for entry in fleet_load_entries_result("archive")? {
+    for entry in fleet_load_entries_result("archive")?.into_iter().filter(fleet_entry_is_session) {
         if archive_session_oracle_name(&entry.session.name) == oracle {
             return Ok(Some(ArchiveFleetEntry {
                 file: entry.file,

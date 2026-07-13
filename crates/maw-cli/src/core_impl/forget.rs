@@ -390,6 +390,7 @@ fn forget_resolve_fleet_entry(
 fn forget_load_fleet_entries(env: &MawXdgEnv) -> Vec<ForgetFleetEntry> {
     fleet_load_entries_for_env(env)
         .into_iter()
+        .filter(fleet_entry_is_session)
         .map(|entry| ForgetFleetEntry {
             path: entry.path,
             session: entry.session,

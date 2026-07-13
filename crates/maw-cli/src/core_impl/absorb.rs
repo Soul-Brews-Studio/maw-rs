@@ -85,6 +85,7 @@ fn absorb_load_fleet_entries() -> Result<Vec<AbsorbFleetEntry>, String> {
     fleet_load_entries_result("absorb").map(|entries| {
         entries
             .into_iter()
+            .filter(fleet_entry_is_session)
             .map(|entry| AbsorbFleetEntry {
                 file: entry.file,
                 path: entry.path,

@@ -340,6 +340,7 @@ fn oracle_find_filesystem(name: &str) -> Option<OracleEntry> {
 fn oracle_fleet_entries() -> Vec<OracleFleetEntry> {
     fleet_load_entries()
         .into_iter()
+        .filter(fleet_entry_is_session)
         .map(|entry| OracleFleetEntry { session: entry.session })
         .collect()
 }

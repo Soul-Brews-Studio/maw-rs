@@ -102,7 +102,7 @@ impl WorktreeRuntime for WorktreeSystemRuntime {
     }
 
     fn worktree_fleet_entries(&mut self) -> Result<Vec<NativeFleetEntry>, String> {
-        fleet_load_entries_result("worktree")
+        fleet_load_entries_result("worktree").map(|entries| entries.into_iter().filter(fleet_entry_is_session).collect())
     }
 
     fn worktree_path_exists(&self, path: &std::path::Path) -> bool {

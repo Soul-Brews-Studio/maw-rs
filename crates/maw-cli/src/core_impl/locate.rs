@@ -331,7 +331,7 @@ fn locate_resolve_session_with_aliases<'a>(
 }
 
 fn locate_declared_oracle_repo_path(oracle: &str) -> Option<String> {
-    for entry in fleet_load_entries() {
+    for entry in fleet_load_entries().into_iter().filter(fleet_entry_is_session) {
         for window in &entry.session.windows {
             if window.kind != Some(NativeRepoKind::Oracle) {
                 continue;
@@ -413,6 +413,7 @@ fn locate_fleet_entry_matches(entry: &LocateFleetEntry, names: &BTreeSet<String>
 fn locate_load_fleet_entries() -> Vec<LocateFleetEntry> {
     fleet_load_entries()
         .into_iter()
+        .filter(fleet_entry_is_session)
         .map(|entry| LocateFleetEntry {
             window_sites: locate_load_fleet_window_sites(&entry.path),
             file: entry.file,

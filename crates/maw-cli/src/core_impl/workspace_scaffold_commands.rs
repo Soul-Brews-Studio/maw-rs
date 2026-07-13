@@ -1135,7 +1135,7 @@ fn new_ensure_fleet_session_entry(session: &str, window: &str, cwd: &std::path::
         return Ok(NewFleetStatusNative::Skipped);
     };
     let env = current_xdg_env();
-    if fleet_load_entries_for_env(&env).iter().any(|entry| entry.session.name == session) {
+    if fleet_load_entries_for_env(&env).iter().any(|entry| fleet_entry_is_session(entry) && entry.session.name == session) {
         return Ok(NewFleetStatusNative::Exists);
     }
     let fleet_dir = maw_state_path(&env, &["fleet"]);

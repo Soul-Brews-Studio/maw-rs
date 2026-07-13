@@ -678,7 +678,7 @@ fn ls_annotation_context() -> LsAnnotationContext {
 
 fn ls_fleet_sessions_for_annotation() -> BTreeSet<String> {
     let mut sessions = BTreeSet::new();
-    for entry in fleet_load_entries() {
+    for entry in fleet_load_entries().into_iter().filter(fleet_entry_is_session) {
         let stem = entry.file.strip_suffix(".json").unwrap_or(&entry.file);
         if !stem.is_empty() {
             sessions.insert(stem.to_owned());

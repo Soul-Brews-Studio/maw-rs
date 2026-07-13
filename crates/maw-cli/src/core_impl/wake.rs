@@ -609,7 +609,7 @@ fn wake_label(options: &WakeOptionsNative) -> String {
 }
 
 fn wake_resolve(options: &WakeOptionsNative, sessions: &[TmuxSession]) -> Result<WakeResolvedNative, String> {
-    let fleet_entries = fleet_load_entries();
+    let fleet_entries = fleet_load_entries().into_iter().filter(fleet_entry_is_session).collect::<Vec<_>>();
     let initial_oracle = wake_oracle(options)?;
     let typed = wake_typed_resolution(options, &initial_oracle, &fleet_entries)?;
     let typed_session_hint = typed.as_ref().and_then(|resolution| resolution.session_hint.clone());

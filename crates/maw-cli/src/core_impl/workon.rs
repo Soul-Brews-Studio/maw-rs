@@ -795,7 +795,7 @@ fn workon_ensure_fleet_session_entry(session: &str, window: &str, cwd: &std::pat
     if !workon_safe_fleet_session_name(session) || window.trim().is_empty() { return Ok(WorkonFleetStatus::Skipped); }
     let repo = workon_repo_from_cwd(cwd).ok_or(WorkonFleetStatus::Skipped).map_err(|_| "workon: skipped fleet registration".to_owned())?;
     let env = current_xdg_env();
-    if fleet_load_entries_for_env(&env).iter().any(|entry| entry.session.name == session) { return Ok(WorkonFleetStatus::Exists); }
+    if fleet_load_entries_for_env(&env).iter().any(|entry| fleet_entry_is_session(entry) && entry.session.name == session) { return Ok(WorkonFleetStatus::Exists); }
     let fleet_dir = maw_state_path(&env, &["fleet"]);
     std::fs::create_dir_all(&fleet_dir).map_err(|error| format!("workon: create fleet dir: {error}"))?;
     let path = fleet_dir.join(format!("{session}.json"));
