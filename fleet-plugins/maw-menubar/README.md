@@ -35,8 +35,10 @@ The approved architecture is documented in
 ```console
 bun run typecheck
 bun test
+swift test
+swift build -c release
 ```
 
-PR-B adds the dependency-free Swift/AppKit `NSStatusItem` helper, JSON/status models,
-and fixture-driven native tests. LaunchAgent rendering and lifecycle mutation remain a
-later slice so the native UI can be reviewed independently.
+The dependency-free Swift/AppKit helper, typed API models, polling, and structural quick
+actions live under `native/`. PR-C will add deterministic LaunchAgent rendering and
+lifecycle mutation after the native UI has been reviewed independently.
