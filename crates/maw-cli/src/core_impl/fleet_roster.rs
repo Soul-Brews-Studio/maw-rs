@@ -315,6 +315,34 @@ mod fleet_roster_tests {
     }
 
     #[test]
+    fn fleet_create_allocates_one_number_namespace_across_all_roots() {
+        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (root, _env) = roster_env("numbering");
+        for (path, body) in [
+            (
+                root.join("state/fleet/01-state.json"),
+                r#"{"name":"01-state","windows":[]}"#,
+            ),
+            (
+                root.join("home/.maw/fleet/squads/02-home/squad.json"),
+                r#"{"name":"02-home","squadName":"home","windows":[],"members":[]}"#,
+            ),
+            (
+                root.join("config/fleet/04-config.json"),
+                r#"{"name":"04-config","windows":[]}"#,
+            ),
+        ] {
+            std::fs::create_dir_all(path.parent().expect("parent")).expect("fleet dir");
+            std::fs::write(path, body).expect("fleet entry");
+        }
+
+        let created = run_fleet_command(&roster_args(&["create", "fresh"]));
+
+        assert_eq!(created.code, 0, "{}", created.stderr);
+        assert!(root.join("state/fleet/squads/03-fresh/squad.json").exists());
+    }
+
+    #[test]
     fn fleet_create_show_round_trip_cache_resolution_and_legacy_files() {
         let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let (root, _env) = roster_env("round-trip");

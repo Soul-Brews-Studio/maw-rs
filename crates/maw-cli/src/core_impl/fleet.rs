@@ -408,9 +408,14 @@ fn fleet_agent_node(value: &str) -> String {
     value.split(':').next().unwrap_or(value).to_owned()
 }
 
+fn fleet_entry_is_session(entry: &NativeFleetEntry) -> bool {
+    entry.session.members.is_none()
+}
+
 fn fleet_entries_to_summaries(entries: &[NativeFleetEntry]) -> Vec<FleetSessionSummary> {
     entries
         .iter()
+        .filter(|entry| fleet_entry_is_session(entry))
         .map(|entry| FleetSessionSummary {
             name: entry.session.name.clone(),
             windows: entry
@@ -673,7 +678,7 @@ fn fleet_findings(state: &FleetState, live: &[TmuxSession]) -> Vec<FleetFinding>
 }
 
 fn fleet_duplicate_window_findings(state: &FleetState, live: &[TmuxSession], findings: &mut Vec<FleetFinding>) {
-    for entry in &state.fleet_entries {
+    for entry in state.fleet_entries.iter().filter(|entry| fleet_entry_is_session(entry)) {
         let by_repo = fleet_windows_by_repo(entry);
         for windows in by_repo.values().filter(|windows| windows.len() > 1) {
             if !fleet_windows_share_alias(windows) || fleet_distinct_live_window_ids(entry, windows, live).len() > 1 { continue; }
@@ -869,7 +874,7 @@ fn fleet_live_session_names<R: maw_tmux::TmuxRunner>(runner: &mut R) -> Result<B
 
 fn fleet_gc_candidates(state: &FleetState, live: &BTreeSet<String>) -> Vec<FleetGcCandidate> {
     let mut candidates = Vec::new();
-    for entry in &state.fleet_entries {
+    for entry in state.fleet_entries.iter().filter(|entry| fleet_entry_is_session(entry)) {
         if live.contains(&entry.session.name) {
             continue;
         }
@@ -1064,7 +1069,7 @@ fn fleet_renumber_item(entry: &NativeFleetEntry, new_name: &str) -> FleetRenumbe
 }
 
 fn fleet_renumber_candidate(entry: &NativeFleetEntry, include_99: bool) -> Option<(u32, String, &NativeFleetEntry)> {
-    if entry.path.file_name().and_then(std::ffi::OsStr::to_str) == Some("squad.json") {
+    if !fleet_entry_is_session(entry) {
         return None;
     }
     let (prefix, stem) = entry.session.name.split_once('-')?;
@@ -1453,10 +1458,11 @@ fn fleet_registry_upsert_session_for_env(
     let entries = fleet_load_entries_for_env(env);
     let path = entries
         .iter()
-        .find(|entry| entry.session.name == session)
+        .find(|entry| fleet_entry_is_session(entry) && entry.session.name == session)
         .or_else(|| {
             entries.iter().find(|entry| {
-                fleet_session_stem(&entry.session.name) == target_stem
+                fleet_entry_is_session(entry)
+                    && fleet_session_stem(&entry.session.name) == target_stem
                     && entry
                         .session
                         .windows
@@ -1520,7 +1526,7 @@ fn fleet_repo_canonical_key(repo: &str) -> String {
 
 fn fleet_fix_duplicate_windows(entries: &[NativeFleetEntry], live: &[TmuxSession]) -> Result<Vec<FleetWindowRepair>, String> {
     let mut repairs = Vec::new();
-    for entry in entries {
+    for entry in entries.iter().filter(|entry| fleet_entry_is_session(entry)) {
         let text = std::fs::read_to_string(&entry.path).map_err(|error| format!("fleet doctor: read {}: {error}", entry.path.display()))?;
         let mut value: serde_json::Value = serde_json::from_str(&text).map_err(|error| format!("fleet doctor: parse {}: {error}", entry.path.display()))?;
         let Some(windows) = value.get("windows").and_then(serde_json::Value::as_array) else { continue };
@@ -2329,6 +2335,59 @@ mod fleet_tests {
             assert!(ghost.exists());
             assert!(!ghost.with_file_name("04-ghost.json.disabled").exists());
         });
+    }
+
+    #[test]
+    fn fleet_session_consumers_ignore_squad_rosters() {
+        fleet_with_fixture(|root| {
+            let roster = root.join("config/fleet/squads/01-3e/squad.json");
+            std::fs::create_dir_all(roster.parent().expect("roster parent")).expect("roster dir");
+            std::fs::write(
+                &roster,
+                r#"{"name":"01-3e","squadName":"3e","windows":[{"name":"durable","repo":"acme/missing-squad"}],"members":[]}"#,
+            )
+            .expect("roster");
+            let mut runtime = FleetFakeRuntime::default();
+            let state = fleet_load_state_with(&mut runtime).expect("state");
+            assert!(state.sessions.iter().all(|session| session.name != "01-3e"));
+            assert!(fleet_gc_candidates(&state, &BTreeSet::new())
+                .iter()
+                .all(|candidate| candidate.path != roster));
+        });
+    }
+
+    #[test]
+    fn fleet_upsert_never_writes_a_session_snapshot_into_a_squad_folder() {
+        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _home = EnvVarRestore::capture("HOME");
+        let _state = EnvVarRestore::capture("MAW_STATE_DIR");
+        let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
+        let _ghq = EnvVarRestore::capture("GHQ_ROOT");
+        let root = fleet_temp_root("upsert-squad-boundary");
+        let roster = root.join("state/fleet/squads/01-3e/squad.json");
+        std::fs::create_dir_all(roster.parent().expect("roster parent")).expect("roster dir");
+        let roster_body = r#"{"name":"01-3e","squadName":"3e","unknown":"keep","windows":[{"name":"durable","repo":"acme/roster"}],"members":[]}"#;
+        std::fs::write(&roster, roster_body).expect("roster");
+        std::env::set_var("HOME", root.join("home"));
+        std::env::set_var("MAW_STATE_DIR", root.join("state"));
+        std::env::set_var("MAW_CONFIG_DIR", root.join("config"));
+        std::env::set_var("GHQ_ROOT", root.join("ghq/github.com"));
+        let windows = vec![FleetWindowSummary {
+            name: "live".to_owned(),
+            repo: "acme/live".to_owned(),
+            kind: None,
+        }];
+
+        let written = fleet_registry_upsert_session_for_env(
+            &current_xdg_env(),
+            "01-3e",
+            &windows,
+            "maw fleet add",
+        )
+        .expect("upsert");
+
+        assert_eq!(written.path, root.join("home/.maw/fleet/01-3e.json"));
+        assert_eq!(std::fs::read_to_string(roster).expect("unchanged roster"), roster_body);
     }
 
     #[test]
