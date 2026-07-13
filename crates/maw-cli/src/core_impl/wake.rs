@@ -38,6 +38,7 @@ struct WakeOptionsNative {
     bud: bool,
     channels: bool,
     wait: bool,
+    yes: bool,
 }
 
 type WakeEqualsSetter = fn(&mut WakeOptionsNative, &str) -> Result<(), String>;
@@ -191,7 +192,22 @@ fn run_wake_command(argv: &[String]) -> CliOutput {
     if wants_help(argv, wake_help_value_flags()) {
         return help_output(wake_usage());
     }
-    match wake_run(argv, &mut WakeNativeTmux) {
+    let mut fleet_wake = |args: &[String]| run_fleet_command(args);
+    run_wake_command_with(argv, &mut WakeNativeTmux, &mut fleet_wake)
+}
+
+fn run_wake_command_with(
+    argv: &[String],
+    tmux: &mut impl WakeTmuxNative,
+    fleet_wake: &mut impl FnMut(&[String]) -> CliOutput,
+) -> CliOutput {
+    let options = match wake_parse_args(argv) {
+        Ok(options) => options,
+        Err(message) => return CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") },
+    };
+    let sessions = tmux.wake_list();
+    if let Some(output) = wake_picker_output(&options, &sessions, tmux, fleet_wake) { return output; }
+    match wake_run_options(&options, &sessions, tmux) {
         Ok((code, stdout)) => CliOutput { code, stdout, stderr: String::new() },
         Err(message) => CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") },
     }
@@ -200,15 +216,152 @@ fn run_wake_command(argv: &[String]) -> CliOutput {
 fn wake_run(argv: &[String], tmux: &mut impl WakeTmuxNative) -> Result<(i32, String), String> {
     let options = wake_parse_args(argv)?;
     let sessions = tmux.wake_list();
-    if options.list { return Ok((0, wake_render_list(&options, &sessions))); }
-    if options.all { return Ok((0, wake_render_all_plan(&options, &sessions))); }
+    wake_run_options(&options, &sessions, tmux)
+}
+
+fn wake_run_options(options: &WakeOptionsNative, sessions: &[TmuxSession], tmux: &mut impl WakeTmuxNative) -> Result<(i32, String), String> {
+    if options.list { return Ok((0, wake_render_list(options, sessions))); }
+    if options.all { return Ok((0, wake_render_all_plan(options, sessions))); }
     let mut out = String::new();
     let started = std::time::Instant::now();
-    let resolved = wake_resolve(&options, &sessions)?;
+    let resolved = wake_resolve(options, sessions)?;
     wake_record_phase(&resolved, "resolve", wake_elapsed_ms(started), &mut out, true);
-    if options.dry_run { return Ok((0, wake_render_dry_run(&options, &resolved))); }
-    wake_apply(&options, &resolved, tmux, &mut out)?;
+    if options.dry_run { return Ok((0, wake_render_dry_run(options, &resolved))); }
+    wake_apply(options, &resolved, tmux, &mut out)?;
     Ok((0, out))
+}
+
+fn wake_picker_output(
+    options: &WakeOptionsNative,
+    sessions: &[TmuxSession],
+    tmux: &mut impl WakeTmuxNative,
+    fleet_wake: &mut impl FnMut(&[String]) -> CliOutput,
+) -> Option<CliOutput> {
+    let (context, rows) = wake_picker_rows(options, sessions)?;
+    let execute_without_prompt = rows.len() == 1
+        && (options.yes
+            || (options.dry_run
+                && rows[0].matched.candidate.kind == maw_matcher::ResolveCandidateKind::FleetSquad));
+    if execute_without_prompt {
+        return Some(wake_run_picker_row(&rows[0], options, sessions, tmux, fleet_wake));
+    }
+    if !wake_stdin_is_terminal() {
+        return Some(CliOutput {
+            code: 1,
+            stdout: picker_render_text("wake", &options.target, context, &rows),
+            stderr: String::new(),
+        });
+    }
+    Some(wake_prompt_picker(&options.target, context, &rows).map_or_else(
+        || CliOutput { code: 1, stdout: String::new(), stderr: "wake: picker cancelled\n".to_owned() },
+        |row| wake_run_picker_row(&row, options, sessions, tmux, fleet_wake),
+    ))
+}
+
+fn wake_stdin_is_terminal() -> bool {
+    use std::io::IsTerminal as _;
+    std::io::stdin().is_terminal()
+}
+
+fn wake_prompt_picker(target: &str, context: &str, rows: &[PickerRow]) -> Option<PickerRow> {
+    use std::io::Write as _;
+    eprint!("{}", picker_render_text("wake", target, context, rows));
+    let yes_hint = if rows.len() == 1 { ", Enter/y" } else { "" };
+    loop {
+        eprint!("pick [1-{}]{yes_hint} or q: ", rows.len());
+        let _ = std::io::stderr().flush();
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line).is_err() { return None; }
+        match picker_parse_selection(&line, rows.len()) {
+            PickerSelection::Pick(index) => return rows.get(index).cloned(),
+            PickerSelection::Quit => return None,
+            PickerSelection::Invalid => eprintln!("wake: enter a number from 1 to {} or q", rows.len()),
+        }
+    }
+}
+
+fn wake_picker_rows(options: &WakeOptionsNative, sessions: &[TmuxSession]) -> Option<(&'static str, Vec<PickerRow>)> {
+    if options.list || options.all || options.target.contains(':') || wake_should_bypass_typed_resolution(options) {
+        return None;
+    }
+    let alive = sessions.iter().map(|session| session.name.clone()).collect::<BTreeSet<_>>();
+    let candidates = local_resolver_candidates(&alive);
+    let (context, matches) = match maw_matcher::resolve_typed_target(&options.target, &candidates) {
+        maw_matcher::ResolveTypedResult::Match { matched }
+            if options.pick
+                || matched.rank == maw_matcher::ResolveMatchRank::Fuzzy
+                || matched.candidate.kind == maw_matcher::ResolveCandidateKind::FleetSquad =>
+        {
+            ("is not a native wake target", vec![matched])
+        }
+        maw_matcher::ResolveTypedResult::Ambiguous { candidates } => {
+            let preferred = wake_preferred_matches(candidates);
+            if preferred.len() == 1
+                && !options.pick
+                && preferred[0].rank != maw_matcher::ResolveMatchRank::Fuzzy
+                && preferred[0].candidate.kind != maw_matcher::ResolveCandidateKind::FleetSquad
+            {
+                return None;
+            }
+            ("matches multiple targets", preferred)
+        }
+        maw_matcher::ResolveTypedResult::None =>
+            ("was not found exactly", deadend_closest_matches(&options.target, &candidates)),
+        maw_matcher::ResolveTypedResult::Match { .. } => return None,
+    };
+    let rows = matches.into_iter().filter_map(wake_picker_row).collect::<Vec<_>>();
+    (!rows.is_empty()).then_some((context, rows))
+}
+
+fn wake_preferred_matches(candidates: Vec<maw_matcher::ResolveMatch>) -> Vec<maw_matcher::ResolveMatch> {
+    let Some(priority) = candidates.iter().map(|matched| wake_kind_priority(matched.candidate.kind)).min() else { return Vec::new(); };
+    candidates.into_iter().filter(|matched| wake_kind_priority(matched.candidate.kind) == priority).collect()
+}
+
+fn wake_kind_priority(kind: maw_matcher::ResolveCandidateKind) -> u8 {
+    match kind {
+        maw_matcher::ResolveCandidateKind::SleepingRegistry => 0,
+        maw_matcher::ResolveCandidateKind::Oracle | maw_matcher::ResolveCandidateKind::Repo => 1,
+        maw_matcher::ResolveCandidateKind::LiveSession | maw_matcher::ResolveCandidateKind::Window => 2,
+        maw_matcher::ResolveCandidateKind::FleetSquad => 3,
+        maw_matcher::ResolveCandidateKind::Peer => 4,
+    }
+}
+
+fn wake_picker_row(matched: maw_matcher::ResolveMatch) -> Option<PickerRow> {
+    let action = match matched.candidate.kind {
+        maw_matcher::ResolveCandidateKind::FleetSquad => format!("maw fleet wake {}", matched.candidate.name),
+        maw_matcher::ResolveCandidateKind::Peer => return None,
+        _ => format!("maw wake {}", matched.candidate.name),
+    };
+    Some(PickerRow { detail: attach_picker_detail(&matched), matched, action })
+}
+
+fn wake_run_picker_row(
+    row: &PickerRow,
+    options: &WakeOptionsNative,
+    sessions: &[TmuxSession],
+    tmux: &mut impl WakeTmuxNative,
+    fleet_wake: &mut impl FnMut(&[String]) -> CliOutput,
+) -> CliOutput {
+    if let Err(message) = wake_validate_target_value(&row.matched.candidate.name, "picker target") {
+        return CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") };
+    }
+    if row.matched.candidate.kind == maw_matcher::ResolveCandidateKind::FleetSquad {
+        let mut args = vec!["wake".to_owned(), row.matched.candidate.name.clone()];
+        if options.dry_run { args.push("--dry-run".to_owned()); }
+        if options.kill { args.push("--kill".to_owned()); }
+        if options.resume { args.push("--resume".to_owned()); }
+        return fleet_wake(&args);
+    }
+    let mut selected = options.clone();
+    selected.target.clone_from(&row.matched.candidate.name);
+    selected.pick = false;
+    selected.yes = false;
+    match wake_run_options(&selected, sessions, tmux) {
+        Ok((code, stdout)) => CliOutput { code, stdout, stderr: String::new() },
+        Err(message) => CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") },
+    }
 }
 
 fn wake_should_use_peer_target(options: &WakeOptionsNative) -> bool {
@@ -238,7 +391,7 @@ fn wake_default_options() -> WakeOptionsNative {
         incubate: None, parent: None, peer: None, layout: None, from: None, snapshot: None, engine: None,
         name: None, repo_path: None, on_ready: Vec::new(), all: false, all_local: false, attach: true, dry_run: false, fresh: false,
         from_snapshot: false, kill: false, list: false, main: false, new_window: false, no_attach: false,
-        pick: false, resume: false, solo: false, split: false, bud: false, channels: false, wait: false,
+        pick: false, resume: false, solo: false, split: false, bud: false, channels: false, wait: false, yes: false,
     }
 }
 
@@ -316,6 +469,7 @@ fn wake_parse_bool_arg(arg: &str, options: &mut WakeOptionsNative) -> Result<boo
         "--bud" => options.bud = true,
         "--channels" => options.channels = true,
         "--wait" => options.wait = true,
+        "--yes" | "-y" => options.yes = true,
         "-h" | "--help" => return Err(wake_usage()),
         _ => return Ok(false),
     }
@@ -351,7 +505,7 @@ fn wake_finalize_options(mut options: WakeOptionsNative, positionals: &[String])
 }
 
 fn wake_usage() -> String {
-    "usage: maw wake <target|all> [--task <slug>|--wt <slug>] [--repo <org/repo>] [--prompt <text>] [--on-ready <cmd>] [--all --all-local --attach|-a --no-attach --dry-run --fresh --from-snapshot --kill --layout <nested|legacy> --list --main --new --parent <session> --peer <node> --pick --resume --snapshot <id> --solo --split]".to_owned()
+    "usage: maw wake <target|all> [--task <slug>|--wt <slug>] [--repo <org/repo>] [--prompt <text>] [--on-ready <cmd>] [--all --all-local --attach|-a --no-attach --dry-run --fresh --from-snapshot --kill --layout <nested|legacy> --list --main --new --parent <session> --peer <node> --pick --resume --snapshot <id> --solo --split --yes|-y]".to_owned()
 }
 
 fn wake_help_value_flags() -> &'static [&'static str] {
@@ -1310,6 +1464,7 @@ mod wake_tests {
         assert_eq!(options.task.as_deref(), Some("issue-134"));
         assert!(options.dry_run && options.no_attach && options.fresh);
         assert!(wake_parse_args(&wake_strings(&["neo", "-a"])).expect("parse -a").attach);
+        assert!(wake_parse_args(&wake_strings(&["neo", "--yes"])).expect("parse yes").yes);
         assert!(wake_parse_args(&wake_strings(&["--", "neo"])).expect_err("separator guard").contains("unknown argument"));
         assert!(wake_parse_args(&wake_strings(&["neo", "--task", "-bad"])).expect_err("value guard").contains("must not start"));
     }
@@ -1600,6 +1755,74 @@ mod wake_tests {
             assert!(err.contains("mascot"), "{err}");
             assert!(err.contains("maw oracle scan"), "{err}");
             assert!(err.contains("maw ls -a"), "{err}");
+            assert!(tmux.actions.is_empty());
+        });
+    }
+
+    #[test]
+    fn wake_exact_fleet_squad_uses_universal_non_tty_picker() {
+        wake_with_fixture(|root| {
+            std::fs::write(
+                root.join("config/fleet/01-3e.json"),
+                r#"{"name":"01-3e","squadName":"3e","windows":[],"members":[{"handle":"alpha"},{"handle":"drift"}]}"#,
+            )
+            .expect("squad registry");
+
+            let output = run_wake_command(&wake_strings(&["3e"]));
+
+            assert_eq!(output.code, 1, "{}{}", output.stdout, output.stderr);
+            assert!(output.stdout.contains("fleet squad 3e (2 members)"), "{}", output.stdout);
+            assert!(output.stdout.contains("maw fleet wake 3e"), "{}", output.stdout);
+            assert!(output.stderr.is_empty(), "{}", output.stderr);
+        });
+    }
+
+    #[test]
+    fn wake_fleet_squad_yes_and_dry_run_execute_in_process_bridge() {
+        wake_with_fixture(|root| {
+            std::fs::write(
+                root.join("config/fleet/01-3e.json"),
+                r#"{"name":"01-3e","squadName":"3e","windows":[],"members":[{"handle":"alpha"}]}"#,
+            )
+            .expect("squad registry");
+            let mut tmux = WakeMockTmux::default();
+            let mut calls = Vec::<Vec<String>>::new();
+            let mut fleet_wake = |args: &[String]| {
+                calls.push(args.to_vec());
+                CliOutput { code: 0, stdout: "fleet bridge\n".to_owned(), stderr: String::new() }
+            };
+
+            let yes = run_wake_command_with(&wake_strings(&["3e", "--yes"]), &mut tmux, &mut fleet_wake);
+            let dry_run = run_wake_command_with(&wake_strings(&["3e", "--dry-run"]), &mut tmux, &mut fleet_wake);
+
+            assert_eq!(yes.code, 0, "{}{}", yes.stdout, yes.stderr);
+            assert_eq!(dry_run.code, 0, "{}{}", dry_run.stdout, dry_run.stderr);
+            assert_eq!(calls, vec![wake_strings(&["wake", "3e"]), wake_strings(&["wake", "3e", "--dry-run"])]);
+            assert!(tmux.actions.is_empty(), "{:?}", tmux.actions);
+        });
+    }
+
+    #[test]
+    fn wake_near_fleet_squad_uses_same_picker_without_auto_action() {
+        wake_with_fixture(|root| {
+            std::fs::write(
+                root.join("config/fleet/01-3e.json"),
+                r#"{"name":"01-3e","squadName":"3e","windows":[],"members":[{"handle":"alpha"}]}"#,
+            )
+            .expect("squad registry");
+            let mut tmux = WakeMockTmux::default();
+            let mut called = false;
+            let mut fleet_wake = |_: &[String]| {
+                called = true;
+                CliOutput { code: 0, stdout: String::new(), stderr: String::new() }
+            };
+
+            let output = run_wake_command_with(&wake_strings(&["3f"]), &mut tmux, &mut fleet_wake);
+
+            assert_eq!(output.code, 1, "{}{}", output.stdout, output.stderr);
+            assert!(output.stdout.contains("fleet squad 3e"), "{}", output.stdout);
+            assert!(output.stdout.contains("maw fleet wake 3e"), "{}", output.stdout);
+            assert!(!called);
             assert!(tmux.actions.is_empty());
         });
     }

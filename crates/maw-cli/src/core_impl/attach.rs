@@ -194,7 +194,7 @@ enum AttachResolvedTarget {
 }
 
 fn attach_resolve_typed_target(target: &str, alive: &BTreeSet<String>) -> AttachResolvedTarget {
-    let candidates = attach_typed_candidates(alive);
+    let candidates = local_resolver_candidates(alive);
     let query = target.split(':').next().unwrap_or(target);
     match maw_matcher::resolve_typed_target(query, &candidates) {
         maw_matcher::ResolveTypedResult::None => AttachResolvedTarget::NotFound(deadend_suggestion_matches(target, &candidates)),
@@ -216,7 +216,7 @@ fn attach_resolve_typed_target(target: &str, alive: &BTreeSet<String>) -> Attach
     }
 }
 
-fn attach_typed_candidates(alive: &BTreeSet<String>) -> Vec<maw_matcher::ResolveTypedCandidate> {
+fn local_resolver_candidates(alive: &BTreeSet<String>) -> Vec<maw_matcher::ResolveTypedCandidate> {
     let mut candidates = alive
         .iter()
         .map(|name| maw_matcher::ResolveTypedCandidate {
