@@ -84,10 +84,15 @@ function initTerminal(cols, rows) {
     fontSize: 14,
     cursorBlink: false,
     scrollback: 0,
-    disableStdin: true,
+    // input enabled: raw UTF-8 keystrokes go back on the pty-stream channel;
+    // the sharer replays them via `tmux send-keys -l` (verified round-trip).
+    disableStdin: false,
     convertEol: false,
   });
   term.open(wrap);
+
+  // forward every keystroke to the shared pane over the same DataChannel
+  term.onData((data) => { if (dc && dc.readyState === "open") dc.send(data); });
 
   requestAnimationFrame(() => {
     try {
