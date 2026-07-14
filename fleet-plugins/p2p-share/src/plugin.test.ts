@@ -7,6 +7,7 @@ import handler, {
   createViewerServerOptions,
   getFlag,
   handleP2pShare,
+  initializeOpenViewer,
   loadWerift,
   parseShareOptions,
   requiresUnauthenticatedRiskAcknowledgement,
@@ -142,4 +143,22 @@ test("viewer config is injected safely and is not exposed by /config", async () 
   expect(await (await fetchViewer(new Request("http://127.0.0.1/config"))).text()).not.toContain(secret);
   expect((await fetchViewer(new Request("http://127.0.0.1/config"))).status).toBe(404);
   expect(await (await fetchViewer(new Request("http://127.0.0.1/"))).text()).toBe(html);
+});
+
+test("each concurrent viewer receives dims when its own DataChannel opens", () => {
+  const viewers = new Map<string, { pc: unknown; dc: unknown }>();
+  const firstMessages: Buffer[] = [];
+  const secondMessages: Buffer[] = [];
+  const channel = (messages: Buffer[]) => ({
+    readyState: "open",
+    send(data: Buffer) { messages.push(data); },
+  });
+
+  initializeOpenViewer(viewers, "viewer-1", {}, channel(firstMessages), { cols: 120, rows: 40 }, () => {});
+  initializeOpenViewer(viewers, "viewer-2", {}, channel(secondMessages), { cols: 120, rows: 40 }, () => {});
+
+  const expected = Buffer.from(JSON.stringify({ type: "dims", cols: 120, rows: 40 }));
+  expect(viewers.size).toBe(2);
+  expect(firstMessages).toEqual([expected]);
+  expect(secondMessages).toEqual([expected]);
 });

@@ -129,13 +129,11 @@ export function sendDataChannelTextToPane(
 
 function startPtyStream(
   target: string,
+  dims: Dims,
   onData: (chunk: Buffer) => void,
-  onDims: (dims: Dims) => void,
   log: Log,
 ): PtyStream {
   let running = true;
-  const dims = getPaneDimensions(target);
-  onDims(dims);
 
   const snapshot = captureSnapshot(target);
   if (snapshot) onData(Buffer.from("\x1b[2J\x1b[H" + snapshot));
@@ -173,6 +171,23 @@ function startPtyStream(
   };
 }
 
+export function initializeOpenViewer(
+  viewers: Map<string, { pc: any; dc: any }>,
+  id: string,
+  pc: any,
+  dc: any,
+  dims: Dims,
+  log: Log,
+): void {
+  viewers.set(id, { pc, dc });
+  try {
+    dc.send(Buffer.from(JSON.stringify({ type: "dims", cols: dims.cols, rows: dims.rows })));
+  } catch (err) {
+    log(`Dims init failed for viewer ${id}: ${err}`);
+  }
+  log(`Viewers: ${viewers.size}`);
+}
+
 export async function loadWerift(
   importer: (specifier: string) => Promise<unknown> = (specifier) => import(specifier),
 ): Promise<Werift> {
@@ -206,15 +221,6 @@ async function startSharePeer(opts: {
     for (const viewer of viewers.values()) {
       try {
         if (viewer.dc.readyState === "open") viewer.dc.send(data);
-      } catch {}
-    }
-  }
-
-  function broadcastDims(dims: Dims): void {
-    const msg = JSON.stringify({ type: "dims", cols: dims.cols, rows: dims.rows });
-    for (const viewer of viewers.values()) {
-      try {
-        if (viewer.dc.readyState === "open") viewer.dc.send(Buffer.from(msg));
       } catch {}
     }
   }
@@ -261,12 +267,12 @@ async function startSharePeer(opts: {
     dc.stateChanged.subscribe?.((state: string) => {
       log(`DataChannel state: ${state} (viewer ${msg.from})`);
       if (state === "open") {
-        viewers.set(msg.from, { pc, dc });
-        log(`Viewers: ${viewers.size}`);
+        const dims = getPaneDimensions(target);
+        initializeOpenViewer(viewers, msg.from, pc, dc, dims, log);
         if (!ptyStream) {
           log(`Starting PTY stream for ${target}`);
           try {
-            ptyStream = startPtyStream(target, broadcastToViewers, broadcastDims, log);
+            ptyStream = startPtyStream(target, dims, broadcastToViewers, log);
             log("PTY streaming via tmux pipe-pane");
           } catch (err) {
             log(`PTY stream failed: ${err}`);
