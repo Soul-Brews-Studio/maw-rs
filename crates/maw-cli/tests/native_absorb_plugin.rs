@@ -103,6 +103,27 @@ fn absorb_native_dry_run_golden_is_hermetic_without_js_ref() {
 }
 
 #[test]
+fn absorb_native_resolves_bare_receiver_repo_across_orgs() {
+    let (root, home, config) = absorb_seed("bare-receiver");
+    std::fs::remove_file(config.join("fleet/02-receiver.json")).expect("remove receiver fixture");
+    absorb_write(
+        &config.join("fleet/02-display-census.json"),
+        r#"{"name":"02-display-census","squadName":"display-census","windows":[{"name":"display-census","repo":""}]}"#,
+    );
+    let receiver = root.join("ghq/github.com/laris-co/display-census");
+    std::fs::create_dir_all(receiver.join("ψ/memory/learnings")).expect("bare receiver repo");
+
+    let output = absorb_command(&root, &home, &config)
+        .args(["absorb", "donor", "--into", "display-census", "--dry-run"])
+        .output()
+        .expect("run absorb");
+    assert!(output.status.success(), "stderr={}", String::from_utf8_lossy(&output.stderr));
+    let stdout = String::from_utf8(output.stdout).expect("stdout");
+    assert!(stdout.contains(&format!("-> {}", receiver.display())), "stdout={stdout}");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn absorb_native_blocks_leading_dash_targets_before_io() {
     let (root, home, config) = absorb_seed("guard");
     let guarded = absorb_command(&root, &home, &config)
