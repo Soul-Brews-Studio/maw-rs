@@ -14,7 +14,11 @@ declare const process: any;
 type Log = (msg: string) => void;
 type Dims = { cols: number; rows: number };
 type PtyStream = { stop: () => void };
-type SpawnSync = (cmd: string[]) => { exitCode?: number; stderr?: { toString(): string } };
+type SpawnSync = (cmd: string[]) => {
+  exitCode?: number;
+  stdout?: { toString(): string };
+  stderr?: { toString(): string };
+};
 type Werift = {
   RTCPeerConnection: any;
   RTCSessionDescription: any;
@@ -75,6 +79,30 @@ function sanitizeTmpSuffix(value: string): string {
   return value.replace(/[^A-Za-z0-9_-]/g, "-").replace(/-+/g, "-").slice(0, 80) || "pane";
 }
 
+export function shareTargetError(
+  target: string,
+  spawnSync: SpawnSync = Bun.spawnSync,
+): string | null {
+  const capture = spawnSync(capturePaneArgs(target));
+  if (capture.exitCode !== 0) {
+    const detail = capture.stderr?.toString().trim();
+    return `Target pane '${target}' cannot be captured${detail ? `: ${detail}` : "."}`;
+  }
+  const pipe = spawnSync(["tmux", "display-message", "-t", target, "-p", "#{pane_pipe}"]);
+  if (pipe.exitCode !== 0) {
+    const detail = pipe.stderr?.toString().trim();
+    return `Cannot inspect tmux pipe for '${target}'${detail ? `: ${detail}` : "."}`;
+  }
+  if (pipe.stdout?.toString().trim() === "1") {
+    return `Target pane '${target}' already has a tmux pipe; stop it before sharing.`;
+  }
+  return null;
+}
+
+function capturePaneArgs(target: string): string[] {
+  return ["tmux", "capture-pane", "-t", target, "-e", "-p"];
+}
+
 function getPaneDimensions(target: string): Dims {
   const r = Bun.spawnSync(["tmux", "display-message", "-t", target, "-p", "#{pane_width} #{pane_height}"]);
   if (r.exitCode !== 0) return { cols: 80, rows: 24 };
@@ -82,10 +110,16 @@ function getPaneDimensions(target: string): Dims {
   return { cols: cols || 80, rows: rows || 24 };
 }
 
-function captureSnapshot(target: string): string {
-  const r = Bun.spawnSync(["tmux", "capture-pane", "-t", target, "-e", "-p"]);
-  if (r.exitCode !== 0) return "";
-  return r.stdout.toString().replace(/\n/g, "\r\n");
+export function captureSnapshot(
+  target: string,
+  spawnSync: SpawnSync = Bun.spawnSync,
+): string {
+  const result = spawnSync(capturePaneArgs(target));
+  if (result.exitCode !== 0) {
+    const detail = result.stderr?.toString().trim() || "unknown tmux error";
+    throw new Error(`tmux capture-pane failed for '${target}': ${detail}`);
+  }
+  return (result.stdout?.toString() || "").replace(/\n/g, "\r\n");
 }
 
 function dataChannelPayloadToText(data: unknown): string {
@@ -134,6 +168,8 @@ function startPtyStream(
   log: Log,
 ): PtyStream {
   let running = true;
+  const targetError = shareTargetError(target);
+  if (targetError) throw new Error(targetError);
 
   const snapshot = captureSnapshot(target);
   if (snapshot) onData(Buffer.from("\x1b[2J\x1b[H" + snapshot));
@@ -369,6 +405,7 @@ export async function handleP2pShare(
   args: string[],
   log: Log,
   authKey = process.env.P2P_SHARE_KEY || process.env.AUTH_KEY || "",
+  spawnSync: SpawnSync = Bun.spawnSync,
 ): Promise<number> {
   const subcommand = args[0] || "status";
 
@@ -394,6 +431,12 @@ export async function handleP2pShare(
     log("SECURITY BLOCK: p2p-share has no authentication key.");
     log("Remote viewers can send keystrokes directly to the live pane.");
     log(`Set P2P_SHARE_KEY (recommended), or rerun with ${UNAUTHENTICATED_RISK_FLAG}.`);
+    return 1;
+  }
+
+  const targetError = shareTargetError(target, spawnSync);
+  if (targetError) {
+    log(`P2P Share failed: ${targetError}`);
     return 1;
   }
 
