@@ -162,3 +162,20 @@ test("each concurrent viewer receives dims when its own DataChannel opens", () =
   expect(firstMessages).toEqual([expected]);
   expect(secondMessages).toEqual([expected]);
 });
+
+test("served viewer sends terminal input and keeps rendering received bytes", async () => {
+  const template = readFileSync(new URL("../viewer.html", import.meta.url), "utf8");
+  const html = renderViewerHtml(template, {
+    signalUrl: "wss://signal.local/ws",
+    peerName: "share-test",
+    target: "session:0.0",
+    authKey: "secret",
+  });
+  const response = createViewerFetchHandler(html)(new Request("http://127.0.0.1/"));
+  const servedViewer = await response.text();
+
+  expect(servedViewer).toContain("disableStdin: false");
+  expect(servedViewer).toMatch(/term\.onData\(\(data\).*dc\.send\(data\)/s);
+  expect(servedViewer).toContain("term.write(bytes)");
+  expect(servedViewer).toContain("term.write(arr)");
+});
