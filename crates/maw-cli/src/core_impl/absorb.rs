@@ -121,11 +121,16 @@ fn absorb_resolve_entry_path(entry: &AbsorbFleetEntry, display_name: &str) -> Op
 fn absorb_find_oracle_repo(repos_root: &std::path::Path, stem: &str) -> Option<std::path::PathBuf> {
     let wanted = format!("{stem}-oracle").to_lowercase();
     let Ok(orgs) = std::fs::read_dir(repos_root) else { return None; };
+    let mut bare_match = None;
     for org in orgs.flatten().filter(|entry| entry.path().is_dir()) {
         let Ok(repos) = std::fs::read_dir(org.path()) else { continue; };
-        for repo in repos.flatten().filter(|entry| entry.path().is_dir()) { if repo.file_name().to_string_lossy().eq_ignore_ascii_case(&wanted) { return Some(repo.path()); } }
+        for repo in repos.flatten().filter(|entry| entry.path().is_dir()) {
+            let name = repo.file_name();
+            if name.to_string_lossy().eq_ignore_ascii_case(&wanted) { return Some(repo.path()); }
+            if bare_match.is_none() && name.to_string_lossy().eq_ignore_ascii_case(stem) { bare_match = Some(repo.path()); }
+        }
     }
-    None
+    bare_match
 }
 
 fn absorb_switch_to_receiver(session_name: &str, dry_run: bool, tmux: &mut AbsorbLocalTmux, out: &mut String) {
@@ -225,6 +230,20 @@ mod absorb_tests {
         assert!(absorb_find_fleet_entry(std::slice::from_ref(&entry), "neo").is_some());
         assert!(absorb_find_fleet_entry(std::slice::from_ref(&entry), "team-neo").is_some());
         assert!(absorb_find_fleet_entry(&[entry], "neo-oracle").is_some());
+    }
+
+    #[test]
+    fn absorb_repo_lookup_prefers_oracle_then_falls_back_to_bare() {
+        let root = std::env::temp_dir().join(format!("maw-rs-absorb-repos-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let bare = root.join("laris-co/display-census");
+        std::fs::create_dir_all(&bare).expect("bare repo");
+        assert_eq!(absorb_find_oracle_repo(&root, "display-census"), Some(bare));
+
+        let budded = root.join("Soul-Brews-Studio/display-census-oracle");
+        std::fs::create_dir_all(&budded).expect("budded repo");
+        assert_eq!(absorb_find_oracle_repo(&root, "display-census"), Some(budded));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
