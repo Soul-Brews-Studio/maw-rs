@@ -403,20 +403,11 @@ export async function handleP2pShare(
   log(`  Viewer: http://localhost:${port}`);
   log("");
 
-  const viewerHtml = readFileSync(join(import.meta.dir, "..", "viewer.html"), "utf8");
-  const server = Bun.serve({
-    port,
-    fetch(req: Request) {
-      const url = new URL(req.url);
-      if (url.pathname === "/" || url.pathname === "/viewer") {
-        return new Response(viewerHtml, { headers: { "content-type": "text/html; charset=utf-8" } });
-      }
-      if (url.pathname === "/config") {
-        return Response.json({ signalUrl, peerName, target, authKey });
-      }
-      return new Response("Not found", { status: 404 });
-    },
-  });
+  const viewerHtml = renderViewerHtml(
+    readFileSync(join(import.meta.dir, "..", "viewer.html"), "utf8"),
+    { signalUrl, peerName, target, authKey },
+  );
+  const server = Bun.serve(createViewerServerOptions(port, viewerHtml));
 
   log("Viewer ready:");
   log(`  Local: http://localhost:${port}`);
@@ -432,6 +423,31 @@ export async function handleP2pShare(
     server.stop();
     return 1;
   }
+}
+
+type ViewerConfig = { signalUrl: string; peerName: string; target: string; authKey: string };
+
+export function renderViewerHtml(template: string, config: ViewerConfig): string {
+  const json = JSON.stringify(config)
+    .replaceAll("<", "\\u003c")
+    .replaceAll("&", "\\u0026")
+    .replaceAll("\u2028", "\\u2028")
+    .replaceAll("\u2029", "\\u2029");
+  return template.replace("__MAW_P2P_SHARE_CONFIG__", json);
+}
+
+export function createViewerFetchHandler(viewerHtml: string): (req: Request) => Response {
+  return (req) => {
+    const path = new URL(req.url).pathname;
+    if (path === "/" || path === "/viewer") {
+      return new Response(viewerHtml, { headers: { "content-type": "text/html; charset=utf-8" } });
+    }
+    return new Response("Not found", { status: 404 });
+  };
+}
+
+export function createViewerServerOptions(port: number, viewerHtml: string) {
+  return { hostname: "127.0.0.1", port, fetch: createViewerFetchHandler(viewerHtml) };
 }
 
 type InvokeContext = {
