@@ -3,13 +3,17 @@ import handler, {
   DEFAULT_SIGNAL_URL,
   UNAUTHENTICATED_RISK_FLAG,
   VIEWER_PORT,
+  createViewerFetchHandler,
+  createViewerServerOptions,
   getFlag,
   handleP2pShare,
   loadWerift,
   parseShareOptions,
   requiresUnauthenticatedRiskAcknowledgement,
+  renderViewerHtml,
   sendDataChannelTextToPane,
 } from "./plugin";
+import { readFileSync } from "node:fs";
 
 async function run(args: string[]) {
   return handler({ source: "cli", args });
@@ -119,4 +123,23 @@ test("DataChannel binary payload is decoded before tmux input", () => {
     ["tmux", "send-keys", "-t", "pane", "-l", "--", "hello"],
     ["tmux", "send-keys", "-t", "pane", "Enter"],
   ]);
+});
+
+test("viewer config is injected safely and is not exposed by /config", async () => {
+  const secret = "signal-secret</script>";
+  const template = readFileSync(new URL("../viewer.html", import.meta.url), "utf8");
+  const html = renderViewerHtml(template, {
+    signalUrl: "wss://signal.local/ws",
+    peerName: "share-test",
+    target: "session:0.0",
+    authKey: secret,
+  });
+  const fetchViewer = createViewerFetchHandler(html);
+
+  expect(createViewerServerOptions(7742, html).hostname).toBe("127.0.0.1");
+  expect(html).not.toContain("</script></script>");
+  expect(html).toContain('"authKey":"signal-secret\\u003c/script>"');
+  expect(await (await fetchViewer(new Request("http://127.0.0.1/config"))).text()).not.toContain(secret);
+  expect((await fetchViewer(new Request("http://127.0.0.1/config"))).status).toBe(404);
+  expect(await (await fetchViewer(new Request("http://127.0.0.1/"))).text()).toBe(html);
 });
