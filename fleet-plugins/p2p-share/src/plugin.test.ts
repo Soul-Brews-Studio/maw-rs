@@ -3,6 +3,7 @@ import handler, {
   DEFAULT_SIGNAL_URL,
   UNAUTHENTICATED_RISK_FLAG,
   VIEWER_PORT,
+  captureSnapshot,
   createViewerFetchHandler,
   createViewerServerOptions,
   getFlag,
@@ -13,6 +14,7 @@ import handler, {
   requiresUnauthenticatedRiskAcknowledgement,
   renderViewerHtml,
   sendDataChannelTextToPane,
+  shareTargetError,
 } from "./plugin";
 import { readFileSync } from "node:fs";
 
@@ -178,4 +180,56 @@ test("served viewer sends terminal input and keeps rendering received bytes", as
   expect(servedViewer).toMatch(/term\.onData\(\(data\).*dc\.send\(data\)/s);
   expect(servedViewer).toContain("term.write(bytes)");
   expect(servedViewer).toContain("term.write(arr)");
+});
+
+test("capture-pane validation rejects a target before the viewer server or signaling starts", async () => {
+  expect(() => captureSnapshot("missing:9.9", () => ({
+    exitCode: 1,
+    stderr: { toString: () => "can't find pane: missing:9.9" },
+  }))).toThrow("tmux capture-pane failed for 'missing:9.9'");
+
+  const calls: string[][] = [];
+  const output: string[] = [];
+  const exitCode = await handleP2pShare(["share", ":0.0"], (line) => output.push(line), "secret", (cmd) => {
+    calls.push(cmd);
+    return cmd[1] === "capture-pane" ? {
+      exitCode: 1,
+      stderr: { toString: () => "can't find pane: :0.0" },
+    } : { exitCode: 0, stdout: { toString: () => "0" } };
+  });
+
+  expect(exitCode).toBe(1);
+  expect(output.join("\n")).toContain("Target pane ':0.0' cannot be captured");
+  expect(output.join("\n")).not.toContain("P2P Share starting");
+  expect(calls).toEqual([
+    ["tmux", "capture-pane", "-t", ":0.0", "-e", "-p"],
+  ]);
+});
+
+test("pre-existing tmux pipe is rejected instead of silently streaming zero bytes", async () => {
+  const calls: string[][] = [];
+  const spawnSync = (cmd: string[]) => {
+    calls.push(cmd);
+    return {
+      exitCode: 0,
+      stdout: { toString: () => cmd[1] === "display-message" ? "1\n" : "snapshot" },
+    };
+  };
+
+  expect(shareTargetError("live:0.0", spawnSync)).toContain("already has a tmux pipe");
+  expect(calls).toEqual([
+    ["tmux", "capture-pane", "-t", "live:0.0", "-e", "-p"],
+    ["tmux", "display-message", "-t", "live:0.0", "-p", "#{pane_pipe}"],
+  ]);
+  const output: string[] = [];
+  const exitCode = await handleP2pShare(
+    ["share", "live:0.0"],
+    (line) => output.push(line),
+    "secret",
+    spawnSync,
+  );
+
+  expect(exitCode).toBe(1);
+  expect(output.join("\n")).toContain("stop it before sharing");
+  expect(output.join("\n")).not.toContain("P2P Share starting");
 });
