@@ -177,9 +177,18 @@ jobs:
       - name: Test with wasm-host feature
         env:
           CARGO_BUILD_JOBS: 2
+          # No debuginfo: each test binary links the full Extism/wasmtime
+          # runtime; with debug info the links OOM the runner's linker
+          # (ld terminated with signal 7 [Bus error]).
+          CARGO_PROFILE_TEST_DEBUG: "0"
+          CARGO_PROFILE_DEV_DEBUG: "0"
         run: cargo test -p maw-cli -p maw-plugin-manifest --features wasm-host --locked
 
       - name: Clippy with wasm-host feature
+        env:
+          CARGO_BUILD_JOBS: 2
+          CARGO_PROFILE_TEST_DEBUG: "0"
+          CARGO_PROFILE_DEV_DEBUG: "0"
         run: cargo clippy -p maw-cli -p maw-plugin-manifest --all-targets --features wasm-host --locked -- -D warnings
 
   maw-menubar-native:
