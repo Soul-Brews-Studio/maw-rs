@@ -95,6 +95,45 @@ fn write_built_js_plugin(dir: &Path, name: &str) {
     .expect("dist entry");
 }
 
+fn write_wasm_plugin_manifest(dir: &Path, name: &str, sha256: &str) {
+    fs::write(
+        dir.join("plugin.json"),
+        format!(
+            r#"{{
+  "name": "{name}",
+  "version": "1.0.0",
+  "target": "wasm",
+  "sdk": "*",
+  "entry": {{ "kind": "wasm", "path": "plugin.wasm", "export": "handle" }},
+  "wasm": "./plugin.wasm",
+  "artifact": {{ "path": "./plugin.wasm", "sha256": "{sha256}" }},
+  "cli": {{ "command": "{name}" }}
+}}
+"#
+        ),
+    )
+    .expect("wasm manifest");
+}
+
+/// Write a committed-artifact wasm package and return the artifact's real pin.
+fn write_wasm_plugin(dir: &Path, name: &str) -> String {
+    fs::create_dir_all(dir).expect("plugin dir");
+    fs::write(dir.join("plugin.wasm"), b"\0asm\x01\x00\x00\x00wasm-fixture")
+        .expect("wasm artifact");
+    let sha256 = maw_plugin_manifest::hash_file(&dir.join("plugin.wasm")).expect("hash wasm");
+    write_wasm_plugin_manifest(dir, name, &sha256);
+    sha256
+}
+
+fn wasm_monorepo_fixture(root: &Path, name: &str) -> (PathBuf, String) {
+    let repo = root.join("repo");
+    let package = repo.join("packages").join(name);
+    let sha256 = write_wasm_plugin(&package, name);
+    fs::write(repo.join("README.md"), "# fixture wasm monorepo\n").expect("readme");
+    commit_fixture_repo(&repo);
+    (repo, sha256)
+}
+
 fn write_serve_only_plugin(dir: &Path, name: &str) {
     fs::create_dir_all(dir).expect("plugin dir");
     fs::write(
@@ -362,6 +401,191 @@ fn plugin_install_git_sha256_pin_combines_with_subpath() {
     assert_success(&pinned, "pinned subpath install");
     assert!(String::from_utf8_lossy(&pinned.stderr).is_empty());
     assert!(install_root.join("pinned-subpath/plugin.json").is_file());
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn plugin_install_git_wasm_subpath_with_pin_installs_committed_artifact() {
+    let root = temp_dir("git-wasm-pinned");
+    let (repo, sha256) = wasm_monorepo_fixture(&root, "wasm-fixture");
+    let install_root = root.join("plugins");
+    let file_url = format!(
+        "file://{}",
+        repo.canonicalize().expect("repo path").display()
+    );
+
+    let output = with_host_plugin_env(
+        Command::new(maw_bin()).args([
+            "plugin",
+            "install",
+            &file_url,
+            "--path",
+            "packages/wasm-fixture",
+            "--sha256",
+            &sha256,
+            "--root",
+            install_root.to_str().expect("install root utf8"),
+        ]),
+        &root,
+    )
+    .output()
+    .expect("maw plugin install wasm");
+
+    assert_success(&output, "pinned wasm subpath install");
+    assert!(String::from_utf8_lossy(&output.stderr).is_empty());
+    let install_dir = install_root.join("wasm-fixture");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("installed wasm-fixture@1.0.0 {}\n", install_dir.display())
+    );
+    assert!(install_dir.join("plugin.json").is_file());
+    assert!(install_dir.join("plugin.wasm").is_file());
+    assert!(!install_root.join("README.md").exists());
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn plugin_install_git_wasm_tampered_artifact_refuses() {
+    let root = temp_dir("git-wasm-tampered");
+    let repo = root.join("repo");
+    let package = repo.join("packages").join("tampered-wasm");
+    let _ = write_wasm_plugin(&package, "tampered-wasm");
+    fs::write(package.join("plugin.wasm"), b"\0asm\x01\x00\x00\x00tampered")
+        .expect("tamper wasm");
+    commit_fixture_repo(&repo);
+    let install_root = root.join("plugins");
+    let file_url = format!(
+        "file://{}",
+        repo.canonicalize().expect("repo path").display()
+    );
+
+    let output = with_host_plugin_env(
+        Command::new(maw_bin()).args([
+            "plugin",
+            "install",
+            &file_url,
+            "--path",
+            "packages/tampered-wasm",
+            "--root",
+            install_root.to_str().expect("install root utf8"),
+        ]),
+        &root,
+    )
+    .output()
+    .expect("maw plugin install tampered wasm");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stdout).is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("plugin 'tampered-wasm' artifact sha256 mismatch — refusing to install"),
+        "stderr: {stderr}"
+    );
+    assert!(!install_root.join("tampered-wasm").exists());
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn plugin_install_git_wasm_missing_pin_refuses_with_actionable_error() {
+    let root = temp_dir("git-wasm-unpinned");
+    let repo = root.join("repo");
+    let package = repo.join("packages").join("unpinned-wasm");
+    fs::create_dir_all(&package).expect("plugin dir");
+    fs::write(package.join("plugin.wasm"), b"\0asm\x01\x00\x00\x00unpinned")
+        .expect("wasm artifact");
+    fs::write(
+        package.join("plugin.json"),
+        r#"{
+  "name": "unpinned-wasm",
+  "version": "1.0.0",
+  "target": "wasm",
+  "sdk": "*",
+  "wasm": "./plugin.wasm",
+  "cli": { "command": "unpinned-wasm" }
+}
+"#,
+    )
+    .expect("manifest without artifact pin");
+    commit_fixture_repo(&repo);
+    let install_root = root.join("plugins");
+    let file_url = format!(
+        "file://{}",
+        repo.canonicalize().expect("repo path").display()
+    );
+
+    let output = with_host_plugin_env(
+        Command::new(maw_bin()).args([
+            "plugin",
+            "install",
+            &file_url,
+            "--path",
+            "packages/unpinned-wasm",
+            "--root",
+            install_root.to_str().expect("install root utf8"),
+        ]),
+        &root,
+    )
+    .output()
+    .expect("maw plugin install unpinned wasm");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stdout).is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("package 'unpinned-wasm' targets wasm")
+            && stderr.contains("artifact.path"),
+        "stderr: {stderr}"
+    );
+    assert!(!install_root.join("unpinned-wasm").exists());
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn plugin_install_git_wasm_missing_artifact_file_refuses() {
+    let root = temp_dir("git-wasm-no-artifact");
+    let repo = root.join("repo");
+    let package = repo.join("packages").join("ghost-wasm");
+    fs::create_dir_all(&package).expect("plugin dir");
+    write_wasm_plugin_manifest(
+        &package,
+        "ghost-wasm",
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    );
+    fs::write(repo.join("README.md"), "# no committed wasm\n").expect("readme");
+    commit_fixture_repo(&repo);
+    let install_root = root.join("plugins");
+    let file_url = format!(
+        "file://{}",
+        repo.canonicalize().expect("repo path").display()
+    );
+
+    let output = with_host_plugin_env(
+        Command::new(maw_bin()).args([
+            "plugin",
+            "install",
+            &file_url,
+            "--path",
+            "packages/ghost-wasm",
+            "--root",
+            install_root.to_str().expect("install root utf8"),
+        ]),
+        &root,
+    )
+    .output()
+    .expect("maw plugin install ghost wasm");
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("package 'ghost-wasm'")
+            && stderr.contains("plugin.wasm is not committed"),
+        "stderr: {stderr}"
+    );
+    assert!(!install_root.join("ghost-wasm").exists());
 
     let _ = fs::remove_dir_all(root);
 }
