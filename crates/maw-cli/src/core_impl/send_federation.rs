@@ -17,6 +17,17 @@ struct SendArgs {
     dry_run: bool,
 }
 
+// Where the message text comes from (#528): positional argv (historical), a
+// file via `-f <path>`, or stdin via a literal `-`. File/stdin content never
+// passes through a shell, so backticks/$/quotes/newlines stay inert.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+enum SendMessageSource {
+    #[default]
+    Positional,
+    File(String),
+    Stdin,
+}
+
 #[derive(Debug, Clone, Default)]
 struct WakeArgs {
     target: String,
@@ -53,7 +64,7 @@ fn run_wake_async(args: Vec<String>) -> Pin<Box<dyn Future<Output = CliOutput> +
 }
 
 async fn run_send_like_async_impl(command: &str, raw_args: &[String]) -> CliOutput {
-    if wants_help_before_positionals(raw_args, &["--from"]) {
+    if wants_help_before_positionals(raw_args, &["--from", "-f"]) {
         return help_output(send_usage(command));
     }
     let send_args = match parse_send_args(command, raw_args) {
@@ -416,12 +427,21 @@ fn send_acl_random_hex6() -> Option<String> {
 }
 
 fn parse_send_args(command: &str, argv: &[String]) -> Result<SendArgs, String> {
+    parse_send_args_with_stdin(command, argv, || std::io::stdin().lock())
+}
+
+fn parse_send_args_with_stdin<R: std::io::Read, F: FnOnce() -> R>(
+    command: &str,
+    argv: &[String],
+    stdin: F,
+) -> Result<SendArgs, String> {
     let mut inbox = None;
     let mut from = None;
     let mut positional = Vec::new();
     let mut approve = false;
     let mut trust = false;
     let mut dry_run = false;
+    let mut source = SendMessageSource::Positional;
     let mut index = 0;
     while index < argv.len() {
         match argv[index].as_str() {
@@ -440,6 +460,14 @@ fn parse_send_args(command: &str, argv: &[String]) -> Result<SendArgs, String> {
             value if value.starts_with("--from=") => {
                 from = Some(value["--from=".len()..].to_owned());
             }
+            "-f" => {
+                let Some(value) = argv.get(index + 1) else {
+                    return Err(format!("{command}: missing -f value (path to message file)"));
+                };
+                send_set_message_source(command, &mut source, SendMessageSource::File(value.clone()))?;
+                index += 1;
+            }
+            "-" => send_set_message_source(command, &mut source, SendMessageSource::Stdin)?,
             value if value.starts_with('-') => return Err(format!("{command}: unknown argument {value}")),
             value => positional.push(value.to_owned()),
         }
@@ -451,18 +479,92 @@ fn parse_send_args(command: &str, argv: &[String]) -> Result<SendArgs, String> {
     if positional.is_empty() {
         return Err(format!("{command}: target and message are required"));
     }
-    if positional.len() == 1 {
-        return Err(format!("{command}: missing message for '{}'", positional[0]));
-    }
+    let text = match &source {
+        SendMessageSource::Positional => {
+            if positional.len() == 1 {
+                return Err(format!("{command}: missing message for '{}'", positional[0]));
+            }
+            positional[1..].join(" ")
+        }
+        SendMessageSource::File(_) | SendMessageSource::Stdin => {
+            if positional.len() > 1 {
+                return Err(format!(
+                    "{command}: message given both as argument and via {}; use exactly one",
+                    send_message_source_label(&source)
+                ));
+            }
+            resolve_send_message_source(command, &positional[0], &source, stdin)?
+        }
+    };
     Ok(SendArgs {
         target: positional[0].clone(),
-        text: positional[1..].join(" "),
+        text,
         inbox,
         from,
         approve,
         trust,
         dry_run,
     })
+}
+
+fn send_message_source_label(source: &SendMessageSource) -> &'static str {
+    match source {
+        SendMessageSource::Positional => "positional message",
+        SendMessageSource::File(_) => "-f <file>",
+        SendMessageSource::Stdin => "'-' (stdin)",
+    }
+}
+
+fn send_set_message_source(
+    command: &str,
+    slot: &mut SendMessageSource,
+    next: SendMessageSource,
+) -> Result<(), String> {
+    if *slot != SendMessageSource::Positional {
+        return Err(format!(
+            "{command}: message can come from only one of -f <file> or '-' (stdin)"
+        ));
+    }
+    *slot = next;
+    Ok(())
+}
+
+// Resolve message text from a file or stdin source (#528). Bytes pass through
+// untouched (no shell, no word-splitting, no substitution); non-UTF-8 or
+// unreadable input errors name the source. Empty content reuses the exact
+// empty-message error positional hey produces today.
+fn resolve_send_message_source<R: std::io::Read, F: FnOnce() -> R>(
+    command: &str,
+    target: &str,
+    source: &SendMessageSource,
+    stdin: F,
+) -> Result<String, String> {
+    let content = match source {
+        SendMessageSource::Positional => String::new(),
+        SendMessageSource::File(path) => {
+            let file = std::fs::File::open(path)
+                .map_err(|error| format!("{command}: cannot read message file '{path}': {error}"))?;
+            send_message_from_reader(command, &format!("file '{path}'"), file)?
+        }
+        SendMessageSource::Stdin => send_message_from_reader(command, "stdin", stdin())?,
+    };
+    send_require_nonempty_message(command, target, content)
+}
+
+fn send_message_from_reader(
+    command: &str,
+    label: &str,
+    reader: impl std::io::Read,
+) -> Result<String, String> {
+    std::io::read_to_string(reader)
+        .map_err(|error| format!("{command}: cannot read message from {label}: {error}"))
+}
+
+fn send_require_nonempty_message(command: &str, target: &str, content: String) -> Result<String, String> {
+    if content.trim().is_empty() {
+        return Err(format!("{command}: missing message for '{target}'"));
+    }
+    Ok(content)
 }
 
 fn send_audit_args(command: &str, raw_args: &[String]) -> Vec<String> {
@@ -491,10 +593,10 @@ fn send_usage_error(command: &str, message: &str) -> CliOutput {
 
 fn send_usage(command: &str) -> String {
     if command == "hey" {
-        return "usage: maw hey <target> <message> [--inbox] [--force deprecated] [--approve] [--trust]\n  default: write receiver inbox and inject into the target pane\n  --inbox: write receiver inbox only; skip pane injection\n  --force: deprecated compatibility alias; delivery is already forced by default\n  target forms:\n    <oracle-window>              same-node window name (local-only)\n    local:<agent>                explicit same-node target\n    <session>:<window>[.<pane>]  paste a TARGET from maw ls -v\n    <node>:<session>             canonical cross-node form (window 1)\n    <node>:<session>:<window>    target a specific tmux window (#410)\n  e.g. maw hey mawjs-oracle \"hello from neo\"\n       maw hey local:mawjs \"hello from neo\"\n       maw hey phaith:01-hojo:3 \"hello hojo-hermes\"\n       run `maw locate <agent>` to enumerate across federation".to_owned();
+        return "usage: maw hey <target> <message> [--inbox] [--force deprecated] [--approve] [--trust]\n       maw hey <target> -f <file>   read message from file (bytes-through; no shell)\n       maw hey <target> -           read message from stdin\n  default: write receiver inbox and inject into the target pane\n  --inbox: write receiver inbox only; skip pane injection\n  --force: deprecated compatibility alias; delivery is already forced by default\n  target forms:\n    <oracle-window>              same-node window name (local-only)\n    local:<agent>                explicit same-node target\n    <session>:<window>[.<pane>]  paste a TARGET from maw ls -v\n    <node>:<session>             canonical cross-node form (window 1)\n    <node>:<session>:<window>    target a specific tmux window (#410)\n  e.g. maw hey mawjs-oracle \"hello from neo\"\n       maw hey local:mawjs \"hello from neo\"\n       maw hey phaith:01-hojo:3 \"hello hojo-hermes\"\n       run `maw locate <agent>` to enumerate across federation".to_owned();
     }
     format!(
-        "usage: maw-rs {command} <target> <message> [--inbox|--no-inbox] [--from <oracle:node>] [--approve] [--trust] [--dry-run]"
+        "usage: maw-rs {command} <target> <message> [--inbox|--no-inbox] [--from <oracle:node>] [--approve] [--trust] [--dry-run]\n       maw-rs {command} <target> -f <file> | -   read message from file or stdin (no shell interpolation)"
     )
 }
 
@@ -2672,6 +2774,82 @@ mod send_acl_hotpath_tests {
         );
         let output = send_usage_error("hey", "hey: --trust requires --approve");
         assert_eq!(output.stderr, include_str!("../../tests/fixtures/native-scope-acl/send-usage.stderr"));
+    }
+
+    fn send_test_stdin(payload: &'static str) -> impl FnOnce() -> std::io::Cursor<&'static [u8]> {
+        move || std::io::Cursor::new(payload.as_bytes())
+    }
+
+    fn send_no_stdin() -> impl FnOnce() -> std::io::Cursor<&'static [u8]> {
+        || panic!("stdin must not be read for this invocation")
+    }
+
+    #[test]
+    fn hey_file_source_delivers_shell_hostile_bytes_identical_to_sinks() {
+        let _lock = env_test_lock().lock().unwrap();
+        let (root, _restores) = send_audit_test_env("file-source");
+        let payload = "review: `cargo test` ate $YESTERDAY and $(point-c)\nline2 'single' \"double\" \\backslash\n";
+        let path = root.join("message.txt");
+        std::fs::write(&path, payload).unwrap();
+        let path_arg = path.to_str().unwrap();
+
+        let args = parse_send_args_with_stdin("hey", &send_acl_vec(&["bob", "-f", path_arg]), send_no_stdin()).expect("parse -f");
+        assert_eq!(args.target, "bob");
+        assert_eq!(args.text, payload, "file bytes must pass through untouched");
+        assert_eq!(args.from, None);
+        assert!(!args.approve && !args.trust && !args.dry_run);
+
+        let config = HeyConfig { node: Some("m5".to_owned()), oracle: Some("atlas".to_owned()), route: RouteConfig::default() };
+        send_record_success("hey", &send_audit_args("hey", &send_acl_vec(&["bob", "-f", path_arg])), &config, "atlas", None, "bob", &args.text, "local", None);
+        let log: serde_json::Value = serde_json::from_str(std::fs::read_to_string(root.join("maw/maw-log.jsonl")).unwrap().trim()).unwrap();
+        assert_eq!(log["msg"], serde_json::json!(payload));
+        if std::process::Command::new("sqlite3").arg("-version").output().is_ok() {
+            let output = std::process::Command::new("sqlite3")
+                .arg(root.join("maw/message-ledger.sqlite"))
+                .arg("select text from messages;")
+                .output()
+                .unwrap();
+            assert_eq!(String::from_utf8(output.stdout).unwrap(), format!("{payload}\n"));
+        }
+    }
+
+    #[test]
+    fn hey_stdin_dash_source_reads_shell_hostile_bytes_identical() {
+        let payload = "a `b` $c\n$(never-runs) \"q\" 'w'";
+        let args = parse_send_args_with_stdin("hey", &send_acl_vec(&["bob", "-"]), send_test_stdin(payload)).expect("parse -");
+        assert_eq!(args.target, "bob");
+        assert_eq!(args.text, payload, "stdin bytes must pass through untouched");
+
+        let empty = parse_send_args_with_stdin("hey", &send_acl_vec(&["bob", "-"]), send_test_stdin("")).unwrap_err();
+        assert_eq!(empty, "hey: missing message for 'bob'", "empty stdin must match today's empty-message error");
+    }
+
+    #[test]
+    fn hey_rejects_positional_message_combined_with_file_or_stdin_source() {
+        let parse = |argv: &[&str]| parse_send_args_with_stdin("hey", &send_acl_vec(argv), send_no_stdin()).unwrap_err();
+        assert_eq!(parse(&["bob", "-f", "/tmp/x", "hello"]), "hey: message given both as argument and via -f <file>; use exactly one");
+        assert_eq!(parse(&["bob", "-", "hello"]), "hey: message given both as argument and via '-' (stdin); use exactly one");
+        assert_eq!(parse(&["bob", "-f", "/tmp/x", "-"]), "hey: message can come from only one of -f <file> or '-' (stdin)");
+        assert_eq!(parse(&["bob", "-f"]), "hey: missing -f value (path to message file)");
+    }
+
+    #[test]
+    fn hey_missing_and_empty_message_files_error_actionably() {
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+        let root = std::env::temp_dir().join(format!("maw-hey-file-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let missing = root.join("nope.txt");
+        let err = parse_send_args_with_stdin("hey", &send_acl_vec(&["bob", "-f", missing.to_str().unwrap()]), send_no_stdin()).unwrap_err();
+        assert!(err.starts_with(&format!("hey: cannot read message file '{}':", missing.display())), "{err}");
+
+        let empty = root.join("empty.txt");
+        std::fs::write(&empty, "").unwrap();
+        let err = parse_send_args_with_stdin("hey", &send_acl_vec(&["bob", "-f", empty.to_str().unwrap()]), send_no_stdin()).unwrap_err();
+        assert_eq!(err, "hey: missing message for 'bob'", "empty file must match today's empty-message error");
+        let output = send_usage_error("hey", &err);
+        assert_eq!(output.code, 1);
+        assert!(output.stderr.contains("✗ missing message for target 'bob'"));
     }
 
     fn send_acl_vec(values: &[&str]) -> Vec<String> { values.iter().map(|value| (*value).to_owned()).collect() }

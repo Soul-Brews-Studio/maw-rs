@@ -1,5 +1,7 @@
 hey: --trust requires --approve
 usage: maw hey <target> <message> [--inbox] [--force deprecated] [--approve] [--trust]
+       maw hey <target> -f <file>   read message from file (bytes-through; no shell)
+       maw hey <target> -           read message from stdin
   default: write receiver inbox and inject into the target pane
   --inbox: write receiver inbox only; skip pane injection
   --force: deprecated compatibility alias; delivery is already forced by default
