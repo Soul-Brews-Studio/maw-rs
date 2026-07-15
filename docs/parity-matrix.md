@@ -2,17 +2,17 @@
 
 Generated from source inspection on 2026-06-25 UTC+7. maw-js source of truth: live fleet install `/home/agent/github.com/Soul-Brews-Studio/maw-js`, version `26.6.13-alpha.1921`, commit `5560732f`. This is the finish-line checklist for full maw-js → maw-rs parity under epic #25; doc-only gaps become follow-up implementation issues.
 
-**Wave-3 refresh (2026-07-15):** corrected `ping` and `consent` from `WASM ✅` to `native ✅` (both carry a top-level native `DispatcherEntry` — `ping.rs` / `consent.rs`, `Handler::Sync`; their `wasm-parity` artifacts are in-tree parity fixtures, not `maw-plugins` extractions), and added a `layout` row (`WASM ✅`, ship-tier plugin extracted to `Soul-Brews-Studio/maw-plugins`, packages/20-layout, runs only under `--features wasm-host`). Re-verification note: `stream` and `hub` were checked against the running binary and left `native ✅` — each has a native `DispatcherEntry` (build.rs auto-aggregates `DISPATCH_114`/`DISPATCH_300` into the dispatcher), `hub` is covered by the dispatcher `CORE_COMMANDS` Native-reachability test, and `stream --unlink … --dry-run` has a committed golden in `crates/maw-cli/tests/native_attach_view_stream_split.rs` that passes on a default build — so despite parallel `maw-plugins` packages (20-stream, 20-hub) their maw-rs status is native.
+**Wave-3 refresh (2026-07-15):** corrected `ping` and `consent` from `WASM ✅` to `native ✅` (both carry a top-level native `DispatcherEntry` — `ping.rs` / `consent.rs`, `Handler::Sync`; their `wasm-parity` artifacts are in-tree parity fixtures, not `maw-plugins` extractions). Flipped `stream` and `hub` from `native ✅` to `WASM ✅` and added a `layout` row (`WASM ✅`): all three are ship-tier plugins extracted to `Soul-Brews-Studio/maw-plugins` (packages/20-stream, 20-hub, 20-layout) with **no** native `DispatcherEntry`. Verified by running the built binary — a real invoke on a default (no-feature) build errors `plugin '<verb>' is a ship-tier WASM plugin … built without the 'wasm-host' feature` (and `stream`'s unlink golden is `#[cfg(feature="wasm-host")]` in `native_attach_view_stream_split.rs`). The parallel-native reading (a `DISPATCH_114`/`DISPATCH_300` claim) was refuted at runtime.
 
 ## Summary
 
-- Total rows: **132**
-- native ✅: **82**
-- WASM ✅: **27**
+- Total rows: **133**
+- native ✅: **81**
+- WASM ✅: **29**
 - stub ⚠️: **13**
 - NOT-PORTED ❌: **10**
 
-Counts sum to the total: 82 + 27 + 13 + 10 = 132.
+Counts sum to the total: 81 + 29 + 13 + 10 = 133.
 
 > **wasm-host gate (wave-3):** `WASM ✅` verbs that are ship-tier plugins extracted to the `Soul-Brews-Studio/maw-plugins` monorepo (e.g. `layout`, packages/20-layout) run **only** on a maw binary built with `--features wasm-host`; default builds omit the Extism runtime and the verb errors loudly. In-tree `WASM ✅` rows (covered by a committed parity fixture or CLI integration test) are a separate, test-only mechanism and are not gated on that feature.
 
@@ -69,7 +69,7 @@ Legend: **native ✅** = Rust dispatcher/implementation exists; **WASM ✅** = a
 | `attach-ssh` | remote ssh attach flow | maw-js source | native ✅ | Rust native 4c subset with dry-run/plan-json tests; verify full ssh path option-injection coverage before marking closed. |
 | `view` | --clean --kill --no-wake --read-only/--readonly --split --wake --zombie-agents | maw-js source | stub ⚠️ | Rust view is attach+--readonly+--print shim; maw-js view plugin is 641 LOC. Most wake/split/cleanup semantics not ported. |
 | `split` | --bottom --claude-pane-policy --horizontal --no-attach --pct --right --vertical | maw-js source | stub ⚠️ | Rust split only handles target, -v/--vertical, --pct, --cmd, --dry-run. maw-js 437 LOC split flags/output remain partial. |
-| `stream` | --help --into --name --unlink | maw-js source | native ✅ | Rust native stream covers link/unlink plans; recheck byte-level output before final all-green. |
+| `stream` | --help --into --name --unlink | maw-js source | WASM ✅ | Ship-tier plugin extracted to `Soul-Brews-Studio/maw-plugins` (packages/20-stream); no native maw-rs `DispatcherEntry`. Real invoke on a default build errors "ship-tier WASM plugin … --features wasm-host"; the unlink golden is `#[cfg(feature="wasm-host")]` in `native_attach_view_stream_split.rs`. Runs only under `--features wasm-host`. |
 | `layout` | tmux layout apply/save/list | maw-js source | WASM ✅ | Ship-tier plugin extracted to `Soul-Brews-Studio/maw-plugins` (packages/20-layout); no native maw-rs `DispatcherEntry`. Runs only on a maw binary built with `--features wasm-host` (see the wasm-host gate). |
 | `capture` | --full --lines --pane | maw-js source | native ✅ | Native DispatcherEntry: `crates/maw-cli/src/core_impl/capture.rs:2`. |
 | `kill` | --all --force --index --pane --peer | maw-js source | native ✅ | Native DispatcherEntry: `crates/maw-cli/src/core_impl/kill.rs:2`. |
@@ -128,7 +128,8 @@ Legend: **native ✅** = Rust dispatcher/implementation exists; **WASM ✅** = a
 | `config` | set/get-ish config; --json | maw-js + maw-rs source | WASM ✅ | WASM parity covers config set node and set port --json; secret-like set is host-gated. Full config surface remains limited. |
 | `channel` | add/remove/list/setup; channel setup flags | maw-js + maw-rs source | native ✅ | Native DispatcherEntry: `crates/maw-cli/src/core_impl/channel.rs:1`. |
 | `discover` | --awake --json --peers --tree | maw-js + maw-rs source | native ✅ | Rust native discover plan exists; compare exact built-in output before closing. |
-| `fuzzy / resolve / identity / normalize / calver / xdg / bind-host / hub / auto-wake / route / worktree-window` | Rust helper commands | maw-js + maw-rs source | native ✅ | Native Rust support commands; mostly not direct maw-js plugin rows but needed for parity internals. |
+| `fuzzy / resolve / identity / normalize / calver / xdg / bind-host / auto-wake / route / worktree-window` | Rust helper commands | maw-js + maw-rs source | native ✅ | Native Rust support commands; mostly not direct maw-js plugin rows but needed for parity internals. |
+| `hub` | fleet hub surface | maw-js + maw-rs source | WASM ✅ | Ship-tier plugin extracted to `Soul-Brews-Studio/maw-plugins` (packages/20-hub); no native maw-rs `DispatcherEntry` (`hub_xdg_plan.rs` is the unrelated hub-xdg helper). Real invoke on a default build errors "ship-tier WASM plugin … --features wasm-host". Runs only under `--features wasm-host`. |
 | `ffi Tier-2` | FFI plugin host | maw-js + maw-rs source | stub ⚠️ | Won't-do/full Tier-2 deferred per issue #70; keep as stub reason rather than blank. |
 ## Fleet / orchestration / misc plugins
 
