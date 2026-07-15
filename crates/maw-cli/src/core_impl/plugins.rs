@@ -464,7 +464,7 @@ mod plugins_tests {
         std::fs::write(dir.join("index.ts"), "export default function handler() {}\n").expect("entry");
         std::fs::write(
             dir.join("plugin.json"),
-            format!(r#"{{"name":"{name}","version":"1.0.0","sdk":"^0.1.0","entry":"index.ts","tier":"{tier}","cli":{{"command":"{name}"}},"description":"{name} plugin"}}"#),
+            format!(r#"{{"name":"{name}","version":"1.0.0","sdk":"^1.0.0","entry":"index.ts","tier":"{tier}","cli":{{"command":"{name}"}},"description":"{name} plugin"}}"#),
         )
         .expect("manifest");
     }

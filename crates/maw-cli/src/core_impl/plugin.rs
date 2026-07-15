@@ -820,7 +820,9 @@ fn plugin_init_summary_json(summary: &maw_plugin_manifest::PluginInitSummary) ->
 }
 
 fn plugin_discover_options() -> DiscoverPackagesOptions {
-    DiscoverPackagesOptions { runtime_version: "1.0.0".to_owned(), ..DiscoverPackagesOptions::default() }
+    // runtime_version defaults to the ABI-derived host_abi_version() — the
+    // SDK-floor gate tracks HOST_FN_NAMES instead of a hardcoded literal.
+    DiscoverPackagesOptions::default()
 }
 
 fn plugin_add_registry_disabled(options: &mut DiscoverPackagesOptions) {

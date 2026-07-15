@@ -155,13 +155,20 @@ Never delete a fixture to make the extraction pass. If the host ABI cannot repre
 an observable behavior, stop and add a generic ABI or document a deliberate parity
 plan; do not silently weaken the test.
 
-PR-B's body must include all three mandatory checklist entries:
+PR-B's body must include all four mandatory checklist entries:
 
 1. **Sub-dispatch/internal-caller audit:** query, classified findings, and the explicit
    wake-all conclusion.
 2. **ADR note:** why the verb is allowed to move, or the new ADR authorizing it.
 3. **Parity plan:** exact goldens/side effects covered and any production smoke the
    lead must run.
+4. **Stale-plugin defense (#520/#522):** confirm the missing-plugin fallthrough knows
+   the verb (fleet-plugins table entry or plugins.lock pin — a machine without the
+   plugin must get the actionable install hint, never `unknown command`), that the
+   package `sdk` range accepts the ABI-derived floor
+   (`maw_plugin_manifest::host_abi_version()`), and that no machine keeps serving the
+   verb from a stale pre-extraction artifact (`maw doctor plugins`:
+   `plugins:stale-artifacts` / `plugins:missing` / `plugins:sdk-floor` clean).
 
 ## 7. Run isolated targeted gates
 

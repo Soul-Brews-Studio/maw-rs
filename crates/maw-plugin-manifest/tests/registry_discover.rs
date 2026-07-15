@@ -214,13 +214,15 @@ fn discover_packages_applies_registry_gates_overrides_and_sorting() {
         ..DiscoverPackagesOptions::default()
     });
 
+    // registry-dev-artifact is a symlinked, unbuilt (no artifact.sha256)
+    // plugin dir: without MAW_PLUGIN_DEV=1 the symlink no longer bypasses
+    // hash verification, so it refuses like a regular unbuilt dir (#522).
     assert_eq!(
         names(&report),
         vec![
             "registry-disabled-ok",
             "registry-artifact-ok",
             "registry-legacy-ok",
-            "registry-dev-artifact",
         ]
     );
     assert!(
@@ -251,15 +253,13 @@ fn discover_packages_applies_registry_gates_overrides_and_sorting() {
             .weight,
         Some(1)
     );
-    assert!(report
-        .plugins
-        .iter()
-        .find(|plugin| plugin.manifest.name == "registry-dev-artifact")
-        .expect("dev")
-        .entry_path
-        .as_ref()
-        .expect("entry path")
-        .ends_with("dist/index.js"));
+    assert!(
+        !report
+            .plugins
+            .iter()
+            .any(|plugin| plugin.manifest.name == "registry-dev-artifact"),
+        "symlinked unbuilt plugin must refuse without MAW_PLUGIN_DEV=1"
+    );
     assert_eq!(
         hash_file(&artifact_ok).expect("hash"),
         sha256(artifact_text)
@@ -274,6 +274,10 @@ fn discover_packages_applies_registry_gates_overrides_and_sorting() {
     assert!(warning_text.contains("plugin 'registry-unbuilt' is unbuilt"));
     assert!(warning_text.contains("plugin 'registry-missing-artifact' artifact missing"));
     assert!(warning_text.contains("plugin 'registry-hash-mismatch' artifact hash mismatch"));
+    assert!(
+        warning_text.contains("plugin 'registry-dev-artifact' is unbuilt"),
+        "{warning_text}"
+    );
 
     remove_dir_all(root).expect("cleanup");
 }

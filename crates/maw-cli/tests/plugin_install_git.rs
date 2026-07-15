@@ -655,3 +655,66 @@ fn plugin_install_then_bare_invoke_serve_only_prints_mounted_url() {
 
     let _ = fs::remove_dir_all(root);
 }
+
+#[test]
+fn plugin_install_git_wasm_success_writes_plugins_lock_pin() {
+    let root = temp_dir("git-wasm-lock-write");
+    let (repo, sha256) = wasm_monorepo_fixture(&root, "lockwrite-fixture");
+    let install_root = root.join("plugins");
+    let lock_path = root.join("plugins.lock");
+    let file_url = format!(
+        "file://{}",
+        repo.canonicalize().expect("repo path").display()
+    );
+
+    let output = with_host_plugin_env(
+        Command::new(maw_bin()).args([
+            "plugin",
+            "install",
+            &file_url,
+            "--path",
+            "packages/lockwrite-fixture",
+            "--sha256",
+            &sha256,
+            "--root",
+            install_root.to_str().expect("install root utf8"),
+        ]),
+        &root,
+    )
+    .env("MAW_PLUGINS_LOCK", &lock_path)
+    .output()
+    .expect("maw plugin install wasm");
+
+    assert_success(&output, "pinned wasm install with lock write");
+    let lock: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&lock_path).expect("lock file"))
+            .expect("lock json");
+    assert_eq!(lock["schema"], 1);
+    let entry = &lock["plugins"]["lockwrite-fixture"];
+    assert_eq!(entry["version"], "1.0.0");
+    assert_eq!(entry["sha256"], serde_json::json!(sha256));
+    let source = entry["source"].as_str().expect("source");
+    assert!(source.starts_with("file://"), "source: {source}");
+    assert!(source.ends_with("#packages/lockwrite-fixture"), "source: {source}");
+
+    // Reinstall of the identical pinned artifact passes the lock gate.
+    let reinstall = with_host_plugin_env(
+        Command::new(maw_bin()).args([
+            "plugin",
+            "install",
+            &file_url,
+            "--path",
+            "packages/lockwrite-fixture",
+            "--root",
+            install_root.to_str().expect("install root utf8"),
+            "--force",
+        ]),
+        &root,
+    )
+    .env("MAW_PLUGINS_LOCK", &lock_path)
+    .output()
+    .expect("maw plugin reinstall wasm");
+    assert_success(&reinstall, "reinstall against matching lock pin");
+
+    let _ = fs::remove_dir_all(root);
+}

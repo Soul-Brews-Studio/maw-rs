@@ -54,6 +54,27 @@ pub const HOST_FN_NAMES: &[&str] = &[
     "maw.ssh.tmux_send_keys",
 ];
 
+/// Ship-tier host ABI generation.
+///
+/// Bump this ONLY on a breaking host-fn change (a function in [`HOST_FN_NAMES`]
+/// is removed or its argument/return shape changes). Additive host fns bump the
+/// derived minor in [`host_abi_version`] automatically via the list length.
+pub const HOST_ABI_MAJOR: u64 = 1;
+
+/// Current host ABI version, derived from the host-fn surface:
+/// `<HOST_ABI_MAJOR>.<HOST_FN_NAMES.len()>.0`.
+///
+/// This is the version the SDK-floor gate feeds to [`satisfies`] against each
+/// manifest's `sdk` range, so the floor tracks the real ABI instead of a
+/// hardcoded literal: adding a host fn bumps the minor, and a plugin built
+/// against a newer surface (e.g. `^1.31.0` on a 30-fn host) refuses to load.
+/// Lives outside the `wasm-host`-gated module on purpose — featureless builds
+/// still gate discovery on it.
+#[must_use]
+pub fn host_abi_version() -> String {
+    format!("{HOST_ABI_MAJOR}.{}.0", HOST_FN_NAMES.len())
+}
+
 /// Stand-in wasm runtime for binaries compiled without the `wasm-host`
 /// feature. Discovery, manifest parse, sha256 hash-verify, and universal
 /// `--help`/`--version` handling all run before this is reached, so a wasm
@@ -377,6 +398,12 @@ where
                         plugins.push(loaded);
                     }
                 }
+                PluginDiscovery::DevBypassed(loaded, warning) => {
+                    if seen_plugin_names.insert(loaded.manifest.name.clone()) {
+                        warnings.push(warning);
+                        plugins.push(loaded);
+                    }
+                }
                 PluginDiscovery::Warning(warning) => warnings.push(warning),
                 PluginDiscovery::Skip => {}
             }
@@ -559,10 +586,15 @@ pub fn scan_dirs() -> Vec<PathBuf> {
     )
 }
 
-/// Runtime SDK version placeholder for registry gates.
+/// Runtime SDK version presented to registry gates.
+///
+/// ABI-derived (see [`host_abi_version`]): a plugin loads iff its manifest
+/// `sdk` range accepts this version. All shipped manifests declare `^1.0.0`,
+/// which accepts every `1.x` ABI, so additive host-fn growth never bricks
+/// them; a plugin requiring a newer or different-generation ABI refuses.
 #[must_use]
 pub fn runtime_sdk_version() -> String {
-    env!("CARGO_PKG_VERSION").to_owned()
+    host_abi_version()
 }
 
 /// Compute a `sha256:<hex>` digest for a file.
@@ -584,6 +616,14 @@ pub fn hash_file(path: &Path) -> Result<String, String> {
 #[must_use]
 pub fn is_dev_mode_install(plugin_dir: &Path) -> bool {
     std::fs::symlink_metadata(plugin_dir).is_ok_and(|metadata| metadata.file_type().is_symlink())
+}
+
+/// True when `MAW_PLUGIN_DEV=1` explicitly opts this process into the
+/// symlinked-plugin hash bypass. Default OFF: symlinked plugin dirs get
+/// hash-verified exactly like regular dirs and refuse on mismatch.
+#[must_use]
+pub fn plugin_dev_bypass_enabled() -> bool {
+    std::env::var_os("MAW_PLUGIN_DEV").is_some_and(|value| value == "1")
 }
 
 /// Minimal maw-js-compatible semver range satisfaction.
