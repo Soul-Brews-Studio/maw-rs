@@ -44,7 +44,7 @@ mod workon_kind_tests {
 
     #[test]
     fn taskless_workon_uses_declared_kind_before_suffix() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _home = EnvVarRestore::capture("HOME");
         let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
         let _state = EnvVarRestore::capture("MAW_STATE_DIR");

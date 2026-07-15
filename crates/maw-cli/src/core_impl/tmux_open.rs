@@ -211,9 +211,7 @@ mod tmux_open_tests {
 
     impl TmuxOpenEnvGuard {
         fn in_tmux(pane: Option<&str>) -> Self {
-            let guard = env_test_lock()
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let guard = env_test_lock();
             let tmux = std::env::var_os("TMUX");
             let tmux_pane = std::env::var_os("TMUX_PANE");
             std::env::set_var("TMUX", "/tmp/tmux-open-test,1,0");
@@ -230,9 +228,7 @@ mod tmux_open_tests {
         }
 
         fn outside_tmux() -> Self {
-            let guard = env_test_lock()
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let guard = env_test_lock();
             let tmux = std::env::var_os("TMUX");
             let tmux_pane = std::env::var_os("TMUX_PANE");
             std::env::remove_var("TMUX");

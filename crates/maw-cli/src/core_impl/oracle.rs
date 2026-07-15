@@ -482,7 +482,7 @@ mod oracle_tests {
 
     #[test]
     fn oracle_scan_progress_reports_lines() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _home = EnvVarRestore::capture("HOME");
         let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
         let _state = EnvVarRestore::capture("MAW_STATE_DIR");
@@ -521,7 +521,7 @@ mod oracle_tests {
 
     #[test]
     fn oracle_repo_scan_uses_declared_kind_before_suffix() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _home = EnvVarRestore::capture("HOME");
         let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
         let _state = EnvVarRestore::capture("MAW_STATE_DIR");
@@ -566,7 +566,7 @@ mod oracle_tests {
 
     #[test]
     fn oracle_scan_registry_captures_numeric_leading_oracle_name() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _home = EnvVarRestore::capture("HOME");
         let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
         let _state = EnvVarRestore::capture("MAW_STATE_DIR");
@@ -600,7 +600,7 @@ mod oracle_tests {
 
     #[test]
     fn oracle_register_discovers_numeric_slot_prefixed_fleet_window_name() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _home = EnvVarRestore::capture("HOME");
         let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
         let _state = EnvVarRestore::capture("MAW_STATE_DIR");

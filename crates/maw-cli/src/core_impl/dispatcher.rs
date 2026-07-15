@@ -118,10 +118,18 @@ fn merged_config_value_for_env(env: &MawXdgEnv) -> serde_json::Value {
     maw_xdg::load_merged_config(env).config
 }
 
+/// Serializes process-env mutation (HOME/XDG/PATH/…) across tests.
+///
+/// Returns the guard directly and recovers from poison: the lock only
+/// serializes env access, and each test restores the env via RAII guards
+/// (`EnvVarRestore`), so a panicking test leaves no state worth propagating.
+/// Without recovery, one panic while holding the guard poisons the mutex and
+/// every later acquisition panics too — a `PoisonError` cascade that fails
+/// dozens of unrelated tests under default (parallel) test threads.
 #[cfg(test)]
-fn env_test_lock() -> &'static std::sync::Mutex<()> {
-    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+fn env_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 #[cfg(test)]
@@ -297,7 +305,7 @@ mod dispatcher_fragment_tests {
 
     #[test]
     fn dispatch_logs_native_commands_to_audit_jsonl() {
-        let _guard = env_test_lock().lock().expect("env lock");
+        let _guard = env_test_lock();
         let (_state_root, _restores) = cli_dispatch_test_env();
         let output = run_cli(&["version".to_owned()]);
         assert_eq!(output.code, 0, "{output:?}");
@@ -325,7 +333,7 @@ mod dispatcher_fragment_tests {
 
     #[test]
     fn concurrent_dispatch_audit_appends_remain_parseable_jsonl() {
-        let _guard = env_test_lock().lock().expect("env lock");
+        let _guard = env_test_lock();
         let (_state_root, _restores) = cli_dispatch_test_env();
         let workers = 32;
         let rows_per_worker = 32;
@@ -360,7 +368,7 @@ mod dispatcher_fragment_tests {
 
     #[test]
     fn dispatch_audit_write_errors_are_best_effort_for_native_commands() {
-        let _guard = env_test_lock().lock().expect("env lock");
+        let _guard = env_test_lock();
         let (state_root, _restores) = cli_dispatch_test_env();
         let blocked_root = state_root.join("blocked");
         fs::write(&blocked_root, b"blocked").expect("blocked state root");
@@ -374,7 +382,7 @@ mod dispatcher_fragment_tests {
 
     #[test]
     fn cli_dispatch_now_iso_uses_fixed_epoch_millis_when_present() {
-        let _guard = env_test_lock().lock().expect("env lock");
+        let _guard = env_test_lock();
         std::env::remove_var("MAW_AUDIT_TEST_NOW_MS");
         std::env::set_var("MAW_AUDIT_TEST_NOW_MS", "0");
         assert_eq!(cli_dispatch_now_iso(), "1970-01-01T00:00:00.000Z");

@@ -892,7 +892,7 @@ mod native_fleet_loader_tests {
     where
         F: FnOnce(),
     {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _home = EnvVarRestore::capture("HOME");
         let _maw_home = EnvVarRestore::capture("MAW_HOME");
         let _maw_xdg = EnvVarRestore::capture("MAW_XDG");

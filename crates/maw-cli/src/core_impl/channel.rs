@@ -1703,7 +1703,7 @@ mod channel_pr301_tests {
 
     #[test]
     fn channel_github_prb_records_untrusted_mcp_without_autospawn_or_token_value() {
-        let _lock = super::env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lock = super::env_test_lock();
         let _home = super::EnvVarRestore::capture("HOME");
         let home = temp_path("home-record");
         let ghq = temp_path("ghq-record");
@@ -1739,7 +1739,7 @@ mod channel_pr301_tests {
 
     #[test]
     fn channel_github_prb_rejects_untrusted_mcp_leading_dash_before_config_write() {
-        let _lock = super::env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lock = super::env_test_lock();
         let _home = super::EnvVarRestore::capture("HOME");
         let home = temp_path("home-reject");
         let ghq = temp_path("ghq-reject");
@@ -1761,7 +1761,7 @@ mod channel_pr301_tests {
 
     #[test]
     fn channel_github_prb_default_mcp_allows_internal_cwd_and_bun_failure_warns_continue() {
-        let _lock = super::env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lock = super::env_test_lock();
         let _home = super::EnvVarRestore::capture("HOME");
         let home = temp_path("home-default");
         let ghq = temp_path("ghq-default");

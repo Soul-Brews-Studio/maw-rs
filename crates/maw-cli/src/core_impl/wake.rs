@@ -1436,7 +1436,7 @@ mod wake_tests {
     where
         F: FnOnce(&std::path::Path),
     {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _home = EnvVarRestore::capture("HOME");
         let _xdg = EnvVarRestore::capture("XDG_CONFIG_HOME");
         let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");

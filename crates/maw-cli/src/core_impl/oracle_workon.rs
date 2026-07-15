@@ -496,7 +496,7 @@ esac
 
     #[test]
     fn oracleworkon_single_target_delegates_to_native_workon_hermetically() {
-        let _lock = super::env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lock = super::env_test_lock();
         let _env = OracleworkonEnvGuard::oracleworkon_new();
         let output = oracleworkon_run(&oracleworkon_strings(&["demo"]), oracleworkon_fleet).expect("run");
         assert!(output.contains("reusing existing window 'demo'"));

@@ -216,7 +216,7 @@ mod tmux_pipe_tests285 {
 
     #[test]
     fn tmux_pipe_fake_maw_no_delegate_and_no_bun_runtime() {
-        let _lock = env_test_lock().lock().expect("env lock");
+        let _lock = env_test_lock();
         std::env::set_var("MAW_JS_REF_DIR", "/nonexistent");
         let mut runner = PipeFakeRunner::default();
         let out = tmux_pipe_with_runner(&strings(&["%42", "cat"]), &mut runner).expect("pipe");

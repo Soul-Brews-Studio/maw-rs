@@ -350,7 +350,7 @@ mod take_tests {
 
     #[test]
     fn take_moves_to_explicit_target_and_prints_cwd() {
-        let _lock = super::env_test_lock().lock().expect("lock");
+        let _lock = super::env_test_lock();
         let _env = TakeEnvGuard::new();
         let mut tmux = TakeMockTmux { windows: "neo\t2\tneo-skills\n".to_owned(), cwd: "/repo\n".to_owned(), ..Default::default() };
 
@@ -363,7 +363,7 @@ mod take_tests {
 
     #[test]
     fn take_split_creates_session_and_kills_default_window() {
-        let _lock = super::env_test_lock().lock().expect("lock");
+        let _lock = super::env_test_lock();
         let _env = TakeEnvGuard::new();
         let mut tmux = TakeMockTmux { windows: "neo\t3\tskills\n".to_owned(), ..Default::default() };
 
@@ -376,7 +376,7 @@ mod take_tests {
 
     #[test]
     fn take_resolves_index_and_strips_display_suffix_for_split_name() {
-        let _lock = super::env_test_lock().lock().expect("lock");
+        let _lock = super::env_test_lock();
         let _env = TakeEnvGuard::new();
         let mut tmux = TakeMockTmux { windows: "neo\t4\tskills\n".to_owned(), ..Default::default() };
 
@@ -408,7 +408,7 @@ mod take_tests {
 
     #[test]
     fn take_same_session_returns_warning_after_split_creation() {
-        let _lock = super::env_test_lock().lock().expect("lock");
+        let _lock = super::env_test_lock();
         let _env = TakeEnvGuard::new();
         let mut tmux = TakeMockTmux::default();
 
@@ -420,7 +420,7 @@ mod take_tests {
 
     #[test]
     fn take_duplicate_new_session_is_ignored_but_move_failure_is_reported() {
-        let _lock = super::env_test_lock().lock().expect("lock");
+        let _lock = super::env_test_lock();
         let _env = TakeEnvGuard::new();
         let mut tmux = TakeMockTmux { windows: "neo\t0\twork\n".to_owned(), fail_new: Some("duplicate session".to_owned()), fail_move: true, ..Default::default() };
 

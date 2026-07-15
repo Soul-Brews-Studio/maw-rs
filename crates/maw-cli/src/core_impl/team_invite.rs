@@ -459,7 +459,7 @@ mod team_invite_tests125 {
 
     #[test]
     fn team_invite_consent_off_records_and_preserves_unrelated_manifest_fields() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner); let _restore = EnvVarRestore::capture("MAW_CONSENT"); std::env::remove_var("MAW_CONSENT");
+        let _guard = env_test_lock(); let _restore = EnvVarRestore::capture("MAW_CONSENT"); std::env::remove_var("MAW_CONSENT");
         let mut fs = FakeFs125::default(); seed_manifest(&mut fs); let trust = FakeTrust125::default(); let mut consent = FakeConsent125::default(); let mut http = FakeHttp125::default();
         let out = team_invite_with(&args(&["invite", "alpha", "scout", "--scope", "reviewer"]), &config(), &mut fs, &trust, &mut consent, &mut http).unwrap();
         assert!(out.contains("invited 'scout'")); assert!(consent.writes.is_empty()); assert!(http.posts.is_empty());
@@ -469,7 +469,7 @@ mod team_invite_tests125 {
 
     #[test]
     fn team_invite_trusted_scope_records_without_requesting_consent() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner); let _restore = EnvVarRestore::capture("MAW_CONSENT"); std::env::set_var("MAW_CONSENT", "1");
+        let _guard = env_test_lock(); let _restore = EnvVarRestore::capture("MAW_CONSENT"); std::env::set_var("MAW_CONSENT", "1");
         let mut fs = FakeFs125::default(); seed_manifest(&mut fs); let mut trust = FakeTrust125::default(); trust.trusted.insert(("lead-node".to_owned(), "scout-node".to_owned(), "team-invite".to_owned())); let mut consent = FakeConsent125::default(); let mut http = FakeHttp125::default();
         let out = team_invite_with(&args(&["invite", "alpha", "scout"]), &config(), &mut fs, &trust, &mut consent, &mut http).unwrap();
         assert!(out.contains("scope: member")); assert!(consent.writes.is_empty()); assert!(http.posts.is_empty());
@@ -477,7 +477,7 @@ mod team_invite_tests125 {
 
     #[test]
     fn team_invite_not_trusted_exits_two_message_and_never_writes_manifest() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner); let _restore = EnvVarRestore::capture("MAW_CONSENT"); let _time = EnvVarRestore::capture("MAW_RS_TEAM_FIXED_EXPIRES"); std::env::set_var("MAW_CONSENT", "1"); std::env::set_var("MAW_RS_TEAM_FIXED_EXPIRES", "2099-01-01T00:00:00.000Z");
+        let _guard = env_test_lock(); let _restore = EnvVarRestore::capture("MAW_CONSENT"); let _time = EnvVarRestore::capture("MAW_RS_TEAM_FIXED_EXPIRES"); std::env::set_var("MAW_CONSENT", "1"); std::env::set_var("MAW_RS_TEAM_FIXED_EXPIRES", "2099-01-01T00:00:00.000Z");
         let mut fs = FakeFs125::default(); seed_manifest(&mut fs); let trust = FakeTrust125::default(); let mut consent = FakeConsent125 { ids: vec!["111111111111111111111111".to_owned()], pins: vec!["ABCDEF".to_owned()], ..Default::default() }; let mut http = FakeHttp125 { ok: true, ..Default::default() };
         let err = team_invite_with(&args(&["invite", "alpha", "scout"]), &config(), &mut fs, &trust, &mut consent, &mut http).unwrap_err();
         assert!(err.starts_with("__TEAM_INVITE_EXIT2__")); assert!(err.contains("request id: 111111111111111111111111")); assert!(err.contains("maw consent approve 111111111111111111111111 ABCDEF")); assert!(err.contains("then re-run:"));
@@ -488,7 +488,7 @@ mod team_invite_tests125 {
 
     #[test]
     fn team_invite_request_failure_keeps_manifest_unchanged() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner); let _restore = EnvVarRestore::capture("MAW_CONSENT"); std::env::set_var("MAW_CONSENT", "1");
+        let _guard = env_test_lock(); let _restore = EnvVarRestore::capture("MAW_CONSENT"); std::env::set_var("MAW_CONSENT", "1");
         let mut fs = FakeFs125::default(); seed_manifest(&mut fs); let trust = FakeTrust125::default(); let mut consent = FakeConsent125::default(); let mut http = FakeHttp125 { ok: false, ..Default::default() };
         let err = team_invite_with(&args(&["invite", "alpha", "scout"]), &config(), &mut fs, &trust, &mut consent, &mut http).unwrap_err();
         assert!(err.contains("consent request failed")); assert!(err.contains("request id (local mirror)")); assert_eq!(fs.writes, 0); assert_eq!(consent.writes.len(), 1);
@@ -496,7 +496,7 @@ mod team_invite_tests125 {
 
     #[test]
     fn team_invite_validates_url_before_http_and_args_before_writes() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner); let _restore = EnvVarRestore::capture("MAW_CONSENT"); std::env::set_var("MAW_CONSENT", "1");
+        let _guard = env_test_lock(); let _restore = EnvVarRestore::capture("MAW_CONSENT"); std::env::set_var("MAW_CONSENT", "1");
         let bad = TeamInviteConfig125 { node: Some("lead-node".to_owned()), named_peers: vec![TeamInviteNamedPeer125 { name: "scout".to_owned(), url: "file:///etc/passwd".to_owned(), node: None }] };
         let mut fs = FakeFs125::default(); seed_manifest(&mut fs); let trust = FakeTrust125::default(); let mut consent = FakeConsent125::default(); let mut http = FakeHttp125::default();
         let err = team_invite_with(&args(&["invite", "alpha", "scout"]), &bad, &mut fs, &trust, &mut consent, &mut http).unwrap_err();

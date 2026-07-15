@@ -281,7 +281,7 @@ mod oracle_recruit_tests {
 
     #[test]
     fn oracle_recruit_dry_run_plan_shape_and_no_writes() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let (root, _env) = recruit_env("dry-run");
         let plan = recruit_plan(&["--dry-run", "--now", "1751900000000"]);
         assert_eq!(plan["command"], "oracle-recruit");
@@ -305,7 +305,7 @@ mod oracle_recruit_tests {
 
     #[test]
     fn fleet_join_round_trip_appends_member_and_consumes_code() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let (root, _env) = recruit_env("round-trip");
         let plan = recruit_plan(&[]);
         let code = plan["code"].as_str().expect("code").to_owned();
@@ -332,7 +332,7 @@ mod oracle_recruit_tests {
 
     #[test]
     fn fleet_join_rejects_expired_code() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let (_root, _env) = recruit_env("expired");
         let plan = recruit_plan(&["--now", "1000"]);
         let code = plan["code"].as_str().expect("code");

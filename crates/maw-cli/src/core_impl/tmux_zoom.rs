@@ -342,7 +342,7 @@ mod zoom_tests {
 
     #[test]
     fn zoom_default_window_toggles_with_safe_tmux_args() {
-        let _lock = super::env_test_lock().lock().expect("lock");
+        let _lock = super::env_test_lock();
         let _env = ZoomEnvGuard::new();
         let mut tmux = ZoomMockTmux { windows: "03-neo\t2\n".to_owned(), ..ZoomMockTmux::default() };
 
@@ -355,7 +355,7 @@ mod zoom_tests {
 
     #[test]
     fn zoom_explicit_window_and_pane_are_preserved() {
-        let _lock = super::env_test_lock().lock().expect("lock");
+        let _lock = super::env_test_lock();
         let _env = ZoomEnvGuard::new();
         let mut tmux = ZoomMockTmux { windows: "03-neo\t0\n".to_owned(), ..ZoomMockTmux::default() };
         let args = zoom_strings(&["neo:1", "--pane", "3"]);
@@ -392,7 +392,7 @@ mod zoom_tests {
 
     #[test]
     fn zoom_reports_ambiguous_suffix_without_resize() {
-        let _lock = super::env_test_lock().lock().expect("lock");
+        let _lock = super::env_test_lock();
         let _env = ZoomEnvGuard::new();
         let mut tmux = ZoomMockTmux { windows: "01-neo\t0\n02-neo\t1\n".to_owned(), ..ZoomMockTmux::default() };
 
@@ -404,7 +404,7 @@ mod zoom_tests {
 
     #[test]
     fn zoom_reports_failure_after_validated_target() {
-        let _lock = super::env_test_lock().lock().expect("lock");
+        let _lock = super::env_test_lock();
         let _env = ZoomEnvGuard::new();
         let mut tmux = ZoomMockTmux { windows: "neo\t0\n".to_owned(), fail_zoom: true, ..ZoomMockTmux::default() };
 

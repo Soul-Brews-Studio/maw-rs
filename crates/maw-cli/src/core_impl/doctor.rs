@@ -875,7 +875,7 @@ mod doctor_tests {
     }
 
     fn doctor_seed_env(name: &str) -> (std::sync::MutexGuard<'static, ()>, std::path::PathBuf, Vec<DoctorEnvRestore>) {
-        let lock = super::env_test_lock().lock().expect("env lock");
+        let lock = super::env_test_lock();
         let temp = doctor_temp_root(name);
         let restores = ["HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "MAW_CONFIG_DIR", "MAW_DATA_DIR", "MAW_STATE_DIR", "MAW_CACHE_DIR", "MAW_HOME", "MAW_XDG", "GHQ_ROOT", "TMUX", "PEERS_FILE", "MAW_PORT", "MAW_GATEWAY"]
             .into_iter().map(DoctorEnvRestore::capture).collect::<Vec<_>>();

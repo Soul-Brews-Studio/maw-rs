@@ -528,7 +528,7 @@ mod pair_tests {
 
     #[test]
     fn pair_write_peer_uses_sender_window_oracle() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _restore = EnvVarRestore::capture("MAW_SESSION_WINDOW");
         std::env::set_var("MAW_SESSION_WINDOW", "33-maw-rs:maw-rs");
         let root = std::env::temp_dir().join(format!("maw-rs-pair-oracle-{}", std::process::id()));
