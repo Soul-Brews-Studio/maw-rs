@@ -778,7 +778,8 @@ fn send_local_message_with_audit(
         Ok(signature) => signature,
         Err(message) => return CliOutput { code: send_error_code(command), stdout: String::new(), stderr: format!("{command}: {message}\n") },
     };
-    let outbound = format_local_hey_message(text, config, sender_oracle, from);
+    let display_from = send_display_from(from);
+    let outbound = format_local_hey_message(text, config, sender_oracle, display_from.as_deref());
     if let Err(error) = tmux.send_text(target, &outbound) {
         return CliOutput {
             code: 1,
@@ -865,7 +866,8 @@ async fn send_peer_message(
     };
     match client.send_peer(&request).await {
         Ok(response) => {
-            let outbound = format_local_hey_message(&args.text, config, sender_oracle, args.from.as_deref());
+            let display_from = send_display_from(args.from.as_deref());
+            let outbound = format_local_hey_message(&args.text, config, sender_oracle, display_from.as_deref());
             send_record_success(command, audit_args, config, sender_oracle, args.from.as_deref(), &args.target, &outbound, &format!("peer:{node}"), signature.as_ref());
             CliOutput {
                 code: 0,
@@ -928,6 +930,13 @@ fn send_normalized_from(config: &HeyConfig, sender_oracle: &str, from: Option<&s
     let handle = resolve_hey_canonical_sender_oracle(config)
         .unwrap_or_else(|| sender_oracle.to_owned());
     Some(format!("{node}:{handle}"))
+}
+
+// Display prefix for locally formatted messages: explicit `--from oracle:node`
+// renders in the same node:oracle order as resolved senders (#519); values that
+// are not wire-shaped pass through verbatim.
+fn send_display_from(from: Option<&str>) -> Option<String> {
+    from.map(|value| wire_sender_to_human(value).unwrap_or_else(|| value.to_owned()))
 }
 
 fn wire_sender_to_human(from: &str) -> Option<String> {
@@ -1346,12 +1355,14 @@ fn explicit_wire_sender_oracle(from: &str) -> Option<String> {
 fn resolve_hey_sender_oracle(config: &HeyConfig) -> String {
     let mut runner = CommandTmuxRunner::new();
     let tmux_pane = std::env::var("TMUX_PANE").ok();
-    resolve_hey_sender_oracle_with(config, tmux_pane.as_deref(), &mut runner)
+    let in_tmux = std::env::var("TMUX").is_ok_and(|value| !value.trim().is_empty());
+    resolve_hey_sender_oracle_with(config, tmux_pane.as_deref(), in_tmux, &mut runner)
 }
 
 fn resolve_hey_sender_oracle_with<R: maw_tmux::TmuxRunner>(
     config: &HeyConfig,
     tmux_pane: Option<&str>,
+    in_tmux: bool,
     runner: &mut R,
 ) -> String {
     tmux_pane
@@ -1359,9 +1370,36 @@ fn resolve_hey_sender_oracle_with<R: maw_tmux::TmuxRunner>(
         .and_then(|pane| tmux_window_name_with(runner, Some(pane)))
         .or_else(|| resolve_hey_canonical_sender_oracle(config))
         .unwrap_or_else(|| {
-            let focused = tmux_window_name_with(runner, None);
-            format!("pane/{}", resolve_sender_oracle(None, focused.as_deref(), None))
+            if in_tmux {
+                let focused = tmux_window_name_with(runner, None);
+                return format!("pane/{}", resolve_sender_oracle(None, focused.as_deref(), None));
+            }
+            // Headless (no TMUX/TMUX_PANE): the focused-window query would name
+            // whatever window the attached client happens to show — another
+            // oracle's identity (#519). Emit a truthful marker instead.
+            send_headless_sender_marker()
         })
+}
+
+fn send_headless_sender_marker() -> String {
+    std::env::current_dir()
+        .ok()
+        .and_then(|cwd| send_cwd_repo_stem(&cwd))
+        .map_or_else(|| "pane/unknown".to_owned(), |stem| format!("job/{stem}"))
+}
+
+fn send_cwd_repo_stem(cwd: &std::path::Path) -> Option<String> {
+    let mut dir = cwd.to_path_buf();
+    loop {
+        if dir.join(".git").exists() {
+            return dir
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned());
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
 }
 
 fn resolve_hey_canonical_sender_oracle(config: &HeyConfig) -> Option<String> {
@@ -2091,7 +2129,7 @@ mod send_acl_hotpath_tests {
             ..SendFakeTmuxRunner::default()
         };
 
-        let sender = resolve_hey_sender_oracle_with(&config, std::env::var("TMUX_PANE").ok().as_deref(), &mut runner);
+        let sender = resolve_hey_sender_oracle_with(&config, std::env::var("TMUX_PANE").ok().as_deref(), true, &mut runner);
 
         assert_eq!(sender, "agora");
         assert_eq!(format_local_hey_message("hello", &config, &sender, None), "[m5:agora] hello");
@@ -2103,10 +2141,78 @@ mod send_acl_hotpath_tests {
             focused_window: Some(Ok("nh\n".to_owned())),
             ..SendFakeTmuxRunner::default()
         };
-        let sender = resolve_hey_sender_oracle_with(&config, None, &mut fallback);
+        let sender = resolve_hey_sender_oracle_with(&config, None, true, &mut fallback);
         assert_eq!(sender, "pane/nh");
         assert_eq!(send_normalized_from(&config, &sender, None).as_deref(), Some("m5:pane/nh"));
         assert_eq!(fallback.calls, vec![("display-message".to_owned(), send_acl_vec(&["-p", "#{window_name}"]))]);
+    }
+
+    #[test]
+    fn send_identity_headless_never_queries_focused_window() {
+        let _lock = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (root, _restores) = send_audit_test_env("sender-headless");
+        let _pane = EnvVarRestore::capture("TMUX_PANE");
+        let _session = EnvVarRestore::capture("MAW_SESSION_WINDOW");
+        let _sender = EnvVarRestore::capture("MAW_SENDER");
+        std::env::remove_var("TMUX_PANE");
+        std::env::remove_var("MAW_SESSION_WINDOW");
+        std::env::remove_var("MAW_SENDER");
+        let plain = root.join("plain");
+        std::fs::create_dir_all(&plain).unwrap();
+        let _cwd = SendCwdRestore::enter(&plain);
+        let config = HeyConfig { node: Some("m5".to_owned()), oracle: None, route: RouteConfig::default() };
+        let mut runner = SendFakeTmuxRunner {
+            focused_window: Some(Ok("ai-party\n".to_owned())),
+            ..SendFakeTmuxRunner::default()
+        };
+
+        let sender = resolve_hey_sender_oracle_with(&config, None, false, &mut runner);
+
+        assert_eq!(sender, "pane/unknown");
+        assert!(runner.calls.is_empty(), "headless sender must never query tmux: {:?}", runner.calls);
+        assert_eq!(send_normalized_from(&config, &sender, None).as_deref(), Some("m5:pane/unknown"));
+    }
+
+    #[test]
+    fn send_identity_headless_signs_job_repo_stem() {
+        let _lock = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (root, _restores) = send_audit_test_env("sender-headless-repo");
+        let _pane = EnvVarRestore::capture("TMUX_PANE");
+        let _session = EnvVarRestore::capture("MAW_SESSION_WINDOW");
+        let _sender = EnvVarRestore::capture("MAW_SENDER");
+        std::env::remove_var("TMUX_PANE");
+        std::env::remove_var("MAW_SESSION_WINDOW");
+        std::env::remove_var("MAW_SENDER");
+        let repo = root.join("maw-rs");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        let nested = repo.join("crates/maw-cli");
+        std::fs::create_dir_all(&nested).unwrap();
+        let _cwd = SendCwdRestore::enter(&nested);
+        let config = HeyConfig { node: Some("m5".to_owned()), oracle: None, route: RouteConfig::default() };
+        let mut runner = SendFakeTmuxRunner {
+            focused_window: Some(Ok("ai-party\n".to_owned())),
+            ..SendFakeTmuxRunner::default()
+        };
+
+        let sender = resolve_hey_sender_oracle_with(&config, None, false, &mut runner);
+
+        assert_eq!(sender, "job/maw-rs");
+        assert!(runner.calls.is_empty(), "headless sender must never query tmux: {:?}", runner.calls);
+        assert_eq!(format_local_hey_message("hello", &config, &sender, None), "[m5:job/maw-rs] hello");
+        assert_eq!(send_normalized_from(&config, &sender, None).as_deref(), Some("m5:job/maw-rs"));
+    }
+
+    #[test]
+    fn send_local_display_normalizes_explicit_wire_from() {
+        let config = HeyConfig { node: Some("m5".to_owned()), oracle: None, route: RouteConfig::default() };
+
+        assert_eq!(send_display_from(Some("atlas:m5")).as_deref(), Some("m5:atlas"));
+        assert_eq!(
+            format_local_hey_message("hello", &config, "atlas", send_display_from(Some("atlas:m5")).as_deref()),
+            "[m5:atlas] hello"
+        );
+        assert_eq!(send_display_from(Some("not-wire-shaped")).as_deref(), Some("not-wire-shaped"));
+        assert_eq!(send_display_from(None), None);
     }
 
     #[test]
