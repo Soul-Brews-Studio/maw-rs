@@ -434,16 +434,107 @@ fn install_from_git_in_temp(
     if !source.is_dir() {
         return Err(format!("plugin install: subpath not found: {}", source.display()));
     }
-    let build = build_js_plugin_dir(&source, false)?;
-    let warning = verify_plugin_install_pin(
-        &build.name,
-        &build.version,
-        Some(&build.sha256),
-        expected_sha256,
-        warn_unpinned,
-    )?;
+    let warning = match read_raw_plugin_install_manifest(&source)? {
+        Some(raw) if raw.get("target").and_then(serde_json::Value::as_str) == Some("wasm") => {
+            verify_wasm_git_install(&source, &raw, expected_sha256, warn_unpinned)?
+        }
+        // target=js (or absent): the JS builder owns validation and errors.
+        _ => {
+            let build = build_js_plugin_dir(&source, false)?;
+            verify_plugin_install_pin(
+                &build.name,
+                &build.version,
+                Some(&build.sha256),
+                expected_sha256,
+                warn_unpinned,
+            )?
+        }
+    };
     let summary = install_plugin_dir(&source, target.root, target.force)?;
     Ok(PluginInstallOutcome { summary, warning })
+}
+
+fn read_raw_plugin_install_manifest(
+    dir: &std::path::Path,
+) -> Result<Option<serde_json::Value>, String> {
+    let path = dir.join("plugin.json");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let text = std::fs::read_to_string(&path)
+        .map_err(|error| format!("invalid plugin.json: {error}"))?;
+    serde_json::from_str(&text)
+        .map(Some)
+        .map_err(|error| format!("invalid plugin.json: {error}"))
+}
+
+/// Verify a cloned `target=wasm` package before install: the committed wasm artifact must exist,
+/// hash to the manifest `artifact.sha256` pin, and satisfy the same `--sha256`/plugins.lock rules
+/// as the JS build route.
+fn verify_wasm_git_install(
+    source: &std::path::Path,
+    raw: &serde_json::Value,
+    expected_sha256: Option<&str>,
+    warn_unpinned: bool,
+) -> Result<Option<String>, String> {
+    let name = raw
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("<unnamed>");
+    let artifact = raw.get("artifact").and_then(serde_json::Value::as_object);
+    let Some(path) = artifact
+        .and_then(|artifact| artifact.get("path"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|path| !path.is_empty())
+    else {
+        return Err(format!(
+            "plugin install: package '{name}' targets wasm but plugin.json has no artifact.path — git installs need a committed .wasm artifact pinned by artifact.path + artifact.sha256"
+        ));
+    };
+    let Some(pin) = artifact
+        .and_then(|artifact| artifact.get("sha256"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|pin| !pin.is_empty())
+    else {
+        return Err(format!(
+            "plugin install: package '{name}' targets wasm but plugin.json has no artifact.sha256 — pin the committed {path} (maw plugin build writes the pin) before git install"
+        ));
+    };
+    let pin = normalize_plugin_install_sha256(pin).map_err(|_| {
+        format!("plugin install: package '{name}' artifact.sha256 must be 64 lowercase hex chars (optionally 'sha256:'-prefixed)")
+    })?;
+    let relative = std::path::Path::new(path);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(format!(
+            "plugin install: package '{name}' artifact.path must stay inside the package: {path}"
+        ));
+    }
+    let wasm_path = source.join(relative);
+    if !wasm_path.is_file() {
+        return Err(format!(
+            "plugin install: package '{name}' targets wasm but the artifact {path} is not committed — build and commit the .wasm before git install"
+        ));
+    }
+    let observed = hash_file(&wasm_path)
+        .map_err(|error| format!("plugin install: hash {path} failed: {error}"))?;
+    if observed != pin {
+        return Err(format!(
+            "plugin '{name}' artifact sha256 mismatch — refusing to install.\n  plugin.json: {pin}\n  committed:   {observed}"
+        ));
+    }
+    let plugin = load_manifest_from_dir(source)?
+        .ok_or_else(|| format!("no plugin.json in {}", source.display()))?;
+    verify_plugin_install_pin(
+        &plugin.manifest.name,
+        &plugin.manifest.version,
+        Some(&observed),
+        expected_sha256,
+        warn_unpinned,
+    )
 }
 
 fn normalize_plugin_install_sha256(value: &str) -> Result<String, String> {
