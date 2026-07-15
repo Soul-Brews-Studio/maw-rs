@@ -29,10 +29,9 @@ struct NodeInput {
 
 #[test]
 fn identity_session_plan_cli_matches_maw_js_fixtures() {
-    let fixtures: Vec<SessionFixture> = serde_json::from_str(include_str!(
-        "../../maw-identity/tests/fixtures/canonical-session-name.fixtures.json"
-    ))
-    .expect("valid canonical session fixtures");
+    let fixtures: Vec<SessionFixture> =
+        serde_json::from_str(maw_identity::CANONICAL_SESSION_NAME_FIXTURES_JSON)
+            .expect("valid canonical session fixtures");
 
     for fixture in fixtures {
         let mut argv = vec![
@@ -69,10 +68,9 @@ fn identity_session_plan_cli_matches_maw_js_fixtures() {
 
 #[test]
 fn identity_node_plan_cli_matches_maw_js_fixtures() {
-    let fixtures: Vec<NodeFixture> = serde_json::from_str(include_str!(
-        "../../maw-identity/tests/fixtures/canonical-node-identity.fixtures.json"
-    ))
-    .expect("valid canonical node fixtures");
+    let fixtures: Vec<NodeFixture> =
+        serde_json::from_str(maw_identity::CANONICAL_NODE_IDENTITY_FIXTURES_JSON)
+            .expect("valid canonical node fixtures");
 
     for fixture in fixtures {
         let mut argv = vec![

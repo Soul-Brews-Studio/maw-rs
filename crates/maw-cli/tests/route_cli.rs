@@ -66,10 +66,8 @@ fn merged_config(base: &Value, overlay: Option<&Value>) -> FixtureConfig {
 
 #[test]
 fn route_plan_cli_matches_maw_js_routing_fixtures() {
-    let fixtures: FixtureRoot = serde_json::from_str(include_str!(
-        "../../maw-routing/tests/fixtures/routing.fixtures.json"
-    ))
-    .expect("valid routing fixtures");
+    let fixtures: FixtureRoot =
+        serde_json::from_str(maw_routing::ROUTING_FIXTURES_JSON).expect("valid routing fixtures");
 
     for fixture in fixtures.cases {
         let config = merged_config(&fixtures.base_config, fixture.config.as_ref());

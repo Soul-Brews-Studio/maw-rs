@@ -26,10 +26,8 @@ struct ExpectedDecision {
 
 #[test]
 fn split_policy_plan_cli_matches_maw_js_fixtures() {
-    let fixtures: Vec<Fixture> = serde_json::from_str(include_str!(
-        "../../maw-split/tests/fixtures/split-policy.fixtures.json"
-    ))
-    .expect("valid split policy fixtures");
+    let fixtures: Vec<Fixture> = serde_json::from_str(maw_split::SPLIT_POLICY_FIXTURES_JSON)
+        .expect("valid split policy fixtures");
 
     for fixture in fixtures {
         let mut argv = vec!["split-policy".to_owned(), "--plan-json".to_owned()];

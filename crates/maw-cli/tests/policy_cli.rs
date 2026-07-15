@@ -35,10 +35,8 @@ struct DefaultActiveGroupFixture {
 
 #[test]
 fn policy_plan_cli_matches_maw_js_fixtures() {
-    let fixtures: FixtureRoot = serde_json::from_str(include_str!(
-        "../../maw-policy/tests/fixtures/plugin-policy.fixtures.json"
-    ))
-    .expect("valid plugin policy fixture json");
+    let fixtures: FixtureRoot = serde_json::from_str(maw_policy::PLUGIN_POLICY_FIXTURES_JSON)
+        .expect("valid plugin policy fixture json");
 
     let output = run_cli(&[
         "policy".to_owned(),
