@@ -46,7 +46,7 @@ use maw_plugin_manifest::WasmHostUnavailableRuntime;
 use maw_plugin_manifest::{
     build_js_plugin_dir, discover_packages, hash_file, import_plugin_symbol, infer_plugin_capabilities,
     init_js_plugin_dir, install_built_plugin_dir, invoke_plugin, load_manifest_from_dir,
-    parse_manifest, DiscoverPackagesOptions, HOST_FN_NAMES, InvokeContext,
+    parse_manifest, DiscoverPackagesOptions, DiscoverPackagesReport, HOST_FN_NAMES, InvokeContext,
     InvokeResult, InvokeSource, LoadedPlugin, LoadedPluginKind,
     PluginManifest, PluginTier,
 };
@@ -646,7 +646,19 @@ fn run_async_dispatch_test(args: Vec<String>) -> Pin<Box<dyn Future<Output = Cli
 
 
 fn dispatch_cli_plugin_or_unknown(argv: &[String], command: &str) -> CliOutput {
-    dispatch_cli_plugin(argv).unwrap_or_else(|| unknown_command(command))
+    // SDK-floor gate: default options carry the ABI-derived runtime version
+    // (maw_plugin_manifest::host_abi_version(), major from HOST_ABI_MAJOR,
+    // minor from HOST_FN_NAMES.len()) — no hardcoded "1.0.0" literal.
+    let report = discover_packages(&DiscoverPackagesOptions::default());
+    if let Some(output) = dispatch_cli_plugin_from_report(&report, argv) {
+        return output;
+    }
+    // No runnable plugin matched. If the verb is a KNOWN extracted verb
+    // (fleet-plugins table or a plugins.lock pin), never degrade to the bare
+    // unknown-command exit: surface the discovery refusal (sdk floor, hash
+    // mismatch, …) or the actionable install hint instead. True typos keep
+    // the existing unknown-command path.
+    missing_plugin_output(command, &report.warnings).unwrap_or_else(|| unknown_command(command))
 }
 
 fn unknown_command(command: &str) -> CliOutput {
@@ -658,11 +670,14 @@ fn unknown_command(command: &str) -> CliOutput {
 }
 
 fn dispatch_cli_plugin(argv: &[String]) -> Option<CliOutput> {
-    let options = DiscoverPackagesOptions {
-        runtime_version: "1.0.0".to_owned(),
-        ..DiscoverPackagesOptions::default()
-    };
-    let report = discover_packages(&options);
+    let report = discover_packages(&DiscoverPackagesOptions::default());
+    dispatch_cli_plugin_from_report(&report, argv)
+}
+
+fn dispatch_cli_plugin_from_report(
+    report: &DiscoverPackagesReport,
+    argv: &[String],
+) -> Option<CliOutput> {
     let (plugin, matched_args) = report
         .plugins
         .iter()
@@ -671,22 +686,45 @@ fn dispatch_cli_plugin(argv: &[String]) -> Option<CliOutput> {
 
     let ctx = InvokeContext::new(InvokeSource::Cli, matched_args.to_vec());
 
-    if plugin.entry_path.is_some() {
-        return Some(dispatch_ts_cli_plugin(plugin, &ctx));
-    }
+    let mut output = if plugin.entry_path.is_some() {
+        dispatch_ts_cli_plugin(plugin, &ctx)
+    } else {
+        // Ship-tier WASM dispatch runs on the real Extism runtime so plugins that import
+        // host functions (maw.exec.*, maw.fs.*, …) load. The MvpWasmInvokeRuntime toy
+        // parser rejected any module with imports and is retained only for no-deps unit
+        // tests in maw-plugin-manifest. with_manifest_fs_roots grants declared fs caps
+        // from the fixed registry (e.g. fs:read:teams) — same wiring as the internal
+        // plugin-manifest invoke path; without it every maw.fs.* call is denied here.
+        // The Extism runtime is compiled in only with the 'wasm-host' feature (deploy
+        // builds); a default (featureless) build routes through ship_tier_wasm_runtime()
+        // to a stand-in whose invoke_wasm fails loudly with a rebuild hint — discovery,
+        // manifest parse, hash-verify, and universal --help/--version stay featureless.
+        let mut runtime = ship_tier_wasm_runtime();
+        render_cli_plugin_result(invoke_plugin(plugin, &ctx, &mut runtime))
+    };
+    prepend_dev_bypass_warnings(&mut output, plugin, &report.warnings);
+    Some(output)
+}
 
-    // Ship-tier WASM dispatch runs on the real Extism runtime so plugins that import
-    // host functions (maw.exec.*, maw.fs.*, …) load. The MvpWasmInvokeRuntime toy
-    // parser rejected any module with imports and is retained only for no-deps unit
-    // tests in maw-plugin-manifest. with_manifest_fs_roots grants declared fs caps
-    // from the fixed registry (e.g. fs:read:teams) — same wiring as the internal
-    // plugin-manifest invoke path; without it every maw.fs.* call is denied here.
-    // The Extism runtime is compiled in only with the 'wasm-host' feature (deploy
-    // builds); a default (featureless) build routes through ship_tier_wasm_runtime()
-    // to a stand-in whose invoke_wasm fails loudly with a rebuild hint — discovery,
-    // manifest parse, hash-verify, and universal --help/--version stay featureless.
-    let mut runtime = ship_tier_wasm_runtime();
-    Some(render_cli_plugin_result(invoke_plugin(plugin, &ctx, &mut runtime)))
+/// The `MAW_PLUGIN_DEV` symlink hash bypass must be LOUD: whenever the invoked
+/// plugin was loaded with verification bypassed, its discovery warning is
+/// forwarded to stderr ahead of the plugin's own output.
+fn prepend_dev_bypass_warnings(output: &mut CliOutput, plugin: &LoadedPlugin, warnings: &[String]) {
+    let needle = format!("'{}'", plugin.manifest.name);
+    let mut forwarded = String::new();
+    for warning in warnings
+        .iter()
+        .filter(|warning| warning.contains("MAW_PLUGIN_DEV=1") && warning.contains(&needle))
+    {
+        forwarded.push_str("warning: ");
+        forwarded.push_str(warning);
+        forwarded.push('\n');
+    }
+    if forwarded.is_empty() {
+        return;
+    }
+    forwarded.push_str(&output.stderr);
+    output.stderr = forwarded;
 }
 
 /// Single construction point for the ship-tier wasm runtime used by both the

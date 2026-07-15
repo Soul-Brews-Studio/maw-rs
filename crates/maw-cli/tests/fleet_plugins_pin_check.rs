@@ -63,6 +63,24 @@ fn args(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| (*value).to_owned()).collect()
 }
 
+/// Install a fleet plugin dir hermetically: local installs verify against and
+/// write plugins.lock (#522), so point `MAW_PLUGINS_LOCK` at a per-test temp
+/// file for the duration of the install — never at the developer machine's
+/// real lock (whose pins for names like `atlas` belong to other sources).
+#[cfg(feature = "wasm-host")]
+fn run_cli_install_with_temp_lock(root: &Path, install_args: &[&str]) -> maw_cli::CliOutput {
+    static LOCK_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = LOCK_ENV.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let previous = std::env::var_os("MAW_PLUGINS_LOCK");
+    std::env::set_var("MAW_PLUGINS_LOCK", root.join("plugins.lock"));
+    let output = run_cli(&args(install_args));
+    match previous {
+        Some(value) => std::env::set_var("MAW_PLUGINS_LOCK", value),
+        None => std::env::remove_var("MAW_PLUGINS_LOCK"),
+    }
+    output
+}
+
 fn temp_dir(label: &str) -> PathBuf {
     static NEXT_DIR: AtomicU64 = AtomicU64::new(0);
     let nonce = SystemTime::now()
@@ -376,13 +394,13 @@ fn cross_team_queue_fleet_artifact_installs_and_scans_vault() {
     let root = temp_dir("ctq-invoke");
     seed_ctq_vault(&root);
     let install_root = root.join("plugins");
-    let install = run_cli(&args(&[
+    let install = run_cli_install_with_temp_lock(&root, &[
         "plugin",
         "install",
         &source.display().to_string(),
         "--root",
         &install_root.display().to_string(),
-    ]));
+    ]);
     assert_eq!(
         install.code, 0,
         "plugin install failed: {}\n{}",
@@ -519,13 +537,13 @@ fn hermes_fleet_artifact_invokes_discord_read_only_verbs() {
     let staged = root.join("hermes");
     copy_tree(&source, &staged);
     let install_root = root.join("plugins");
-    let install = run_cli(&args(&[
+    let install = run_cli_install_with_temp_lock(&root, &[
         "plugin",
         "install",
         &staged.display().to_string(),
         "--root",
         &install_root.display().to_string(),
-    ]));
+    ]);
     assert_eq!(
         install.code, 0,
         "plugin install failed: {}\n{}",
@@ -583,7 +601,7 @@ fn atlas_fleet_artifact_invokes_read_only_state_verbs() {
     let source = fleet_plugins_dir().join("atlas");
     let root = temp_dir("atlas-invoke");
     let install_root = root.join("plugins");
-    let install = run_cli(&args(&["plugin", "install", &source.display().to_string(), "--root", &install_root.display().to_string()]));
+    let install = run_cli_install_with_temp_lock(&root, &["plugin", "install", &source.display().to_string(), "--root", &install_root.display().to_string()]);
     assert_eq!(install.code, 0, "plugin install failed: {}\n{}", install.stderr, install.stdout);
     let plugin = load_manifest_from_dir(&install_root.join("atlas")).expect("load installed atlas").expect("installed atlas manifest");
     let mut observed = String::new();

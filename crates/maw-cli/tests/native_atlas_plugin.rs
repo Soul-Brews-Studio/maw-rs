@@ -201,8 +201,18 @@ fn atlas_namespace_without_plugin_fails_fast_instead_of_hanging() {
         elapsed < std::time::Duration::from_secs(1),
         "atlas dispatch miss hung for {elapsed:?}"
     );
+    // #522 defense 4: atlas is a KNOWN extracted verb (fleet-plugins), so a
+    // missing plugin prints the actionable install hint — not a bare
+    // unknown-command typo message — while still failing fast.
     let stderr = String::from_utf8(output.stderr).expect("stderr");
-    assert!(stderr.contains("unknown command 'atlas'"), "{stderr}");
+    assert!(
+        stderr.contains("verb 'atlas' is provided by plugin 'atlas'"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("maw plugin install Soul-Brews-Studio/maw-rs/fleet-plugins/atlas"),
+        "{stderr}"
+    );
 
     std::fs::remove_dir_all(root).expect("cleanup");
 }
