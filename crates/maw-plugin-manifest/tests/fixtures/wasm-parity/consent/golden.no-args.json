@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": null,
-    "ok": true,
-    "output": "id                        from → to             action            status   summary\nreq-new                   nova → tk             hey               pending   Approve Nova to send a fleet status update\nreq-old                   wish → tk             team-invite       pending   Invite TK to review the Team Nova bridge"
-  },
-  "stderr": "",
-  "stdout": "id                        from → to             action            status   summary\nreq-new                   nova → tk             hey               pending   Approve Nova to send a fleet status update\nreq-old                   wish → tk             team-invite       pending   Invite TK to review the Team Nova bridge"
-}

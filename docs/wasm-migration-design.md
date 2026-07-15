@@ -313,7 +313,16 @@ Acceptance rule: for migrated plugins, WASM-plugin output must byte-match the ex
 
 ### Golden fixture harness
 
-Use the same pattern as the existing portable fixture tests in maw-rs crates: stable JSON fixtures checked into the maw-rs repo, deterministic host fakes, and one expected output per scenario.
+Use the same pattern as the existing portable fixture tests in maw-rs crates: stable JSON fixtures checked into the repo, deterministic host fakes, and one expected output per scenario.
+
+> **Repo split phase 2 (2026-07-16):** the committed parity fixtures and the
+> `examples/wasm-parity/` AssemblyScript sources described in this section were
+> extracted to
+> [Soul-Brews-Studio/maw-fixtures](https://github.com/Soul-Brews-Studio/maw-fixtures)
+> (@aecf20b6), together with `scripts/refresh-wasm-parity-goldens.sh` and the
+> `wasm_parity_harness.rs` consumer tests (removed here; rework tracked in
+> #546). The layout below is preserved as the design of record — it now lives
+> at the same relative paths inside maw-fixtures.
 
 Fixture layout:
 
@@ -340,7 +349,7 @@ Harness stages:
 | Compare | Compare normalized result envelope and raw output bytes. | `stdout`, `stderr`, `InvokeResult.output`, and error text byte-match unless fixture marks an approved intentional delta. |
 | Native integration | For selected plugins, run against real maw-rs native services in dry-run/temp roots. | No live fleet mutation; fmt/clippy/test still green. |
 
-Golden outputs are captured once and committed. Tests must not invoke the live `maw-js` checkout; they read `golden.<argscase>.json` from `crates/maw-plugin-manifest/tests/fixtures/wasm-parity/<plugin>/`. To refresh after intentionally bumping the maw-js reference, run this on a maintainer machine where the real maw-js clone exists:
+Golden outputs are captured once and committed. Tests must not invoke the live `maw-js` checkout; they read `golden.<argscase>.json` from `crates/maw-plugin-manifest/tests/fixtures/wasm-parity/<plugin>/` (now in maw-fixtures). To refresh after intentionally bumping the maw-js reference, run this on a maintainer machine where the real maw-js clone exists (in a maw-rs checkout at a pre-split SHA, ≤5cbd148e, where the harness generator still exists; the script itself moved to maw-fixtures):
 
 ```bash
 MAW_JS_REF_DIR=/path/to/Soul-Brews-Studio/maw-js scripts/refresh-wasm-parity-goldens.sh

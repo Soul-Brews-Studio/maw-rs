@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": null,
-    "ok": true,
-    "output": "{\n  \"ok\": true,\n  \"dryRun\": true,\n  \"reachablePeers\": 2,\n  \"totalPeers\": 2\n}"
-  },
-  "stderr": "",
-  "stdout": "{\n  \"ok\": true,\n  \"dryRun\": true,\n  \"reachablePeers\": 2,\n  \"totalPeers\": 2\n}"
-}

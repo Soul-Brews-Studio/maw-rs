@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": null,
-    "ok": true,
-    "output": "\n\u001b[36;1mWorkspaces\u001b[0m  \u001b[90m2 joined\u001b[0m\n\n  \u001b[32m●\u001b[0m  \u001b[37;1mAlpha Team\u001b[0m  \u001b[90m(alpha)\u001b[0m\n     \u001b[36mHub:\u001b[0m     https://hub.example.test\n     \u001b[36mAgents:\u001b[0m  2 agents shared\n     \u001b[90m         nova, orion\u001b[0m\n     \u001b[90mJoined:  2026-06-24T09:00:00.000Z\u001b[0m\n  \u001b[31m●\u001b[0m  \u001b[37;1mBeta Team\u001b[0m  \u001b[90m(beta)\u001b[0m\n     \u001b[36mHub:\u001b[0m     https://beta.example.test\n     \u001b[36mAgents:\u001b[0m  \u001b[90mno agents shared\u001b[0m\n     \u001b[90mJoined:  2026-06-24T09:05:00.000Z\u001b[0m\n"
-  },
-  "stderr": "",
-  "stdout": "\n\u001b[36;1mWorkspaces\u001b[0m  \u001b[90m2 joined\u001b[0m\n\n  \u001b[32m●\u001b[0m  \u001b[37;1mAlpha Team\u001b[0m  \u001b[90m(alpha)\u001b[0m\n     \u001b[36mHub:\u001b[0m     https://hub.example.test\n     \u001b[36mAgents:\u001b[0m  2 agents shared\n     \u001b[90m         nova, orion\u001b[0m\n     \u001b[90mJoined:  2026-06-24T09:00:00.000Z\u001b[0m\n  \u001b[31m●\u001b[0m  \u001b[37;1mBeta Team\u001b[0m  \u001b[90m(beta)\u001b[0m\n     \u001b[36mHub:\u001b[0m     https://beta.example.test\n     \u001b[36mAgents:\u001b[0m  \u001b[90mno agents shared\u001b[0m\n     \u001b[90mJoined:  2026-06-24T09:05:00.000Z\u001b[0m\n"
-}

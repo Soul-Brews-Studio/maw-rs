@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": null,
-    "ok": true,
-    "output": "\nmaw check tools\n\nRequired:\n  \u001b[32m✓\u001b[0m bun       1.2.0\n  \u001b[32m✓\u001b[0m gh        2.50.0\n  \u001b[32m✓\u001b[0m ghq       1.6.2\n  \u001b[32m✓\u001b[0m git       2.45.1\n  \u001b[32m✓\u001b[0m tmux      3.4\n\nOptional (Python plugins):\n  \u001b[32m✓\u001b[0m uv        0.4.0\n  \u001b[32m✓\u001b[0m uvx       0.4.0  \u001b[90m(provided by uv)\u001b[0m\n\n5 required ✓  ·  2 optional ✓  ·  0 missing\n"
-  },
-  "stderr": "",
-  "stdout": "\nmaw check tools\n\nRequired:\n  \u001b[32m✓\u001b[0m bun       1.2.0\n  \u001b[32m✓\u001b[0m gh        2.50.0\n  \u001b[32m✓\u001b[0m ghq       1.6.2\n  \u001b[32m✓\u001b[0m git       2.45.1\n  \u001b[32m✓\u001b[0m tmux      3.4\n\nOptional (Python plugins):\n  \u001b[32m✓\u001b[0m uv        0.4.0\n  \u001b[32m✓\u001b[0m uvx       0.4.0  \u001b[90m(provided by uv)\u001b[0m\n\n5 required ✓  ·  2 optional ✓  ·  0 missing\n"
-}

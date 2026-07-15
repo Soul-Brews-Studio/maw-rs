@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": null,
-    "ok": true,
-    "output": "\n\u001b[36mCONTACTS\u001b[0m (2):\n\n  \u001b[32mathena      \u001b[0m  maw: \u001b[33mathena-oracle\u001b[0m    thread: \u001b[90mthread-42\u001b[0m    inbox: \u001b[90minbox/athena\u001b[0m    repo: \u001b[90m/repo/athena\u001b[0m    \u001b[90m\"planner\"\u001b[0m\n  \u001b[32mmawjs       \u001b[0m  maw: \u001b[33mm5:mawjs\u001b[0m\n"
-  },
-  "stderr": "",
-  "stdout": "\n\u001b[36mCONTACTS\u001b[0m (2):\n\n  \u001b[32mathena      \u001b[0m  maw: \u001b[33mathena-oracle\u001b[0m    thread: \u001b[90mthread-42\u001b[0m    inbox: \u001b[90minbox/athena\u001b[0m    repo: \u001b[90m/repo/athena\u001b[0m    \u001b[90m\"planner\"\u001b[0m\n  \u001b[32mmawjs       \u001b[0m  maw: \u001b[33mm5:mawjs\u001b[0m\n"
-}

@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": "usage: maw about <oracle>",
-    "ok": false,
-    "output": null
-  },
-  "stderr": "usage: maw about <oracle>",
-  "stdout": ""
-}

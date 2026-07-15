@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": null,
-    "ok": true,
-    "output": "\n\u001b[36;1mFederation Status\u001b[0m  \u001b[90m3 nodes (1 local + 2 peers)\u001b[0m\n\n  \u001b[32m●\u001b[0m  \u001b[37mnova-local (local)\u001b[0m  \u001b[32monline\u001b[0m  \u001b[90m0ms · 0 agents\u001b[0m\n  \u001b[32m●\u001b[0m  \u001b[37malpha\u001b[0m  \u001b[32mreachable\u001b[0m  \u001b[90m12ms · 4 agents\u001b[0m\n     \u001b[90mhttps://alpha.example.test\u001b[0m\n  \u001b[32m●\u001b[0m  \u001b[37mbeta\u001b[0m  \u001b[32mreachable\u001b[0m  \u001b[90m12ms · 2 agents\u001b[0m\n     \u001b[90mhttps://beta.example.test\u001b[0m\n\n\u001b[90m3/3 reachable (one-way; use --verify for pair-symmetric check — PR #398)\u001b[0m\n"
-  },
-  "stderr": "",
-  "stdout": "\n\u001b[36;1mFederation Status\u001b[0m  \u001b[90m3 nodes (1 local + 2 peers)\u001b[0m\n\n  \u001b[32m●\u001b[0m  \u001b[37mnova-local (local)\u001b[0m  \u001b[32monline\u001b[0m  \u001b[90m0ms · 0 agents\u001b[0m\n  \u001b[32m●\u001b[0m  \u001b[37malpha\u001b[0m  \u001b[32mreachable\u001b[0m  \u001b[90m12ms · 4 agents\u001b[0m\n     \u001b[90mhttps://alpha.example.test\u001b[0m\n  \u001b[32m●\u001b[0m  \u001b[37mbeta\u001b[0m  \u001b[32mreachable\u001b[0m  \u001b[90m12ms · 2 agents\u001b[0m\n     \u001b[90mhttps://beta.example.test\u001b[0m\n\n\u001b[90m3/3 reachable (one-way; use --verify for pair-symmetric check — PR #398)\u001b[0m\n"
-}

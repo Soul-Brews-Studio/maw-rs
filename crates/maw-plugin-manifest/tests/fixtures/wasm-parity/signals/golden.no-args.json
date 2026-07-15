@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": null,
-    "ok": true,
-    "output": "\n  \u001b[36mBud signals\u001b[0m (last 7d \u2014 2 total)\n\n  \u001b[31m[alert]\u001b[0m \u001b[90m2026-07-01\u001b[0m athena: queue pressure rising\n  \u001b[36m[info]\u001b[0m \u001b[90m2026-06-29\u001b[0m orion: daily scan complete\n"
-  },
-  "stderr": "",
-  "stdout": "\n  \u001b[36mBud signals\u001b[0m (last 7d \u2014 2 total)\n\n  \u001b[31m[alert]\u001b[0m \u001b[90m2026-07-01\u001b[0m athena: queue pressure rising\n  \u001b[36m[info]\u001b[0m \u001b[90m2026-06-29\u001b[0m orion: daily scan complete\n"
-}

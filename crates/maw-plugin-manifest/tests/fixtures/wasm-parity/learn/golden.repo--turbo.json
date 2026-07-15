@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": "maw learn: unknown flag(s) --turbo (accepts --fast, --deep)",
-    "ok": false,
-    "output": null
-  },
-  "stderr": "maw learn: unknown flag(s) --turbo (accepts --fast, --deep)",
-  "stdout": ""
-}

@@ -31,28 +31,9 @@ fn run(args: &[&str], maw_home: &Path) -> std::process::Output {
         .expect("run maw-rs")
 }
 
-#[cfg(feature = "wasm-host")]
-fn run_stream(args: &[&str], root: &Path) -> std::process::Output {
-    let plugin = root.join("plugins/stream");
-    fs::create_dir_all(&plugin).expect("stream plugin dir");
-    fs::write(
-        plugin.join("plugin.json"),
-        include_str!("fixtures/native-interactive/stream-plugin/plugin.json"),
-    )
-    .expect("stream plugin json");
-    fs::write(
-        plugin.join("plugin.wasm"),
-        include_bytes!("fixtures/native-interactive/stream-plugin/plugin.wasm"),
-    )
-    .expect("stream plugin wasm");
-    Command::new(bin())
-        .args(args)
-        .env("MAW_HOME", root)
-        .env("MAW_JS_REF_DIR", "/nonexistent")
-        .env("MAW_PLUGINS_DIR", root.join("plugins"))
-        .output()
-        .expect("run stream plugin")
-}
+// The wasm-host stream-unlink golden tests were removed in the repo split —
+// the native-interactive/stream-plugin wasm fixture now lives in
+// Soul-Brews-Studio/maw-fixtures @aecf20b6; rework/relocate tracked in #546.
 
 #[test]
 fn interactive_plugin_commands_are_native_not_bun_fallback() {
@@ -312,42 +293,6 @@ fn attach_ssh_refuses_unsafe_session_before_ssh() {
         "{stderr}"
     );
     assert_eq!(String::from_utf8(output.stdout).expect("stdout"), "");
-}
-
-#[cfg(feature = "wasm-host")]
-#[test]
-fn stream_unlink_dry_run_matches_committed_golden_without_ref_checkout() {
-    let root = temp_dir("stream-unlink-dry-run");
-    let output = run_stream(&["stream", "--unlink", "view:oracle", "--dry-run"], &root);
-
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(
-        String::from_utf8(output.stdout).expect("stdout"),
-        include_str!("fixtures/native-interactive/stream-unlink-dry-run.stdout")
-    );
-    assert_eq!(String::from_utf8(output.stderr).expect("stderr"), "");
-}
-
-#[cfg(feature = "wasm-host")]
-#[test]
-fn stream_unlink_plan_json_matches_committed_golden_without_ref_checkout() {
-    let root = temp_dir("stream-unlink-plan-json");
-    let output = run_stream(&["stream", "--unlink", "view:oracle", "--plan-json"], &root);
-
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(
-        String::from_utf8(output.stdout).expect("stdout"),
-        include_str!("fixtures/native-interactive/stream-unlink-plan.json")
-    );
-    assert_eq!(String::from_utf8(output.stderr).expect("stderr"), "");
 }
 
 #[test]

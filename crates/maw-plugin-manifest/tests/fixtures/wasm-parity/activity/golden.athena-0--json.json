@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": null,
-    "ok": true,
-    "output": "{\"pane\":\"athena:0\",\"state\":\"idle\",\"confidence\":\"high\",\"samples\":3,\"diff_samples\":0,\"last_change_ago_seconds\":30,\"sample_window_seconds\":30}\n"
-  },
-  "stderr": "",
-  "stdout": "{\"pane\":\"athena:0\",\"state\":\"idle\",\"confidence\":\"high\",\"samples\":3,\"diff_samples\":0,\"last_change_ago_seconds\":30,\"sample_window_seconds\":30}\n"
-}

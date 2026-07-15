@@ -40,12 +40,10 @@ jobs:
       # (fleet-bun-tests job) with the fleet-plugins/ -> packages/ extraction
       # (repo split phase 1, 2026-07-15).
 
-      - name: Setup Node cache for WASM fixtures
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: packages/wasm-sdk/package-lock.json
+      # The "Build deterministic AssemblyScript WASM fixtures" step
+      # (packages/wasm-sdk check:fixtures) moved to
+      # Soul-Brews-Studio/maw-fixtures with the wasm fixture + examples/
+      # extraction (repo split phase 2, 2026-07-16).
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
@@ -53,11 +51,6 @@ jobs:
           shared-key: rust-workspace-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           cache-all-crates: true
           cache-targets: true
-
-      - name: Build deterministic AssemblyScript WASM fixtures
-        run: |
-          npm --prefix packages/wasm-sdk ci
-          npm --prefix packages/wasm-sdk run check:fixtures
 
       - name: Fetch Cargo dependencies
         shell: bash

@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": null,
-    "ok": true,
-    "output": "source  name   node  oracle  url               \n------  -----  ----  ------  ------------------\nconfig  mawjs  -     -       http://m5:3456    \nconfig  -      -     -       http://config:3456\n\nfleet config\nnode   name          session   endpoint        repo                    \n-----  ------------  --------  --------------  ------------------------\nmawjs  mawjs-oracle  50-mawjs  http://m5:3456  Soul-Brews-Studio/maw-js"
-  },
-  "stderr": "",
-  "stdout": "source  name   node  oracle  url               \n------  -----  ----  ------  ------------------\nconfig  mawjs  -     -       http://m5:3456    \nconfig  -      -     -       http://config:3456\n\nfleet config\nnode   name          session   endpoint        repo                    \n-----  ------------  --------  --------------  ------------------------\nmawjs  mawjs-oracle  50-mawjs  http://m5:3456  Soul-Brews-Studio/maw-js"
-}

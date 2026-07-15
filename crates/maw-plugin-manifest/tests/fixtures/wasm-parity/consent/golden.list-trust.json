@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": null,
-    "ok": true,
-    "output": "from → to                action            approvedAt\ntk → nova               hey               2026-06-20T10:00:00.000Z\ntk → wish               team-invite       2026-06-21T11:30:00.000Z"
-  },
-  "stderr": "",
-  "stdout": "from → to                action            approvedAt\ntk → nova               hey               2026-06-20T10:00:00.000Z\ntk → wish               team-invite       2026-06-21T11:30:00.000Z"
-}

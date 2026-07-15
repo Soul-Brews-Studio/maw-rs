@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": null,
-    "ok": true,
-    "output": "source  session   window        pane  command  cwd  matches\n------  --------  ------------  ----  -------  ---  -------\ntmux    50-mawjs  mawjs-oracle  0     -        -    -      "
-  },
-  "stderr": "",
-  "stdout": "source  session   window        pane  command  cwd  matches\n------  --------  ------------  ----  -------  ---  -------\ntmux    50-mawjs  mawjs-oracle  0     -        -    -      "
-}
