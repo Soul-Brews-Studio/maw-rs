@@ -122,6 +122,44 @@ async fn native_wake_posts_signed_api_wake_to_configured_peer() {
     );
 }
 
+#[tokio::test]
+async fn native_wake_surfaces_receiver_failure_instead_of_false_woke() {
+    let _guard = env_lock().lock().await;
+    let env = TestEnv::new("native-wake-fail");
+    let peer_key = "known-peer-key";
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    env.write_config(&format!("http://{addr}"));
+    std::env::set_var("MAW_HOME", &env.root);
+    std::env::set_var("MAW_PEER_KEY", peer_key);
+
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accept");
+        let _captured = read_one_http_request(&mut socket).await;
+        write_json_response(
+            &mut socket,
+            r#"{"ok":false,"target":"agent","error":"wake exited 1: wake: repo not found for agent"}"#,
+        )
+        .await;
+    });
+
+    let output = run_cli_async(&args(&[
+        "wake",
+        "remote:agent",
+        "--from",
+        "sender-oracle:sender-node",
+    ]))
+    .await;
+
+    assert_eq!(output.code, 1, "{}", output.stdout);
+    assert!(!output.stdout.contains("woke"), "{}", output.stdout);
+    assert!(
+        output.stderr.contains("repo not found for agent"),
+        "{}",
+        output.stderr
+    );
+}
+
 fn assert_common_v3_headers_and_signature(
     captured: &CapturedRequest,
     federation_token: &str,
