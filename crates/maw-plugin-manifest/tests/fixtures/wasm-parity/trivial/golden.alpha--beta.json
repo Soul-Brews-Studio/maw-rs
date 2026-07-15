@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": null,
-    "ok": true,
-    "output": "input={\"args\":[\"alpha\",\"beta\"],\"source\":\"cli\"} name=nova loud=true valid=true spark=1428 cmd=maw ping stat={\"ok\":true,\"value\":{\"exists\":true,\"kind\":\"file\",\"bytes\":7}}"
-  },
-  "stderr": "",
-  "stdout": "input={\"args\":[\"alpha\",\"beta\"],\"source\":\"cli\"} name=nova loud=true valid=true spark=1428 cmd=maw ping stat={\"ok\":true,\"value\":{\"exists\":true,\"kind\":\"file\",\"bytes\":7}}"
-}

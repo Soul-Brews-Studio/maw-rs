@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": "unsupported shell: fish",
-    "ok": false,
-    "output": null
-  },
-  "stderr": "unsupported shell: fish",
-  "stdout": ""
-}

@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": null,
-    "ok": true,
-    "output": "project incubate: would clone \"https://github.com/Soul-Brews-Studio/maw-rs\" and symlink into ψ/incubate/<owner>/<repo> — not yet implemented in core plugin; use Oracle skill /project for full behavior.\n  track: https://github.com/Soul-Brews-Studio/maw-js/issues/523"
-  },
-  "stderr": "",
-  "stdout": "project incubate: would clone \"https://github.com/Soul-Brews-Studio/maw-rs\" and symlink into ψ/incubate/<owner>/<repo> — not yet implemented in core plugin; use Oracle skill /project for full behavior.\n  track: https://github.com/Soul-Brews-Studio/maw-js/issues/523"
-}

@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": null,
-    "ok": true,
-    "output": "\u001b[32m✅\u001b[0m alpha \u001b[90m(https://alpha.example.test)\u001b[0m — 12ms, auth: ok (alpha…123)\n\u001b[32m✅\u001b[0m beta \u001b[90m(https://beta.example.test)\u001b[0m — 12ms, auth: off"
-  },
-  "stderr": "",
-  "stdout": "\u001b[32m✅\u001b[0m alpha \u001b[90m(https://alpha.example.test)\u001b[0m — 12ms, auth: ok (alpha…123)\n\u001b[32m✅\u001b[0m beta \u001b[90m(https://beta.example.test)\u001b[0m — 12ms, auth: off"
-}

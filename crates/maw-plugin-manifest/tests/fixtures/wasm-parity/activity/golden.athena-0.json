@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": null,
-    "ok": true,
-    "output": "athena:0: 🟡 IDLE (quiet (no change in 30s), 0/3 samples diff)\n"
-  },
-  "stderr": "",
-  "stdout": "athena:0: 🟡 IDLE (quiet (no change in 30s), 0/3 samples diff)\n"
-}

@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": null,
-    "ok": true,
-    "output": "\n\u001b[36mPARKED\u001b[0m (1):\n\n  \u001b[33mcodex-1\u001b[0m  \"handoff note\"  0m ago  feat/nova  \u001b[33m2 dirty\u001b[0m\n"
-  },
-  "stderr": "",
-  "stdout": "\n\u001b[36mPARKED\u001b[0m (1):\n\n  \u001b[33mcodex-1\u001b[0m  \"handoff note\"  0m ago  feat/nova  \u001b[33m2 dirty\u001b[0m\n"
-}

@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": null,
-    "ok": true,
-    "output": "{\n  \"window\": 7,\n  \"buckets\": [\n    \"2026-06-25\",\n    \"2026-06-26\",\n    \"2026-06-27\",\n    \"2026-06-28\",\n    \"2026-06-29\",\n    \"2026-06-30\",\n    \"2026-07-01\"\n  ],\n  \"agents\": [\n    {\n      \"name\": \"athena-oracle\",\n      \"dailyCosts\": [\n        0,\n        0,\n        0.5,\n        0,\n        2,\n        0,\n        10\n      ],\n      \"totalCost\": 12.5,\n      \"hadActivity\": [\n        false,\n        false,\n        true,\n        false,\n        true,\n        false,\n        true\n      ]\n    }\n  ],\n  \"total\": {\n    \"cost\": 12.5,\n    \"agents\": 1\n  }\n}"
-  },
-  "stderr": "",
-  "stdout": "{\n  \"window\": 7,\n  \"buckets\": [\n    \"2026-06-25\",\n    \"2026-06-26\",\n    \"2026-06-27\",\n    \"2026-06-28\",\n    \"2026-06-29\",\n    \"2026-06-30\",\n    \"2026-07-01\"\n  ],\n  \"agents\": [\n    {\n      \"name\": \"athena-oracle\",\n      \"dailyCosts\": [\n        0,\n        0,\n        0.5,\n        0,\n        2,\n        0,\n        10\n      ],\n      \"totalCost\": 12.5,\n      \"hadActivity\": [\n        false,\n        false,\n        true,\n        false,\n        true,\n        false,\n        true\n      ]\n    }\n  ],\n  \"total\": {\n    \"cost\": 12.5,\n    \"agents\": 1\n  }\n}"
-}

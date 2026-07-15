@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": "invalid_peer_source",
-    "ok": false,
-    "output": "usage: maw discover [--peers config|scout|both] [--json] [--tree] [--awake]"
-  },
-  "stderr": "invalid_peer_source",
-  "stdout": "usage: maw discover [--peers config|scout|both] [--json] [--tree] [--awake]"
-}

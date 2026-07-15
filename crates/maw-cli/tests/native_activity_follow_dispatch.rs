@@ -1,13 +1,8 @@
 // Dispatcher registration pins (and other pre-invoke coverage) run on the
-// default test path; tests that execute plugin.wasm need the real Extism
-// runtime and run in the wasm-host CI job
-// (`cargo test -p maw-cli --features wasm-host`).
+// default test path. The wasm-host follow-plugin usage-guard test was removed
+// in the repo split — the epic55/follow-plugin wasm fixture now lives in
+// Soul-Brews-Studio/maw-fixtures @aecf20b6; rework/relocate tracked in #546.
 use std::{path::PathBuf, process::Command};
-#[cfg(feature = "wasm-host")]
-use std::{
-    sync::atomic::{AtomicU64, Ordering},
-    time::{SystemTime, UNIX_EPOCH},
-};
 
 fn epic55_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_maw-rs"))
@@ -17,29 +12,6 @@ fn epic55_base() -> Command {
     let mut command = Command::new(epic55_bin());
     command.env("MAW_JS_REF_DIR", "/nonexistent");
     command
-}
-
-#[cfg(feature = "wasm-host")]
-fn epic55_follow() -> (Command, PathBuf) {
-    static NEXT_DIR: AtomicU64 = AtomicU64::new(0);
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock")
-        .as_nanos();
-    let root = std::env::temp_dir().join(format!(
-        "maw-rs-follow-plugin-{}-{nonce}-{}",
-        std::process::id(),
-        NEXT_DIR.fetch_add(1, Ordering::Relaxed)
-    ));
-    let plugin = root.join("follow");
-    std::fs::create_dir_all(&plugin).expect("plugin dir");
-    let fixture =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/epic55/follow-plugin");
-    std::fs::copy(fixture.join("plugin.json"), plugin.join("plugin.json")).expect("manifest");
-    std::fs::copy(fixture.join("plugin.wasm"), plugin.join("plugin.wasm")).expect("wasm");
-    let mut command = epic55_base();
-    command.env("MAW_PLUGINS_DIR", &root);
-    (command, root)
 }
 
 #[test]
@@ -60,18 +32,6 @@ fn epic55_activity_matches_committed_golden_without_ref_checkout() {
         include_str!("fixtures/epic55/activity-idle-json.stdout")
     );
     assert_eq!(String::from_utf8(output.stderr).expect("stderr"), "");
-}
-
-#[cfg(feature = "wasm-host")]
-#[test]
-fn epic55_follow_plugin_preserves_usage_guard() {
-    let (mut command, root) = epic55_follow();
-    let output = command.args(["follow", "-pane"]).output().expect("follow");
-    assert!(!output.status.success());
-    assert!(String::from_utf8(output.stderr)
-        .expect("stderr")
-        .contains("usage: maw follow"));
-    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]

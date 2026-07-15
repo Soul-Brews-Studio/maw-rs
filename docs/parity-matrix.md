@@ -4,6 +4,17 @@ Generated from source inspection on 2026-06-25 UTC+7. maw-js source of truth: li
 
 **Wave-3 refresh (2026-07-15):** corrected `ping` and `consent` from `WASM ✅` to `native ✅` (both carry a top-level native `DispatcherEntry` — `ping.rs` / `consent.rs`, `Handler::Sync`; their `wasm-parity` artifacts are in-tree parity fixtures, not `maw-plugins` extractions). Flipped `stream` and `hub` from `native ✅` to `WASM ✅` and added a `layout` row (`WASM ✅`): all three are ship-tier plugins extracted to `Soul-Brews-Studio/maw-plugins` (packages/20-stream, 20-hub, 20-layout) with **no** native `DispatcherEntry`. Verified by running the built binary — a real invoke on a default (no-feature) build errors `plugin '<verb>' is a ship-tier WASM plugin … built without the 'wasm-host' feature` (and `stream`'s unlink golden is `#[cfg(feature="wasm-host")]` in `native_attach_view_stream_split.rs`). The parallel-native reading (a `DISPATCH_114`/`DISPATCH_300` claim) was refuted at runtime.
 
+**Repo split phase 2 (2026-07-16):** the committed WASM test fixtures cited as
+evidence below (`crates/maw-plugin-manifest/tests/fixtures/wasm-parity/*`,
+`crates/maw-cli/tests/fixtures/native-*/<name>-plugin/`, `hostfn-probe`,
+`epic55/follow-plugin`, `wasm-dispatch`) and the `examples/wasm-parity/`
+sources were extracted to
+[Soul-Brews-Studio/maw-fixtures](https://github.com/Soul-Brews-Studio/maw-fixtures)
+(@aecf20b6). The fixture-welded tests referenced in the Evidence column were
+removed/gutted in the same split; test rework is tracked in #546. Fixture
+paths below are preserved as historical evidence pointers — resolve them
+against maw-fixtures (same relative layout) or maw-rs history @5cbd148e.
+
 ## Summary
 
 - Total rows: **133**

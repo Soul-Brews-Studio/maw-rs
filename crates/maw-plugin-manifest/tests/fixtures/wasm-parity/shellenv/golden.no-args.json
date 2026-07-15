@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": "missing shell argument",
-    "ok": false,
-    "output": null
-  },
-  "stderr": "missing shell argument",
-  "stdout": ""
-}

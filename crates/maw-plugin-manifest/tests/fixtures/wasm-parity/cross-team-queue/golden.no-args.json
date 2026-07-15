@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": null,
-    "ok": true,
-    "output": "{\"items\":[],\"stats\":{\"totalItems\":0,\"byRecipient\":{},\"byType\":{},\"oldestAgeHours\":null,\"newestAgeHours\":null},\"errors\":[],\"schemaVersion\":1}"
-  },
-  "stderr": "",
-  "stdout": "{\"items\":[],\"stats\":{\"totalItems\":0,\"byRecipient\":{},\"byType\":{},\"oldestAgeHours\":null,\"newestAgeHours\":null},\"errors\":[],\"schemaVersion\":1}"
-}

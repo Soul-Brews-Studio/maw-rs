@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": "maw learn: --fast and --deep are mutually exclusive",
-    "ok": false,
-    "output": null
-  },
-  "stderr": "maw learn: --fast and --deep are mutually exclusive",
-  "stdout": ""
-}

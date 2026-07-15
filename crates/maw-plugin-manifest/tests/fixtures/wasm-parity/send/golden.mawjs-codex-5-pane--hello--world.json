@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": null,
-    "ok": true,
-    "output": "\u001b[32mtyped\u001b[0m → mawjs:codex-5.pane: hello world"
-  },
-  "stderr": "",
-  "stdout": "\u001b[32mtyped\u001b[0m → mawjs:codex-5.pane: hello world"
-}

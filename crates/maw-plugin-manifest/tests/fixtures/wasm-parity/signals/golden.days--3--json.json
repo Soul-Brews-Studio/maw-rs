@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": null,
-    "ok": true,
-    "output": "[\n  {\n    \"kind\": \"alert\",\n    \"timestamp\": \"2026-07-01T09:30:00.000Z\",\n    \"bud\": \"athena\",\n    \"message\": \"queue pressure rising\",\n    \"file\": \"alpha.json\"\n  },\n  {\n    \"kind\": \"info\",\n    \"timestamp\": \"2026-06-29T12:00:00.000Z\",\n    \"bud\": \"orion\",\n    \"message\": \"daily scan complete\",\n    \"file\": \"beta.json\"\n  }\n]"
-  },
-  "stderr": "",
-  "stdout": "[\n  {\n    \"kind\": \"alert\",\n    \"timestamp\": \"2026-07-01T09:30:00.000Z\",\n    \"bud\": \"athena\",\n    \"message\": \"queue pressure rising\",\n    \"file\": \"alpha.json\"\n  },\n  {\n    \"kind\": \"info\",\n    \"timestamp\": \"2026-06-29T12:00:00.000Z\",\n    \"bud\": \"orion\",\n    \"message\": \"daily scan complete\",\n    \"file\": \"beta.json\"\n  }\n]"
-}
