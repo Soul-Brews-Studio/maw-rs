@@ -63,6 +63,7 @@ pub enum ConsentAction {
     Hey,
     TeamInvite,
     PluginInstall,
+    FleetRecruit,
 }
 
 impl ConsentAction {
@@ -72,6 +73,18 @@ impl ConsentAction {
             Self::Hey => "hey",
             Self::TeamInvite => "team-invite",
             Self::PluginInstall => "plugin-install",
+            Self::FleetRecruit => "fleet-recruit",
+        }
+    }
+
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "hey" => Some(Self::Hey),
+            "team-invite" => Some(Self::TeamInvite),
+            "plugin-install" => Some(Self::PluginInstall),
+            "fleet-recruit" => Some(Self::FleetRecruit),
+            _ => None,
         }
     }
 }

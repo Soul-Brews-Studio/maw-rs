@@ -194,7 +194,7 @@ mod tmux_close_tests281 {
 
     #[test]
     fn tmux_close_explicit_target_breaks_detached_with_arg_vector() {
-        let _lock = env_test_lock().lock().expect("env lock");
+        let _lock = env_test_lock();
         let _env = EnvGuard::set("/tmp/tmux-1/default,1,0", "%1");
         let mut runner = CloseFakeRunner::default();
         let out = tmux_close_with_runner(&strings(&["%42"]), &mut runner).expect("close");
@@ -204,7 +204,7 @@ mod tmux_close_tests281 {
 
     #[test]
     fn tmux_close_no_target_hides_non_current_panes() {
-        let _lock = env_test_lock().lock().expect("env lock");
+        let _lock = env_test_lock();
         let _env = EnvGuard::set("/tmp/tmux-1/default,1,0", "%2");
         let mut runner = CloseFakeRunner { panes: strings(&["%1", "%2", "%3"]), ..CloseFakeRunner::default() };
         let out = tmux_close_with_runner(&[], &mut runner).expect("close");
@@ -221,7 +221,7 @@ mod tmux_close_tests281 {
 
     #[test]
     fn tmux_close_refuses_current_pane_before_runner() {
-        let _lock = env_test_lock().lock().expect("env lock");
+        let _lock = env_test_lock();
         let _env = EnvGuard::set("/tmp/tmux-1/default,1,0", "%7");
         let mut runner = CloseFakeRunner::default();
         let err = tmux_close_with_runner(&strings(&["%7"]), &mut runner).expect_err("current pane guard");
@@ -232,7 +232,7 @@ mod tmux_close_tests281 {
 
     #[test]
     fn tmux_close_rejects_leading_dash_before_runner() {
-        let _lock = env_test_lock().lock().expect("env lock");
+        let _lock = env_test_lock();
         let _env = EnvGuard::set("/tmp/tmux-1/default,1,0", "%1");
         let mut runner = CloseFakeRunner::default();
         let err = tmux_close_with_runner(&strings(&["-oProxyCommand=bad"]), &mut runner).expect_err("guard");
@@ -243,7 +243,7 @@ mod tmux_close_tests281 {
 
     #[test]
     fn tmux_close_rejects_control_target_before_runner() {
-        let _lock = env_test_lock().lock().expect("env lock");
+        let _lock = env_test_lock();
         let _env = EnvGuard::set("/tmp/tmux-1/default,1,0", "%1");
         let mut runner = CloseFakeRunner::default();
         let err = tmux_close_with_runner(&strings(&["bad\npane"]), &mut runner).expect_err("guard");
@@ -254,7 +254,7 @@ mod tmux_close_tests281 {
 
     #[test]
     fn tmux_close_fake_maw_no_delegate_and_no_bun_runtime() {
-        let _lock = env_test_lock().lock().expect("env lock");
+        let _lock = env_test_lock();
         let _env = EnvGuard::set("/tmp/tmux-1/default,1,0", "%1");
         std::env::set_var("MAW_JS_REF_DIR", "/nonexistent");
         let mut runner = CloseFakeRunner::default();

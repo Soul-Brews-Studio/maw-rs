@@ -39,6 +39,7 @@ struct RunPeerDeps<'a, P: RunPeerTransport> {
 
 trait RunTmux {
     fn run_sessions(&mut self) -> Vec<RouteSession>;
+    fn run_pane_targets_raw(&mut self) -> Option<String>;
     fn run_send_text(&mut self, target: &str, text: &str) -> Result<(), String>;
     fn run_send_enter(&mut self, target: &str) -> Result<(), String>;
 }
@@ -66,6 +67,16 @@ impl RunTmux for RunSystemTmux {
         tmux_sessions_to_route_sessions(self.client.list_all())
     }
 
+    fn run_pane_targets_raw(&mut self) -> Option<String> {
+        let mut runner = maw_tmux::CommandTmuxRunner::new();
+        maw_tmux::TmuxRunner::run(
+            &mut runner,
+            "list-panes",
+            &["-a".to_owned(), "-F".to_owned(), maw_tmux::PANE_TARGET_FORMAT.to_owned()],
+        )
+        .ok()
+    }
+
     fn run_send_text(&mut self, target: &str, text: &str) -> Result<(), String> {
         run_validate_tmux_target(target)?;
         run_validate_command_text(text)?;
@@ -82,7 +93,9 @@ impl RunPeerTransport for RunCurlPeerTransport {
     fn run_peer_keys(&mut self, request: &RunPeerRequest) -> Result<RunPeerResponse, String> {
         run_validate_peer_request(request)?;
         let body = run_peer_body(&request.target, &request.text)?;
+        let federation_token = load_federation_token()?;
         let headers = sign_headers_v3_at(
+            &federation_token,
             &request.peer_key,
             &request.from,
             "POST",
@@ -156,12 +169,46 @@ fn run_run_with_from(
     run_validate_target_query(&parsed.target).map_err(|message| (2, message))?;
     run_validate_command_text(&parsed.text).map_err(|message| (2, message))?;
     match resolve_route_target(&parsed.target, &config.route, &tmux.run_sessions()) {
-        RouteResult::Local { target } | RouteResult::SelfNode { target } => run_local(&target, &parsed.text, tmux),
+        RouteResult::Local { target } | RouteResult::SelfNode { target } => {
+            let target = run_prefer_pane_zero_for_ambiguous_agent(&parsed.target, &target, tmux);
+            run_local(&target, &parsed.text, tmux)
+        }
         RouteResult::Peer { peer_url, target, node } => {
             let mut deps = RunPeerDeps { peer, config, from, peer_key, now };
             run_peer(&node, &peer_url, &target, &parsed.text, &mut deps)
         }
         RouteResult::Error { detail, hint, .. } => Err((2, run_route_error(&detail, hint))),
+    }
+}
+
+fn run_prefer_pane_zero_for_ambiguous_agent(
+    query: &str,
+    target: &str,
+    tmux: &mut impl RunTmux,
+) -> String {
+    if route_agent_name_from_query(query).is_none() || route_window_target_without_pane(target).is_none() {
+        return target.to_owned();
+    }
+    let Some(raw) = tmux.run_pane_targets_raw() else {
+        return target.to_owned();
+    };
+    let mut runner = RunPaneTargetRunner { raw, used: false };
+    prefer_pane_zero_for_ambiguous_agent(query, target, &mut runner)
+}
+
+struct RunPaneTargetRunner {
+    raw: String,
+    used: bool,
+}
+
+impl maw_tmux::TmuxRunner for RunPaneTargetRunner {
+    fn run(&mut self, subcommand: &str, _args: &[String]) -> Result<String, maw_tmux::TmuxError> {
+        if subcommand == "list-panes" && !self.used {
+            self.used = true;
+            Ok(self.raw.clone())
+        } else {
+            Err(maw_tmux::TmuxError::new(format!("unexpected tmux command {subcommand}")))
+        }
     }
 }
 
@@ -400,6 +447,7 @@ mod run_tests {
     #[derive(Debug, Default)]
     struct RunFakeTmux {
         sessions: Vec<RouteSession>,
+        pane_targets_raw: Option<String>,
         sends: Vec<(String, String)>,
         enters: Vec<String>,
     }
@@ -414,6 +462,10 @@ mod run_tests {
     impl RunTmux for RunFakeTmux {
         fn run_sessions(&mut self) -> Vec<RouteSession> {
             self.sessions.clone()
+        }
+
+        fn run_pane_targets_raw(&mut self) -> Option<String> {
+            self.pane_targets_raw.clone()
         }
 
         fn run_send_text(&mut self, target: &str, text: &str) -> Result<(), String> {
@@ -512,6 +564,22 @@ fn run_session(name: &str, windows: Vec<RouteWindow>) -> RouteSession {
     }
 
     #[test]
+    fn run_ambiguous_agent_name_targets_lead_pane_zero() {
+        let mut tmux = RunFakeTmux {
+            sessions: vec![run_session("81-kru32", vec![run_window(0, "kru32-oracle")])],
+            pane_targets_raw: Some([
+                "%9|||81-kru32:0.2|||kru32-oracle||||||/tmp",
+                "%7|||81-kru32:0.0|||kru32-oracle||||||/tmp",
+            ].join("\n")),
+            ..RunFakeTmux::default()
+        };
+        let mut peer = RunFakePeer::default();
+        run_run(&run_strings(&["81-kru32:kru32-oracle", "probe"]), &mut tmux, &mut peer, &run_config(), run_key, run_now)
+            .expect("run");
+        assert_eq!(tmux.sends, vec![("81-kru32:0.0".to_owned(), "probe".to_owned())]);
+    }
+
+    #[test]
     fn run_empty_text_sends_enter_only() {
         let mut tmux = RunFakeTmux { sessions: vec![run_session("work", vec![run_window(0, "shell")])], ..RunFakeTmux::default() };
         let mut peer = RunFakePeer::default();
@@ -587,7 +655,7 @@ fn run_session(name: &str, windows: Vec<RouteWindow>) -> RouteSession {
 
     #[test]
     fn run_curl_argv_has_separator_before_url() {
-        let headers = sign_headers_v3_at("key", "test-oracle:test-node", "POST", RUN_PANE_KEYS_PATH, Some(b"{}"), run_now()).expect("headers");
+        let headers = sign_headers_v3_at("token", "key", "test-oracle:test-node", "POST", RUN_PANE_KEYS_PATH, Some(b"{}"), run_now()).expect("headers");
         let argv = run_curl_argv("http://peer.example/", &headers, "{}").expect("argv");
         let sep = argv.iter().position(|arg| arg == "--").expect("separator");
         assert_eq!(argv[sep + 1], "http://peer.example/api/pane-keys");

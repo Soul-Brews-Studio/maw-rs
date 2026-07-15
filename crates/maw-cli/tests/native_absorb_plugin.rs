@@ -35,11 +35,11 @@ fn absorb_seed(name: &str) -> (PathBuf, PathBuf, PathBuf) {
     std::fs::create_dir_all(&bin).expect("bin dir");
     absorb_write(
         &config.join("fleet/01-donor.json"),
-        r#"{"name":"01-donor-oracle","groupName":"donor-team","windows":[{"name":"donor-window","repo":"org/donor-oracle"}]}"#,
+        r#"{"name":"01-donor-oracle","squadName":"donor-team","windows":[{"name":"donor-window","repo":"org/donor-oracle"}]}"#,
     );
     absorb_write(
         &config.join("fleet/02-receiver.json"),
-        r#"{"name":"02-receiver-oracle","groupName":"receiver-team","windows":[{"name":"receiver-window","repo":"org/receiver-oracle"}]}"#,
+        r#"{"name":"02-receiver-oracle","squadName":"receiver-team","windows":[{"name":"receiver-window","repo":"org/receiver-oracle"}]}"#,
     );
     std::fs::create_dir_all(root.join("ghq/github.com/org/donor-oracle/ψ/memory/learnings"))
         .expect("donor repo");
@@ -99,6 +99,27 @@ fn absorb_native_dry_run_golden_is_hermetic_without_js_ref() {
         !log.contains("switch-client"),
         "dry-run switched tmux: {log}"
     );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn absorb_native_resolves_bare_receiver_repo_across_orgs() {
+    let (root, home, config) = absorb_seed("bare-receiver");
+    std::fs::remove_file(config.join("fleet/02-receiver.json")).expect("remove receiver fixture");
+    absorb_write(
+        &config.join("fleet/02-display-census.json"),
+        r#"{"name":"02-display-census","squadName":"display-census","windows":[{"name":"display-census","repo":""}]}"#,
+    );
+    let receiver = root.join("ghq/github.com/laris-co/display-census");
+    std::fs::create_dir_all(receiver.join("ψ/memory/learnings")).expect("bare receiver repo");
+
+    let output = absorb_command(&root, &home, &config)
+        .args(["absorb", "donor", "--into", "display-census", "--dry-run"])
+        .output()
+        .expect("run absorb");
+    assert!(output.status.success(), "stderr={}", String::from_utf8_lossy(&output.stderr));
+    let stdout = String::from_utf8(output.stdout).expect("stdout");
+    assert!(stdout.contains(&format!("-> {}", receiver.display())), "stdout={stdout}");
     let _ = std::fs::remove_dir_all(root);
 }
 

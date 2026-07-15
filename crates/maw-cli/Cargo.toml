@@ -10,6 +10,10 @@ publish = false
 name = "maw-rs"
 path = "src/main.rs"
 
+[features]
+default = []
+wasm-host = ["maw-plugin-manifest/wasm-host"]
+
 [dependencies]
 maw-auto-wake = { path = "../maw-auto-wake" }
 maw-auth = { path = "../maw-auth" }
@@ -27,6 +31,9 @@ maw-plugin-manifest = { path = "../maw-plugin-manifest" }
 maw-plugin-scaffold = { path = "../maw-plugin-scaffold" }
 maw-policy = { path = "../maw-policy" }
 maw-routing = { path = "../maw-routing" }
+maw-schedule = { path = "../maw-schedule" }
+maw-schedule-launchd = { path = "../maw-schedule-launchd" }
+maw-schedule-runner = { path = "../maw-schedule-runner" }
 maw-split = { path = "../maw-split" }
 maw-tmux = { path = "../maw-tmux" }
 maw-transport = { path = "../maw-transport" }
@@ -35,6 +42,7 @@ maw-xdg = { path = "../maw-xdg" }
 axum = { version = "0.7", default-features = false, features = ["http1", "json", "tokio", "query", "ws"] }
 futures-util = "0.3"
 rand = "0.8"
+portable-pty = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

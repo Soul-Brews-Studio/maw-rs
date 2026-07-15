@@ -390,6 +390,7 @@ fn forget_resolve_fleet_entry(
 fn forget_load_fleet_entries(env: &MawXdgEnv) -> Vec<ForgetFleetEntry> {
     fleet_load_entries_for_env(env)
         .into_iter()
+        .filter(fleet_entry_is_session)
         .map(|entry| ForgetFleetEntry {
             path: entry.path,
             session: entry.session,
@@ -401,7 +402,7 @@ fn forget_fleet_entry_matches(entry: &ForgetFleetEntry, aliases: &BTreeSet<Strin
     let mut candidates = vec![
         entry.session.name.clone(),
         forget_strip_numeric_prefix(&entry.session.name).to_owned(),
-        entry.session.group_name.clone(),
+        entry.session.squad_name.clone(),
     ];
     for window in &entry.session.windows {
         candidates.push(window.name.clone());
@@ -696,7 +697,7 @@ mod forget_tests {
         std::fs::create_dir_all(root.join("config/fleet")).expect("fleet dir");
         std::fs::write(
             root.join("config/fleet/03-neo.json"),
-            r#"{"name":"03-neo","groupName":"knights","windows":[{"name":"neo","repo":"acme/neo-oracle"}]}"#,
+            r#"{"name":"03-neo","squadName":"knights","windows":[{"name":"neo","repo":"acme/neo-oracle"}]}"#,
         )
         .expect("fleet");
         std::fs::create_dir_all(root.join("state/snapshots")).expect("state snapshots");
@@ -775,7 +776,7 @@ mod forget_tests {
 
     #[test]
     fn forget_native_done_runner_uses_explicit_cwd_without_path_maw_or_global_cwd_change() {
-        let _lock = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lock = env_test_lock();
         let _home = EnvVarRestore::capture("HOME");
         let _maw_home = EnvVarRestore::capture("MAW_HOME");
         let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");

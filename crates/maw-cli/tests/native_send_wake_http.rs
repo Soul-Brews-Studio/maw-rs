@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use maw_auth::{build_from_sign_payload, hash_body, verify_hmac_sig};
+use maw_auth::{build_from_sign_payload, hash_body, sign, verify_hmac_sig};
 use maw_cli::run_cli_async;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -18,6 +18,7 @@ struct CapturedRequest {
 }
 
 static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+const FEDERATION_TOKEN: &str = "known-federation-token";
 
 fn env_lock() -> &'static Mutex<()> {
     ENV_LOCK.get_or_init(|| Mutex::new(()))
@@ -69,6 +70,7 @@ async fn native_send_posts_signed_api_send_to_configured_peer() {
     );
     assert_common_v3_headers_and_signature(
         &captured,
+        FEDERATION_TOKEN,
         peer_key,
         "sender-oracle:sender-node",
         "/api/send",
@@ -113,14 +115,54 @@ async fn native_wake_posts_signed_api_wake_to_configured_peer() {
     assert_eq!(captured.body, r#"{"target":"agent","task":"fix issue"}"#);
     assert_common_v3_headers_and_signature(
         &captured,
+        FEDERATION_TOKEN,
         peer_key,
         "sender-oracle:sender-node",
         "/api/wake",
     );
 }
 
+#[tokio::test]
+async fn native_wake_surfaces_receiver_failure_instead_of_false_woke() {
+    let _guard = env_lock().lock().await;
+    let env = TestEnv::new("native-wake-fail");
+    let peer_key = "known-peer-key";
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    env.write_config(&format!("http://{addr}"));
+    std::env::set_var("MAW_HOME", &env.root);
+    std::env::set_var("MAW_PEER_KEY", peer_key);
+
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accept");
+        let _captured = read_one_http_request(&mut socket).await;
+        write_json_response(
+            &mut socket,
+            r#"{"ok":false,"target":"agent","error":"wake exited 1: wake: repo not found for agent"}"#,
+        )
+        .await;
+    });
+
+    let output = run_cli_async(&args(&[
+        "wake",
+        "remote:agent",
+        "--from",
+        "sender-oracle:sender-node",
+    ]))
+    .await;
+
+    assert_eq!(output.code, 1, "{}", output.stdout);
+    assert!(!output.stdout.contains("woke"), "{}", output.stdout);
+    assert!(
+        output.stderr.contains("repo not found for agent"),
+        "{}",
+        output.stderr
+    );
+}
+
 fn assert_common_v3_headers_and_signature(
     captured: &CapturedRequest,
+    federation_token: &str,
     peer_key: &str,
     from: &str,
     path: &str,
@@ -153,6 +195,10 @@ fn assert_common_v3_headers_and_signature(
     assert_eq!(signature.len(), 64);
     assert!(signature.chars().all(|ch| ch.is_ascii_hexdigit()));
     assert_eq!(signature, &signature.to_ascii_lowercase());
+    assert_eq!(
+        captured.headers.get("x-maw-signature").map(String::as_str),
+        Some(sign(federation_token, "POST", path, timestamp, "").as_str())
+    );
 
     let body_hash = hash_body(Some(captured.body.as_bytes()));
     let payload = build_from_sign_payload(from, timestamp, "POST", path, &body_hash);
@@ -242,7 +288,7 @@ impl TestEnv {
         std::fs::write(
             self.root.join("config").join("maw.config.json"),
             format!(
-                r#"{{"node":"sender-node","oracle":"sender-oracle","namedPeers":[{{"name":"remote","url":"{peer_url}"}}]}}"#
+                r#"{{"node":"sender-node","oracle":"sender-oracle","federationToken":"{FEDERATION_TOKEN}","namedPeers":[{{"name":"remote","url":"{peer_url}"}}]}}"#
             ),
         )
         .expect("write config");

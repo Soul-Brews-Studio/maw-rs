@@ -64,6 +64,20 @@ fn consent_request_plan_models_peer_http_failure_with_redacted_body() {
 }
 
 #[test]
+fn consent_request_plan_round_trips_fleet_recruit_action() {
+    let mut args = base_args();
+    let action = args
+        .iter()
+        .position(|arg| arg == "hey")
+        .expect("action arg");
+    args[action] = "fleet-recruit".to_owned();
+    let json = json(&args);
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["pending"]["action"], "fleet-recruit");
+    assert_eq!(json["pending"]["status"], "pending");
+}
+
+#[test]
 fn consent_request_plan_rejects_bad_action_and_missing_fields() {
     let bad_action = run_cli(&[
         "consent-request".to_owned(),

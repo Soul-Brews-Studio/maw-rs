@@ -1,0 +1,3 @@
+{"ts":"2026-07-10T00:00:00.000Z","cmd":"hey","args":["hey","bob","hello"],"user":"alice","pid":1}
+{"ts":"2026-07-10T00:00:01.000Z","cmd":"hey","args":["hey","bob","spoof","--from","mallory:m5"],"user":"alice","pid":2}
+{"ts":"2026-07-10T00:00:02.000Z","cmd":"send","args":["send","bob","oops","--from","bad"],"user":"carol","pid":3}

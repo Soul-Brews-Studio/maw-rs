@@ -1,12 +1,13 @@
 use maw_discord::is_numeric_snowflake;
 
 const DISPATCH_116: &[DispatcherEntry] = &[DispatcherEntry {
-    command: "atlas",
+    command: "discord-inv",
     handler: Handler::Async(atlas_async_native),
 }];
 
-const ATLAS_USAGE: &str = "usage: maw atlas <bot> [--guild <id>] [--all-guilds] [--with-threads] [--json]";
+const ATLAS_USAGE: &str = "usage: maw discord-inv <bot> [--guild <id>] [--all-guilds] [--with-threads] [--json]";
 const ATLAS_FAKE_DISCORD_ENV: &str = "MAW_RS_ATLAS_FAKE_DISCORD";
+const ATLAS_DISCORD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct AtlasArgs {
@@ -89,8 +90,10 @@ async fn atlas_run_real(parsed: AtlasArgs) -> CliOutput {
     if parsed.json {
         args.push("--json".to_owned());
     }
-    let output = run_discord_command(args).await;
-    CliOutput { code: output.code, stdout: output.stdout, stderr: output.stderr }
+    match tokio::time::timeout(ATLAS_DISCORD_TIMEOUT, run_discord_command(args)).await {
+        Ok(output) => CliOutput { code: output.code, stdout: output.stdout, stderr: output.stderr },
+        Err(_) => atlas_error("discord-inv: timed out waiting for Discord inventory"),
+    }
 }
 
 fn atlas_parse_args(argv: &[String]) -> Result<AtlasArgs, String> {
@@ -100,7 +103,7 @@ fn atlas_parse_args(argv: &[String]) -> Result<AtlasArgs, String> {
         let token = &argv[index];
         match token.as_str() {
             "help" | "--help" | "-h" => return Err(ATLAS_USAGE.to_owned()),
-            "--" => return Err("atlas: -- separator is not allowed".to_owned()),
+            "--" => return Err("discord-inv: -- separator is not allowed".to_owned()),
             "--json" => parsed.json = true,
             "--all-guilds" => parsed.all_guilds = true,
             "--with-threads" => parsed.with_threads = true,
@@ -114,7 +117,7 @@ fn atlas_parse_args(argv: &[String]) -> Result<AtlasArgs, String> {
                 atlas_validate_snowflake("guild", &guild)?;
                 parsed.guild = Some(guild);
             }
-            value if value.starts_with('-') => return Err(format!("atlas: unknown argument {value}")),
+            value if value.starts_with('-') => return Err(format!("discord-inv: unknown argument {value}")),
             value => atlas_set_bot(&mut parsed, value)?,
         }
         index += 1;
@@ -127,13 +130,13 @@ fn atlas_parse_args(argv: &[String]) -> Result<AtlasArgs, String> {
 
 fn atlas_take_value(argv: &[String], index: &mut usize, flag: &str) -> Result<String, String> {
     *index += 1;
-    let Some(value) = argv.get(*index) else { return Err(format!("atlas: {flag} requires a value")); };
+    let Some(value) = argv.get(*index) else { return Err(format!("discord-inv: {flag} requires a value")); };
     atlas_validate_value(flag, value)
 }
 
 fn atlas_set_bot(parsed: &mut AtlasArgs, value: &str) -> Result<(), String> {
     if !parsed.bot.is_empty() {
-        return Err(format!("atlas: unexpected argument {value}"));
+        return Err(format!("discord-inv: unexpected argument {value}"));
     }
     parsed.bot = atlas_validate_value("bot", value)?;
     Ok(())
@@ -147,7 +150,7 @@ fn atlas_validate_value(label: &str, value: &str) -> Result<String, String> {
         || value.contains('\0')
         || value == "--"
     {
-        return Err(format!("atlas: invalid {label} value"));
+        return Err(format!("discord-inv: invalid {label} value"));
     }
     Ok(value.to_owned())
 }
@@ -156,99 +159,11 @@ fn atlas_validate_snowflake(label: &str, value: &str) -> Result<(), String> {
     if is_numeric_snowflake(value) {
         Ok(())
     } else {
-        Err(format!("atlas: invalid {label} id '{value}'"))
+        Err(format!("discord-inv: invalid {label} id '{value}'"))
     }
 }
 
-fn atlas_fake_discord() -> Option<AtlasFakeDiscord> {
-    let raw = std::env::var(ATLAS_FAKE_DISCORD_ENV).ok()?;
-    serde_json::from_str(&raw).ok()
-}
-
-async fn atlas_render_fake(parsed: &AtlasArgs, fake: &AtlasFakeDiscord) -> Result<String, String> {
-    if fake.bot != parsed.bot {
-        return Err(format!("atlas: fake discord has bot '{}', requested '{}'", fake.bot, parsed.bot));
-    }
-    let guilds = atlas_filter_guilds(parsed, &fake.guilds)?;
-    let gateway_events = atlas_gateway_observed_count(&fake.gateway_events).await;
-    if parsed.json {
-        return Ok(atlas_render_json(&fake.bot, gateway_events, &guilds));
-    }
-    Ok(atlas_render_text(&fake.bot, gateway_events, &guilds))
-}
-
-fn atlas_filter_guilds(parsed: &AtlasArgs, guilds: &[AtlasGuild]) -> Result<Vec<AtlasGuild>, String> {
-    let mut selected = if let Some(guild_id) = &parsed.guild {
-        guilds.iter().filter(|guild| &guild.id == guild_id).cloned().collect::<Vec<_>>()
-    } else if parsed.all_guilds {
-        guilds.to_vec()
-    } else {
-        guilds.iter().take(1).cloned().collect()
-    };
-    if !parsed.with_threads {
-        for guild in &mut selected {
-            guild.channels.retain(|channel| !matches!(channel.kind, 10..=12));
-        }
-    }
-    atlas_validate_fake_ids(&selected)?;
-    Ok(selected)
-}
-
-fn atlas_validate_fake_ids(guilds: &[AtlasGuild]) -> Result<(), String> {
-    for guild in guilds {
-        atlas_validate_snowflake("guild", &guild.id)?;
-        for channel in &guild.channels {
-            atlas_validate_snowflake("channel", &channel.id)?;
-            for user in &channel.allow_from {
-                atlas_validate_snowflake("user", user)?;
-            }
-        }
-    }
-    Ok(())
-}
-
-async fn atlas_gateway_observed_count(events: &[String]) -> usize {
-    maw_discord::gateway::observe_mock_gateway_events(events).await
-}
-
-fn atlas_render_json(bot: &str, gateway_events: usize, guilds: &[AtlasGuild]) -> String {
-    let value = serde_json::json!({
-        "bot": bot,
-        "gatewayEvents": gateway_events,
-        "guilds": guilds,
-    });
-    format!("{}\n", serde_json::to_string_pretty(&value).unwrap_or_default())
-}
-
-fn atlas_render_text(bot: &str, gateway_events: usize, guilds: &[AtlasGuild]) -> String {
-    let mut out = String::new();
-    let _ = writeln!(out, "🗺️ atlas — Discord oracle registry for {bot}");
-    let _ = writeln!(out, "  gateway: {gateway_events} event(s) observed");
-    let mut total_channels = 0usize;
-    let mut total_enabled = 0usize;
-    for guild in guilds {
-        total_channels = total_channels.saturating_add(guild.channels.len());
-        total_enabled = total_enabled.saturating_add(guild.channels.iter().filter(|channel| channel.enabled).count());
-        let _ = writeln!(out, "  ▼ {} ({}) · {} channel(s)", guild.name, guild.id, guild.channels.len());
-        let mut channels = guild.channels.clone();
-        channels.sort_by(|left, right| left.name.cmp(&right.name));
-        for channel in channels {
-            let _ = writeln!(out, "{}", atlas_render_channel(&channel));
-        }
-    }
-    let _ = writeln!(out, "summary: {} server(s) · {total_channels} channels visible · {total_enabled} enabled", guilds.len());
-    out
-}
-
-fn atlas_render_channel(channel: &AtlasChannel) -> String {
-    if channel.enabled {
-        let mention = if channel.require_mention { "mention" } else { "all-msg" };
-        let allow = if channel.allow_from.is_empty() { "EVERYONE".to_owned() } else { channel.allow_from.join(",") };
-        format!("     ✓ #{:<36} {mention} {allow}", channel.name)
-    } else {
-        format!("     · #{:<36} (in guild, no access)", channel.name)
-    }
-}
+include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/core_impl/atlas_render.rs"));
 
 fn atlas_ok(stdout: &str) -> CliOutput {
     CliOutput { code: 0, stdout: format!("{stdout}\n"), stderr: String::new() }
@@ -277,6 +192,14 @@ mod atlas_tests {
         assert!(atlas_parse_args(&["no\npe".to_owned()]).unwrap_err().contains("invalid bot"));
     }
 
+    #[test]
+    fn discord_inv_accepts_bot_inventory_args() {
+        let parsed = atlas_parse_args(&atlas_strings(&["nova", "--all-guilds", "--with-threads"])).expect("native bot route");
+        assert_eq!(parsed.bot, "nova");
+        assert!(parsed.all_guilds);
+        assert!(parsed.with_threads);
+    }
+
     #[tokio::test]
     async fn atlas_fake_gateway_subscribe_counts_events() {
         assert_eq!(atlas_gateway_observed_count(&["heartbeat".to_owned(), "heartbeat-ack".to_owned()]).await, 2);
@@ -284,7 +207,8 @@ mod atlas_tests {
 
     #[test]
     fn atlas_dispatch_registers_native() {
-        assert_eq!(dispatcher_status("atlas"), DispatchKind::Native);
-        assert_eq!(DISPATCH_116[0].command, "atlas");
+        assert_eq!(dispatcher_status("discord-inv"), DispatchKind::Native);
+        assert_eq!(dispatcher_status("atlas"), DispatchKind::NativeError);
+        assert_eq!(DISPATCH_116[0].command, "discord-inv");
     }
 }

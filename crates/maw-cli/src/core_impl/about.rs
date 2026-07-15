@@ -279,7 +279,7 @@ fn about_config_session(oracle: &str) -> Option<String> {
 
 #[cfg(not(test))]
 fn about_fleet_entry(oracle: &str) -> Option<AboutFleetEntry> {
-    for entry in fleet_load_entries() {
+    for entry in fleet_load_entries().into_iter().filter(fleet_entry_is_session) {
         let has_oracle = entry.session.windows.iter().any(|window| {
             let window_name = window.name.to_lowercase();
             window_name == format!("{oracle}-oracle") || window_name == oracle

@@ -148,7 +148,10 @@ fn deny_special_path(path: &Path) -> bool {
         || path.starts_with("/sys")
         || path.starts_with("/root")
 }
-fn default_config_root() -> PathBuf {
+fn default_config_root(config_root: Option<&Path>) -> PathBuf {
+    if let Some(path) = config_root {
+        return path.to_path_buf();
+    }
     if let Some(path) = std::env::var_os("MAW_CONFIG_DIR") {
         return PathBuf::from(path);
     }
@@ -185,10 +188,130 @@ fn home_dir() -> Option<PathBuf> {
 /// `maw.fs.*` in production: a manifest may name one of these scopes but can
 /// never inject a path of its own. Extend by adding an arm here — never by
 /// reading a path from a manifest.
-fn known_fs_root(scope: &str, home: &Path) -> Option<PathBuf> {
+fn known_fs_root(
+    scope: &str,
+    home: &Path,
+    config_root: Option<&Path>,
+    vault_root: Option<&Path>,
+) -> Option<PathBuf> {
     match scope {
         "teams" => Some(home.join(".claude").join("teams")),
+        "config" => Some(default_config_root(config_root)),
+        "claude-projects" => Some(configured_claude_projects_root(home)),
+        "repos" => Some(configured_repos_root(home)),
+        "cwd" => std::env::current_dir().ok(),
+        "maw-cache" => Some(configured_maw_cache_root(home)),
+        "maw-legacy" => Some(home.join(".maw")),
+        "fleet-state" => Some(default_state_root().join("fleet")),
+        "fleet-legacy" => Some(home.join(".maw").join("fleet")),
+        "fleet-config" => Some(default_config_root(config_root).join("fleet")),
+        "psi" => configured_psi_root(config_root).ok(),
+        "vault" => configured_vault_root(home, config_root, vault_root).ok(),
         _ => None,
+    }
+}
+
+fn known_fs_root_should_create(scope: &str) -> bool {
+    matches!(scope, "teams" | "config" | "maw-cache" | "psi")
+}
+
+fn configured_maw_cache_root(home: &Path) -> PathBuf {
+    if let Some(path) = std::env::var_os("MAW_HOME").filter(|value| !value.is_empty()) {
+        return resolve_configured_path(PathBuf::from(path), home);
+    }
+    if let Some(path) = std::env::var_os("MAW_CACHE_DIR").filter(|value| !value.is_empty()) {
+        return resolve_configured_path(PathBuf::from(path), home);
+    }
+    if std::env::var("MAW_XDG").is_ok_and(|value| {
+        matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
+    }) {
+        return std::env::var_os("XDG_CACHE_HOME")
+            .filter(|value| !value.is_empty())
+            .map_or_else(|| home.join(".cache"), PathBuf::from)
+            .join("maw");
+    }
+    home.join(".maw")
+}
+
+fn configured_repos_root(home: &Path) -> PathBuf {
+    std::env::var_os("GHQ_ROOT").filter(|value| !value.is_empty()).map_or_else(
+        || home.join("Code").join("github.com"),
+        |value| {
+            let root = resolve_configured_path(PathBuf::from(value), home);
+            if root.file_name().and_then(std::ffi::OsStr::to_str) == Some("github.com") { root } else { root.join("github.com") }
+        },
+    )
+}
+
+fn configured_psi_root(config_root: Option<&Path>) -> Result<PathBuf, HostResult<Value>> {
+    let cwd = std::env::current_dir().map_err(|error| {
+        HostResult::err(
+            HostErrorCode::IoError,
+            format!("failed to read cwd: {error}"),
+        )
+    })?;
+    let config = read_config_json(&default_config_root(config_root).join("maw.config.json"))?;
+    if let Some(path) = config
+        .get("psiPath")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+    {
+        let path = PathBuf::from(path);
+        return Ok(if path.is_absolute() {
+            path
+        } else {
+            cwd.join(path)
+        });
+    }
+    let greek_psi = cwd.join("ψ");
+    Ok(if greek_psi.exists() {
+        greek_psi
+    } else {
+        cwd.join("psi")
+    })
+}
+
+fn configured_claude_projects_root(home: &Path) -> PathBuf {
+    if let Some(path) = std::env::var_os("MAW_CLAUDE_PROJECTS_DIR").filter(|value| !value.is_empty()) {
+        return resolve_configured_path(PathBuf::from(path), home);
+    }
+    if let Some(path) = std::env::var_os("CLAUDE_HOME").filter(|value| !value.is_empty()) {
+        return resolve_configured_path(PathBuf::from(path), home).join("projects");
+    }
+    home.join(".claude").join("projects")
+}
+
+fn configured_vault_root(
+    home: &Path,
+    config_root: Option<&Path>,
+    vault_root: Option<&Path>,
+) -> Result<PathBuf, HostResult<Value>> {
+    if let Some(root) = vault_root {
+        return Ok(resolve_configured_path(root.to_path_buf(), home));
+    }
+    if let Some(root) = std::env::var_os("MAW_VAULT_ROOT").filter(|value| !value.is_empty()) {
+        return Ok(resolve_configured_path(PathBuf::from(root), home));
+    }
+    let config = read_config_json(&default_config_root(config_root).join("maw.config.json"))?;
+    for key in ["vaultRoot", "vault.root"] {
+        if let Some(root) = get_json_path(&config, key)
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+        {
+            return Ok(resolve_configured_path(PathBuf::from(root), home));
+        }
+    }
+    Err(HostResult::err(
+        HostErrorCode::NotFound,
+        "vault root is not configured; set MAW_VAULT_ROOT or maw.config.json vaultRoot",
+    ))
+}
+
+fn resolve_configured_path(path: PathBuf, home: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path
+    } else {
+        home.join(path)
     }
 }
 

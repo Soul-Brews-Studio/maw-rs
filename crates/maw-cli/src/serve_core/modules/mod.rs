@@ -14,6 +14,7 @@ pub mod debug_routes;
 pub mod federation_routes;
 pub mod god_mode_ui;
 pub mod identity_routes;
+pub mod info_routes;
 pub mod pairing;
 pub mod static_views;
 pub mod thread_routes;
@@ -61,6 +62,7 @@ where
         federation_routes::federation_registration(),
         god_mode_ui::godui_registration(),
         identity_routes::identity_registration(),
+        info_routes::info_registration(),
         pairing::pair_registration(),
         thread_routes::threadstore_registration(),
         trigger_routes::triggers_registration(),

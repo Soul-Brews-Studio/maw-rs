@@ -6,6 +6,7 @@
 //   fs:read:teams / fs:write:teams  → ~/.claude/teams   (roster + inboxes)
 //   tmux:read                       → live-session check for `ls`
 //   proc:exec:date                  → wall clock (WASM has no clock; see notes below)
+//   tmux:send                       → post-say member nudge (same polling trigger as `maw hey <member> nudge`)
 //
 // The lead IS the team: team = basename(cwd) minus "-oracle", where cwd/home come
 // from the InvokeContext the CLI dispatch injects into the guest input. join stays
@@ -18,9 +19,11 @@
 //   * name guard blocks path traversal (../, /, .)
 //   * only the 8 valid --agent-color values are accepted
 //   * inbox append never clobbers existing message bytes
-import { Host } from "@extism/as-pdk";
-import { fsRead, fsWrite, fsList, listSessions, hostExec } from "@maw-rs/wasm-sdk";
+import { Host, Memory } from "@extism/as-pdk";
+import { length } from "@extism/as-pdk/lib/env";
+import { fsRead, fsWrite, fsList, listSessions, sendKeys, hostExec } from "@maw-rs/wasm-sdk";
 
+@external("extism:host/user", "maw.paths.get") declare function mawPathsGet(input: u64): u64;
 export function myAbort(message: string | null, fileName: string | null, lineNumber: u32, columnNumber: u32): void {}
 
 const COLORS: string[] = ["red", "green", "yellow", "blue", "purple", "cyan", "magenta", "white"];
@@ -28,8 +31,8 @@ const COLORS: string[] = ["red", "green", "yellow", "blue", "purple", "cyan", "m
 export function handle(): i32 {
   const input = Host.inputString();
   const args = extractArgs(input);
-  const cwd = jsonStringField(input, "cwd");
-  const home = jsonStringField(input, "home");
+  const cwd = pathGet("cwd");
+  const home = pathGet("home");
   const sub = args.length > 0 ? args[0] : "";
 
   if (sub == "join") return cmdJoin(deriveTeam(cwd), args); // no home/roster needed for the pointer
@@ -63,6 +66,7 @@ function baseName(path: string): string {
   const slash = path.lastIndexOf("/");
   return slash >= 0 ? path.slice(slash + 1) : path;
 }
+function pathGet(name: string): string { const input = Memory.allocateString("{\"name\":" + quote(name) + "}"); const output = mawPathsGet(input.offset); const out = new Memory(output, length(output)).toString(); return out.indexOf("\"ok\":true") < 0 ? "" : jsonStringField(out, "path"); }
 
 // ── start ────────────────────────────────────────────────────────────────────
 // maw squad start — start THIS repo's squad. Adopts an existing folder, never clobbers.
@@ -127,7 +131,7 @@ function cmdJoin(team: string, args: string[]): i32 {
 }
 
 // ── say ──────────────────────────────────────────────────────────────────────
-// maw squad say <member> <text...> — append to a member's inbox (never clobbers).
+// maw squad say <member> <text...> — append to a member's inbox (never clobbers), then nudge it.
 function cmdSay(teams: string, team: string, args: string[]): i32 {
   const member = args.length > 1 ? args[1] : "";
   const text = args.length > 2 ? args.slice(2).join(" ") : "";
@@ -152,7 +156,18 @@ function cmdSay(teams: string, team: string, args: string[]): i32 {
   const msg = messageJson("team-lead", text, isoNow());
   const w = writeFile(path, appendToArray(existing, msg));
   if (w != "") return finish(false, null, w);
-  return finish(true, "✓ said to " + member + "@" + team + ": " + text, null);
+  let out = "✓ said to " + member + "@" + team + ": " + text;
+  const nudge = nudgeMember(member);
+  if (nudge != "") out += "\n  ⚠ nudge skipped: " + nudge;
+  return finish(true, out, null);
+}
+
+function nudgeMember(member: string): string {
+  const req = "{\"target\":" + quote(member) + ",\"keys\":[\"nudge\"],\"literal\":true,\"enter\":true,\"allowAiPane\":true}";
+  const res = sendKeys(req);
+  if (res.indexOf("\"ok\":true") >= 0) return "";
+  const err = jsonStringField(res, "error");
+  return err == "" ? "member polling nudge failed" : err;
 }
 
 // ── ls ───────────────────────────────────────────────────────────────────────

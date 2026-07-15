@@ -4,6 +4,9 @@ impl MawWasmHost {
             .scopes_for("fs", verb)
             .into_iter()
             .filter_map(|scope| {
+                if scope == "vault" && verb != "read" {
+                    return None;
+                }
                 self.fs_roots
                     .get(&scope)
                     .and_then(|root| canonicalize_checked_path(root).ok())
@@ -57,7 +60,7 @@ impl MawWasmHost {
             .fs_roots
             .get("config")
             .cloned()
-            .unwrap_or_else(default_config_root);
+            .unwrap_or_else(|| default_config_root(None));
         if deny_special_path(&root) {
             return Err(HostResult::err(
                 HostErrorCode::CapabilityDenied,
@@ -89,7 +92,11 @@ impl MawWasmHost {
         let port = config
             .get("port")
             .and_then(json_u16)
-            .or_else(|| std::env::var("MAW_PORT").ok().and_then(|value| value.parse::<u16>().ok()))
+            .or_else(|| {
+                std::env::var("MAW_PORT")
+                    .ok()
+                    .and_then(|value| value.parse::<u16>().ok())
+            })
             .unwrap_or(31_745);
         parse_localserver_base_url(&format!("http://127.0.0.1:{port}"))
     }

@@ -23,6 +23,14 @@ trait TokenRunner {
     fn token_confirm(&mut self, prompt: &str) -> bool;
 }
 
+trait TokenApplyTmux {
+    fn apply_list_panes(&mut self) -> Vec<maw_tmux::TmuxPane>;
+    fn apply_capture(&mut self, target: &str) -> Result<String, String>;
+    fn apply_send_text(&mut self, target: &str, text: &str) -> Result<(), String>;
+    fn apply_send_enter(&mut self, target: &str) -> Result<(), String>;
+    fn apply_sleep_ms(&mut self, ms: u64);
+}
+
 struct TokenSystemRunner;
 
 impl TokenRunner for TokenSystemRunner {
@@ -50,6 +58,18 @@ impl TokenRunner for TokenSystemRunner {
     fn token_confirm(&mut self, prompt: &str) -> bool {
         token_prompt_confirm(prompt)
     }
+}
+
+struct TokenSystemApplyTmux { client: maw_tmux::TmuxClient<maw_tmux::CommandTmuxRunner> }
+
+impl TokenSystemApplyTmux { fn new() -> Self { Self { client: maw_tmux::TmuxClient::local() } } }
+
+impl TokenApplyTmux for TokenSystemApplyTmux {
+    fn apply_list_panes(&mut self) -> Vec<maw_tmux::TmuxPane> { self.client.list_panes() }
+    fn apply_capture(&mut self, target: &str) -> Result<String, String> { self.client.capture(target, Some(80)).map_err(|error| error.message) }
+    fn apply_send_text(&mut self, target: &str, text: &str) -> Result<(), String> { self.client.send_keys_literal(target, text).map_err(|error| error.message) }
+    fn apply_send_enter(&mut self, target: &str) -> Result<(), String> { self.client.send_enter(target).map_err(|error| error.message) }
+    fn apply_sleep_ms(&mut self, ms: u64) { std::thread::sleep(std::time::Duration::from_millis(ms)); }
 }
 
 struct TokenFakeRunner {
@@ -139,7 +159,13 @@ fn token_dispatch(argv: &[String], runner: &mut dyn TokenRunner) -> Result<Token
         "help" | "--help" | "-h" => Ok(token_ok(format!("{}\n", token_help()))),
         "list" | "ls" | "tokens" => token_cmd_list(runner).map(token_ok),
         "current" => Ok(token_ok(token_current().map_or_else(String::new, |name| format!("{name}\n")))),
+        "resolve" => token_cmd_resolve().map(token_ok),
+        "status" => Ok(token_ok(token_status(&TmuxClient::local().list_panes())?)),
         "use" => token_cmd_use(&parsed, runner),
+        "apply" => {
+            let mut tmux = TokenSystemApplyTmux::new();
+            token_cmd_apply(&parsed, runner, &mut tmux)
+        }
         "save" => token_cmd_save(&parsed, runner),
         "load" => token_cmd_load(&parsed, runner),
         "scan" => token_cmd_scan(runner).map(token_ok),
@@ -148,25 +174,57 @@ fn token_dispatch(argv: &[String], runner: &mut dyn TokenRunner) -> Result<Token
 }
 
 #[derive(Debug, Default)]
+#[allow(clippy::struct_excessive_bools)]
 struct TokenArgs {
     positionals: Vec<String>,
     no_team: bool,
     force: bool,
+    all: bool,
+    dry_run: bool,
+    session: Option<String>,
+    squad: Option<String>,
 }
 
 fn token_parse_args(argv: &[String]) -> Result<TokenArgs, String> {
     let mut parsed = TokenArgs::default();
-    for value in argv {
+    let mut index = 0;
+    while index < argv.len() {
+        let value = &argv[index];
         match value.as_str() {
             "--no-team" => parsed.no_team = true,
             "--force" | "-f" => parsed.force = true,
+            "--all" => parsed.all = true,
+            "--dry-run" => parsed.dry_run = true,
+            "--session" => {
+                index += 1;
+                let Some(next) = argv.get(index) else { return Err("maw token apply: --session requires a value".to_owned()); };
+                token_validate_cli_value("session", next)?;
+                parsed.session = Some(next.clone());
+            }
+            "--squad" => {
+                index += 1;
+                let Some(next) = argv.get(index) else { return Err("maw token apply: --squad requires a value".to_owned()); };
+                token_validate_name("squad", next)?;
+                parsed.squad = Some(next.clone());
+            }
             "--" => return Err("maw token: -- separator is not allowed".to_owned()),
+            _ if value.starts_with("--session=") => {
+                let next = value.trim_start_matches("--session=");
+                token_validate_cli_value("session", next)?;
+                parsed.session = Some(next.to_owned());
+            }
+            _ if value.starts_with("--squad=") => {
+                let next = value.trim_start_matches("--squad=");
+                token_validate_name("squad", next)?;
+                parsed.squad = Some(next.to_owned());
+            }
             _ if value.starts_with('-') => return Err(format!("maw token: unknown flag {value}")),
             _ => {
                 token_validate_cli_value("argument", value)?;
                 parsed.positionals.push(value.clone());
             }
         }
+        index += 1;
     }
     Ok(parsed)
 }
@@ -220,6 +278,43 @@ fn token_cmd_use(args: &TokenArgs, runner: &mut dyn TokenRunner) -> Result<Token
     Ok(token_ok(stdout))
 }
 
+fn token_cmd_apply(args: &TokenArgs, runner: &mut dyn TokenRunner, tmux: &mut dyn TokenApplyTmux) -> Result<TokenCommandResult, String> {
+    let Some(name) = args.positionals.get(1).map(String::as_str) else {
+        return Err("usage: maw token apply <name> [--session X|--squad S|--all] [--dry-run]".to_owned());
+    };
+    token_validate_name("token name", name)?;
+    let pass_path = format!("{TOKEN_TOKEN_PREFIX}{name}");
+    if !token_pass_exists(runner, &pass_path) { return Err(format!("token \"{name}\" not found in pass ({pass_path})")); }
+    let scopes = usize::from(args.all) + usize::from(args.session.is_some()) + usize::from(args.squad.is_some());
+    if scopes > 1 { return Err("maw token apply: choose only one of --session, --squad, or --all".to_owned()); }
+    let sessions = token_apply_scope_sessions(args)?;
+    let panes = token_apply_targets(tmux.apply_list_panes(), sessions.as_deref());
+    let mut out = format!("token apply {name}: {} target(s)\n", panes.len());
+    let mut idle = Vec::new();
+    for pane in panes {
+        let target = token_apply_target(&pane);
+        if pane.cwd.as_deref().unwrap_or_default().is_empty() {
+            let _ = std::fmt::Write::write_fmt(&mut out, format_args!("skip {target}: cwd unknown\n"));
+        } else if token_apply_pane_idle(tmux, &target) {
+            let _ = std::fmt::Write::write_fmt(&mut out, format_args!("plan {target}: /exit; direnv reload 2>/dev/null; claude -c\n"));
+            idle.push(target);
+        } else {
+            let _ = std::fmt::Write::write_fmt(&mut out, format_args!("skip {target}: busy\n"));
+        }
+    }
+    if args.dry_run { return Ok(token_ok(out)); }
+    out.insert_str(0, &token_cmd_use(args, runner)?.stdout);
+    for target in idle {
+        tmux.apply_send_text(&target, "/exit").map_err(|error| format!("token apply: {target}: send /exit failed: {error}"))?;
+        tmux.apply_send_enter(&target).map_err(|error| format!("token apply: {target}: send enter failed: {error}"))?;
+        tmux.apply_sleep_ms(1_500);
+        tmux.apply_send_text(&target, "direnv reload 2>/dev/null; claude -c").map_err(|error| format!("token apply: {target}: restart failed: {error}"))?;
+        tmux.apply_send_enter(&target).map_err(|error| format!("token apply: {target}: restart enter failed: {error}"))?;
+        let _ = std::fmt::Write::write_fmt(&mut out, format_args!("applied {target}\n"));
+    }
+    Ok(token_ok(out))
+}
+
 fn token_cmd_save(args: &TokenArgs, runner: &mut dyn TokenRunner) -> Result<TokenCommandResult, String> {
     let cwd = std::env::current_dir().map_err(|_| "maw token save: current directory unavailable".to_owned())?;
     let name = token_default_name(args.positionals.get(1).map(String::as_str), &cwd)?;
@@ -267,6 +362,141 @@ fn token_cmd_scan(runner: &mut dyn TokenRunner) -> Result<String, String> {
     Ok(token_format_scan(&rows))
 }
 
+fn token_cmd_resolve() -> Result<String, String> {
+    let cwd = std::env::current_dir().map_err(|_| "maw token resolve: current directory unavailable".to_owned())?;
+    if let Some(oracle) = token_resolve_oracle_from_cwd(&cwd) {
+        if let Some(name) = token_resolve_assigned_token(&oracle)? { return Ok(format!("{name}\n")); }
+    }
+    if let Some(name) = token_current() { return Ok(format!("{name}\n")); }
+    if let Some(name) = token_current_file() { return Ok(format!("{name}\n")); }
+    Err("maw token resolve: no token assignment found".to_owned())
+}
+
+fn token_resolve_oracle_from_cwd(cwd: &std::path::Path) -> Option<String> {
+    if let Some(cache) = locate_load_registry_cache() {
+        let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+        let mut matches = cache.oracles.into_iter()
+            .filter_map(|oracle| {
+                if oracle.local_path.trim().is_empty() { return None; }
+                let path = std::path::PathBuf::from(oracle.local_path);
+                let path = path.canonicalize().unwrap_or(path);
+                cwd.starts_with(&path).then_some((path.components().count(), oracle.name))
+            })
+            .collect::<Vec<_>>();
+        matches.sort_by_key(|item| std::cmp::Reverse(item.0));
+        if let Some((_, name)) = matches.into_iter().next() { return Some(name); }
+    }
+    cwd.file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .map(|name| name.strip_suffix("-oracle").unwrap_or(name).to_owned())
+        .filter(|name| !name.is_empty())
+}
+
+fn token_resolve_assigned_token(oracle: &str) -> Result<Option<String>, String> {
+    for entry in fleet_load_entries_result("token resolve")? {
+        let Some(members) = entry.session.members.as_ref() else { continue; };
+        let Some(member) = members.iter().find(|member| token_oracle_matches(&member.handle, oracle)) else { continue; };
+        if let Some(name) = member.token.as_deref().filter(|name| !name.trim().is_empty()) {
+            token_validate_name("token name", name)?;
+            return Ok(Some(name.to_owned()));
+        }
+        if let Some(name) = entry.session.token.as_deref().filter(|name| !name.trim().is_empty()) {
+            token_validate_name("token name", name)?;
+            return Ok(Some(name.to_owned()));
+        }
+    }
+    Ok(None)
+}
+
+fn token_oracle_matches(handle: &str, oracle: &str) -> bool {
+    let normalize = |value: &str| value.trim().strip_suffix("-oracle").unwrap_or(value.trim()).to_owned();
+    normalize(handle) == normalize(oracle)
+}
+
+fn token_current_file() -> Option<String> {
+    let value = std::fs::read_to_string(maw_state_path(&current_xdg_env(), &["token-current"])).ok()?;
+    let name = value.trim();
+    (!name.is_empty()).then(|| name.to_owned())
+}
+
+fn token_status(panes: &[maw_tmux::TmuxPane]) -> Result<String, String> {
+    let running = token_running_by_oracle(panes);
+    let mut rows = Vec::new();
+    for entry in fleet_load_entries_result("token status")? {
+        let squad_token = entry.session.token.as_deref();
+        for member in entry.session.members.unwrap_or_default() {
+            let assigned = member.token.as_deref().or(squad_token).unwrap_or("-").to_owned();
+            let running = running.get(&member.handle).cloned().unwrap_or_else(|| "-".to_owned());
+            rows.push((member.handle, assigned, running));
+        }
+    }
+    rows.sort();
+    let mut out = "oracle	assigned	running
+".to_owned();
+    for (oracle, assigned, running) in rows { let _ = std::fmt::Write::write_fmt(&mut out, format_args!("{oracle}\t{assigned}\t{running}\n")); }
+    Ok(out)
+}
+
+fn token_running_by_oracle(panes: &[maw_tmux::TmuxPane]) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for pane in panes {
+        let oracle = pane.cwd.as_deref().and_then(|cwd| std::path::Path::new(cwd).file_name()).and_then(std::ffi::OsStr::to_str).map(|name| name.strip_suffix("-oracle").unwrap_or(name).to_owned());
+        let Some(oracle) = oracle else { continue; };
+        let Some(token) = token_extract_running_marker(&pane.title) else { continue; };
+        out.insert(oracle, token);
+    }
+    out
+}
+
+fn token_extract_running_marker(text: &str) -> Option<String> {
+    let idx = text.find('🔐')? + '🔐'.len_utf8();
+    let name = text[idx..].chars().take_while(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.')).collect::<String>();
+    (!name.is_empty()).then_some(name)
+}
+
+fn token_apply_scope_sessions(args: &TokenArgs) -> Result<Option<Vec<String>>, String> {
+    if let Some(session) = args.session.as_ref() { return Ok(Some(vec![session.clone()])); }
+    if let Some(squad) = args.squad.as_ref() {
+        let sessions = fleet_load_entries_result("token apply")?
+            .into_iter()
+            .filter(|entry| fleet_roster_entry_matches(entry, squad))
+            .map(|entry| entry.session.name)
+            .collect::<Vec<_>>();
+        if sessions.is_empty() { return Err(format!("no squad named {squad}")); }
+        return Ok(Some(sessions));
+    }
+    Ok(None)
+}
+
+fn token_apply_targets(panes: Vec<maw_tmux::TmuxPane>, sessions: Option<&[String]>) -> Vec<maw_tmux::TmuxPane> {
+    let mut out = panes
+        .into_iter()
+        .filter(token_apply_is_claude_pane)
+        .filter(|pane| sessions.is_none_or(|names| names.iter().any(|name| token_apply_pane_in_session(pane, name))))
+        .collect::<Vec<_>>();
+    out.sort_by_key(token_apply_target);
+    out
+}
+
+fn token_apply_is_claude_pane(pane: &maw_tmux::TmuxPane) -> bool {
+    maw_split::is_claude_like_pane(Some(&pane.command)) || pane.title.to_ascii_lowercase().contains("claude")
+}
+
+fn token_apply_pane_in_session(pane: &maw_tmux::TmuxPane, session: &str) -> bool {
+    pane.target.strip_prefix(session).is_some_and(|tail| tail.starts_with(':')) || pane.id == session
+}
+
+fn token_apply_target(pane: &maw_tmux::TmuxPane) -> String {
+    if pane.id.starts_with('%') { pane.id.clone() } else { pane.target.clone() }
+}
+
+fn token_apply_pane_idle(tmux: &mut dyn TokenApplyTmux, target: &str) -> bool {
+    let Ok(first) = tmux.apply_capture(target) else { return false; };
+    tmux.apply_sleep_ms(600);
+    let Ok(second) = tmux.apply_capture(target) else { return false; };
+    normalize_activity_snapshot(&first) == normalize_activity_snapshot(&second)
+}
+
 fn token_ok(stdout: String) -> TokenCommandResult { TokenCommandResult { ok: true, stdout } }
 
 fn token_error(message: &str) -> CliOutput {
@@ -274,7 +504,7 @@ fn token_error(message: &str) -> CliOutput {
 }
 
 fn token_help() -> &'static str {
-    "usage: maw token <list|use|current|save|load|scan> [...]\n  list                                  — list vault tokens + saved .envrcs (active marked)\n  use <name> [--no-team]                — switch active Claude token in local .envrc\n  current                               — print active token name (for statuslines)\n  save [name] [-f|--force]              — save .envrc to pass vault (default name = cwd basename)\n  load [name] [-f|--force]              — restore .envrc from pass vault + direnv allow\n  scan                                  — scan ghq repos, map tokens to oracles\n\naliases:\n  tokens                                — same as `list`\n  ls                                    — same as `list`\n\nsecurity: token values are never printed, logged, or stored outside\n          memory. See README.md for the full threat model."
+    "usage: maw token <list|use|current|resolve|apply|save|load|scan> [...]\n  list                                  — list vault tokens + saved .envrcs (active marked)\n  use <name> [--no-team]                — switch active Claude token in local .envrc\n  current                               — print active token name (for statuslines)\n  resolve                               — print assigned token name for cwd oracle/squad, then legacy fallbacks\n  apply <name> [--session X|--squad S|--all] [--dry-run]\n                                        — restart idle Claude panes onto token\n  save [name] [-f|--force]              — save .envrc to pass vault (default name = cwd basename)\n  load [name] [-f|--force]              — restore .envrc from pass vault + direnv allow\n  scan                                  — scan ghq repos, map tokens to oracles\n\naliases:\n  tokens                                — same as `list`\n  ls                                    — same as `list`\n\nsecurity: token values are never printed, logged, or stored outside\n          memory. See README.md for the full threat model."
 }
 
 fn token_current() -> Option<String> {
@@ -543,4 +773,128 @@ fn token_extract_after(haystack: &str, start: &str) -> Option<String> {
     let tail = &haystack[start_idx..];
     let value = tail.chars().take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_').collect::<String>();
     (!value.is_empty()).then_some(value)
+}
+
+#[cfg(test)]
+mod token_apply_tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct FakeApply { panes: Vec<maw_tmux::TmuxPane>, captures: Vec<String>, actions: Vec<String> }
+
+    impl TokenApplyTmux for FakeApply {
+        fn apply_list_panes(&mut self) -> Vec<maw_tmux::TmuxPane> { self.panes.clone() }
+        fn apply_capture(&mut self, _target: &str) -> Result<String, String> { Ok(self.captures.remove(0)) }
+        fn apply_send_text(&mut self, target: &str, text: &str) -> Result<(), String> { self.actions.push(format!("text {target} {text}")); Ok(()) }
+        fn apply_send_enter(&mut self, target: &str) -> Result<(), String> { self.actions.push(format!("enter {target}")); Ok(()) }
+        fn apply_sleep_ms(&mut self, ms: u64) { self.actions.push(format!("sleep {ms}")); }
+    }
+
+    fn args(values: &[&str]) -> TokenArgs { token_parse_args(&values.iter().map(|value| (*value).to_owned()).collect::<Vec<_>>()).expect("args") }
+    fn temp(name: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!("maw-rs-token-apply-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("temp root");
+        root
+    }
+    fn pane(id: &str, session: &str) -> maw_tmux::TmuxPane {
+        maw_tmux::TmuxPane { id: id.to_owned(), command: "claude".to_owned(), target: format!("{session}:main.0"), title: String::new(), pid: Some(42), cwd: Some("/repo".to_owned()), last_activity: None }
+    }
+    fn runner(root: std::path::PathBuf, name: &str) -> TokenFakeRunner {
+        std::fs::create_dir_all(root.join("pass/claude")).expect("pass dir");
+        std::fs::write(root.join(format!("pass/claude/token-{name}")), "secret\n").expect("token");
+        TokenFakeRunner { root, fail: None }
+    }
+
+
+    #[test]
+    fn token_status_reports_assigned_and_running_tokens() {
+        let _guard = env_test_lock();
+        let root = temp("status-root");
+        let _restore = ["HOME", "MAW_HOME", "MAW_CONFIG_DIR", "MAW_STATE_DIR", "MAW_CACHE_DIR", "GHQ_ROOT"].map(EnvVarRestore::capture);
+        for (key, dir) in [("HOME", "home"), ("MAW_CONFIG_DIR", "config"), ("MAW_STATE_DIR", "state"), ("MAW_CACHE_DIR", "cache"), ("GHQ_ROOT", "ghq")] {
+            std::env::set_var(key, root.join(dir));
+        }
+        std::env::remove_var("MAW_HOME");
+        let squad_dir = root.join("state/fleet/squads/01-core");
+        std::fs::create_dir_all(&squad_dir).expect("squad dir");
+        std::fs::write(
+            squad_dir.join("squad.json"),
+            r#"{"name":"01-core","squadName":"core","token":"duo","members":[{"handle":"atlas","token":"dd2"},{"handle":"maw-rs"}]}"#,
+        )
+        .expect("squad file");
+        let mut panes = vec![pane("%9", "core")];
+        panes[0].cwd = Some("/repos/atlas-oracle".to_owned());
+        panes[0].title = "ready 🔐wave".to_owned();
+        let out = token_status(&panes).expect("status");
+        assert!(out.contains("atlas\tdd2\twave\n"));
+        assert!(out.contains("maw-rs\tduo\t-\n"));
+        assert_eq!(token_extract_running_marker("x 🔐dd2*"), Some("dd2".to_owned()));
+    }
+
+    #[test]
+    fn token_resolve_prefers_member_then_squad_then_legacy_fallbacks() {
+        let _guard = env_test_lock();
+        let root = temp("resolve-root");
+        let cwd = root.join("atlas-oracle");
+        std::fs::create_dir_all(&cwd).expect("cwd");
+        let _restore = ["HOME", "MAW_HOME", "MAW_CONFIG_DIR", "MAW_STATE_DIR", "MAW_CACHE_DIR", "GHQ_ROOT"].map(EnvVarRestore::capture);
+        for (key, dir) in [("HOME", "home"), ("MAW_CONFIG_DIR", "config"), ("MAW_STATE_DIR", "state"), ("MAW_CACHE_DIR", "cache"), ("GHQ_ROOT", "ghq")] {
+            std::env::set_var(key, root.join(dir));
+        }
+        std::env::remove_var("MAW_HOME");
+        let old = std::env::current_dir().expect("old cwd");
+        std::env::set_current_dir(&cwd).expect("chdir");
+        let squad_dir = root.join("state/fleet/squads/01-core");
+        std::fs::create_dir_all(&squad_dir).expect("squad dir");
+        std::fs::write(
+            squad_dir.join("squad.json"),
+            r#"{"name":"01-core","squadName":"core","token":"duo","members":[{"handle":"atlas","token":"dd2"}]}"#,
+        ).expect("squad file");
+        assert_eq!(token_cmd_resolve().expect("member token"), "dd2\n");
+
+        std::fs::write(
+            squad_dir.join("squad.json"),
+            r#"{"name":"01-core","squadName":"core","token":"duo","members":[{"handle":"atlas"}]}"#,
+        ).expect("squad file");
+        assert_eq!(token_cmd_resolve().expect("squad token"), "duo\n");
+
+        std::fs::write(
+            squad_dir.join("squad.json"),
+            r#"{"name":"01-core","squadName":"core","members":[{"handle":"atlas"}]}"#,
+        ).expect("squad file");
+        std::fs::write(cwd.join(".envrc"), "export CLAUDE_TOKEN_NAME=\"legacy\"\n").expect("envrc");
+        assert_eq!(token_cmd_resolve().expect("legacy envrc"), "legacy\n");
+
+        std::fs::remove_file(cwd.join(".envrc")).expect("remove envrc");
+        std::fs::write(root.join("state/token-current"), "current\n").expect("token-current");
+        assert_eq!(token_cmd_resolve().expect("token-current"), "current\n");
+        std::env::set_current_dir(old).expect("restore cwd");
+    }
+
+    #[test]
+    fn token_apply_dry_run_plans_idle_and_skips_busy() {
+        let mut runner = runner(temp("dry-run"), "blue");
+        let mut tmux = FakeApply { panes: vec![pane("%1", "s1"), pane("%2", "s2")], captures: vec!["same".into(), "same".into(), "old".into(), "new".into()], actions: Vec::new() };
+        let out = token_cmd_apply(&args(&["apply", "blue", "--all", "--dry-run"]), &mut runner, &mut tmux).expect("apply");
+        assert!(out.stdout.contains("token apply blue: 2 target(s)"));
+        assert!(out.stdout.contains("plan %1: /exit; direnv reload 2>/dev/null; claude -c"));
+        assert!(out.stdout.contains("skip %2: busy"));
+        assert!(tmux.actions.iter().all(|action| action.starts_with("sleep ")));
+    }
+
+    #[test]
+    fn token_apply_live_writes_envrc_then_restarts_idle_pane() {
+        let _guard = env_test_lock();
+        let mut runner = runner(temp("live-root"), "green");
+        let cwd = temp("live-cwd");
+        let old = std::env::current_dir().expect("cwd old");
+        std::env::set_current_dir(&cwd).expect("chdir");
+        let mut tmux = FakeApply { panes: vec![pane("%3", "s1")], captures: vec!["idle".into(), "idle".into()], actions: Vec::new() };
+        let out = token_cmd_apply(&args(&["apply", "green", "--session", "s1"]), &mut runner, &mut tmux).expect("apply");
+        std::env::set_current_dir(old).expect("restore cwd");
+        assert!(std::fs::read_to_string(cwd.join(".envrc")).expect("envrc").contains("CLAUDE_TOKEN_NAME=\"green\""));
+        assert!(out.stdout.contains("Now using: green"));
+        assert_eq!(tmux.actions, vec!["sleep 600", "text %3 /exit", "enter %3", "sleep 1500", "text %3 direnv reload 2>/dev/null; claude -c", "enter %3"]);
+    }
 }

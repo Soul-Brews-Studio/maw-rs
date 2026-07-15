@@ -1,0 +1,33 @@
+{
+  "artifact": {
+    "path": "./plugin.wasm",
+    "sha256": "sha256:d59bc8107c040e65c263e48267b22c07ea530ad4af9e55cb573de8f9e80fbd7f"
+  },
+  "author": "Soul-Brews-Studio",
+  "capabilities": [
+    "fs:read:teams",
+    "fs:read:vault",
+    "tmux:read"
+  ],
+  "cli": {
+    "aliases": [
+      "t"
+    ],
+    "command": "team",
+    "help": "maw team <create|plan|preflight|load|spawn-from|spawn|bring|send|shutdown|resume|lives|list|status|add|tasks|done|assign|delete|invite|oracle-invite|oracle-remove|members|enter>"
+  },
+  "description": "Read-only team inventory (slice 1 of the maw-js team plugin port).",
+  "entry": {
+    "export": "handle",
+    "kind": "wasm",
+    "path": "plugin.wasm"
+  },
+  "license": "MIT",
+  "name": "team",
+  "schemaVersion": 1,
+  "sdk": "^1.0.0",
+  "target": "wasm",
+  "version": "2.0.1",
+  "wasm": "./plugin.wasm",
+  "weight": 30
+}

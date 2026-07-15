@@ -316,7 +316,7 @@ mod pr_tests {
 
     #[test]
     fn pr_default_create_matches_maw_js_output_shape() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _restore = EnvVarRestore::capture("TMUX");
         std::env::set_var("TMUX", "/tmp/tmux,1,0");
         let repo = pr_temp_dir("create");
@@ -332,7 +332,7 @@ mod pr_tests {
 
     #[test]
     fn pr_window_target_uses_current_session_and_show_current() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _restore = EnvVarRestore::capture("TMUX");
         std::env::set_var("TMUX", "/tmp/tmux,1,0");
         let repo = pr_temp_dir("view");
@@ -348,7 +348,7 @@ mod pr_tests {
 
     #[test]
     fn pr_requires_tmux_before_env_or_process_io() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _restore = EnvVarRestore::capture("TMUX");
         std::env::remove_var("TMUX");
         let mut tmux = PrMockTmux::default();

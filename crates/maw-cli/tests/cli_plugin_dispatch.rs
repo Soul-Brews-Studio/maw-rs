@@ -1,4 +1,5 @@
 use maw_cli::run_cli;
+#[cfg(feature = "wasm-host")]
 use maw_plugin_manifest::hash_file;
 use serde_json::json;
 use std::ffi::OsString;
@@ -146,6 +147,7 @@ fn write_ts_plugin_with_runtime(
     write(package_dir.join("plugin.json"), manifest.to_string()).expect("manifest");
 }
 
+#[cfg(feature = "wasm-host")]
 fn write_bun_dev_wasm_plugin(plugins_dir: &Path, dir_name: &str, command: &str) {
     let package_dir = plugins_dir.join(dir_name);
     create_dir_all(&package_dir).expect("plugin dir");
@@ -179,6 +181,7 @@ fn write_bun_dev_wasm_plugin(plugins_dir: &Path, dir_name: &str, command: &str) 
     .expect("manifest");
 }
 
+#[cfg(feature = "wasm-host")]
 fn write_bun_dev_raw_wasm_with_ts_entry_plugin(plugins_dir: &Path, dir_name: &str, command: &str) {
     let package_dir = plugins_dir.join(dir_name);
     create_dir_all(&package_dir).expect("plugin dir");
@@ -214,6 +217,7 @@ fn write_bun_dev_raw_wasm_with_ts_entry_plugin(plugins_dir: &Path, dir_name: &st
     .expect("manifest");
 }
 
+#[cfg(feature = "wasm-host")]
 fn write_ship_tier_wasm_plugin(plugins_dir: &Path, dir_name: &str, command: &str) {
     let package_dir = plugins_dir.join(dir_name);
     create_dir_all(&package_dir).expect("plugin dir");
@@ -250,6 +254,7 @@ fn write_ship_tier_wasm_plugin(plugins_dir: &Path, dir_name: &str, command: &str
 /// functions. The old MVP runtime rejected any import-bearing module ("unresolved
 /// imports" / "failed to parse WebAssembly module"); the Extism runtime instantiates it
 /// and runs it. This drives the real CLI dispatch entrypoint end to end.
+#[cfg(feature = "wasm-host")]
 #[test]
 fn dispatch_cli_plugin_runs_import_bearing_wasm_on_extism_runtime() {
     let _guard = env_lock().lock().expect("env lock");
@@ -285,7 +290,7 @@ fn dispatch_cli_plugin_runs_import_bearing_wasm_on_extism_runtime() {
 }
 
 #[test]
-fn dispatch_cli_plugin_finds_matching_ts_plugin_and_refuses_maw_bridge() {
+fn dispatch_cli_plugin_finds_matching_ts_plugin_and_uses_bun_fallback_without_maw_bridge() {
     let _guard = env_lock().lock().expect("env lock");
     let _restore = EnvRestore::capture();
     let root = temp_dir("prefix");
@@ -305,19 +310,50 @@ fn dispatch_cli_plugin_finds_matching_ts_plugin_and_refuses_maw_bridge() {
 
     let dispatched = run_cli(&args(&["weather", "report", "--city", "Bangkok"]));
 
+    assert_eq!(dispatched.code, 0, "{}", dispatched.stderr);
+    assert_eq!(dispatched.stdout, "bun stdout\n");
+    assert_eq!(
+        dispatched.stderr,
+        "⚠ [dev-tier: bun] weather-demo — TS runs unsandboxed; ship tier = WASM (maw plugin build)\nbun stderr\n"
+    );
+    assert!(
+        !marker.exists(),
+        "fake PATH maw was invoked, but TS/JS fallback must use bun directly"
+    );
+    let captured = read_to_string(&bun_args).expect("bun args");
+    assert!(
+        captured.contains(&format!(
+            "entry={}\n",
+            plugins_dir.join("weather-demo").join("index.ts").display()
+        )),
+        "{captured}"
+    );
+    assert!(captured.contains("arg0=--city\n"), "{captured}");
+    assert!(captured.contains("arg1=Bangkok\n"), "{captured}");
+
+    remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn dispatch_cli_plugin_keeps_fail_closed_error_for_implicit_ts_when_bun_is_absent() {
+    let _guard = env_lock().lock().expect("env lock");
+    let _restore = EnvRestore::capture();
+    let root = temp_dir("implicit-ts-no-bun");
+    let bin_dir = root.join("bin");
+    let plugins_dir = root.join("plugins");
+    create_dir_all(&bin_dir).expect("bin dir");
+    create_dir_all(&plugins_dir).expect("plugins dir");
+    write_ts_plugin(&plugins_dir, "weather-demo", "weather report");
+    std::env::set_var("PATH", &bin_dir);
+    std::env::set_var("MAW_PLUGINS_DIR", &plugins_dir);
+
+    let dispatched = run_cli(&args(&["weather", "report"]));
+
     assert_eq!(dispatched.code, 2, "{}", dispatched.stdout);
     assert!(dispatched.stdout.is_empty(), "{}", dispatched.stdout);
     assert_eq!(
         dispatched.stderr,
         "TS/JS plugin requires prebuilt WASM artifact; no maw-js/Bun fallback\n"
-    );
-    assert!(
-        !marker.exists(),
-        "fake PATH maw was invoked, but TS/JS plugin dispatch must fail closed"
-    );
-    assert!(
-        !bun_args.exists(),
-        "fake PATH bun was invoked without runtime=bun-dev opt-in"
     );
 
     remove_dir_all(root).expect("cleanup");
@@ -402,6 +438,7 @@ fn dispatch_cli_plugin_reports_missing_bun_for_bun_dev_runtime() {
     remove_dir_all(root).expect("cleanup");
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn dispatch_cli_plugin_prefers_wasm_artifact_over_bun_dev_runtime() {
     let _guard = env_lock().lock().expect("env lock");
@@ -435,6 +472,7 @@ fn dispatch_cli_plugin_prefers_wasm_artifact_over_bun_dev_runtime() {
     remove_dir_all(root).expect("cleanup");
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn dispatch_cli_plugin_raw_wasm_field_beats_bun_dev_string_ts_entry() {
     let _guard = env_lock().lock().expect("env lock");
@@ -501,10 +539,12 @@ fn unknown_plugin_command_falls_through_to_cli_error() {
 /// `MvpWasmInvokeRuntime` toy parser rejected any import-bearing module outright, so
 /// this doubles as proof the CLI dispatch path now uses the Extism runtime (#72
 /// blocker 1). Byte-for-byte copy of the committed wasm-parity `triggers` fixture.
+#[cfg(feature = "wasm-host")]
 const WASM_IMPORT_BEARING: &[u8] = include_bytes!("fixtures/wasm-dispatch/import-bearing.wasm");
 
 /// Stable substring of `WASM_IMPORT_BEARING`'s deterministic stdout — asserting on it
 /// proves the module actually instantiated and ran under Extism.
+#[cfg(feature = "wasm-host")]
 const WASM_IMPORT_BEARING_MARKER: &str = "No triggers configured";
 
 #[test]

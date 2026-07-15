@@ -259,12 +259,7 @@ fn run_consent_request_plan(argv: &[String]) -> CliOutput {
 }
 
 fn parse_consent_action(value: &str) -> Result<ConsentAction, String> {
-    match value {
-        "hey" => Ok(ConsentAction::Hey),
-        "team-invite" => Ok(ConsentAction::TeamInvite),
-        "plugin-install" => Ok(ConsentAction::PluginInstall),
-        _ => Err("consent-request: invalid --action value".to_owned()),
-    }
+    ConsentAction::parse(value).ok_or_else(|| "consent-request: invalid --action value".to_owned())
 }
 
 fn render_consent_request_plan_json(
@@ -353,7 +348,7 @@ fn consent_request_usage_error(message: &str) -> CliOutput {
 }
 
 fn consent_request_usage() -> &'static str {
-    "usage: maw-rs consent-request --from <from> --to <to> --action <hey|team-invite|plugin-install> --summary <summary> --request-id <id> --pin <pin> --now <ms> [--peer-url <url>] [--peer-ok|--peer-http-status <status>|--peer-network-error <message>] [--plan-json]"
+    "usage: maw-rs consent-request --from <from> --to <to> --action <hey|team-invite|plugin-install|fleet-recruit> --summary <summary> --request-id <id> --pin <pin> --now <ms> [--peer-url <url>] [--peer-ok|--peer-http-status <status>|--peer-network-error <message>] [--plan-json]"
 }
 
 #[allow(clippy::too_many_lines)]

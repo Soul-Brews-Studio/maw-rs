@@ -106,30 +106,31 @@ pub(super) async fn access_map(
     let (_, flags) = parse_flags(args);
     if has_flag(&flags, "refresh") {
         log.push("  refreshing channel-map from Discord...".to_owned());
-        if let Some(token) = decrypt_token(&pre.token_name) {
-            let guilds = fetch_guilds(rest, &token).await.unwrap_or_default();
-            let mut map = load_channel_map(&pre.channel_map);
-            let guild_filter = flags.get("guild").and_then(|v| v.first());
-            for guild in guilds
-                .iter()
-                .filter(|g| guild_filter.is_none_or(|id| id == &g.id))
-            {
-                if let Ok(channels) = fetch_channels(rest, &token, &guild.id).await {
-                    for channel in channels {
-                        if channel.kind == 0 || channel.kind == 5 {
-                            map.insert(channel.name, channel.id);
+        match decrypt_token_result(&pre.token_name) {
+            Ok(token) => {
+                let guilds = fetch_guilds(rest, &token).await.unwrap_or_default();
+                let mut map = load_channel_map(&pre.channel_map);
+                let guild_filter = flags.get("guild").and_then(|v| v.first());
+                for guild in guilds
+                    .iter()
+                    .filter(|g| guild_filter.is_none_or(|id| id == &g.id))
+                {
+                    if let Ok(channels) = fetch_channels(rest, &token, &guild.id).await {
+                        for channel in channels {
+                            if channel.kind == 0 || channel.kind == 5 {
+                                map.insert(channel.name, channel.id);
+                            }
                         }
                     }
                 }
+                if let Err(error) = save_channel_map(&pre.channel_map, &map) {
+                    log.push(format!("  ✗ failed to write channel-map: {error}"));
+                } else {
+                    log.push(format!("    wrote {} channel(s)", map.len()));
+                }
+                log.push(String::new());
             }
-            if let Err(error) = save_channel_map(&pre.channel_map, &map) {
-                log.push(format!("  ✗ failed to write channel-map: {error}"));
-            } else {
-                log.push(format!("    wrote {} channel(s)", map.len()));
-            }
-            log.push(String::new());
-        } else {
-            log.push(format!("  ✗ pass decrypt failed for {}", pre.token_name));
+            Err(error) => log.push(format!("  ✗ {error}")),
         }
     }
     let map = load_channel_map(&pre.channel_map);

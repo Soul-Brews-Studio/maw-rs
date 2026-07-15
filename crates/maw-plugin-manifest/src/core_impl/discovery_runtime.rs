@@ -16,6 +16,91 @@ impl PluginInvokeRuntime for MvpWasmInvokeRuntime {
     }
 }
 
+/// Host functions the real wasm-host runtime registers for ship-tier plugins.
+///
+/// Lives outside the `wasm-host`-gated module on purpose: the featureless
+/// `plugin-manifest invoke --plan-json` render reports `hostFnCount` and must
+/// keep working in builds without the Extism runtime.
+pub const HOST_FN_NAMES: &[&str] = &[
+    "maw.cli.run",
+    "maw.exec.run",
+    "maw.exec.spawn",
+    "maw.paths.get",
+    "maw.time.now",
+    "maw.config.get",
+    "maw.config.set",
+    "maw.consent.read",
+    "maw.fs.read",
+    "maw.fs.write",
+    "maw.fs.mkdir",
+    "maw.fs.remove",
+    "maw.fs.list",
+    "maw.fs.stat",
+    "maw.http.request",
+    "maw.net.fetch",
+    "maw.localserver.request",
+    "maw.http.peer_send",
+    "maw.http.peer_wake",
+    "maw.tmux.list_sessions",
+    "maw.tmux.capture",
+    "maw.tmux.send_keys",
+    "maw.tmux.run",
+    "maw.tmux.command",
+    "maw.tmux.send_enter",
+    "maw.tmux.tags_read",
+    "maw.tmux.tags_write",
+    "maw.ssh.exec",
+    "maw.ssh.tmux_capture",
+    "maw.ssh.tmux_send_keys",
+];
+
+/// Ship-tier host ABI generation.
+///
+/// Bump this ONLY on a breaking host-fn change (a function in [`HOST_FN_NAMES`]
+/// is removed or its argument/return shape changes). Additive host fns bump the
+/// derived minor in [`host_abi_version`] automatically via the list length.
+pub const HOST_ABI_MAJOR: u64 = 1;
+
+/// Current host ABI version, derived from the host-fn surface:
+/// `<HOST_ABI_MAJOR>.<HOST_FN_NAMES.len()>.0`.
+///
+/// This is the version the SDK-floor gate feeds to [`satisfies`] against each
+/// manifest's `sdk` range, so the floor tracks the real ABI instead of a
+/// hardcoded literal: adding a host fn bumps the minor, and a plugin built
+/// against a newer surface (e.g. `^1.31.0` on a 30-fn host) refuses to load.
+/// Lives outside the `wasm-host`-gated module on purpose — featureless builds
+/// still gate discovery on it.
+#[must_use]
+pub fn host_abi_version() -> String {
+    format!("{HOST_ABI_MAJOR}.{}.0", HOST_FN_NAMES.len())
+}
+
+/// Stand-in wasm runtime for binaries compiled without the `wasm-host`
+/// feature. Discovery, manifest parse, sha256 hash-verify, and universal
+/// `--help`/`--version` handling all run before this is reached, so a wasm
+/// verb in a featureless build fails loudly here — never as `UnknownCommand`.
+#[derive(Debug, Clone, Default)]
+pub struct WasmHostUnavailableRuntime;
+
+impl PluginInvokeRuntime for WasmHostUnavailableRuntime {
+    fn invoke_ts(&mut self, _plugin: &LoadedPlugin, _ctx: &InvokeContext) -> InvokeResult {
+        InvokeResult::error("TS plugin runtime is not available in Extism runtime")
+    }
+
+    fn invoke_wasm(
+        &mut self,
+        plugin: &LoadedPlugin,
+        _ctx: &InvokeContext,
+        _wasm_bytes: &[u8],
+    ) -> InvokeResult {
+        InvokeResult::error(format!(
+            "plugin '{}' is a ship-tier WASM plugin but this maw binary was built without the 'wasm-host' feature. Rebuild with: cargo install --path crates/maw-cli --features wasm-host",
+            plugin.manifest.name
+        ))
+    }
+}
+
+#[cfg_attr(not(feature = "wasm-host"), allow(dead_code))]
 fn parse_invoke_result_stdout(stdout: &[u8]) -> Result<InvokeResult, String> {
     let value: Value = serde_json::from_slice(stdout)
         .map_err(|error| format!("failed to parse InvokeResult JSON: {error}"))?;
@@ -43,23 +128,13 @@ fn optional_string_field(
     })
 }
 
+#[cfg_attr(not(feature = "wasm-host"), allow(dead_code))]
 fn invoke_context_json(ctx: &InvokeContext) -> String {
-    // cwd/home are additive maw-rs context fields. Emit them only when known so
-    // the default `{source,args}` shape stays byte-identical to maw-js (and the
-    // committed wasm-parity goldens) for plugins that don't need them.
-    let mut value = serde_json::json!({
+    serde_json::json!({
         "source": ctx.source.as_str(),
         "args": ctx.args,
-    });
-    if let Some(map) = value.as_object_mut() {
-        if let Some(cwd) = &ctx.cwd {
-            map.insert("cwd".to_owned(), serde_json::Value::from(cwd.as_str()));
-        }
-        if let Some(home) = &ctx.home {
-            map.insert("home".to_owned(), serde_json::Value::from(home.as_str()));
-        }
-    }
-    value.to_string()
+    })
+    .to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,6 +200,9 @@ pub fn parse_manifest(json_text: &str, dir: &Path) -> Result<PluginManifest, Str
     let (capabilities, capability_warnings) = capabilities.map_or((None, Vec::new()), |parsed| {
         (Some(parsed.capabilities), parsed.warnings)
     });
+    let endpoints = parse_endpoints(&raw)?;
+    let secrets = parse_secrets(&raw)?;
+    validate_endpoint_capabilities(capabilities.as_deref(), endpoints.as_ref(), secrets.as_ref())?;
 
     Ok(PluginManifest {
         name,
@@ -153,6 +231,8 @@ pub fn parse_manifest(json_text: &str, dir: &Path) -> Result<PluginManifest, Str
         target,
         capability_namespaces,
         capabilities,
+        endpoints,
+        secrets,
         capability_warnings,
         dependencies: parse_dependencies(&raw)?,
         artifact: parse_artifact(&raw)?,
@@ -318,6 +398,12 @@ where
                         plugins.push(loaded);
                     }
                 }
+                PluginDiscovery::DevBypassed(loaded, warning) => {
+                    if seen_plugin_names.insert(loaded.manifest.name.clone()) {
+                        warnings.push(warning);
+                        plugins.push(loaded);
+                    }
+                }
                 PluginDiscovery::Warning(warning) => warnings.push(warning),
                 PluginDiscovery::Skip => {}
             }
@@ -450,10 +536,39 @@ where
         return runtime.invoke_ts(plugin, ctx);
     }
 
+    if let Some(url) = serve_only_plugin_url(plugin, ctx) {
+        return InvokeResult::output(url);
+    }
+
     match std::fs::read(&plugin.wasm_path) {
         Ok(wasm_bytes) => runtime.invoke_wasm(plugin, ctx, &wasm_bytes),
         Err(error) => InvokeResult::error(format!("failed to read wasm: {error}")),
     }
+}
+
+fn serve_only_plugin_url(plugin: &LoadedPlugin, ctx: &InvokeContext) -> Option<String> {
+    if ctx.source != InvokeSource::Cli
+        || !ctx.args.is_empty()
+        || plugin.entry_path.is_some()
+        || !plugin.wasm_path.as_os_str().is_empty()
+    {
+        return None;
+    }
+    let prefix = plugin
+        .manifest
+        .engine
+        .as_ref()?
+        .serve
+        .as_ref()?
+        .prefix
+        .as_deref()?
+        .trim_end_matches('/');
+    let port = std::env::var("MAW_PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .filter(|port| *port > 0)
+        .unwrap_or(3456);
+    Some(format!("http://localhost:{port}{prefix}/"))
 }
 
 /// Default plugin scan roots.
@@ -471,10 +586,15 @@ pub fn scan_dirs() -> Vec<PathBuf> {
     )
 }
 
-/// Runtime SDK version placeholder for registry gates.
+/// Runtime SDK version presented to registry gates.
+///
+/// ABI-derived (see [`host_abi_version`]): a plugin loads iff its manifest
+/// `sdk` range accepts this version. All shipped manifests declare `^1.0.0`,
+/// which accepts every `1.x` ABI, so additive host-fn growth never bricks
+/// them; a plugin requiring a newer or different-generation ABI refuses.
 #[must_use]
 pub fn runtime_sdk_version() -> String {
-    env!("CARGO_PKG_VERSION").to_owned()
+    host_abi_version()
 }
 
 /// Compute a `sha256:<hex>` digest for a file.
@@ -496,6 +616,14 @@ pub fn hash_file(path: &Path) -> Result<String, String> {
 #[must_use]
 pub fn is_dev_mode_install(plugin_dir: &Path) -> bool {
     std::fs::symlink_metadata(plugin_dir).is_ok_and(|metadata| metadata.file_type().is_symlink())
+}
+
+/// True when `MAW_PLUGIN_DEV=1` explicitly opts this process into the
+/// symlinked-plugin hash bypass. Default OFF: symlinked plugin dirs get
+/// hash-verified exactly like regular dirs and refuse on mismatch.
+#[must_use]
+pub fn plugin_dev_bypass_enabled() -> bool {
+    std::env::var_os("MAW_PLUGIN_DEV").is_some_and(|value| value == "1")
 }
 
 /// Minimal maw-js-compatible semver range satisfaction.
@@ -661,18 +789,17 @@ mod part03_coverage_tests {
     }
 
     #[test]
-    fn invoke_context_json_includes_cwd_and_home() {
+    fn invoke_context_json_ignores_host_process_fields() {
         let ctx = InvokeContext {
             source: InvokeSource::Cli,
             args: vec!["start".to_owned()],
             cwd: Some("/work/here".to_owned()),
             home: Some("/home/nat".to_owned()),
         };
-        let value: serde_json::Value =
-            serde_json::from_str(&invoke_context_json(&ctx)).expect("context json");
-        assert_eq!(value["source"], "cli");
-        assert_eq!(value["cwd"], "/work/here");
-        assert_eq!(value["home"], "/home/nat");
+        assert_eq!(
+            invoke_context_json(&ctx),
+            r#"{"args":["start"],"source":"cli"}"#
+        );
     }
 
     #[test]

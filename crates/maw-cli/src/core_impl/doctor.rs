@@ -192,9 +192,19 @@ fn doctor_collect_checks(options: &DoctorOptions) -> Vec<DoctorCheckNative> {
     if doctor_should_run(only, &["install", "all"]) { checks.push(doctor_check_install(options)); }
     if only.is_some_and(|value| matches!(value, "xdg" | "all")) { checks.push(doctor_check_xdg(options)); }
     if doctor_should_run(only, &["version", "all"]) { checks.push(doctor_check_version(options)); }
-    if doctor_should_run(only, &["plugins"]) { checks.push(doctor_check_plugins()); }
+    if doctor_should_run(only, &["plugins"]) {
+        checks.push(doctor_check_plugins());
+        checks.push(doctor_check_wasm_host());
+        checks.push(doctor_check_plugin_stale_artifacts());
+        checks.push(doctor_check_plugin_sdk_floor());
+        checks.push(doctor_check_plugin_missing());
+    }
     if doctor_should_run(only, &["peers", "all"]) { checks.push(doctor_check_peer_duplicates()); checks.push(doctor_check_stale_peers()); }
-    if doctor_should_run(only, &["hub"]) { checks.push(doctor_check_hub()); }
+    if doctor_should_run(only, &["hub", "all"]) { checks.push(doctor_check_hub()); }
+    if doctor_should_run(only, &["hub", "all"]) {
+        if let Some(check) = doctor_check_config_shadow() { checks.push(check); }
+        if let Some(check) = doctor_check_config_backup_loss() { checks.push(check); }
+    }
     if doctor_should_run(only, &["scout"]) { checks.push(doctor_ok("scout", "scout check is native-noop on maw-rs")); }
     if doctor_should_run(only, &["federation"]) { checks.push(doctor_ok("federation", "federation reachability skipped without configured peers")); }
     if doctor_should_run(only, &["disk"]) { checks.push(doctor_check_disk()); }
@@ -256,6 +266,177 @@ fn doctor_check_plugins() -> DoctorCheckNative {
     }
 }
 
+/// Warn when ship-tier wasm plugins are installed but this binary was built
+/// without the `wasm-host` feature (Extism runtime compiled out). Discovery,
+/// manifest parse, and sha256 pin verification still work featureless; only
+/// invoke fails — loudly, with the same rebuild hint surfaced here.
+fn doctor_check_wasm_host() -> DoctorCheckNative {
+    let dir = maw_data_path(&doctor_xdg_env(), &["plugins"]);
+    let wasm_plugins = doctor_installed_wasm_plugins(&dir);
+    if wasm_plugins.is_empty() {
+        return doctor_info("plugins:wasm-host", "no installed wasm plugins require the wasm-host runtime");
+    }
+    let count = wasm_plugins.len();
+    if cfg!(feature = "wasm-host") {
+        return doctor_ok("plugins:wasm-host", &format!("wasm-host runtime compiled in ({count} wasm plugin{})", doctor_plural(count)));
+    }
+    doctor_warn(
+        "plugins:wasm-host",
+        &format!("{count} installed wasm plugin{} cannot run — this maw binary was built without the 'wasm-host' feature: {}", doctor_plural(count), wasm_plugins.join(", ")),
+        &["cargo install --path crates/maw-cli --features wasm-host"],
+    )
+}
+
+fn doctor_installed_wasm_plugins(dir: &std::path::Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let manifest_path = entry.path().join("plugin.json");
+            let text = std::fs::read_to_string(manifest_path).ok()?;
+            let manifest: serde_json::Value = serde_json::from_str(&text).ok()?;
+            let is_wasm = manifest.get("wasm").is_some()
+                || manifest.get("target").and_then(serde_json::Value::as_str) == Some("wasm");
+            if !is_wasm { return None; }
+            Some(
+                manifest
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .map_or_else(|| entry.file_name().to_string_lossy().into_owned(), str::to_owned),
+            )
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+/// Stale-artifact check (#520): compare each installed plugin's
+/// `registry.meta.json` provenance record against the manifest pin and the
+/// plugins.lock pin. Flags the April maw-plugin-registry relics (retired
+/// registry as `source`), artifacts whose recorded install sha no longer
+/// matches the manifest `artifact.sha256`, and installs drifting from the
+/// plugins.lock pin.
+fn doctor_check_plugin_stale_artifacts() -> DoctorCheckNative {
+    let dir = maw_data_path(&doctor_xdg_env(), &["plugins"]);
+    let issues = doctor_stale_plugin_artifacts(&dir);
+    if issues.is_empty() {
+        return doctor_info("plugins:stale-artifacts", "no stale or provenance-mismatched plugin artifacts detected");
+    }
+    doctor_warn(
+        "plugins:stale-artifacts",
+        &issues.join("; "),
+        &["maw plugin install <source> --force  (reinstall from the current registry source)"],
+    )
+}
+
+fn doctor_stale_plugin_artifacts(dir: &std::path::Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut issues = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(meta) = doctor_read_json(&path.join("registry.meta.json")) else { continue };
+        let name = meta
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .map_or_else(|| entry.file_name().to_string_lossy().into_owned(), str::to_owned);
+        let meta_sha = meta.get("sha256").and_then(serde_json::Value::as_str).map(doctor_normalize_sha);
+        let source = meta.get("source").and_then(serde_json::Value::as_str).unwrap_or("");
+        let added_at = meta.get("addedAt").and_then(serde_json::Value::as_str).unwrap_or("unknown date");
+        if source.contains("maw-plugin-registry") {
+            issues.push(format!(
+                "plugin '{name}' was installed from the RETIRED maw-plugin-registry ({source}, addedAt {added_at}) — reinstall from maw-plugins"
+            ));
+        }
+        let manifest_sha = doctor_read_json(&path.join("plugin.json")).ok().and_then(|manifest| {
+            manifest
+                .get("artifact")
+                .and_then(|artifact| artifact.get("sha256"))
+                .and_then(serde_json::Value::as_str)
+                .map(doctor_normalize_sha)
+        });
+        if let (Some(meta_sha), Some(manifest_sha)) = (&meta_sha, &manifest_sha) {
+            if meta_sha != manifest_sha {
+                issues.push(format!(
+                    "plugin '{name}' registry.meta.json sha256 ({meta_sha}) no longer matches the manifest artifact pin ({manifest_sha}) — provenance unverifiable, reinstall"
+                ));
+            }
+        }
+        if let (Some(lock), Some(manifest_sha)) = (read_plugin_lock_entry_full(&name).ok().flatten(), &manifest_sha) {
+            if &lock.sha256 != manifest_sha {
+                issues.push(format!(
+                    "plugin '{name}' installed artifact pin ({manifest_sha}) drifts from plugins.lock ({}) — reinstall the pinned version",
+                    lock.sha256
+                ));
+            }
+        }
+    }
+    issues.sort();
+    issues
+}
+
+fn doctor_normalize_sha(value: &str) -> String {
+    let hex = value.strip_prefix("sha256:").unwrap_or(value);
+    format!("sha256:{}", hex.to_ascii_lowercase())
+}
+
+/// Below-floor check (#522): surface plugins the SDK-floor gate refuses — the
+/// discovery warnings would otherwise only appear when the verb is invoked.
+fn doctor_check_plugin_sdk_floor() -> DoctorCheckNative {
+    let abi = maw_plugin_manifest::host_abi_version();
+    let report = maw_plugin_manifest::discover_packages(&maw_plugin_manifest::DiscoverPackagesOptions::default());
+    let refusals: Vec<&String> = report
+        .warnings
+        .iter()
+        .filter(|warning| warning.contains("requires maw SDK"))
+        .collect();
+    if refusals.is_empty() {
+        return doctor_info(
+            "plugins:sdk-floor",
+            &format!("all installed plugins accept host ABI {abi} ({} host fns)", maw_plugin_manifest::HOST_FN_NAMES.len()),
+        );
+    }
+    let names = refusals
+        .iter()
+        .map(|warning| warning.lines().next().unwrap_or(warning).to_owned())
+        .collect::<Vec<_>>()
+        .join("; ");
+    doctor_warn(
+        "plugins:sdk-floor",
+        &format!("{} plugin{} below the SDK floor (host ABI {abi}): {names}", refusals.len(), doctor_plural(refusals.len())),
+        &["rebuild/reinstall the plugin against the current ABI (maw plugin build, then maw plugin install --force)"],
+    )
+}
+
+/// Missing-plugin check (#522): every plugins.lock pin represents a plugin
+/// this machine expects — warn when the pinned plugin is no longer installed
+/// under the plugin root.
+fn doctor_check_plugin_missing() -> DoctorCheckNative {
+    let pinned = plugin_lock_pinned_names();
+    if pinned.is_empty() {
+        return doctor_info("plugins:missing", "no plugins.lock pins to check");
+    }
+    let dir = maw_data_path(&doctor_xdg_env(), &["plugins"]);
+    let mut missing: Vec<String> = pinned
+        .into_iter()
+        .filter(|name| !dir.join(name).join("plugin.json").exists())
+        .collect();
+    missing.sort();
+    if missing.is_empty() {
+        return doctor_info("plugins:missing", "all plugins.lock pins are installed");
+    }
+    doctor_warn(
+        "plugins:missing",
+        &format!(
+            "{} pinned plugin{} missing from {}: {}",
+            missing.len(),
+            doctor_plural(missing.len()),
+            dir.display(),
+            missing.join(", ")
+        ),
+        &["maw plugin install <source from plugins.lock>"],
+    )
+}
+
 fn doctor_check_peer_duplicates() -> DoctorCheckNative {
     let env = doctor_peer_env();
     let store = maw_peer::load_peer_store(&env);
@@ -279,6 +460,116 @@ fn doctor_check_hub() -> DoctorCheckNative {
         doctor_info("hub", &format!("config readable at {}", cfg.display()))
     } else {
         doctor_warn("hub", &format!("config missing at {}", cfg.display()), &["maw init"])
+    }
+}
+
+fn doctor_check_config_shadow() -> Option<DoctorCheckNative> {
+    let env = doctor_xdg_env();
+    let config_dir = maw_config_dir(&env);
+    let legacy = config_dir.join("maw.config.json");
+    if !legacy.exists() || !doctor_has_weighted_config_layer(&config_dir) {
+        return None;
+    }
+    let raw = std::fs::read_to_string(&legacy).ok()?;
+    let parsed = serde_json::from_str::<serde_json::Value>(&raw).ok()?;
+    let mut keys = Vec::new();
+    doctor_collect_json_key_paths("", &parsed, &mut keys);
+    if keys.is_empty() {
+        return None;
+    }
+    keys.sort_unstable();
+    Some(doctor_warn(
+        "config:legacy-shadow",
+        &format!(
+            "legacy maw.config.json is ignored (weighted layers present); keys found there: {}",
+            keys.join(", ")
+        ),
+        &["move those keys into a weighted maw.config.<N>.json layer"],
+    ))
+}
+
+fn doctor_check_config_backup_loss() -> Option<DoctorCheckNative> {
+    let config_dir = maw_config_dir(&doctor_xdg_env());
+    let entries = std::fs::read_dir(&config_dir).ok()?;
+    let mut losses = std::collections::BTreeSet::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Some((current_name, _)) = name.split_once(".bak-pre-") else { continue };
+        if current_name != "maw.config.json" && !doctor_is_weighted_config_name(current_name) { continue; }
+        let Ok(backup) = doctor_read_json(&entry.path()) else { continue };
+        let current_path = config_dir.join(current_name);
+        let Ok(current) = doctor_read_json(&current_path) else { continue };
+        let mut missing = std::collections::BTreeSet::new();
+        if let (Some(backup), Some(current)) = (backup.as_object(), current.as_object()) {
+            for (key, value) in backup {
+                if !current.contains_key(key) { missing.insert(key.clone()); }
+                doctor_collect_missing_json_paths(key, value, current.get(key), &mut missing);
+            }
+        }
+        if !missing.is_empty() {
+            losses.insert(format!("{} missing {}", current_path.display(), missing.into_iter().collect::<Vec<_>>().join(", ")));
+        }
+    }
+    (!losses.is_empty()).then(|| doctor_warn(
+        "config:backup-key-loss",
+        &format!("backup contains config keys absent from current file: {}", losses.into_iter().collect::<Vec<_>>().join("; ")),
+        &["restore the missing keys from the newest .bak-pre-* sibling"],
+    ))
+}
+
+fn doctor_read_json(path: &std::path::Path) -> Result<serde_json::Value, ()> {
+    let raw = std::fs::read_to_string(path).map_err(|_| ())?;
+    serde_json::from_str(&raw).map_err(|_| ())
+}
+
+fn doctor_collect_missing_json_paths(
+    prefix: &str,
+    backup: &serde_json::Value,
+    current: Option<&serde_json::Value>,
+    missing: &mut std::collections::BTreeSet<String>,
+) {
+    if let Some(object) = backup.as_object() {
+        for (key, value) in object {
+            let path = format!("{prefix}.{key}");
+            doctor_collect_missing_json_paths(&path, value, current.and_then(|item| item.get(key)), missing);
+        }
+    } else if current.is_none() {
+        missing.insert(prefix.to_owned());
+    }
+}
+
+fn doctor_has_weighted_config_layer(config_dir: &std::path::Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(config_dir) else {
+        return false;
+    };
+    entries
+        .flatten()
+        .any(|entry| entry.file_name().to_str().is_some_and(doctor_is_weighted_config_name))
+}
+
+fn doctor_is_weighted_config_name(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("maw.config.") else {
+        return false;
+    };
+    let Some(digits) = rest
+        .strip_suffix(".local.json")
+        .or_else(|| rest.strip_suffix(".json")) else {
+        return false;
+    };
+    !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn doctor_collect_json_key_paths(prefix: &str, value: &serde_json::Value, out: &mut Vec<String>) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, child) in map {
+                let next = if prefix.is_empty() { key.clone() } else { format!("{prefix}.{key}") };
+                doctor_collect_json_key_paths(&next, child, out);
+            }
+        }
+        _ if !prefix.is_empty() => out.push(prefix.to_owned()),
+        _ => {}
     }
 }
 
@@ -584,7 +875,7 @@ mod doctor_tests {
     }
 
     fn doctor_seed_env(name: &str) -> (std::sync::MutexGuard<'static, ()>, std::path::PathBuf, Vec<DoctorEnvRestore>) {
-        let lock = super::env_test_lock().lock().expect("env lock");
+        let lock = super::env_test_lock();
         let temp = doctor_temp_root(name);
         let restores = ["HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "MAW_CONFIG_DIR", "MAW_DATA_DIR", "MAW_STATE_DIR", "MAW_CACHE_DIR", "MAW_HOME", "MAW_XDG", "GHQ_ROOT", "TMUX", "PEERS_FILE", "MAW_PORT", "MAW_GATEWAY"]
             .into_iter().map(DoctorEnvRestore::capture).collect::<Vec<_>>();
@@ -643,6 +934,50 @@ mod doctor_tests {
     }
 
     #[test]
+    fn doctor_warns_when_weighted_config_shadows_legacy_keys() {
+        let (_lock, temp, _restore) = doctor_seed_env("config-shadow");
+        let config = temp.join("config-shadow/xdg-config/maw");
+        fs::write(config.join("maw.config.json"), r#"{"hooks":{"postWake":["echo hi"]},"node":"legacy"}"#).expect("legacy");
+        fs::write(config.join("maw.config.50.json"), r#"{"commands":{"default":"codex"}}"#).expect("weighted");
+
+        let output = run_doctor_command(&doctor_strings(&["--json", "hub"]));
+
+        assert_eq!(output.stderr, "");
+        assert_eq!(output.code, 1);
+        let parsed: serde_json::Value = serde_json::from_str(&output.stdout).expect("json");
+        let checks = parsed["checks"].as_array().expect("checks");
+        let shadow = checks
+            .iter()
+            .find(|check| check["name"] == "config:legacy-shadow")
+            .expect("legacy shadow warning");
+        assert_eq!(shadow["severity"], "warn");
+        assert_eq!(
+            shadow["message"],
+            "legacy maw.config.json is ignored (weighted layers present); keys found there: hooks.postWake, node"
+        );
+    }
+
+    #[test]
+    fn doctor_warns_when_backup_has_lost_post_wake_hook() {
+        let (_lock, temp, _restore) = doctor_seed_env("config-backup-loss");
+        let config = temp.join("config-backup-loss/xdg-config/maw");
+        fs::write(config.join("maw.config.50.json"), r#"{"node":"current"}"#).expect("current");
+        fs::write(
+            config.join("maw.config.50.json.bak-pre-postwake-1783545408"),
+            r#"{"node":"current","hooks":{"postWake":["echo arrange"]}}"#,
+        )
+        .expect("backup");
+
+        let output = run_doctor_command(&doctor_strings(&["--json", "hub"]));
+
+        assert_eq!(output.code, 1);
+        let parsed: serde_json::Value = serde_json::from_str(&output.stdout).expect("json");
+        let loss = parsed["checks"].as_array().expect("checks").iter()
+            .find(|check| check["name"] == "config:backup-key-loss").expect("backup warning");
+        assert!(loss["message"].as_str().expect("message").contains("hooks.postWake"));
+    }
+
+    #[test]
     fn doctor_fix_stale_is_hermetic_with_seeded_peer_store() {
         let (_lock, temp, _restore) = doctor_seed_env("stale-peers");
         let peers = temp.join("peers.json");
@@ -662,5 +997,119 @@ mod doctor_tests {
         let output = run_doctor_command(&doctor_strings(&["--json", "--fix-xdg", "--dry-run", "xdg"]));
         assert_eq!(output.code, 0);
         assert_eq!(output.stdout, include_str!("../../tests/fixtures/native-doctor/xdg-migrate-dry-run.json"));
+    }
+
+    fn doctor_plugin_env(temp: &std::path::Path, name: &str) -> Vec<DoctorEnvRestore> {
+        // doctor_seed_env does not cover the plugin-specific vars.
+        let restores = ["MAW_PLUGINS_DIR", "MAW_PLUGINS_LOCK", "MAW_PLUGIN_DEV"]
+            .into_iter()
+            .map(DoctorEnvRestore::capture)
+            .collect::<Vec<_>>();
+        let scan = temp.join(format!("{name}-scan"));
+        fs::create_dir_all(&scan).expect("scan dir");
+        std::env::set_var("MAW_PLUGINS_DIR", &scan);
+        std::env::set_var("MAW_PLUGINS_LOCK", temp.join(format!("{name}-plugins.lock")));
+        std::env::remove_var("MAW_PLUGIN_DEV");
+        restores
+    }
+
+    fn doctor_check<'a>(parsed: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
+        parsed["checks"]
+            .as_array()
+            .expect("checks")
+            .iter()
+            .find(|check| check["name"] == name)
+            .unwrap_or_else(|| panic!("check {name} missing: {parsed}"))
+    }
+
+    #[test]
+    fn doctor_flags_stale_registry_meta_artifacts() {
+        let (_lock, temp, _restore) = doctor_seed_env("stale-artifacts");
+        let _plugin_restore = doctor_plugin_env(&temp, "stale-artifacts");
+        let plugin_dir = temp
+            .join("stale-artifacts/xdg-data/maw/plugins/broadcast");
+        fs::create_dir_all(&plugin_dir).expect("plugin dir");
+        fs::write(
+            plugin_dir.join("registry.meta.json"),
+            r#"{"version":"0.1.0","source":"soul-brews-studio/maw-plugin-registry/broadcast@v0.1.0-broadcast","sha256":"4f3efb6a03d6828ee6b9126b2a9c974f7e68df271b8865482086f3e98483d778","addedAt":"2026-04-29T01:39:12Z"}"#,
+        )
+        .expect("meta");
+        fs::write(
+            plugin_dir.join("plugin.json"),
+            r#"{"name":"broadcast","version":"1.1.0","sdk":"^1.0.0","target":"wasm","artifact":{"path":"./plugin.wasm","sha256":"sha256:07a1af2f0000000000000000000000000000000000000000000000000000dead"}}"#,
+        )
+        .expect("manifest");
+
+        let output = run_doctor_command(&doctor_strings(&["--json", "plugins"]));
+
+        assert_eq!(output.code, 1, "stdout: {}", output.stdout);
+        let parsed: serde_json::Value = serde_json::from_str(&output.stdout).expect("json");
+        let check = doctor_check(&parsed, "plugins:stale-artifacts");
+        assert_eq!(check["severity"], "warn");
+        let message = check["message"].as_str().expect("message");
+        assert!(message.contains("RETIRED maw-plugin-registry"), "{message}");
+        assert!(message.contains("no longer matches the manifest artifact pin"), "{message}");
+        assert!(message.contains("'broadcast'"), "{message}");
+    }
+
+    #[test]
+    fn doctor_flags_lock_pinned_plugins_that_are_not_installed() {
+        let (_lock, temp, _restore) = doctor_seed_env("missing-pins");
+        let _plugin_restore = doctor_plugin_env(&temp, "missing-pins");
+        let lock_path = temp.join("missing-pins-plugins.lock");
+        fs::write(
+            &lock_path,
+            r#"{"schema":1,"plugins":{"ghost-plugin":{"version":"1.0.0","sha256":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","source":"github:o/r@v1"}}}"#,
+        )
+        .expect("lock");
+
+        let output = run_doctor_command(&doctor_strings(&["--json", "plugins"]));
+
+        assert_eq!(output.code, 1, "stdout: {}", output.stdout);
+        let parsed: serde_json::Value = serde_json::from_str(&output.stdout).expect("json");
+        let check = doctor_check(&parsed, "plugins:missing");
+        assert_eq!(check["severity"], "warn");
+        assert!(
+            check["message"].as_str().expect("message").contains("ghost-plugin"),
+            "{}",
+            check["message"]
+        );
+    }
+
+    #[test]
+    fn doctor_flags_below_floor_plugins_and_reports_abi_when_clean() {
+        let (_lock, temp, _restore) = doctor_seed_env("sdk-floor");
+        let _plugin_restore = doctor_plugin_env(&temp, "sdk-floor");
+        let scan = temp.join("sdk-floor-scan");
+        let below = scan.join("floor-low");
+        fs::create_dir_all(&below).expect("plugin dir");
+        fs::write(
+            below.join("plugin.json"),
+            r#"{"name":"floor-low","version":"1.0.0","sdk":"^0.1.0"}"#,
+        )
+        .expect("manifest");
+
+        let output = run_doctor_command(&doctor_strings(&["--json", "plugins"]));
+        assert_eq!(output.code, 1, "stdout: {}", output.stdout);
+        let parsed: serde_json::Value = serde_json::from_str(&output.stdout).expect("json");
+        let check = doctor_check(&parsed, "plugins:sdk-floor");
+        assert_eq!(check["severity"], "warn");
+        let message = check["message"].as_str().expect("message");
+        assert!(message.contains("below the SDK floor"), "{message}");
+        assert!(message.contains("floor-low"), "{message}");
+
+        fs::remove_dir_all(&below).expect("remove below-floor plugin");
+        let output = run_doctor_command(&doctor_strings(&["--json", "plugins"]));
+        let parsed: serde_json::Value = serde_json::from_str(&output.stdout).expect("json");
+        let check = doctor_check(&parsed, "plugins:sdk-floor");
+        assert_eq!(check["ok"], true);
+        assert!(
+            check["message"]
+                .as_str()
+                .expect("message")
+                .contains(&maw_plugin_manifest::host_abi_version()),
+            "{}",
+            check["message"]
+        );
     }
 }

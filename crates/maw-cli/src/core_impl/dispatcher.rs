@@ -28,10 +28,6 @@ use maw_calver::{compute_version, Channel, ComputeArgs, DateParts};
 use maw_feed::{active_oracles_at, describe_activity, parse_line, FeedEvent};
 use maw_discord::run_discord_command;
 use maw_fuzzy::{distance as fuzzy_distance, fuzzy_match};
-use maw_hub::{
-    load_workspace_configs, validate_workspace_config, WorkspaceConfig, WorkspaceConfigValidation,
-    HEARTBEAT_MS, RECONNECT_BASE_MS, RECONNECT_MAX_MS,
-};
 use maw_identity::{canonical_node_identity, canonical_session_name, CanonicalSessionNameInput};
 use maw_matcher::{
     normalize_target, resolve_by_name, resolve_session_target, resolve_worktree_target,
@@ -43,10 +39,14 @@ use maw_peer::{
     NamedPeerConfig, PeerConfig, PeerSourceMode, PeerSourceResult, ProbeErrorCode,
     ProbeFailureInput, ProbeLastError, ProbeMawHandshake,
 };
+#[cfg(feature = "wasm-host")]
+use maw_plugin_manifest::ExtismWasmInvokeRuntime;
+#[cfg(not(feature = "wasm-host"))]
+use maw_plugin_manifest::WasmHostUnavailableRuntime;
 use maw_plugin_manifest::{
     build_js_plugin_dir, discover_packages, hash_file, import_plugin_symbol, infer_plugin_capabilities,
     init_js_plugin_dir, install_built_plugin_dir, invoke_plugin, load_manifest_from_dir,
-    parse_manifest, DiscoverPackagesOptions, ExtismWasmInvokeRuntime, HOST_FN_NAMES, InvokeContext,
+    parse_manifest, DiscoverPackagesOptions, DiscoverPackagesReport, HOST_FN_NAMES, InvokeContext,
     InvokeResult, InvokeSource, LoadedPlugin, LoadedPluginKind,
     PluginManifest, PluginTier,
 };
@@ -89,6 +89,7 @@ use maw_xdg::{
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
 use std::future::Future;
+use std::io::Write as _;
 use std::path::Path;
 use std::pin::Pin;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -117,10 +118,18 @@ fn merged_config_value_for_env(env: &MawXdgEnv) -> serde_json::Value {
     maw_xdg::load_merged_config(env).config
 }
 
+/// Serializes process-env mutation (HOME/XDG/PATH/…) across tests.
+///
+/// Returns the guard directly and recovers from poison: the lock only
+/// serializes env access, and each test restores the env via RAII guards
+/// (`EnvVarRestore`), so a panicking test leaves no state worth propagating.
+/// Without recovery, one panic while holding the guard poisons the mutex and
+/// every later acquisition panics too — a `PoisonError` cascade that fails
+/// dozens of unrelated tests under default (parallel) test threads.
 #[cfg(test)]
-fn env_test_lock() -> &'static std::sync::Mutex<()> {
-    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+fn env_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 #[cfg(test)]
@@ -245,11 +254,16 @@ mod async_dispatch_tests {
 
 #[cfg(test)]
 mod dispatcher_fragment_tests {
-    use super::{dispatcher_entries, dispatcher_status, run_cli, DispatchKind, MAW_RS_VERSION_STRING};
+    use super::{cli_dispatch_log_command, cli_dispatch_now_iso, current_xdg_env, env_test_lock};
+    use super::{
+        dispatcher_entries, dispatcher_status, run_cli, DispatchKind, MAW_RS_VERSION_STRING,
+    };
     use std::collections::BTreeSet;
+    use std::fs;
+    use std::path::PathBuf;
 
     const CORE_COMMANDS: &[&str] = &[
-        "hey", "send", "serve", "health", "ls", "wake", "hub", "tmux", "init", "reply", "run",
+        "hey", "send", "serve", "health", "ls", "wake", "tmux", "init", "reply", "run",
         "attach", "bud", "buddy",
     ];
 
@@ -287,6 +301,125 @@ mod dispatcher_fragment_tests {
         assert!(!MAW_RS_VERSION_STRING.starts_with("maw-rs vv"));
         assert!(MAW_RS_VERSION_STRING.contains(env!("MAW_RS_GIT_HASH")));
         assert!(MAW_RS_VERSION_STRING.contains(" built "));
+    }
+
+    #[test]
+    fn dispatch_logs_native_commands_to_audit_jsonl() {
+        let _guard = env_test_lock();
+        let (_state_root, _restores) = cli_dispatch_test_env();
+        let output = run_cli(&["version".to_owned()]);
+        assert_eq!(output.code, 0, "{output:?}");
+        let path = super::audit_jsonl_path(&current_xdg_env());
+        let text = fs::read_to_string(path).expect("audit log");
+        let rows: Vec<_> = text
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .collect();
+        assert!(!rows.is_empty(), "{text}");
+        let row: serde_json::Value = serde_json::from_str(rows.last().expect("row")).expect("json");
+        assert_eq!(row.get("cmd").and_then(serde_json::Value::as_str), Some("version"));
+        assert_eq!(
+            row.get("args").and_then(serde_json::Value::as_array).map(Vec::len),
+            Some(0)
+        );
+        assert_eq!(row.get("binary").and_then(serde_json::Value::as_str), Some("maw-rs"));
+        assert_eq!(
+            row.get("version").and_then(serde_json::Value::as_str),
+            Some(super::MAW_RS_BUILD_VERSION)
+        );
+        let config_path = super::maw_config_path(&current_xdg_env(), &["audit.jsonl"]);
+        assert!(!config_path.exists(), "audit must use state, not config: {config_path:?}");
+    }
+
+    #[test]
+    fn concurrent_dispatch_audit_appends_remain_parseable_jsonl() {
+        let _guard = env_test_lock();
+        let (_state_root, _restores) = cli_dispatch_test_env();
+        let workers = 32;
+        let rows_per_worker = 32;
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(workers));
+        let payload = "x".repeat(2_048);
+
+        std::thread::scope(|scope| {
+            for worker in 0..workers {
+                let barrier = std::sync::Arc::clone(&barrier);
+                let payload = &payload;
+                scope.spawn(move || {
+                    barrier.wait();
+                    for row in 0..rows_per_worker {
+                        cli_dispatch_log_command(
+                            "audit-concurrency-test",
+                            &[format!("{worker}-{row}-{payload}")],
+                        );
+                    }
+                });
+            }
+        });
+
+        let path = super::audit_jsonl_path(&current_xdg_env());
+        let text = fs::read_to_string(path).expect("audit log");
+        let rows: Vec<_> = text.lines().collect();
+        assert_eq!(rows.len(), workers * rows_per_worker, "{text}");
+        for (line, row) in rows.iter().enumerate() {
+            serde_json::from_str::<serde_json::Value>(row)
+                .unwrap_or_else(|error| panic!("audit line {line} is corrupt: {error}: {row}"));
+        }
+    }
+
+    #[test]
+    fn dispatch_audit_write_errors_are_best_effort_for_native_commands() {
+        let _guard = env_test_lock();
+        let (state_root, _restores) = cli_dispatch_test_env();
+        let blocked_root = state_root.join("blocked");
+        fs::write(&blocked_root, b"blocked").expect("blocked state root");
+        let _state_restore = super::EnvVarRestore::capture("MAW_STATE_DIR");
+        std::env::set_var("MAW_STATE_DIR", &blocked_root);
+        let output = run_cli(&["version".to_owned()]);
+        assert_eq!(output.code, 0);
+        assert!(output.stderr.is_empty());
+        assert!(!blocked_root.join("audit.jsonl").exists());
+    }
+
+    #[test]
+    fn cli_dispatch_now_iso_uses_fixed_epoch_millis_when_present() {
+        let _guard = env_test_lock();
+        std::env::remove_var("MAW_AUDIT_TEST_NOW_MS");
+        std::env::set_var("MAW_AUDIT_TEST_NOW_MS", "0");
+        assert_eq!(cli_dispatch_now_iso(), "1970-01-01T00:00:00.000Z");
+        std::env::remove_var("MAW_AUDIT_TEST_NOW_MS");
+    }
+
+    fn cli_dispatch_test_env() -> (PathBuf, Vec<super::EnvVarRestore>) {
+        let root = std::env::temp_dir().join(format!(
+            "maw-rs-dispatch-audit-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_nanos())
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("state").join("maw")).expect("state dir");
+        let restores = [
+            "HOME",
+            "XDG_CONFIG_HOME",
+            "XDG_STATE_HOME",
+            "MAW_STATE_DIR",
+            "MAW_HOME",
+            "MAW_XDG",
+        ]
+        .into_iter()
+        .map(super::EnvVarRestore::capture)
+        .collect::<Vec<_>>();
+        let home = root.join("home");
+        let config = root.join("config");
+        let state = root.join("state");
+        std::env::set_var("HOME", &home);
+        std::env::set_var("XDG_CONFIG_HOME", &config);
+        std::env::set_var("XDG_STATE_HOME", &state);
+        std::env::set_var("MAW_XDG", "1");
+        std::env::remove_var("MAW_HOME");
+        std::env::remove_var("MAW_STATE_DIR");
+        (state, restores)
     }
 }
 
@@ -328,8 +461,13 @@ pub fn run_cli(argv: &[String]) -> CliOutput {
     };
 
     match dispatcher_target(command) {
-        DispatchTarget::Native(handler) => handler(&argv[1..]),
-        DispatchTarget::AsyncNative(handler) => run_async_handler_blocking(handler, &argv[1..]),
+        DispatchTarget::Native(handler) => {
+            cli_dispatch_log_command(command, &argv[1..]);
+            native_or_plugin_fallback(argv, || handler(&argv[1..]))
+        }
+        DispatchTarget::AsyncNative(handler) => native_or_plugin_fallback(argv, || {
+            run_async_handler_blocking(handler, &argv[1..])
+        }),
         DispatchTarget::UnknownCommand => dispatch_cli_plugin_or_unknown(argv, command),
     }
 }
@@ -346,10 +484,125 @@ pub async fn run_cli_async(argv: &[String]) -> CliOutput {
     };
 
     match dispatcher_target(command) {
-        DispatchTarget::Native(handler) => handler(&argv[1..]),
-        DispatchTarget::AsyncNative(handler) => handler(argv[1..].to_vec()).await,
+        DispatchTarget::Native(handler) => {
+            cli_dispatch_log_command(command, &argv[1..]);
+            native_or_plugin_fallback(argv, || handler(&argv[1..]))
+        }
+        DispatchTarget::AsyncNative(handler) => {
+            plugin_fallback_for_native_miss(argv, handler(argv[1..].to_vec()).await)
+        }
         DispatchTarget::UnknownCommand => dispatch_cli_plugin_or_unknown(argv, command),
     }
+}
+
+fn native_or_plugin_fallback(argv: &[String], native: impl FnOnce() -> CliOutput) -> CliOutput {
+    plugin_fallback_for_native_miss(argv, native())
+}
+
+fn plugin_fallback_for_native_miss(argv: &[String], native_output: CliOutput) -> CliOutput {
+    if native_output.code != 2 || !looks_like_top_level_unknown_args(argv, &native_output.stderr) {
+        return native_output;
+    }
+    dispatch_cli_plugin(argv).unwrap_or(native_output)
+}
+
+fn looks_like_top_level_unknown_args(argv: &[String], stderr: &str) -> bool {
+    let Some(command) = argv.first() else {
+        return false;
+    };
+    if !native_plugin_fallthrough_command(command) {
+        return false;
+    }
+    let Some(detail) = stderr.strip_prefix(&format!("{command}: ")) else {
+        return false;
+    };
+    detail.starts_with("unknown")
+        || detail.starts_with("unexpected")
+        || detail.starts_with("unrecognized")
+}
+
+fn native_plugin_fallthrough_command(command: &str) -> bool {
+    command == "cross-team-queue" || command == "squad"
+}
+
+fn cli_dispatch_log_command(command: &str, args: &[String]) {
+    let row = serde_json::json!({
+        "ts": cli_dispatch_now_iso(),
+        "cmd": command,
+        "args": args,
+        "binary": "maw-rs",
+        "version": MAW_RS_BUILD_VERSION,
+    });
+    let path = audit_jsonl_path(&current_xdg_env());
+    let _ = append_jsonl_atomic(&path, &row);
+}
+
+fn audit_jsonl_path(env: &MawXdgEnv) -> std::path::PathBuf {
+    maw_state_path(env, &["audit.jsonl"])
+}
+
+fn append_jsonl_atomic(path: &Path, row: &serde_json::Value) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    } else {
+        return Err(std::io::Error::other("jsonl path has no parent"));
+    }
+    let mut line = serde_json::to_vec(row).map_err(std::io::Error::other)?;
+    line.push(b'\n');
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    let written = file.write(&line)?;
+    if written == line.len() {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::WriteZero,
+            "short jsonl append",
+        ))
+    }
+}
+
+fn cli_dispatch_now_iso() -> String {
+    let millis = std::env::var("MAW_AUDIT_TEST_NOW_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or_else(cli_dispatch_now_millis);
+    let secs = millis / 1000;
+    let millis = millis % 1000;
+    let days = i64::try_from(secs / 86_400).unwrap_or(i64::MAX);
+    let day_seconds = secs % 86_400;
+    let hour = day_seconds / 3600;
+    let minute = (day_seconds % 3600) / 60;
+    let second = day_seconds % 60;
+    let (year, month, day) = cli_dispatch_civil_from_days(days);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z"
+    )
+}
+
+fn cli_dispatch_now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
+}
+
+fn cli_dispatch_civil_from_days(days: i64) -> (i32, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = mp + if mp < 10 { 3 } else { -9 };
+    (
+        i32::try_from(y + i64::from(m <= 2)).unwrap_or(1970),
+        u32::try_from(m).unwrap_or(1),
+        u32::try_from(d).unwrap_or(1),
+    )
 }
 
 fn run_async_handler_blocking(handler: AsyncHandler, args: &[String]) -> CliOutput {
@@ -401,7 +654,19 @@ fn run_async_dispatch_test(args: Vec<String>) -> Pin<Box<dyn Future<Output = Cli
 
 
 fn dispatch_cli_plugin_or_unknown(argv: &[String], command: &str) -> CliOutput {
-    dispatch_cli_plugin(argv).unwrap_or_else(|| unknown_command(command))
+    // SDK-floor gate: default options carry the ABI-derived runtime version
+    // (maw_plugin_manifest::host_abi_version(), major from HOST_ABI_MAJOR,
+    // minor from HOST_FN_NAMES.len()) — no hardcoded "1.0.0" literal.
+    let report = discover_packages(&DiscoverPackagesOptions::default());
+    if let Some(output) = dispatch_cli_plugin_from_report(&report, argv) {
+        return output;
+    }
+    // No runnable plugin matched. If the verb is a KNOWN extracted verb
+    // (fleet-plugins table or a plugins.lock pin), never degrade to the bare
+    // unknown-command exit: surface the discovery refusal (sdk floor, hash
+    // mismatch, …) or the actionable install hint instead. True typos keep
+    // the existing unknown-command path.
+    missing_plugin_output(command, &report.warnings).unwrap_or_else(|| unknown_command(command))
 }
 
 fn unknown_command(command: &str) -> CliOutput {
@@ -413,11 +678,14 @@ fn unknown_command(command: &str) -> CliOutput {
 }
 
 fn dispatch_cli_plugin(argv: &[String]) -> Option<CliOutput> {
-    let options = DiscoverPackagesOptions {
-        runtime_version: "1.0.0".to_owned(),
-        ..DiscoverPackagesOptions::default()
-    };
-    let report = discover_packages(&options);
+    let report = discover_packages(&DiscoverPackagesOptions::default());
+    dispatch_cli_plugin_from_report(&report, argv)
+}
+
+fn dispatch_cli_plugin_from_report(
+    report: &DiscoverPackagesReport,
+    argv: &[String],
+) -> Option<CliOutput> {
     let (plugin, matched_args) = report
         .plugins
         .iter()
@@ -426,31 +694,116 @@ fn dispatch_cli_plugin(argv: &[String]) -> Option<CliOutput> {
 
     let ctx = InvokeContext::new(InvokeSource::Cli, matched_args.to_vec());
 
-    if plugin.entry_path.is_some() {
-        return Some(dispatch_ts_cli_plugin(plugin, &ctx));
-    }
+    let mut output = if plugin.entry_path.is_some() {
+        dispatch_ts_cli_plugin(plugin, &ctx)
+    } else {
+        // Ship-tier WASM dispatch runs on the real Extism runtime so plugins that import
+        // host functions (maw.exec.*, maw.fs.*, …) load. The MvpWasmInvokeRuntime toy
+        // parser rejected any module with imports and is retained only for no-deps unit
+        // tests in maw-plugin-manifest. with_manifest_fs_roots grants declared fs caps
+        // from the fixed registry (e.g. fs:read:teams) — same wiring as the internal
+        // plugin-manifest invoke path; without it every maw.fs.* call is denied here.
+        // The Extism runtime is compiled in only with the 'wasm-host' feature (deploy
+        // builds); a default (featureless) build routes through ship_tier_wasm_runtime()
+        // to a stand-in whose invoke_wasm fails loudly with a rebuild hint — discovery,
+        // manifest parse, hash-verify, and universal --help/--version stay featureless.
+        let mut runtime = ship_tier_wasm_runtime();
+        render_cli_plugin_result(invoke_plugin(plugin, &ctx, &mut runtime))
+    };
+    prepend_dev_bypass_warnings(&mut output, plugin, &report.warnings);
+    Some(output)
+}
 
-    // Ship-tier WASM dispatch runs on the real Extism runtime so plugins that import
-    // host functions (maw.exec.*, maw.fs.*, …) load. The MvpWasmInvokeRuntime toy
-    // parser rejected any module with imports and is retained only for no-deps unit
-    // tests in maw-plugin-manifest. with_manifest_fs_roots grants declared fs caps
-    // from the fixed registry (e.g. fs:read:teams) — same wiring as the internal
-    // plugin-manifest invoke path; without it every maw.fs.* call is denied here.
-    let mut runtime = ExtismWasmInvokeRuntime::default().with_manifest_fs_roots();
-    Some(render_cli_plugin_result(invoke_plugin(plugin, &ctx, &mut runtime)))
+/// The `MAW_PLUGIN_DEV` symlink hash bypass must be LOUD: whenever the invoked
+/// plugin was loaded with verification bypassed, its discovery warning is
+/// forwarded to stderr ahead of the plugin's own output.
+fn prepend_dev_bypass_warnings(output: &mut CliOutput, plugin: &LoadedPlugin, warnings: &[String]) {
+    let needle = format!("'{}'", plugin.manifest.name);
+    let mut forwarded = String::new();
+    for warning in warnings
+        .iter()
+        .filter(|warning| warning.contains("MAW_PLUGIN_DEV=1") && warning.contains(&needle))
+    {
+        forwarded.push_str("warning: ");
+        forwarded.push_str(warning);
+        forwarded.push('\n');
+    }
+    if forwarded.is_empty() {
+        return;
+    }
+    forwarded.push_str(&output.stderr);
+    output.stderr = forwarded;
+}
+
+/// Single construction point for the ship-tier wasm runtime used by both the
+/// CLI plugin fallthrough (`dispatch_cli_plugin`) and the internal
+/// `plugin-manifest invoke` plan path (`run_plugin_manifest_invoke_plan`).
+#[cfg(feature = "wasm-host")]
+fn ship_tier_wasm_runtime() -> ExtismWasmInvokeRuntime {
+    ExtismWasmInvokeRuntime::default().with_manifest_fs_roots()
+}
+
+/// Featureless builds get a runtime whose `invoke_wasm` errors with an
+/// actionable rebuild message instead of degrading to `UnknownCommand`.
+#[cfg(not(feature = "wasm-host"))]
+fn ship_tier_wasm_runtime() -> WasmHostUnavailableRuntime {
+    WasmHostUnavailableRuntime
 }
 
 fn dispatch_ts_cli_plugin(plugin: &LoadedPlugin, ctx: &InvokeContext) -> CliOutput {
-    if !plugin_manifest_opts_into_bun_dev(plugin) {
-        return CliOutput {
+    dispatch_ts_cli_plugin_with_bun_probe(plugin, ctx, bun_binary_available_on_path)
+}
+
+fn dispatch_ts_cli_plugin_with_bun_probe(
+    plugin: &LoadedPlugin,
+    ctx: &InvokeContext,
+    bun_available: impl FnOnce() -> bool,
+) -> CliOutput {
+    match ts_cli_dispatch_decision(plugin, bun_available) {
+        TsCliDispatchDecision::BunDev => dispatch_bun_dev_plugin(plugin, ctx),
+        TsCliDispatchDecision::FailClosed => CliOutput {
             code: 2,
             stdout: String::new(),
             stderr: "TS/JS plugin requires prebuilt WASM artifact; no maw-js/Bun fallback\n"
                 .to_owned(),
-        };
+        },
     }
+}
 
-    dispatch_bun_dev_plugin(plugin, ctx)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TsCliDispatchDecision {
+    BunDev,
+    FailClosed,
+}
+
+fn ts_cli_dispatch_decision(
+    plugin: &LoadedPlugin,
+    bun_available: impl FnOnce() -> bool,
+) -> TsCliDispatchDecision {
+    if plugin_manifest_opts_into_bun_dev(plugin) {
+        return TsCliDispatchDecision::BunDev;
+    }
+    if plugin.kind == LoadedPluginKind::Ts && plugin.entry_path.is_some() && bun_available() {
+        TsCliDispatchDecision::BunDev
+    } else {
+        TsCliDispatchDecision::FailClosed
+    }
+}
+
+fn bun_binary_available_on_path() -> bool {
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|dir| bun_binary_exists_in_dir(&dir))
+}
+
+#[cfg(windows)]
+const BUN_BINARY_NAMES: &[&str] = &["bun.exe", "bun.cmd", "bun.bat", "bun"];
+#[cfg(not(windows))]
+const BUN_BINARY_NAMES: &[&str] = &["bun"];
+
+fn bun_binary_exists_in_dir(dir: &Path) -> bool {
+    BUN_BINARY_NAMES.iter().any(|name| dir.join(name).is_file())
 }
 
 fn plugin_manifest_opts_into_bun_dev(plugin: &LoadedPlugin) -> bool {
@@ -465,6 +818,88 @@ fn plugin_manifest_opts_into_bun_dev(plugin: &LoadedPlugin) -> bool {
         .get("runtime")
         .and_then(serde_json::Value::as_str)
         .is_some_and(|runtime| runtime == "bun-dev")
+}
+
+
+#[cfg(test)]
+mod ts_plugin_dispatch_decision_tests {
+    use super::*;
+    use serde_json::json;
+    use std::cell::Cell;
+
+    fn temp_plugin_dir(label: &str) -> std::path::PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "maw-rs-ts-dispatch-{label}-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("plugin dir");
+        dir
+    }
+
+    fn load_ts_plugin(label: &str, runtime: Option<&str>) -> (std::path::PathBuf, LoadedPlugin) {
+        let dir = temp_plugin_dir(label);
+        std::fs::write(dir.join("index.ts"), "export default async function main() {}\n")
+            .expect("entry");
+        let mut manifest = json!({
+            "name": label,
+            "version": "1.0.0",
+            "sdk": "*",
+            "target": "js",
+            "entry": "index.ts",
+            "cli": { "command": label }
+        });
+        if let Some(runtime) = runtime {
+            manifest["runtime"] = json!(runtime);
+        }
+        std::fs::write(dir.join("plugin.json"), manifest.to_string()).expect("manifest");
+        let plugin = load_manifest_from_dir(&dir)
+            .expect("load manifest")
+            .expect("loaded plugin");
+        assert_eq!(plugin.kind, LoadedPluginKind::Ts);
+        (dir, plugin)
+    }
+
+    #[test]
+    fn bare_ts_plugin_uses_bun_dev_decision_when_bun_probe_succeeds() {
+        let (dir, plugin) = load_ts_plugin("bare-ts-bun", None);
+        let decision = ts_cli_dispatch_decision(&plugin, || true);
+
+        assert_eq!(decision, TsCliDispatchDecision::BunDev);
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[test]
+    fn bare_ts_plugin_fails_closed_when_bun_probe_fails() {
+        let (dir, plugin) = load_ts_plugin("bare-ts-no-bun", None);
+        let ctx = InvokeContext::new(InvokeSource::Cli, Vec::new());
+        let output = dispatch_ts_cli_plugin_with_bun_probe(&plugin, &ctx, || false);
+
+        assert_eq!(output.code, 2);
+        assert!(output.stdout.is_empty());
+        assert_eq!(
+            output.stderr,
+            "TS/JS plugin requires prebuilt WASM artifact; no maw-js/Bun fallback\n"
+        );
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[test]
+    fn explicit_bun_dev_runtime_does_not_call_bun_probe() {
+        let (dir, plugin) = load_ts_plugin("explicit-bun-dev", Some("bun-dev"));
+        let called = Cell::new(false);
+        let decision = ts_cli_dispatch_decision(&plugin, || {
+            called.set(true);
+            false
+        });
+
+        assert_eq!(decision, TsCliDispatchDecision::BunDev);
+        assert!(!called.get(), "runtime=bun-dev should bypass the probe");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
 }
 
 fn dispatch_bun_dev_plugin(plugin: &LoadedPlugin, ctx: &InvokeContext) -> CliOutput {
@@ -518,7 +953,13 @@ fn bun_dev_banner(plugin_name: &str) -> String {
 }
 
 fn plugin_cli_args<'a>(plugin: &LoadedPlugin, argv: &'a [String]) -> Option<&'a [String]> {
-    let command = &plugin.manifest.cli.as_ref()?.command;
+    let cli = plugin.manifest.cli.as_ref()?;
+    std::iter::once(&cli.command)
+        .chain(cli.aliases.iter().flatten())
+        .find_map(|command| plugin_command_args(command, argv))
+}
+
+fn plugin_command_args<'a>(command: &str, argv: &'a [String]) -> Option<&'a [String]> {
     let command_parts = command.split_whitespace().collect::<Vec<_>>();
     if command_parts.is_empty() || argv.len() < command_parts.len() {
         return None;

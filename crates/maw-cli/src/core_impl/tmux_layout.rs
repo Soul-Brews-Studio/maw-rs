@@ -1,5 +1,3 @@
-const DISPATCH_283: &[DispatcherEntry] = &[];
-
 const TMUX_SUB_283: &[TmuxSubcommandEntry] = &[TmuxSubcommandEntry {
     names: &["layout"],
     handler: run_tmux_layout_command,
@@ -25,6 +23,17 @@ fn run_tmux_layout_command(argv: &[String]) -> CliOutput {
         Ok(stdout) => CliOutput { code: 0, stdout, stderr: String::new() },
         Err((code, message)) => CliOutput { code, stdout: String::new(), stderr: format!("{message}\n") },
     }
+}
+
+fn tmux_layout_current_with_runner<R: maw_tmux::TmuxRunner>(
+    preset: &str,
+    runner: &mut R,
+) -> Result<(), (i32, String)> {
+    tmux_layout_validate_preset(preset)?;
+    runner
+        .run("select-layout", &[preset.to_owned()])
+        .map_err(|error| (1, format!("layout: select-layout failed: {}", error.message)))?;
+    Ok(())
 }
 
 fn tmux_layout_with_runner<R: maw_tmux::TmuxRunner>(
@@ -115,7 +124,6 @@ mod tmux_layout_tests {
 
     #[test]
     fn tmux_layout_fragment_is_part283_only() {
-        assert!(DISPATCH_283.is_empty());
         assert_eq!(TMUX_SUB_283.len(), 1);
         assert_eq!(TMUX_SUB_283[0].names, &["layout"]);
     }
@@ -129,6 +137,13 @@ mod tmux_layout_tests {
             runner.calls,
             vec![("select-layout".to_owned(), strings(&["-t", "session:1", "tiled"]))]
         );
+    }
+
+    #[test]
+    fn tmux_layout_current_helper_keeps_internal_fleet_path_native() {
+        let mut runner = LayoutFakeRunner::default();
+        tmux_layout_current_with_runner("main-vertical", &mut runner).expect("current layout");
+        assert_eq!(runner.calls, vec![("select-layout".to_owned(), strings(&["main-vertical"]))]);
     }
 
     #[test]

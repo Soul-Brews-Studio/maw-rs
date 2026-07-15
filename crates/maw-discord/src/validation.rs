@@ -28,7 +28,11 @@ pub(super) fn discord_validate_channel_arg(value: &str, log: &mut Vec<String>) -
     true
 }
 
-pub(super) fn discord_validate_snowflake_for_log(value: &str, label: &str, log: &mut Vec<String>) -> bool {
+pub(super) fn discord_validate_snowflake_for_log(
+    value: &str,
+    label: &str,
+    log: &mut Vec<String>,
+) -> bool {
     if !is_numeric_snowflake(value) {
         log.push(format!(
             "✗ invalid {label} id: numeric Discord snowflake required"

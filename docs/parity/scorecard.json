@@ -1,0 +1,622 @@
+{
+  "version": 1,
+  "frozen_at": "2026-07-09",
+  "frozen_by": "athena — denominator v3 (97 plugin-overlap + 11 js-core + 10 top-alias)",
+  "amendment_policy": "additions allowed via athena review; removals only via RELEASED-with-committed-fallthrough-test",
+  "gate_4and": {
+    "1_pass_threshold": "≥80% of surface PASS (≈95 verbs)",
+    "2_critical_set_100pct": [
+      "hey",
+      "send",
+      "run",
+      "kill",
+      "peek",
+      "ls",
+      "attach",
+      "wake",
+      "fleet",
+      "team",
+      "workon",
+      "inbox"
+    ],
+    "2_note": "critical verbs must be PASS or RELEASED — never FAIL, never un-scorecarded",
+    "3_invariant": "issue #345 merged (global fall-through-no-hang)",
+    "4_signoff": "Nat"
+  },
+  "allowlist": {
+    "normalize_before_diff": [
+      "startup banner",
+      "ANSI color",
+      "timing/duration",
+      "PID",
+      "ephemeral id/timestamp"
+    ],
+    "must_match": [
+      "stdout data",
+      "exit code",
+      "state/DB side-effects",
+      "idempotency",
+      "no-hang-on-bad-args (<1s)"
+    ]
+  },
+  "layers": {
+    "plugin_overlap": [
+      "about",
+      "absorb",
+      "activity",
+      "archive",
+      "artifact-manager",
+      "assign",
+      "attach",
+      "attach-ssh",
+      "avengers",
+      "awaken",
+      "bg",
+      "broadcast",
+      "bud",
+      "capture",
+      "check",
+      "cleanup",
+      "codex",
+      "completions",
+      "consent",
+      "contacts",
+      "costs",
+      "cross-team-queue",
+      "demo",
+      "discover",
+      "doctor",
+      "done",
+      "dream",
+      "federation",
+      "find",
+      "fleet",
+      "follow",
+      "health",
+      "inbox",
+      "incubate",
+      "init",
+      "kill",
+      "learn",
+      "locate",
+      "ls",
+      "mega",
+      "messages",
+      "on",
+      "oracle",
+      "oracle-skills",
+      "oracle-workon",
+      "overview",
+      "pair",
+      "pane",
+      "panes",
+      "park",
+      "peek",
+      "peers",
+      "ping",
+      "plugin",
+      "pr",
+      "profile",
+      "project",
+      "pulse",
+      "rename",
+      "restart",
+      "resume",
+      "reunion",
+      "run",
+      "scope",
+      "send",
+      "send-enter",
+      "send-text",
+      "session",
+      "setup",
+      "shellenv",
+      "signals",
+      "sleep",
+      "soul-sync",
+      "split",
+      "stop",
+      "stream",
+      "swarm",
+      "tab",
+      "tag",
+      "take",
+      "talk-to",
+      "team",
+      "tile",
+      "tmux",
+      "token",
+      "transport",
+      "triggers",
+      "trust",
+      "ui",
+      "view",
+      "wake",
+      "whoami",
+      "workon",
+      "workspace",
+      "zai",
+      "zenoh-scout",
+      "zoom"
+    ],
+    "core_collisions": [
+      "hey",
+      "plugins",
+      "artifacts",
+      "artifact",
+      "agents",
+      "agent",
+      "audit",
+      "serve",
+      "update",
+      "upgrade",
+      "version"
+    ],
+    "alias_collisions": [
+      "a",
+      "t",
+      "layout",
+      "bring",
+      "b",
+      "scaffold",
+      "awake",
+      "new",
+      "preflight",
+      "snapshots"
+    ]
+  },
+  "behavioral_rows": [
+    {
+      "id": "agent-shorthand",
+      "desc": "js: maw <agent> [msg] → send/peek default vs rs auto-bridge (#318)",
+      "counts_in_percent": false,
+      "verdict": "pending",
+      "note": "dispatch semantics — verdict required before flip"
+    }
+  ],
+  "released_prior": [
+    {
+      "verb": "atlas",
+      "resolution": "renamed native→discord-inv (#344/#346, athena signed)",
+      "fallthrough_test": "crates/maw-cli/tests/native_atlas_plugin.rs::atlas_namespace_is_owned_by_plugin_not_native_discord_inv",
+      "field_test": "13/13 (atlas-oracle, 2026-07-09)"
+    }
+  ],
+  "verdicts": {
+    "a": {
+      "status": "pending"
+    },
+    "about": {
+      "status": "pending"
+    },
+    "absorb": {
+      "status": "pending"
+    },
+    "activity": {
+      "status": "pending"
+    },
+    "agent": {
+      "status": "pending"
+    },
+    "agents": {
+      "status": "pending"
+    },
+    "archive": {
+      "status": "pending"
+    },
+    "artifact": {
+      "status": "pending"
+    },
+    "artifact-manager": {
+      "status": "pending"
+    },
+    "artifacts": {
+      "status": "pending"
+    },
+    "assign": {
+      "status": "pending"
+    },
+    "attach": {
+      "status": "pending"
+    },
+    "attach-ssh": {
+      "status": "pending"
+    },
+    "audit": {
+      "status": "pending"
+    },
+    "avengers": {
+      "status": "pending"
+    },
+    "awake": {
+      "status": "pending"
+    },
+    "awaken": {
+      "status": "pending"
+    },
+    "b": {
+      "status": "pending"
+    },
+    "bg": {
+      "status": "pending"
+    },
+    "bring": {
+      "status": "pending"
+    },
+    "broadcast": {
+      "status": "pending"
+    },
+    "bud": {
+      "status": "pending"
+    },
+    "capture": {
+      "status": "pending"
+    },
+    "check": {
+      "status": "pending"
+    },
+    "cleanup": {
+      "status": "pending"
+    },
+    "codex": {
+      "status": "pending"
+    },
+    "completions": {
+      "status": "pending"
+    },
+    "consent": {
+      "status": "pending"
+    },
+    "contacts": {
+      "status": "pending"
+    },
+    "costs": {
+      "status": "pending"
+    },
+    "cross-team-queue": {
+      "status": "pending"
+    },
+    "demo": {
+      "status": "pending"
+    },
+    "discover": {
+      "status": "pending"
+    },
+    "doctor": {
+      "status": "pending"
+    },
+    "done": {
+      "status": "pending"
+    },
+    "dream": {
+      "status": "pending"
+    },
+    "federation": {
+      "status": "pending"
+    },
+    "find": {
+      "status": "pending"
+    },
+    "fleet": {
+      "status": "pending"
+    },
+    "follow": {
+      "status": "pending"
+    },
+    "health": {
+      "status": "pending"
+    },
+    "hey": {
+      "status": "FAIL",
+      "date": "2026-07-09",
+      "attested_by": "atlas field-test (matrix v2 + T1/T2 tagging, extreme isolation, delivery verified from destination file)",
+      "passes": [
+        "delivery: exactly-once, in-order, auto-sign, correct newline, faster (0.08s vs js 0.51s error path)",
+        "--help special-case (matches W-002 pattern)",
+        "idempotency/ordering",
+        "no-hang"
+      ],
+      "track2_converge_required": [
+        "no-args: exit code rs=2 vs js=1 + format",
+        "error-path: exit code rs=2 vs js=1 + verbosity",
+        "happy-path stdout: js='delivered → target: [sig] MSG' vs rs='delivered target' (Hyrum — scripts may grep 'delivered →')",
+        "audit persistence (BLOCKING, athena ruling): rs must write audit.jsonl + maw-log.jsonl schema byte-compatible with js on EVERY send — covered by allowlist 'state/DB side-effects must match'; history tooling depends on maw-log (Nothing-is-Deleted). Currently rs writes zero (send_federation.rs)"
+      ],
+      "golden_fixtures": "/tmp/ft-hey/golden-js/ (4 cases .out/.err/.exit + README) — copy to repo fixtures for convergence",
+      "athena_ruling": "audit-gap = T2 converge-required + BLOCKING (not a new track). hey=FAIL until all 4 T2 sub-cases match. delivery core (exactly-once/ordered/signed) verified strong.",
+      "issues": [
+        "#348 audit/log writes (blocker)",
+        "#349 exit-codes/stdout/verbosity converge"
+      ]
+    },
+    "inbox": {
+      "status": "pending"
+    },
+    "incubate": {
+      "status": "pending"
+    },
+    "init": {
+      "status": "pending"
+    },
+    "kill": {
+      "status": "HAZARD-FIXED",
+      "date": "2026-07-09",
+      "attested_by": "atlas field-test (19 kills, all ftkzz-* isolated, tmux-ls diff before/after every kill = fleet byte-identical)",
+      "passes": [
+        "SAFETY GREEN: only scratch sessions killed, fleet intact",
+        "no-args",
+        "happy-path session",
+        "window-target (session survives)",
+        "error <1s",
+        "idempotency"
+      ],
+      "track2_blocking": [
+        "audit.jsonl schema differs: js={ts,cmd,args:[kill,target],user,pid} vs rs={args:[target],binary,cmd,ts,version} — rs missing user/pid (same class as #348); neither writes maw-log for kill"
+      ],
+      "track1_waiver_candidate": [
+        "kill --help: js prints generic tmux-plugin help (defect); rs correctly rejects flag + prints kill usage"
+      ],
+      "escalated_to_athena": "fuzzy-resolution KIND differs: js exact-match-only (ftkzz→not-found, kills nothing) vs rs prefix-match+ambiguity-refusal (finds 3, lists, refuses, kills nothing) — both SAFE, design question: should a destructive verb have fuzzy at all (per #318 typed resolver)",
+      "infra_finding": "audit.jsonl 24% corrupt from concurrent writes (filed urgent) — blocks trusting audit as evidence",
+      "hazard_fixed": "#355 — session resolver exact-only, destructive substring-kill divergence closed live",
+      "remaining_t2": "error-text still differs from js (non-destructive) — parked for sweep-resume; do NOT mark full PASS"
+    },
+    "layout": {
+      "status": "pending"
+    },
+    "learn": {
+      "status": "pending"
+    },
+    "locate": {
+      "status": "pending"
+    },
+    "ls": {
+      "status": "pending"
+    },
+    "mega": {
+      "status": "pending"
+    },
+    "messages": {
+      "status": "pending"
+    },
+    "new": {
+      "status": "pending"
+    },
+    "on": {
+      "status": "pending"
+    },
+    "oracle": {
+      "status": "pending"
+    },
+    "oracle-skills": {
+      "status": "pending"
+    },
+    "oracle-workon": {
+      "status": "pending"
+    },
+    "overview": {
+      "status": "pending"
+    },
+    "pair": {
+      "status": "pending"
+    },
+    "pane": {
+      "status": "pending"
+    },
+    "panes": {
+      "status": "pending"
+    },
+    "park": {
+      "status": "pending"
+    },
+    "peek": {
+      "status": "FAIL",
+      "date": "2026-07-09",
+      "attested_by": "atlas field-test (matrix v2, scratch session, read-only verified)",
+      "failures": [
+        "no-args listing: js literal last-3-lines vs rs last-non-blank (non-cosmetic)",
+        "happy path: js extra tip line; rs pads ~21 trailing blank lines; markers correct both",
+        "error message text differs entirely (exit codes match 1/1)",
+        "flag parsing: js has none (--help treated as target); rs supports --help/--lines/--history"
+      ],
+      "passes": [
+        "idempotency",
+        "no-hang <1s both",
+        "read-only (no session/tmux state mutated)"
+      ],
+      "js_bug_found": "uncaught HostExecError crash on window-index target (comm-peek.ts node-prefix branch silent no-op) — rs handles cleanly",
+      "note": "most divergences = rs more robust than js; needs athena policy ruling: byte-match-to-buggy-js vs canonical-behavior waiver",
+      "track_split": {
+        "track2_converge_required": [
+          "no-args listing semantics (js literal last-3-lines)",
+          "happy-path: no trailing padding (rs pads ~21), tip-line parity",
+          "error message text byte-match js format"
+        ],
+        "track1_waivers": [
+          {
+            "id": "W-001",
+            "sub_case": "window-index target not found",
+            "spec": "target <session>:<idx> not found → exit 1 + stderr EXACTLY one line matching frozen rs format: no window '<idx>' in session '<name>' — windows: <list> · no stack trace · this format IS the golden (frozen, no drift)",
+            "status": "SIGNED-PENDING-ACTIVATION",
+            "signed_by": "athena",
+            "w4_js_bug": "maw-js#2865"
+          },
+          {
+            "id": "W-002",
+            "sub_case": "--help/-h handling",
+            "spec": "--help/-h → usage text on STDOUT, exit 0, never treated as target name · extra flags (--lines/--history) = allowed superset",
+            "status": "SIGNED-PENDING-ACTIVATION",
+            "signed_by": "athena",
+            "w4_js_bug": "maw-js#2866"
+          }
+        ],
+        "activation_rule": "waiver counts as waived-PASS only when w3 (rs committed test per spec) merges — tracked with #347"
+      }
+    },
+    "peers": {
+      "status": "pending"
+    },
+    "ping": {
+      "status": "pending"
+    },
+    "plugin": {
+      "status": "pending"
+    },
+    "plugins": {
+      "status": "pending"
+    },
+    "pr": {
+      "status": "pending"
+    },
+    "preflight": {
+      "status": "pending"
+    },
+    "profile": {
+      "status": "pending"
+    },
+    "project": {
+      "status": "pending"
+    },
+    "pulse": {
+      "status": "pending"
+    },
+    "rename": {
+      "status": "pending"
+    },
+    "restart": {
+      "status": "pending"
+    },
+    "resume": {
+      "status": "pending"
+    },
+    "reunion": {
+      "status": "pending"
+    },
+    "run": {
+      "status": "pending"
+    },
+    "scaffold": {
+      "status": "pending"
+    },
+    "scope": {
+      "status": "pending"
+    },
+    "send": {
+      "status": "pending"
+    },
+    "send-enter": {
+      "status": "pending"
+    },
+    "send-text": {
+      "status": "pending"
+    },
+    "serve": {
+      "status": "pending"
+    },
+    "session": {
+      "status": "pending"
+    },
+    "setup": {
+      "status": "pending"
+    },
+    "shellenv": {
+      "status": "pending"
+    },
+    "signals": {
+      "status": "pending"
+    },
+    "sleep": {
+      "status": "pending"
+    },
+    "snapshots": {
+      "status": "pending"
+    },
+    "soul-sync": {
+      "status": "pending"
+    },
+    "split": {
+      "status": "pending"
+    },
+    "stop": {
+      "status": "pending"
+    },
+    "stream": {
+      "status": "pending"
+    },
+    "swarm": {
+      "status": "pending"
+    },
+    "t": {
+      "status": "pending"
+    },
+    "tab": {
+      "status": "pending"
+    },
+    "tag": {
+      "status": "pending"
+    },
+    "take": {
+      "status": "pending"
+    },
+    "talk-to": {
+      "status": "pending"
+    },
+    "team": {
+      "status": "pending"
+    },
+    "tile": {
+      "status": "pending"
+    },
+    "tmux": {
+      "status": "pending"
+    },
+    "token": {
+      "status": "pending"
+    },
+    "transport": {
+      "status": "pending"
+    },
+    "triggers": {
+      "status": "pending"
+    },
+    "trust": {
+      "status": "pending"
+    },
+    "ui": {
+      "status": "pending"
+    },
+    "update": {
+      "status": "pending"
+    },
+    "upgrade": {
+      "status": "pending"
+    },
+    "version": {
+      "status": "pending"
+    },
+    "view": {
+      "status": "pending"
+    },
+    "wake": {
+      "status": "pending"
+    },
+    "whoami": {
+      "status": "pending"
+    },
+    "workon": {
+      "status": "pending"
+    },
+    "workspace": {
+      "status": "pending"
+    },
+    "zai": {
+      "status": "pending"
+    },
+    "zenoh-scout": {
+      "status": "pending"
+    },
+    "zoom": {
+      "status": "pending"
+    }
+  }
+}

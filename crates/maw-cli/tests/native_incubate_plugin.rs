@@ -1,13 +1,28 @@
+// Dispatcher registration pins (and other pre-invoke coverage) run on the
+// default test path; tests that execute plugin.wasm need the real Extism
+// runtime and run in the wasm-host CI job
+// (`cargo test -p maw-cli --features wasm-host`).
 use maw_cli::{dispatcher_status, DispatchKind};
+#[cfg(feature = "wasm-host")]
 use std::fs;
+#[cfg(feature = "wasm-host")]
 use std::path::{Path, PathBuf};
+#[cfg(feature = "wasm-host")]
 use std::process::Command;
+#[cfg(feature = "wasm-host")]
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(feature = "wasm-host")]
 fn bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_maw-rs"))
 }
 
+#[cfg(feature = "wasm-host")]
+fn plugin_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native-incubate")
+}
+
+#[cfg(feature = "wasm-host")]
 fn temp_dir(name: &str) -> PathBuf {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -18,6 +33,7 @@ fn temp_dir(name: &str) -> PathBuf {
     path
 }
 
+#[cfg(feature = "wasm-host")]
 fn chmod_exec(path: &Path) {
     #[cfg(unix)]
     {
@@ -28,13 +44,15 @@ fn chmod_exec(path: &Path) {
     }
 }
 
+#[cfg(feature = "wasm-host")]
 fn write_shell(path: &Path, body: &str) {
     fs::write(path, body).expect("write fake executable");
     chmod_exec(path);
 }
 
+#[cfg(feature = "wasm-host")]
 fn write_fake_bud_tools(bin_dir: &Path) {
-    for program in ["gh", "ghq", "git"] {
+    for program in ["gh", "ghq", "git", "direnv"] {
         write_shell(
             &bin_dir.join(program),
             &format!(
@@ -47,6 +65,7 @@ exit 0
     }
 }
 
+#[cfg(feature = "wasm-host")]
 fn write_fake_self(bin_dir: &Path) -> PathBuf {
     let fake_self = bin_dir.join("fake-self");
     write_shell(
@@ -59,6 +78,7 @@ exit 0
     fake_self
 }
 
+#[cfg(feature = "wasm-host")]
 fn write_fake_tmux(bin_dir: &Path) {
     let tmux = bin_dir.join("tmux");
     write_shell(
@@ -83,6 +103,7 @@ esac
     );
 }
 
+#[cfg(feature = "wasm-host")]
 fn seed_config(root: &Path) {
     let config = root.join("xdg-config").join("maw");
     fs::create_dir_all(&config).expect("config dir");
@@ -93,6 +114,7 @@ fn seed_config(root: &Path) {
     .expect("seed config");
 }
 
+#[cfg(feature = "wasm-host")]
 fn run(root: &Path, args: &[&str]) -> std::process::Output {
     let bin_dir = root.join("bin");
     let home = root.join("home");
@@ -116,9 +138,11 @@ fn run(root: &Path, args: &[&str]) -> std::process::Output {
         .env("XDG_STATE_HOME", &xdg_state)
         .env("GHQ_ROOT", &ghq_root)
         .env("MAW_BUD_OWNER", "org")
+        .env("CLAUDE_TOKEN_NAME", "duo")
         .env("TMUX", root.join("tmux-socket"))
         .env("MAW_JS_REF_DIR", "/nonexistent")
         .env("MAW_RS_SELF_BIN", bin_dir.join("fake-self"))
+        .env("MAW_PLUGINS_DIR", plugin_dir())
         .env("MAW_INCUBATE_BUD_LOG", root.join("bud.log"))
         .env("MAW_INCUBATE_SELF_LOG", root.join("self.log"))
         .env("MAW_INCUBATE_TMUX_LOG", root.join("tmux.log"))
@@ -126,14 +150,16 @@ fn run(root: &Path, args: &[&str]) -> std::process::Output {
         .expect("run maw-rs")
 }
 
+#[cfg(feature = "wasm-host")]
 fn normalize_stdout(root: &Path, stdout: Vec<u8>) -> String {
     String::from_utf8(stdout)
         .expect("stdout")
         .replace(&root.display().to_string(), "{ROOT}")
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
-fn native_incubate_dry_run_matches_committed_golden_and_is_hermetic() {
+fn incubate_plugin_dry_run_matches_native_golden_and_is_hermetic() {
     let root = temp_dir("dry-run");
     let bin_dir = root.join("bin");
     fs::create_dir_all(&bin_dir).expect("bin dir");
@@ -169,8 +195,9 @@ fn native_incubate_dry_run_matches_committed_golden_and_is_hermetic() {
     fs::remove_dir_all(root).expect("cleanup");
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
-fn native_incubate_dispatches_trigger_after_in_process_bud_and_guards_options() {
+fn incubate_plugin_preserves_bud_subdispatch_tmux_send_and_guards() {
     let root = temp_dir("send");
     let bin_dir = root.join("bin");
     fs::create_dir_all(&bin_dir).expect("bin dir");
@@ -178,8 +205,6 @@ fn native_incubate_dispatches_trigger_after_in_process_bud_and_guards_options() 
     write_fake_self(&bin_dir);
     write_fake_tmux(&bin_dir);
     seed_config(&root);
-
-    assert_eq!(dispatcher_status("incubate"), DispatchKind::Native);
 
     let output = run(&root, &["incubate", "org/widgets", "--contribute"]);
     assert!(
@@ -196,6 +221,7 @@ fn native_incubate_dispatches_trigger_after_in_process_bud_and_guards_options() 
     assert!(bud_log.contains("gh repo view org/widgets-oracle --json name"));
     assert!(bud_log.contains("ghq get github.com/org/widgets-oracle"));
     assert!(bud_log.contains("git -C "));
+    assert!(bud_log.contains("direnv allow "));
     assert!(
         !bud_log.contains(" maw ") && !bud_log.starts_with("maw "),
         "incubate must not shell PATH maw; bud_log={bud_log}"
@@ -212,4 +238,9 @@ fn native_incubate_dispatches_trigger_after_in_process_bud_and_guards_options() 
         .expect("stderr")
         .contains("--stem requires a value"));
     fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn incubate_dispatcher_registration_is_removed_for_plugin_fallthrough() {
+    assert_eq!(dispatcher_status("incubate"), DispatchKind::NativeError);
 }

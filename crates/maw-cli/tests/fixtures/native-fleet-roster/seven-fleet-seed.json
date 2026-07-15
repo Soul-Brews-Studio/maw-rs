@@ -1,0 +1,9 @@
+{"squads":[
+  {"name":"sensors","token":"wave","members":["floodboy","dustboy-phd","dustboy-chain","esp32","fireman","3e-infra"]},
+  {"name":"watch","token":"t2","members":["argus","timekeeper","pulse","odin","display-census"]},
+  {"name":"dig","token":"dd2","members":["digger","ting","atlas","athena","meta"]},
+  {"name":"comms","token":"nh","members":["hermes","transcriber","line-timeline","facebook-*","mascot","penny"]},
+  {"name":"home","token":"pb","members":["homekeeper","fleet-manager","window-arranger","gpu","kru32"]},
+  {"name":"core","token":"duo","members":["token","maw-rs","noah","arra-oracle-v3"]},
+  {"name":"reserve","token":"rb","members":["ajfon","nh-oracle","mirror","artifact-manager","rest"]}
+]}

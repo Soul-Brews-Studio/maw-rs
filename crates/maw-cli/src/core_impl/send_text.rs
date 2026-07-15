@@ -345,7 +345,7 @@ mod sendtext_tests {
 
     #[test]
     fn sendtext_literal_path_joins_text_and_enters() {
-        let _lock = super::env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lock = super::env_test_lock();
         let _env = SendtextEnvGuard::sendtext_new();
         let mut tmux =
             SendtextMockTmux::sendtext_with_responses(vec![Ok("0"), Ok(""), Ok(""), Ok("$ \r"), Ok("$ \r")]);
@@ -362,7 +362,7 @@ mod sendtext_tests {
 
     #[test]
     fn sendtext_buffer_path_is_hermetic_for_long_text() {
-        let _lock = super::env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lock = super::env_test_lock();
         let _env = SendtextEnvGuard::sendtext_new();
         let long_text = "x".repeat(501);
         let mut tmux =
@@ -401,7 +401,7 @@ mod sendtext_tests {
 
     #[test]
     fn sendtext_warns_when_pending_input_remains() {
-        let _lock = super::env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lock = super::env_test_lock();
         let _env = SendtextEnvGuard::sendtext_new();
         let mut tmux = SendtextMockTmux::sendtext_with_responses(vec![
             Ok("0"),
@@ -435,7 +435,7 @@ mod sendtext_tests {
 
     #[test]
     fn sendtext_does_not_retry_non_matching_pending_input() {
-        let _lock = super::env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lock = super::env_test_lock();
         let _env = SendtextEnvGuard::sendtext_new();
         let mut tmux = SendtextMockTmux::sendtext_with_responses(vec![
             Ok("0"),
@@ -462,7 +462,7 @@ mod sendtext_tests {
 
     #[test]
     fn sendtext_grace_recheck_catches_false_negative_before_success() {
-        let _lock = super::env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lock = super::env_test_lock();
         let _env = SendtextEnvGuard::sendtext_new();
         let mut tmux = SendtextMockTmux::sendtext_with_responses(vec![
             Ok("0"),
@@ -506,7 +506,7 @@ mod sendtext_tests {
 
     #[test]
     fn sendtext_reports_tmux_failure() {
-        let _lock = super::env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lock = super::env_test_lock();
         let _env = SendtextEnvGuard::sendtext_new();
         let mut tmux = SendtextMockTmux::sendtext_with_responses(vec![Ok("0"), Err("no pane")]);
 
@@ -517,7 +517,7 @@ mod sendtext_tests {
 
     #[test]
     fn sendtext_explicit_session_window_pins_duplicate_window_names() {
-        let _lock = super::env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lock = super::env_test_lock();
         let _env = SendtextEnvGuard::sendtext_new();
         let mut tmux = SendtextMockTmux::sendtext_with_responses(vec![
             Ok(concat!(
@@ -546,7 +546,7 @@ mod sendtext_tests {
 
     #[test]
     fn sendtext_explicit_session_window_miss_is_loud_without_cross_session_fallback() {
-        let _lock = super::env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lock = super::env_test_lock();
         let _env = SendtextEnvGuard::sendtext_new();
         let mut tmux = SendtextMockTmux::sendtext_with_responses(vec![Ok(concat!(
             "webhook-relay-v3|||0|||oracle|||1|||\n",

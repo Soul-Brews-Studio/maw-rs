@@ -23,9 +23,11 @@ impl MawWasmHost {
             return fake.output.clone();
         }
         match name {
+            "maw.cli.run" => to_json(&self.cli_run(input)),
             "maw.exec.run" => to_json(&self.exec_run(input)),
             "maw.exec.spawn" => to_json(&self.exec_spawn(input)),
             "maw.paths.get" => to_json(&self.paths_get(input)),
+            "maw.time.now" => to_json(&HostResult::ok(json!({ "millis": time_now_millis() }))),
             "maw.config.get" => to_json(&self.config_get(input)),
             "maw.config.set" => to_json(&self.config_set(input)),
             "maw.consent.read" => to_json(&self.consent_read(input)),
@@ -41,6 +43,7 @@ impl MawWasmHost {
             "maw.fs.list" => to_json(&self.fs_list(input)),
             "maw.fs.stat" => to_json(&self.fs_stat(input)),
             "maw.http.request" => to_json(&self.http_request(input)),
+            "maw.net.fetch" => to_json(&self.net_fetch(input)),
             "maw.localserver.request" => to_json(&self.localserver_request(input)),
             "maw.http.peer_send" => to_json(&self.peer_send(input)),
             "maw.http.peer_wake" => to_json(&self.peer_wake(input)),
@@ -48,6 +51,7 @@ impl MawWasmHost {
             "maw.tmux.capture" => to_json(&self.tmux_capture(input)),
             "maw.tmux.send_keys" => to_json(&self.tmux_send_keys(input)),
             "maw.tmux.run" => to_json(&self.tmux_run(input)),
+            "maw.tmux.command" => to_json(&self.tmux_command(input)),
             "maw.tmux.send_enter" => to_json(&self.tmux_send_enter(input)),
             "maw.tmux.tags_read" => to_json(&self.tmux_tags_read(input)),
             "maw.tmux.tags_write" => to_json(&self.tmux_tags_write(input)),
@@ -87,5 +91,15 @@ impl MawWasmHost {
             });
         }
     }
+}
 
+fn time_now_millis() -> u64 {
+    std::env::var("MAW_TIME_TEST_NOW_MS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
+        })
 }

@@ -459,7 +459,7 @@ mod federation_tests {
     #[test]
     fn federation_dispatch_registers_native_and_guards() {
         assert_eq!(dispatcher_status("federation"), DispatchKind::Native);
-        let _guard = env_test_lock().lock().expect("env lock");
+        let _guard = env_test_lock();
         let _env = FederationTestEnv134::new("guard");
         let mut fake = FederationFakeTransport134::default();
         let out = federation_run_with(&federation_args(&["status", "--peers", "scout"]), &federation_test_config(), &mut fake);
@@ -469,7 +469,7 @@ mod federation_tests {
 
     #[test]
     fn federation_status_uses_native_curl_transport_shape() {
-        let _guard = env_test_lock().lock().expect("env lock");
+        let _guard = env_test_lock();
         let _env = FederationTestEnv134::new("status");
         let mut fake = FederationFakeTransport134::default();
         let out = federation_run_with(&federation_args(&["status", "--json"]), &federation_test_config(), &mut fake);
@@ -481,7 +481,7 @@ mod federation_tests {
 
     #[test]
     fn federation_sync_json_is_read_only_preview() {
-        let _guard = env_test_lock().lock().expect("env lock");
+        let _guard = env_test_lock();
         let _env = FederationTestEnv134::new("sync");
         let mut fake = FederationFakeTransport134::default();
         let out = federation_run_with(&federation_args(&["sync", "--json"]), &federation_test_config(), &mut fake);
@@ -493,7 +493,7 @@ mod federation_tests {
 
     #[test]
     fn federation_sync_dirty_default_refuses_live_write() {
-        let _guard = env_test_lock().lock().expect("env lock");
+        let _guard = env_test_lock();
         let _env = FederationTestEnv134::new("sync-refuse");
         let mut fake = FederationFakeTransport134::default();
         let out = federation_run_with(&federation_args(&["sync"]), &federation_test_config(), &mut fake);

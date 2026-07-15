@@ -14,6 +14,11 @@ declare const process: any;
 type Log = (msg: string) => void;
 type Dims = { cols: number; rows: number };
 type PtyStream = { stop: () => void };
+type SpawnSync = (cmd: string[]) => {
+  exitCode?: number;
+  stdout?: { toString(): string };
+  stderr?: { toString(): string };
+};
 type Werift = {
   RTCPeerConnection: any;
   RTCSessionDescription: any;
@@ -22,6 +27,7 @@ type Werift = {
 
 export const VIEWER_PORT = 7742;
 export const DEFAULT_SIGNAL_URL = "wss://phd-signaling.laris.workers.dev/ws";
+export const UNAUTHENTICATED_RISK_FLAG = "--i-understand-the-risk";
 
 export const command = {
   name: "p2p-share",
@@ -35,6 +41,7 @@ function usage(log: Log): void {
   log("");
   log("Usage:");
   log("  maw p2p-share share <pane> [--signal <url>] [--name <name>] [--port <port>]");
+  log(`    [${UNAUTHENTICATED_RISK_FLAG}]`);
   log("  maw p2p-share status");
 }
 
@@ -64,8 +71,36 @@ export function parseShareOptions(args: string[]): {
   return { target, signalUrl, peerName, port };
 }
 
+export function requiresUnauthenticatedRiskAcknowledgement(args: string[], authKey: string): boolean {
+  return !authKey && !args.includes(UNAUTHENTICATED_RISK_FLAG);
+}
+
 function sanitizeTmpSuffix(value: string): string {
   return value.replace(/[^A-Za-z0-9_-]/g, "-").replace(/-+/g, "-").slice(0, 80) || "pane";
+}
+
+export function shareTargetError(
+  target: string,
+  spawnSync: SpawnSync = Bun.spawnSync,
+): string | null {
+  const capture = spawnSync(capturePaneArgs(target));
+  if (capture.exitCode !== 0) {
+    const detail = capture.stderr?.toString().trim();
+    return `Target pane '${target}' cannot be captured${detail ? `: ${detail}` : "."}`;
+  }
+  const pipe = spawnSync(["tmux", "display-message", "-t", target, "-p", "#{pane_pipe}"]);
+  if (pipe.exitCode !== 0) {
+    const detail = pipe.stderr?.toString().trim();
+    return `Cannot inspect tmux pipe for '${target}'${detail ? `: ${detail}` : "."}`;
+  }
+  if (pipe.stdout?.toString().trim() === "1") {
+    return `Target pane '${target}' already has a tmux pipe; stop it before sharing.`;
+  }
+  return null;
+}
+
+function capturePaneArgs(target: string): string[] {
+  return ["tmux", "capture-pane", "-t", target, "-e", "-p"];
 }
 
 function getPaneDimensions(target: string): Dims {
@@ -75,21 +110,66 @@ function getPaneDimensions(target: string): Dims {
   return { cols: cols || 80, rows: rows || 24 };
 }
 
-function captureSnapshot(target: string): string {
-  const r = Bun.spawnSync(["tmux", "capture-pane", "-t", target, "-e", "-p"]);
-  if (r.exitCode !== 0) return "";
-  return r.stdout.toString().replace(/\n/g, "\r\n");
+export function captureSnapshot(
+  target: string,
+  spawnSync: SpawnSync = Bun.spawnSync,
+): string {
+  const result = spawnSync(capturePaneArgs(target));
+  if (result.exitCode !== 0) {
+    const detail = result.stderr?.toString().trim() || "unknown tmux error";
+    throw new Error(`tmux capture-pane failed for '${target}': ${detail}`);
+  }
+  return (result.stdout?.toString() || "").replace(/\n/g, "\r\n");
+}
+
+function dataChannelPayloadToText(data: unknown): string {
+  if (typeof data === "string") return data;
+  if (data instanceof Buffer) return data.toString("utf8");
+  if (data instanceof ArrayBuffer) return Buffer.from(data).toString("utf8");
+  if (ArrayBuffer.isView(data)) return Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString("utf8");
+  return "";
+}
+
+function runTmuxInput(target: string, args: string[], action: string, log: Log, spawnSync: SpawnSync): void {
+  const r = spawnSync(["tmux", "send-keys", "-t", target, ...args]);
+  if (r.exitCode !== 0) log(`tmux ${action} failed: ${r.stderr?.toString() || "unknown error"}`);
+}
+
+export function sendDataChannelTextToPane(
+  target: string,
+  data: unknown,
+  log: Log = () => {},
+  spawnSync: SpawnSync = Bun.spawnSync,
+): void {
+  const text = dataChannelPayloadToText(data);
+  if (!text) return;
+
+  let literal = "";
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch !== "\n" && ch !== "\r") {
+      literal += ch;
+      continue;
+    }
+
+    if (literal) runTmuxInput(target, ["-l", "--", literal], "literal input", log, spawnSync);
+    literal = "";
+    runTmuxInput(target, ["Enter"], "enter", log, spawnSync);
+    if (ch === "\r" && text[i + 1] === "\n") i += 1;
+  }
+
+  if (literal) runTmuxInput(target, ["-l", "--", literal], "literal input", log, spawnSync);
 }
 
 function startPtyStream(
   target: string,
+  dims: Dims,
   onData: (chunk: Buffer) => void,
-  onDims: (dims: Dims) => void,
   log: Log,
 ): PtyStream {
   let running = true;
-  const dims = getPaneDimensions(target);
-  onDims(dims);
+  const targetError = shareTargetError(target);
+  if (targetError) throw new Error(targetError);
 
   const snapshot = captureSnapshot(target);
   if (snapshot) onData(Buffer.from("\x1b[2J\x1b[H" + snapshot));
@@ -127,6 +207,23 @@ function startPtyStream(
   };
 }
 
+export function initializeOpenViewer(
+  viewers: Map<string, { pc: any; dc: any }>,
+  id: string,
+  pc: any,
+  dc: any,
+  dims: Dims,
+  log: Log,
+): void {
+  viewers.set(id, { pc, dc });
+  try {
+    dc.send(Buffer.from(JSON.stringify({ type: "dims", cols: dims.cols, rows: dims.rows })));
+  } catch (err) {
+    log(`Dims init failed for viewer ${id}: ${err}`);
+  }
+  log(`Viewers: ${viewers.size}`);
+}
+
 export async function loadWerift(
   importer: (specifier: string) => Promise<unknown> = (specifier) => import(specifier),
 ): Promise<Werift> {
@@ -160,15 +257,6 @@ async function startSharePeer(opts: {
     for (const viewer of viewers.values()) {
       try {
         if (viewer.dc.readyState === "open") viewer.dc.send(data);
-      } catch {}
-    }
-  }
-
-  function broadcastDims(dims: Dims): void {
-    const msg = JSON.stringify({ type: "dims", cols: dims.cols, rows: dims.rows });
-    for (const viewer of viewers.values()) {
-      try {
-        if (viewer.dc.readyState === "open") viewer.dc.send(Buffer.from(msg));
       } catch {}
     }
   }
@@ -209,15 +297,18 @@ async function startSharePeer(opts: {
     });
 
     const dc = pc.createDataChannel("pty-stream", { ordered: true });
+    dc.onmessage = (event: { data?: unknown }) => {
+      sendDataChannelTextToPane(target, event?.data, log);
+    };
     dc.stateChanged.subscribe?.((state: string) => {
       log(`DataChannel state: ${state} (viewer ${msg.from})`);
       if (state === "open") {
-        viewers.set(msg.from, { pc, dc });
-        log(`Viewers: ${viewers.size}`);
+        const dims = getPaneDimensions(target);
+        initializeOpenViewer(viewers, msg.from, pc, dc, dims, log);
         if (!ptyStream) {
           log(`Starting PTY stream for ${target}`);
           try {
-            ptyStream = startPtyStream(target, broadcastToViewers, broadcastDims, log);
+            ptyStream = startPtyStream(target, dims, broadcastToViewers, log);
             log("PTY streaming via tmux pipe-pane");
           } catch (err) {
             log(`PTY stream failed: ${err}`);
@@ -310,7 +401,12 @@ async function startSharePeer(opts: {
   await new Promise(() => {});
 }
 
-async function handleP2pShare(args: string[], log: Log): Promise<number> {
+export async function handleP2pShare(
+  args: string[],
+  log: Log,
+  authKey = process.env.P2P_SHARE_KEY || process.env.AUTH_KEY || "",
+  spawnSync: SpawnSync = Bun.spawnSync,
+): Promise<number> {
   const subcommand = args[0] || "status";
 
   if (subcommand === "status" || subcommand === "help" || subcommand === "-h" || subcommand === "--help") {
@@ -331,8 +427,23 @@ async function handleP2pShare(args: string[], log: Log): Promise<number> {
     return 1;
   }
 
+  if (requiresUnauthenticatedRiskAcknowledgement(args, authKey)) {
+    log("SECURITY BLOCK: p2p-share has no authentication key.");
+    log("Remote viewers can send keystrokes directly to the live pane.");
+    log(`Set P2P_SHARE_KEY (recommended), or rerun with ${UNAUTHENTICATED_RISK_FLAG}.`);
+    return 1;
+  }
+
+  const targetError = shareTargetError(target, spawnSync);
+  if (targetError) {
+    log(`P2P Share failed: ${targetError}`);
+    return 1;
+  }
+
   const { signalUrl, peerName, port } = parseShareOptions(args);
-  const authKey = process.env.P2P_SHARE_KEY || process.env.AUTH_KEY || "";
+  if (!authKey) {
+    log("WARNING: AUTHENTICATION DISABLED. Remote viewers can type into the live pane.");
+  }
 
   log("P2P Share starting...");
   log(`  Pane:   ${target}`);
@@ -341,25 +452,16 @@ async function handleP2pShare(args: string[], log: Log): Promise<number> {
   log(`  Viewer: http://localhost:${port}`);
   log("");
 
-  const viewerHtml = readFileSync(join(import.meta.dir, "..", "viewer.html"), "utf8");
-  const server = Bun.serve({
-    port,
-    fetch(req: Request) {
-      const url = new URL(req.url);
-      if (url.pathname === "/" || url.pathname === "/viewer") {
-        return new Response(viewerHtml, { headers: { "content-type": "text/html; charset=utf-8" } });
-      }
-      if (url.pathname === "/config") {
-        return Response.json({ signalUrl, peerName, target, authKey });
-      }
-      return new Response("Not found", { status: 404 });
-    },
-  });
+  const viewerHtml = renderViewerHtml(
+    readFileSync(join(import.meta.dir, "..", "viewer.html"), "utf8"),
+    { signalUrl, peerName, target, authKey },
+  );
+  const server = Bun.serve(createViewerServerOptions(port, viewerHtml));
 
   log("Viewer ready:");
   log(`  Local: http://localhost:${port}`);
   log(`  Share: http://localhost:${port}/?peer=${encodeURIComponent(peerName)}`);
-  log("  Anyone with this link + signaling access can view (read-only)");
+  log("  Anyone with this link + signaling access can view and type into the shared pane");
   log("");
 
   try {
@@ -370,6 +472,31 @@ async function handleP2pShare(args: string[], log: Log): Promise<number> {
     server.stop();
     return 1;
   }
+}
+
+type ViewerConfig = { signalUrl: string; peerName: string; target: string; authKey: string };
+
+export function renderViewerHtml(template: string, config: ViewerConfig): string {
+  const json = JSON.stringify(config)
+    .replaceAll("<", "\\u003c")
+    .replaceAll("&", "\\u0026")
+    .replaceAll("\u2028", "\\u2028")
+    .replaceAll("\u2029", "\\u2029");
+  return template.replace("__MAW_P2P_SHARE_CONFIG__", json);
+}
+
+export function createViewerFetchHandler(viewerHtml: string): (req: Request) => Response {
+  return (req) => {
+    const path = new URL(req.url).pathname;
+    if (path === "/" || path === "/viewer") {
+      return new Response(viewerHtml, { headers: { "content-type": "text/html; charset=utf-8" } });
+    }
+    return new Response("Not found", { status: 404 });
+  };
+}
+
+export function createViewerServerOptions(port: number, viewerHtml: string) {
+  return { hostname: "127.0.0.1", port, fetch: createViewerFetchHandler(viewerHtml) };
 }
 
 type InvokeContext = {

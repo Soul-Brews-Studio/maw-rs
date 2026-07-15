@@ -8,6 +8,16 @@ Rust port of the maw-js portable core.
 
 ## Install maw-rs
 
+On macOS Apple Silicon, install the stable prebuilt binary and zsh completions without a
+Rust toolchain:
+
+```bash
+brew install soul-brews-studio/maw/maw
+```
+
+See [`docs/install.md`](docs/install.md) for upgrades, pinned CI installs, the release
+installer, and source builds.
+
 macOS Apple Silicon and Linux x86_64 prebuilt binaries are published on tagged releases.
 The installer downloads the matching asset, verifies its `.sha256` sidecar, backs
 up any existing `maw`, and installs to `~/.local/bin/maw` by default.
@@ -75,13 +85,13 @@ That path builds a `wasm32-unknown-unknown` artifact with Cargo, writes a
 `dist/plugin.json` artifact contract, and is loaded through the native Extism
 WASM runtime.
 
-JS/TS plugin source builds are intentionally deferred and fail closed in
-`maw-rs`: no Bun/JS compiler is vendored, and there is no Bun subprocess
-fallback. Existing JS/TS plugins must be converted to Rust-WASM or shipped as a
-prebuilt WASM artifact with `target = "wasm"` and a relative `wasm` path in
-`plugin.json`. This preserves the ZERO-BUN cutover boundary (#59); a future
-Javy/QuickJS-style JS-to-WASM toolchain would need a separate design and
-security review.
+The `maw-rs` ship-tier WASM builder does not yet compile JS/TS source: it vendors
+no JS-to-WASM compiler, and the pinned host has no Bun subprocess fallback. This
+is a boundary of that deployment path, not a ban on Bun; Bun/JS fleet plugins and
+dev-tier surfaces remain first-class alongside Rust. A JS/TS plugin entering the
+ship-tier WASM host must currently provide a prebuilt artifact with `target =
+"wasm"` and a relative `wasm` path in `plugin.json`. A future Javy/QuickJS-style
+toolchain would need a separate design and security review.
 
 ## Phase 1 status
 

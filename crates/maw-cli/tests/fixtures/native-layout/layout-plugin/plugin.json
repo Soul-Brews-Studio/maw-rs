@@ -1,0 +1,26 @@
+{
+  "artifact": {
+    "path": "./plugin.wasm",
+    "sha256": "sha256:8d6e4645ef71309dd94df3ef1c0926d39f4c536e39b1642a6b55cbb9cff80250"
+  },
+  "author": "Soul-Brews-Studio",
+  "capabilities": [
+    "tmux:raw:select-layout"
+  ],
+  "cli": {
+    "command": "layout",
+    "help": "maw layout <name> [--to <session:window>]"
+  },
+  "description": "Apply a managed tmux window layout.",
+  "entry": {
+    "export": "handle",
+    "kind": "wasm",
+    "path": "plugin.wasm"
+  },
+  "name": "layout",
+  "sdk": "^1.0.0",
+  "target": "wasm",
+  "version": "1.0.0",
+  "wasm": "plugin.wasm",
+  "weight": 20
+}

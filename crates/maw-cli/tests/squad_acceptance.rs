@@ -27,6 +27,15 @@
 //! Guards are asserted tier-agnostically as: process exits non-zero (loud) AND zero
 //! bytes are written under the teams root. The single live-tmux path (join's
 //! "one oracle, one session" pre-check) is `#[ignore]`-gated.
+//!
+//! Every test executes the squad plugin.wasm through CLI dispatch, so the whole
+//! file needs the real Extism runtime and runs in the wasm-host CI job
+//! (`cargo test -p maw-cli --features wasm-host`). The guard tests would pass
+//! vacuously on a featureless build (the wasm-host-missing error also exits
+//! non-zero and writes nothing), proving nothing about the plugin — gate, don't
+//! fake green.
+
+#![cfg(feature = "wasm-host")]
 
 use maw_cli::run_cli;
 use serde_json::{json, Value};

@@ -6,10 +6,14 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
+// Used only by the wasm_host module (same flat include! namespace).
+#[cfg(feature = "wasm-host")]
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+#[cfg(feature = "wasm-host")]
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
+#[cfg(feature = "wasm-host")]
 use std::time::Instant;
 
 use serde_json::{Map, Value};

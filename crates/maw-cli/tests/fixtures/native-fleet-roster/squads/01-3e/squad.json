@@ -1,0 +1,12 @@
+{
+  "name": "01-3e",
+  "squadName": "3e",
+  "windows": [],
+  "members": [
+    { "handle": "atlas", "role": "lead" },
+    { "handle": "drift", "node": "mba" },
+    { "handle": "echo" },
+    { "handle": "forge" },
+    { "handle": "ghost" }
+  ]
+}

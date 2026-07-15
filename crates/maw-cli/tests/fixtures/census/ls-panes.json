@@ -1,0 +1,4 @@
+[
+  {"id":"%1","target":"01-athena:1.0","command":"claude --model opus","ageSec":12},
+  {"id":"%2","target":"02-zai-oracle:1.0","command":"codex --model gpt-5","ageSec":400}
+]

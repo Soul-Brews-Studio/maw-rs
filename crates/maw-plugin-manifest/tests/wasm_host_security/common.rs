@@ -20,7 +20,7 @@ fn temp(label: &str) -> PathBuf {
         std::process::id()
     ));
     create_dir_all(&dir).expect("temp dir");
-    dir
+    std::fs::canonicalize(&dir).unwrap_or(dir)
 }
 
 fn manifest(dir: &Path, caps: &[&str]) -> PluginManifest {
@@ -41,6 +41,40 @@ fn manifest(dir: &Path, caps: &[&str]) -> PluginManifest {
 
 fn host(dir: &Path, caps: &[&str]) -> MawWasmHost {
     let manifest = manifest(dir, caps);
+    wasm_host_from_manifest(dir, manifest)
+}
+
+fn endpoint_host(dir: &Path, caps: &[&str], endpoints: Value) -> MawWasmHost {
+    endpoint_secret_host(dir, caps, endpoints, None)
+}
+
+fn endpoint_secret_host(
+    dir: &Path,
+    caps: &[&str],
+    endpoints: Value,
+    secrets: Option<Value>,
+) -> MawWasmHost {
+    write(dir.join("plugin.wasm"), b"\0asm\x01\0\0\0").expect("wasm");
+    let mut raw = json!({
+        "name": "secure-plugin",
+        "version": "1.0.0",
+        "sdk": "*",
+        "entry": { "kind": "wasm", "path": "plugin.wasm", "export": "handle" },
+        "capabilities": caps,
+    });
+    raw.as_object_mut()
+        .expect("manifest object")
+        .insert("endpoints".to_owned(), endpoints);
+    if let Some(secrets) = secrets {
+        raw.as_object_mut()
+            .expect("manifest object")
+            .insert("secrets".to_owned(), secrets);
+    }
+    let manifest = parse_manifest(&raw.to_string(), dir).expect("manifest");
+    wasm_host_from_manifest(dir, manifest)
+}
+
+fn wasm_host_from_manifest(dir: &Path, manifest: PluginManifest) -> MawWasmHost {
     let loaded = maw_plugin_manifest::LoadedPlugin {
         manifest,
         dir: dir.to_path_buf(),
@@ -84,4 +118,3 @@ fn spawn_localserver_once(body: &'static str) -> String {
     });
     format!("http://127.0.0.1:{}", addr.port())
 }
-

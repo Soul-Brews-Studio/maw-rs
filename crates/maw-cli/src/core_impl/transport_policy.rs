@@ -191,13 +191,13 @@ enum PolicyPlanAction {
     DefaultActiveIncludes { key: String, plugin: String },
 }
 
+const POLICY_USAGE: &str = "usage: maw-rs policy [--constants|--weight <i32>|--default-active <key> [--includes <plugin>]] [--plan-json]\n       maw-rs policy constants [--plan-json]";
+
 fn policy_usage_error(message: &str) -> CliOutput {
     CliOutput {
         code: 2,
         stdout: String::new(),
-        stderr: format!(
-            "{message}\nusage: maw-rs policy [--constants|--weight <i32>|--default-active <key> [--includes <plugin>]] [--plan-json]\n       maw-rs policy constants [--plan-json]\n"
-        ),
+        stderr: format!("{message}\n{POLICY_USAGE}\n"),
     }
 }
 

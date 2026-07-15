@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use maw_auth::{build_from_sign_payload, hash_body, verify_hmac_sig};
+use maw_auth::{build_from_sign_payload, hash_body, sign, verify_hmac_sig};
 use maw_transport::{PeerSendRequest, PeerWakeRequest, ReqwestHttpTransportIo};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -16,6 +16,7 @@ struct CapturedRequest {
 #[tokio::test]
 async fn reqwest_http_transport_posts_api_send_with_verifiable_v3_signature() {
     let peer_key = "known-peer-key";
+    let federation_token = "known-federation-token";
     let timestamp = 1_700_000_123_i64;
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");
@@ -41,6 +42,7 @@ async fn reqwest_http_transport_posts_api_send_with_verifiable_v3_signature() {
             text: "E1 signed capture".to_owned(),
             inbox: Some(true),
             from: "sender-oracle:sender-node".to_owned(),
+            federation_token: federation_token.to_owned(),
             peer_key: peer_key.to_owned(),
             timestamp,
         })
@@ -84,6 +86,15 @@ async fn reqwest_http_transport_posts_api_send_with_verifiable_v3_signature() {
     assert!(signature.chars().all(|ch| ch.is_ascii_hexdigit()));
     assert_eq!(signature, &signature.to_ascii_lowercase());
 
+    let legacy_signature = captured
+        .headers
+        .get("x-maw-signature")
+        .expect("legacy signature");
+    assert_eq!(
+        legacy_signature,
+        &sign(federation_token, "POST", "/api/send", timestamp, "")
+    );
+
     let body_hash = hash_body(Some(captured.body.as_bytes()));
     let payload = build_from_sign_payload(
         "sender-oracle:sender-node",
@@ -98,6 +109,7 @@ async fn reqwest_http_transport_posts_api_send_with_verifiable_v3_signature() {
 #[tokio::test]
 async fn reqwest_http_transport_posts_api_wake_with_verifiable_v3_signature() {
     let peer_key = "known-peer-key";
+    let federation_token = "known-federation-token";
     let timestamp = 1_700_000_456_i64;
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");
@@ -122,6 +134,7 @@ async fn reqwest_http_transport_posts_api_wake_with_verifiable_v3_signature() {
             target: "remote-oracle".to_owned(),
             task: Some("fix issue".to_owned()),
             from: "sender-oracle:sender-node".to_owned(),
+            federation_token: federation_token.to_owned(),
             peer_key: peer_key.to_owned(),
             timestamp,
         })
@@ -164,6 +177,15 @@ async fn reqwest_http_transport_posts_api_wake_with_verifiable_v3_signature() {
     assert_eq!(signature.len(), 64);
     assert!(signature.chars().all(|ch| ch.is_ascii_hexdigit()));
     assert_eq!(signature, &signature.to_ascii_lowercase());
+
+    let legacy_signature = captured
+        .headers
+        .get("x-maw-signature")
+        .expect("legacy signature");
+    assert_eq!(
+        legacy_signature,
+        &sign(federation_token, "POST", "/api/wake", timestamp, "")
+    );
 
     let body_hash = hash_body(Some(captured.body.as_bytes()));
     let payload = build_from_sign_payload(

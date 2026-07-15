@@ -1,0 +1,15 @@
+## whoami
+bot: hermes-bot | id: bot-42 | bot: true
+## channels
+guild: Nous  (guild1)
+## read
+[neo] hello
+[trinity bot] ack
+## threads-list
+thread Alpha  (th1)  msgs=2
+thread Old  (th2)  msgs=1 [archived]
+## threads-read
+thread Alpha  (th1)  msgs=2
+     [morpheus] thread hi
+thread Old  (th2)  msgs=1 [archived]
+     [archive-bot bot] old note

@@ -3,7 +3,7 @@ const DISPATCH_121: &[DispatcherEntry] = &[
     DispatcherEntry { command: "buddy", handler: Handler::Sync(bud_run_command) },
 ];
 
-const BUD_USAGE: &str = "usage: maw bud <name> [--from <oracle>] [--root] [--seed] [--org <org>] [--repo org/repo] [--issue N] [--issue-repo owner/repo] [--note <text>] [--nickname <pretty>] [--engine <name>|-e <name>] [--fast] [--split] [--scaffold-only] [--dry-run]\n       Or: maw bud --from-repo <path|url> --stem <stem> [--pr] [--from <parent>] [--seed] [--sync-peers] [--force] [--track-vault] [--dry-run]";
+const BUD_USAGE: &str = "usage: maw bud <name> [--from <oracle>] [--root] [--seed] [--org <org>] [--repo org/repo] [--issue N] [--issue-repo owner/repo] [--note <text>] [--nickname <pretty>] [--engine <name>|-e <name>] [--session <N>-<name>] [--fast] [--split] [--scaffold-only] [--dry-run]\n       Or: maw bud --from-repo <path|url> --stem <stem> [--pr] [--from <parent>] [--seed] [--sync-peers] [--force] [--track-vault] [--dry-run]";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)]
@@ -33,6 +33,7 @@ struct BudOptions {
     sync_peers: bool,
     parent_session_id: Option<String>,
     session_id: Option<String>,
+    session: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +64,7 @@ trait BudFs {
     fn bud_exists(&self, path: &std::path::Path) -> bool;
     fn bud_create_dir_all(&mut self, path: &std::path::Path) -> Result<(), String>;
     fn bud_read(&self, path: &std::path::Path) -> Result<Vec<u8>, String>;
+    fn bud_read_dir_names(&self, path: &std::path::Path) -> Result<Vec<String>, String>;
     fn bud_write_atomic(&mut self, path: &std::path::Path, bytes: &[u8]) -> Result<(), String>;
     fn bud_append_atomic(&mut self, path: &std::path::Path, text: &str) -> Result<(), String>;
     fn bud_copy_atomic(&mut self, from: &std::path::Path, to: &std::path::Path) -> Result<(), String>;
@@ -145,6 +147,18 @@ impl BudFs for BudSystemFs {
         std::fs::read(path).map_err(|error| error.to_string())
     }
 
+    fn bud_read_dir_names(&self, path: &std::path::Path) -> Result<Vec<String>, String> {
+        let entries = match std::fs::read_dir(path) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error.to_string()),
+        };
+        Ok(entries
+            .flatten()
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .collect())
+    }
+
     fn bud_write_atomic(&mut self, path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
         bud_write_atomic_path(path, bytes)
     }
@@ -203,7 +217,11 @@ fn bud_parse(argv: &[String]) -> Result<BudOptions, String> {
             "--force" => options.force = true,
             "--track-vault" => options.track_vault = true,
             "--sync-peers" => options.sync_peers = true,
-            flag @ ("--from" | "--from-repo" | "--stem" | "--org" | "--repo" | "--issue" | "--issue-repo" | "--note" | "--nickname" | "--engine" | "-e" | "--parent" | "--parent-session-id" | "--session-id") => { bud_assign_value(&mut options, flag, &bud_take_value(argv, &mut index, flag)?)?; }
+            flag @ ("--from" | "--from-repo" | "--stem" | "--org" | "--repo" | "--issue" | "--issue-repo" | "--note" | "--nickname" | "--engine" | "-e" | "--parent" | "--parent-session-id" | "--session-id" | "--session") => { bud_assign_value(&mut options, flag, &bud_take_value(argv, &mut index, flag)?)?; }
+            value if value.starts_with("--") && value.contains('=') => {
+                let (flag, value) = value.split_once('=').unwrap_or_default();
+                bud_assign_value(&mut options, flag, value)?;
+            }
             value if value.starts_with('-') => return Err(bud_flag_like(value)),
             value => bud_set_name(&mut options, value)?,
         }
@@ -225,6 +243,7 @@ fn bud_assign_value(options: &mut BudOptions, flag: &str, value: &str) -> Result
         "--engine" | "-e" => options.engine = Some(bud_validate_id(value, flag)?),
         "--parent" | "--parent-session-id" => options.parent_session_id = Some(bud_validate_id(value, flag)?),
         "--session-id" => options.session_id = Some(bud_validate_id(value, flag)?),
+        "--session" => options.session = Some(bud_validate_session_name(value)?),
         _ => return Err(format!("bud: unknown flag {flag}")),
     }
     Ok(())
@@ -265,8 +284,11 @@ fn bud_run_options(options: &BudOptions, gh: &mut impl BudGhGitRunner, fs: &mut 
     bud_create_repo(&ctx, gh, fs)?;
     bud_write_skeleton(&ctx, options, fs)?;
     let _ = bud_reload(http);
-    if options.scaffold_only { return Ok(bud_scaffold_summary(&ctx)); }
-    Ok(bud_finalize(&ctx, options, gh, fs, wake))
+    if options.scaffold_only {
+        let env_ready = bud_prepare_env(&ctx.repo_path, options, gh, fs)?;
+        return Ok(format!("{env_ready}{}", bud_scaffold_summary(&ctx)));
+    }
+    bud_finalize(&ctx, options, gh, fs, wake)
 }
 
 fn bud_context(options: &BudOptions, gh: &mut impl BudGhGitRunner) -> Result<BudContext, String> {
@@ -283,23 +305,25 @@ fn bud_context(options: &BudOptions, gh: &mut impl BudGhGitRunner) -> Result<Bud
 fn bud_from_repo(options: &BudOptions, gh: &mut impl BudGhGitRunner, fs: &mut impl BudFs) -> Result<String, String> {
     let stem = options.stem.clone().ok_or_else(|| "--from-repo requires --stem <stem>".to_owned())?;
     let target = options.from_repo.clone().ok_or_else(|| "--from-repo requires a target".to_owned())?;
-    if bud_looks_like_url(&target) { return bud_from_repo_url(options, &stem, &target, gh); }
+    if bud_looks_like_url(&target) { return bud_from_repo_url(options, &stem, &target, gh, fs); }
     let path = std::path::PathBuf::from(&target);
     let plan = bud_from_repo_plan(&stem, &path, options);
     if options.dry_run { return Ok(plan); }
     if !options.force && fs.bud_exists(&path.join("ψ")) { return Err(format!("ψ/ already present at {} — pass --force to merge", path.display())); }
     bud_write_from_repo_scaffold(&stem, &path, options, fs)?;
     if options.sync_peers { let _ = bud_sync_peers(&path, fs); }
-    Ok(format!("{plan}\n  \x1b[32m✓ done\x1b[0m — run `maw wake {stem}` to start a session\n"))
+    let env_ready = bud_prepare_env(&path, options, gh, fs)?;
+    Ok(format!("{plan}\n{env_ready}  \x1b[32m✓ done\x1b[0m — run `maw wake {stem}` to start a session\n"))
 }
 
-fn bud_from_repo_url(options: &BudOptions, stem: &str, target: &str, gh: &mut impl BudGhGitRunner) -> Result<String, String> {
+fn bud_from_repo_url(options: &BudOptions, stem: &str, target: &str, gh: &mut impl BudGhGitRunner, fs: &mut impl BudFs) -> Result<String, String> {
     let plan = format!("\n  \x1b[36m🧪 Oracle scaffold plan\x1b[0m — {stem} → {target}\n\n  clone url, inject scaffold, optionally push PR\n");
     if options.dry_run { return Ok(plan); }
     let tmp = std::env::temp_dir().join(format!("maw-bud-from-repo-{}", bud_epoch_seconds()));
     let clone_args = vec!["clone".to_owned(), "--depth".to_owned(), "1".to_owned(), target.to_owned(), path_string(&tmp)];
     if !gh.bud_run("git", &clone_args).ok { return Err("bud: git clone failed".to_owned()); }
-    Ok(format!("{plan}  \x1b[32m✓\x1b[0m cloned → {}\n", tmp.display()))
+    let env_ready = bud_prepare_env(&tmp, options, gh, fs)?;
+    Ok(format!("{plan}  \x1b[32m✓\x1b[0m cloned → {}\n{env_ready}", tmp.display()))
 }
 
 fn bud_dry_run(ctx: &BudContext, options: &BudOptions) -> String {
@@ -340,7 +364,7 @@ fn bud_write_skeleton(ctx: &BudContext, options: &BudOptions, fs: &mut impl BudF
     fs.bud_write_atomic(&ctx.repo_path.join(".claude/settings.json"), bud_settings().as_bytes())?;
     if let Some(nickname) = &options.nickname { fs.bud_write_atomic(&ctx.repo_path.join("ψ/nickname"), format!("{nickname}\n").as_bytes())?; }
     if let Some(note) = &options.note { fs.bud_write_atomic(&ctx.repo_path.join("ψ/memory/birth-note.md"), format!("# Birth note\n\n{note}\n").as_bytes())?; }
-    bud_write_fleet(ctx, fs)
+    bud_write_fleet(ctx, options, fs)
 }
 
 fn bud_create_vault(root: &std::path::Path, fs: &mut impl BudFs) -> Result<(), String> {
@@ -348,16 +372,17 @@ fn bud_create_vault(root: &std::path::Path, fs: &mut impl BudFs) -> Result<(), S
     Ok(())
 }
 
-fn bud_write_fleet(ctx: &BudContext, fs: &mut impl BudFs) -> Result<(), String> {
+fn bud_write_fleet(ctx: &BudContext, options: &BudOptions, fs: &mut impl BudFs) -> Result<(), String> {
     let dir = maw_config_path(&current_xdg_env(), &["fleet"]);
     fs.bud_create_dir_all(&dir)?;
-    let file = dir.join(format!("99-{}.json", ctx.stem));
+    let session = bud_resolve_session_name(&dir, &ctx.stem, options.session.as_deref(), fs)?;
+    let file = dir.join(format!("{session}.json"));
     let mut value = if fs.bud_exists(&file) {
         serde_json::from_slice(&fs.bud_read(&file)?).map_err(|error| error.to_string())?
     } else {
-        serde_json::json!({ "name": format!("99-{}", ctx.stem), "windows": [], "sync_peers": [] })
+        serde_json::json!({ "name": session, "windows": [], "sync_peers": [] })
     };
-    value["name"] = serde_json::json!(format!("99-{}", ctx.stem));
+    value["name"] = serde_json::json!(session);
     bud_fleet_ensure_window(&mut value, ctx)?;
     if let Some(parent) = &ctx.parent {
         bud_fleet_ensure_sync_peer(&mut value, parent)?;
@@ -374,6 +399,40 @@ fn bud_write_fleet(ctx: &BudContext, fs: &mut impl BudFs) -> Result<(), String> 
         )
         .as_bytes(),
     )
+}
+
+fn bud_resolve_session_name(dir: &std::path::Path, stem: &str, requested: Option<&str>, fs: &impl BudFs) -> Result<String, String> {
+    if let Some(session) = requested {
+        if fs.bud_exists(&dir.join(format!("{session}.json"))) {
+            return Err(format!("bud: session {session} already exists"));
+        }
+        return Ok(session.to_owned());
+    }
+    let used = bud_used_session_numbers(dir, fs)?;
+    let next = (1..=99)
+        .find(|number| !used.contains(number))
+        .ok_or_else(|| "bud: no free fleet session prefix in 01-99".to_owned())?;
+    Ok(format!("{next:02}-{stem}"))
+}
+
+fn bud_used_session_numbers(dir: &std::path::Path, fs: &impl BudFs) -> Result<BTreeSet<u32>, String> {
+    Ok(fs
+        .bud_read_dir_names(dir)?
+        .into_iter()
+        .filter_map(|name| name.strip_suffix(".json").map(str::to_owned))
+        .filter_map(|name| name.split_once('-').and_then(|(prefix, _)| prefix.parse::<u32>().ok()))
+        .collect())
+}
+
+fn bud_validate_session_name(value: &str) -> Result<String, String> {
+    let Some((prefix, stem)) = value.split_once('-') else { return Err("bud: --session must look like <N>-<name>".to_owned()); };
+    if prefix.is_empty() || !prefix.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err("bud: --session prefix must be numeric".to_owned());
+    }
+    let number = prefix.parse::<u32>().map_err(|_| "bud: --session prefix must be numeric".to_owned())?;
+    if !(1..=99).contains(&number) { return Err("bud: --session prefix must be between 1 and 99".to_owned()); }
+    let stem = bud_validate_oracle_stem(stem).map_err(|_| "bud: --session name is invalid".to_owned())?;
+    Ok(format!("{number:02}-{stem}"))
 }
 
 fn bud_fleet_ensure_window(value: &mut serde_json::Value, ctx: &BudContext) -> Result<(), String> {
@@ -408,15 +467,47 @@ fn bud_scaffold_summary(ctx: &BudContext) -> String {
     format!("\n  \x1b[32m▧ Scaffold complete!\x1b[0m {}\n  \x1b[90m  repo: {}\n  \x1b[90m  path: {}\n  \x1b[90m  skipped: git commit/push, wake, attach, parent sync_peers, /awaken\n\n", ctx.stem, ctx.slug, ctx.repo_path.display())
 }
 
-fn bud_finalize(ctx: &BudContext, options: &BudOptions, gh: &mut impl BudGhGitRunner, fs: &mut impl BudFs, wake: &mut impl BudWakeRunner) -> String {
+fn bud_finalize(ctx: &BudContext, options: &BudOptions, gh: &mut impl BudGhGitRunner, fs: &mut impl BudFs, wake: &mut impl BudWakeRunner) -> Result<String, String> {
     let mut out = String::new();
     let _ = writeln!(out, "  \x1b[90m○\x1b[0m {}", ctx.parent.as_deref().map_or("root oracle — no parent".to_owned(), |p| format!("born blank — pull memory when ready: maw soul-sync {p} --from")));
     bud_git_commit(ctx, gh, &mut out);
+    out.push_str(&bud_prepare_env(&ctx.repo_path, options, gh, fs)?);
     let _ = bud_update_parent_peers(ctx, fs, &mut out);
     bud_wake(ctx, options, wake, &mut out);
     if options.signal_on_birth { let _ = bud_birth_signal(ctx, gh, fs, &mut out); }
     let _ = writeln!(out, "\n  \x1b[32m{} complete!\x1b[0m {}", if ctx.parent.is_some() { "🧬 Bud" } else { "🌱 Root bud" }, ctx.stem);
-    out
+    Ok(out)
+}
+
+fn bud_prepare_env(target: &std::path::Path, options: &BudOptions, gh: &mut impl BudGhGitRunner, fs: &mut impl BudFs) -> Result<String, String> {
+    if options.engine.as_deref().is_some_and(|engine| engine != "claude") { return Ok(String::new()); }
+    let target_envrc = target.join(".envrc");
+    let existing = if fs.bud_exists(&target_envrc) {
+        String::from_utf8(fs.bud_read(&target_envrc)?).map_err(|_| format!("bud: {} is not UTF-8", target_envrc.display()))?
+    } else {
+        String::new()
+    };
+    if token_detect_active_token(&existing).is_none() {
+        let source = std::env::current_dir().ok()
+            .and_then(|cwd| fs.bud_read(&cwd.join(".envrc")).ok())
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .unwrap_or_default();
+        let name = token_detect_active_token(&source)
+            .or_else(|| std::env::var("CLAUDE_TOKEN_NAME").ok().filter(|value| !value.is_empty()))
+            .ok_or_else(|| "bud: no Claude token assignment found; run `maw token use <name>` in the current repo, then retry".to_owned())?;
+        token_validate_name("token name", &name).map_err(|error| format!("bud: {error}"))?;
+        let no_team = !source.contains("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
+            && std::env::var_os("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS").is_none();
+        fs.bud_write_atomic(&target_envrc, token_build_envrc_content(&existing, &name, no_team).as_bytes())?;
+    }
+    let allow = gh.bud_run("direnv", &["allow".to_owned(), path_string(target)]);
+    if !allow.ok {
+        return Err(format!(
+            "bud: direnv allow failed for {}: {}\n  run: cd {} && direnv allow .",
+            target.display(), allow.stderr.trim(), target.display()
+        ));
+    }
+    Ok(format!("  \x1b[32m✓\x1b[0m token environment allowed: {}\n", target.display()))
 }
 
 fn bud_git_commit(ctx: &BudContext, gh: &mut impl BudGhGitRunner, out: &mut String) {
@@ -591,6 +682,16 @@ mod bud_tests {
         fn bud_exists(&self, path: &std::path::Path) -> bool { self.files.contains_key(path) || self.dirs.contains(path) }
         fn bud_create_dir_all(&mut self, path: &std::path::Path) -> Result<(), String> { self.dirs.insert(path.to_path_buf()); Ok(()) }
         fn bud_read(&self, path: &std::path::Path) -> Result<Vec<u8>, String> { self.files.get(path).cloned().ok_or_else(|| "missing".to_owned()) }
+        fn bud_read_dir_names(&self, path: &std::path::Path) -> Result<Vec<String>, String> {
+            let mut names = self
+                .files
+                .keys()
+                .filter(|file| file.parent() == Some(path))
+                .filter_map(|file| file.file_name().and_then(std::ffi::OsStr::to_str).map(str::to_owned))
+                .collect::<Vec<_>>();
+            names.sort();
+            Ok(names)
+        }
         fn bud_write_atomic(&mut self, path: &std::path::Path, bytes: &[u8]) -> Result<(), String> { self.files.insert(path.to_path_buf(), bytes.to_vec()); Ok(()) }
         fn bud_append_atomic(&mut self, path: &std::path::Path, text: &str) -> Result<(), String> { self.files.entry(path.to_path_buf()).or_default().extend_from_slice(text.as_bytes()); Ok(()) }
         fn bud_copy_atomic(&mut self, from: &std::path::Path, to: &std::path::Path) -> Result<(), String> { let data = self.bud_read(from)?; self.bud_write_atomic(to, &data) }
@@ -610,7 +711,7 @@ mod bud_tests {
 
     #[test]
     fn bud_dry_run_matches_golden_without_ref() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _restore_ghq = EnvVarRestore::capture("GHQ_ROOT");
         let _restore_home = EnvVarRestore::capture("HOME");
         std::env::set_var("GHQ_ROOT", ".");
@@ -646,18 +747,92 @@ mod bud_tests {
     }
 
     #[test]
+    fn bud_equals_values_remain_opaque_for_plugin_subdispatch() {
+        let options = bud_parse(&bud_args(&[
+            "sprout",
+            "--note=--split --from=mallory",
+            "--nickname=-leading",
+        ]))
+        .expect("parse opaque values");
+        assert_eq!(options.note.as_deref(), Some("--split --from=mallory"));
+        assert_eq!(options.nickname.as_deref(), Some("-leading"));
+        assert!(!options.split);
+        assert_eq!(options.from, None);
+    }
+
+    #[test]
+    fn bud_session_default_scans_lowest_free_prefix() {
+        let mut fs = FakeFs::default();
+        let dir = std::path::Path::new("/fleet");
+        for name in ["01-root.json", "02-watch.json", "99-legacy.json", "notes.txt"] {
+            fs.files.insert(dir.join(name), b"{}".to_vec());
+        }
+        assert_eq!(bud_resolve_session_name(dir, "sprout", None, &fs).unwrap(), "03-sprout");
+    }
+
+    #[test]
+    fn bud_session_override_validates_and_normalizes_prefix() {
+        let options = bud_parse(&bud_args(&["sprout", "--session", "7-custom"])).unwrap();
+        let fs = FakeFs::default();
+        assert_eq!(bud_resolve_session_name(std::path::Path::new("/fleet"), "sprout", options.session.as_deref(), &fs).unwrap(), "07-custom");
+        assert!(bud_parse(&bud_args(&["sprout", "--session", "custom"])).unwrap_err().contains("<N>-<name>"));
+    }
+
+    #[test]
+    fn bud_session_override_reports_collision() {
+        let mut fs = FakeFs::default();
+        let dir = std::path::Path::new("/fleet");
+        fs.files.insert(dir.join("07-custom.json"), b"{}".to_vec());
+        let error = bud_resolve_session_name(dir, "sprout", Some("07-custom"), &fs).unwrap_err();
+        assert_eq!(error, "bud: session 07-custom already exists");
+    }
+
+    #[test]
     fn bud_scaffold_only_skips_git_and_wake() {
         let mut gh = FakeGh::default(); let mut fs = FakeFs::default(); let mut wake = FakeWake::default(); let mut http = FakeHttp::default();
+        fs.files.insert(std::env::current_dir().unwrap().join(".envrc"), b"export CLAUDE_TOKEN_NAME=\"duo\"\n".to_vec());
         let out = bud_run_with(&bud_args(&["sprout", "--org", "Org", "--scaffold-only"]), &mut gh, &mut fs, &mut wake, &mut http);
         assert_eq!(out.code, 0); assert!(out.stdout.contains("Scaffold complete"));
         assert!(!gh.calls.iter().any(|(p, _)| p == "git")); assert!(wake.calls.is_empty()); assert_eq!(http.ports, [3456]);
     }
 
     #[test]
+    fn bud_flow_bootstraps_env_and_allows_before_wake() {
+        let _guard = env_test_lock();
+        let _restore_ghq = EnvVarRestore::capture("GHQ_ROOT");
+        std::env::set_var("GHQ_ROOT", "/repos");
+        let mut gh = FakeGh::default(); let mut fs = FakeFs::default(); let mut wake = FakeWake::default(); let mut http = FakeHttp::default();
+        fs.files.insert(std::env::current_dir().unwrap().join(".envrc"), b"export CLAUDE_TOKEN_NAME=\"duo\"\nexport CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1\n".to_vec());
+
+        let out = bud_run_with(&bud_args(&["sprout", "--org", "Org"]), &mut gh, &mut fs, &mut wake, &mut http);
+
+        let repo = std::path::Path::new("/repos/github.com/Org/sprout-oracle");
+        assert_eq!(out.code, 0);
+        assert!(String::from_utf8(fs.files[&repo.join(".envrc")].clone()).unwrap().contains("CLAUDE_TOKEN_NAME=\"duo\""));
+        assert!(gh.calls.iter().any(|(program, args)| program == "direnv" && args == &["allow".to_owned(), path_string(repo)]));
+        assert_eq!(wake.calls.len(), 1);
+    }
+
+    #[test]
+    fn bud_flow_hard_fails_direnv_before_wake() {
+        let _guard = env_test_lock();
+        let _restore_ghq = EnvVarRestore::capture("GHQ_ROOT");
+        std::env::set_var("GHQ_ROOT", "/repos");
+        let mut gh = FakeGh { fail: ["direnv allow".to_owned()].into(), ..Default::default() };
+        let mut fs = FakeFs::default(); let mut wake = FakeWake::default(); let mut http = FakeHttp::default();
+        fs.files.insert(std::env::current_dir().unwrap().join(".envrc"), b"export CLAUDE_TOKEN_NAME=\"duo\"\n".to_vec());
+
+        let out = bud_run_with(&bud_args(&["sprout", "--org", "Org"]), &mut gh, &mut fs, &mut wake, &mut http);
+
+        assert_eq!(out.code, 1);
+        assert!(out.stderr.contains("direnv allow failed"));
+        assert!(out.stderr.contains("run: cd /repos/github.com/Org/sprout-oracle && direnv allow ."));
+        assert!(wake.calls.is_empty());
+    }
+
+    #[test]
     fn bud_sync_peers_archives_before_overwrite_and_redacts() {
-        let _guard = env_test_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _restore_state = EnvVarRestore::capture("MAW_STATE_DIR");
         std::env::set_var("MAW_STATE_DIR", "/tmp/maw-bud-test-state");
         let mut fs = FakeFs::default();
@@ -671,7 +846,7 @@ mod bud_tests {
 
     #[test]
     fn bud_repos_root_uses_ghq_root_before_home_fallback() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _restore_ghq = EnvVarRestore::capture("GHQ_ROOT");
         let _restore_home = EnvVarRestore::capture("HOME");
         std::env::remove_var("GHQ_ROOT");
@@ -687,7 +862,7 @@ mod bud_tests {
 
     #[test]
     fn bud_repos_root_env_wins_over_ghq_root_command() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _restore_ghq = EnvVarRestore::capture("GHQ_ROOT");
         let _restore_home = EnvVarRestore::capture("HOME");
         std::env::set_var("GHQ_ROOT", "/env/Code");
@@ -703,7 +878,7 @@ mod bud_tests {
 
     #[test]
     fn bud_repos_root_falls_back_to_home_when_ghq_root_fails() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _restore_ghq = EnvVarRestore::capture("GHQ_ROOT");
         let _restore_home = EnvVarRestore::capture("HOME");
         std::env::remove_var("GHQ_ROOT");
@@ -726,7 +901,7 @@ mod bud_tests {
 
     #[test]
     fn bud_engine_flag_passes_through_to_wake_and_dry_run() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _restore_ghq = EnvVarRestore::capture("GHQ_ROOT");
         let _restore_home = EnvVarRestore::capture("HOME");
         std::env::set_var("GHQ_ROOT", ".");

@@ -1,4 +1,4 @@
-use crate::{decrypt_token, list_pass_tokens, DiscordEnv};
+use crate::{decrypt_token_result, list_pass_tokens, DiscordEnv, TokenDecryptError};
 use std::time::Duration;
 use tokio::{
     sync::{broadcast, watch},
@@ -99,9 +99,15 @@ pub fn resolve_gateway_token(
             .map(|entry| entry.name)
             .ok_or_else(|| format!("no Discord token entry for bot '{}'", config.bot))?
     };
-    decrypt_token(&token_name)
+    decrypt_token_result(&token_name)
         .map(GatewayToken::from_mock)
-        .ok_or_else(|| format!("failed to decrypt Discord token entry '{token_name}'"))
+        .map_err(|error| {
+            if error == TokenDecryptError::TimedOut {
+                error.to_string()
+            } else {
+                format!("failed to decrypt Discord token entry '{token_name}'")
+            }
+        })
 }
 
 /// Event delivered to subscribers.

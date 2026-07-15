@@ -946,7 +946,7 @@ mod activity_tests {
             ..FakeTmux::default()
         };
         let mut clock = FakeClock { now: 0, sleeps: Vec::new() };
-        let _guard = env_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = env_test_lock();
         let _restore = EnvVarRestore::capture("MAW_JS_REF_DIR");
         std::env::set_var("MAW_JS_REF_DIR", "/nonexistent");
         let output = cmd_activity(Some("s:main"), &opts, &mut tmux, &mut clock).expect("activity");

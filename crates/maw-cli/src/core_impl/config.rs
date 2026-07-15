@@ -51,6 +51,7 @@ fn config_set(argv: &[String], json: bool) -> Result<String, String> {
         _ => return Err("maw config: native set currently supports node|port".to_owned()),
     };
     let mut config = config_read_target()?;
+    let before = config.clone();
     let object = config
         .as_object_mut()
         .ok_or_else(|| "maw config: root config must be a JSON object".to_owned())?;
@@ -63,6 +64,7 @@ fn config_set(argv: &[String], json: bool) -> Result<String, String> {
                 .map_err(|error| format!("maw config: failed to render JSON: {error}"))?
         ),
     )?;
+    config_audit_write(&config_target_path(), &before, &config);
     if json {
         Ok(format!(
             "{}\n",
@@ -406,6 +408,23 @@ fn config_atomic_write(path: &std::path::Path, body: &str) -> Result<(), String>
         .map_err(|error| format!("maw config: failed to replace config: {error}"))
 }
 
+fn config_audit_write(path: &std::path::Path, before: &serde_json::Value, after: &serde_json::Value) {
+    let before_keys = before.as_object().map_or_else(Vec::new, |map| map.keys().cloned().collect::<Vec<_>>());
+    let after_keys = after.as_object().map_or_else(Vec::new, |map| map.keys().cloned().collect::<Vec<_>>());
+    let added = after_keys.iter().filter(|key| !before_keys.contains(key)).cloned().collect::<Vec<_>>();
+    let removed = before_keys.iter().filter(|key| !after_keys.contains(key)).cloned().collect::<Vec<_>>();
+    let changed = after_keys.iter().filter(|key| before.get(*key) != after.get(*key) && before.get(*key).is_some()).cloned().collect::<Vec<_>>();
+    let row = serde_json::json!({
+        "ts": cli_dispatch_now_iso(),
+        "cmd": "config-write",
+        "path": path.display().to_string(),
+        "keysDiff": { "added": added, "removed": removed, "changed": changed },
+        "binary": "maw-rs",
+        "version": MAW_RS_BUILD_VERSION,
+    });
+    let _ = append_jsonl_atomic(&audit_jsonl_path(&current_xdg_env()), &row);
+}
+
 fn config_validate_node(raw: &str) -> Result<String, String> {
     let value = raw.trim();
     if value.is_empty()
@@ -442,8 +461,18 @@ fn config_validate_port(raw: &str) -> Result<u16, String> {
 #[cfg(test)]
 mod config_tests {
     use super::{
-        config_dispatch, config_target_path, dispatcher_status, DispatchKind, EnvVarRestore,
+        config_dispatch, config_redact_value, config_target_path, dispatcher_status, DispatchKind,
+        EnvVarRestore,
     };
+
+    #[test]
+    fn config_redact_masks_named_token_pool_groups() {
+        let mut value = serde_json::json!({"tokenPool": {"3e": [{"access_token": "secret-3e-key"}], "zai": [{"access_token": "secret-zai-key"}]}});
+        config_redact_value(&mut value);
+        let body = value.to_string();
+        assert!(!body.contains("secret-3e-key"));
+        assert!(!body.contains("secret-zai-key"));
+    }
 
     #[test]
     fn config_dispatch_registers_native() {
@@ -473,7 +502,7 @@ mod config_tests {
 
     #[test]
     fn config_set_uses_weighted_target_when_present() {
-        let _lock = super::env_test_lock().lock().expect("env lock");
+        let _lock = super::env_test_lock();
         let _home = EnvVarRestore::capture("MAW_HOME");
         let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
         let root = std::env::temp_dir().join(format!("maw-rs-config-unit-{}", std::process::id()));
@@ -499,7 +528,7 @@ mod config_tests {
 
     #[test]
     fn config_show_redacts_federation_token_by_default() {
-        let _lock = super::env_test_lock().lock().expect("env lock");
+        let _lock = super::env_test_lock();
         let _home = EnvVarRestore::capture("MAW_HOME");
         let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
         let root = config_seed_secret_fixture("redact-default");
@@ -514,7 +543,7 @@ mod config_tests {
 
     #[test]
     fn config_show_reveal_prints_raw_secret_when_explicit() {
-        let _lock = super::env_test_lock().lock().expect("env lock");
+        let _lock = super::env_test_lock();
         let _home = EnvVarRestore::capture("MAW_HOME");
         let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
         let root = config_seed_secret_fixture("reveal");
@@ -527,7 +556,7 @@ mod config_tests {
 
     #[test]
     fn config_show_json_remains_parseable_after_redaction() {
-        let _lock = super::env_test_lock().lock().expect("env lock");
+        let _lock = super::env_test_lock();
         let _home = EnvVarRestore::capture("MAW_HOME");
         let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
         let root = config_seed_secret_fixture("json");
@@ -540,7 +569,7 @@ mod config_tests {
 
     #[test]
     fn config_show_redacts_nested_secret_keys_but_keeps_key_prefix_visible() {
-        let _lock = super::env_test_lock().lock().expect("env lock");
+        let _lock = super::env_test_lock();
         let _home = EnvVarRestore::capture("MAW_HOME");
         let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
         let root = config_seed_secret_fixture("nested");

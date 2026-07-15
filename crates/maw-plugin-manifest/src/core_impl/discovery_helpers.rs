@@ -7,6 +7,9 @@ fn cache_discover_plugins(plugins: Vec<LoadedPlugin>) {
 enum PluginDiscovery {
     Loaded(LoadedPlugin),
     Legacy(LoadedPlugin),
+    /// Loaded despite skipped hash verification (symlinked dir + `MAW_PLUGIN_DEV=1`);
+    /// carries the loud warning that must surface to the user.
+    DevBypassed(LoadedPlugin, String),
     Warning(String),
     Skip,
 }
@@ -23,6 +26,28 @@ fn discover_plugin_dir(pkg_dir: &Path, options: &DiscoverPackagesOptions) -> Plu
             &manifest.sdk,
             &options.runtime_version,
         ));
+    }
+
+    // Symlinked plugin dirs get hash-verified like regular dirs (and refuse on
+    // mismatch) unless the process explicitly opts into the dev bypass with
+    // MAW_PLUGIN_DEV=1 — and even then, the bypass warns loudly.
+    let dev_bypass = manifest.artifact.is_some()
+        && is_dev_mode_install(pkg_dir)
+        && plugin_dev_bypass_enabled();
+    if dev_bypass {
+        let warning = format!(
+            "plugin '{}' loaded from symlinked dir with hash verification BYPASSED (MAW_PLUGIN_DEV=1) — artifact integrity unverified: {}",
+            manifest.name,
+            pkg_dir.display()
+        );
+        if options
+            .disabled_plugins
+            .iter()
+            .any(|disabled| disabled == &loaded.manifest.name)
+        {
+            loaded.disabled = true;
+        }
+        return PluginDiscovery::DevBypassed(loaded, warning);
     }
 
     if let Some(warning) = artifact_refusal_warning(pkg_dir, manifest) {
@@ -47,9 +72,6 @@ fn discover_plugin_dir(pkg_dir: &Path, options: &DiscoverPackagesOptions) -> Plu
 
 fn artifact_refusal_warning(pkg_dir: &Path, manifest: &PluginManifest) -> Option<String> {
     let artifact = manifest.artifact.as_ref()?;
-    if is_dev_mode_install(pkg_dir) {
-        return None;
-    }
     let Some(expected_sha) = &artifact.sha256 else {
         return Some(format!(
             "plugin '{}' is unbuilt — run `maw plugin build` in {}",
@@ -341,6 +363,8 @@ mod tests {
             target: None,
             capability_namespaces: None,
             capabilities: None,
+            endpoints: None,
+            secrets: None,
             capability_warnings: Vec::new(),
             dependencies: None,
             artifact: None,
@@ -497,6 +521,125 @@ mod tests {
         parse_optional_code_section(&[0x00], None, 0, 0, &mut module)
             .expect("missing exported handle skips code parse");
         assert_eq!(module.handle_result, 0);
+    }
+
+    #[test]
+    fn host_abi_version_derives_floor_from_host_fn_surface() {
+        assert_eq!(host_abi_version(), format!("1.{}.0", HOST_FN_NAMES.len()));
+        assert_eq!(runtime_sdk_version(), host_abi_version());
+        // All shipped manifests declare ^1.0.0 — they must keep loading.
+        assert!(satisfies(&host_abi_version(), "^1.0.0"));
+        assert!(satisfies(&host_abi_version(), "*"));
+        assert!(satisfies(&host_abi_version(), ">=1.0.0"));
+        // Below the floor (pre-1.0 ABI generation) refuses.
+        assert!(!satisfies(&host_abi_version(), "^0.1.0"));
+        // Requiring an ABI newer than this host (e.g. built after a host fn
+        // was added) refuses — adding a host fn bumps the floor automatically.
+        let future_abi = format!("^1.{}.0", HOST_FN_NAMES.len() + 1);
+        assert!(!satisfies(&host_abi_version(), &future_abi));
+        assert!(!satisfies(&host_abi_version(), "^2.0.0"));
+    }
+
+    #[test]
+    fn discovery_refuses_below_floor_plugins_with_actionable_warning() {
+        let root = temp_dir("sdk-floor");
+        for (name, sdk) in [("floor-ok", "^1.0.0"), ("floor-low", "^0.1.0")] {
+            let dir = root.join(name);
+            std::fs::create_dir_all(&dir).expect("plugin dir");
+            std::fs::write(
+                dir.join("plugin.json"),
+                format!(r#"{{"name":"{name}","version":"1.0.0","sdk":"{sdk}"}}"#),
+            )
+            .expect("manifest");
+        }
+
+        let report = discover_packages(&DiscoverPackagesOptions {
+            scan_dirs: vec![root.clone()],
+            disabled_plugins: Vec::new(),
+            runtime_version: runtime_sdk_version(),
+            use_cache: false,
+        });
+
+        assert_eq!(report.plugins.len(), 1);
+        assert_eq!(report.plugins[0].manifest.name, "floor-ok");
+        let refusal = report
+            .warnings
+            .iter()
+            .find(|warning| warning.contains("floor-low"))
+            .expect("below-floor refusal warning");
+        assert!(refusal.contains("requires maw SDK ^0.1.0"), "{refusal}");
+        assert!(refusal.contains(&runtime_sdk_version()), "{refusal}");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_plugin_dirs_hash_verify_by_default_and_bypass_only_with_dev_flag() {
+        static DEV_ENV_LOCK: Mutex<()> = Mutex::new(());
+        let _guard = DEV_ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous = std::env::var_os("MAW_PLUGIN_DEV");
+        std::env::remove_var("MAW_PLUGIN_DEV");
+
+        let root = temp_dir("symlink-verify");
+        let real = root.join("real-plugin");
+        std::fs::create_dir_all(&real).expect("real dir");
+        std::fs::write(real.join("plugin.wasm"), b"\0asm\x01\x00\x00\x00fixture").expect("wasm");
+        let wrong_pin = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+        let manifest = |pin: &str| {
+            format!(
+                r#"{{"name":"symdemo","version":"1.0.0","sdk":"*","target":"wasm","entry":{{"kind":"wasm","path":"plugin.wasm","export":"handle"}},"wasm":"./plugin.wasm","artifact":{{"path":"./plugin.wasm","sha256":"{pin}"}}}}"#
+            )
+        };
+        std::fs::write(real.join("plugin.json"), manifest(wrong_pin)).expect("manifest");
+        let scan = root.join("scan");
+        std::fs::create_dir_all(&scan).expect("scan dir");
+        std::os::unix::fs::symlink(&real, scan.join("symdemo")).expect("symlink");
+        let options = DiscoverPackagesOptions {
+            scan_dirs: vec![scan.clone()],
+            disabled_plugins: Vec::new(),
+            runtime_version: runtime_sdk_version(),
+            use_cache: false,
+        };
+
+        // Default OFF: the symlinked dir is hash-verified and refuses on mismatch.
+        let report = discover_packages(&options);
+        assert!(report.plugins.is_empty(), "tampered symlinked plugin must refuse");
+        assert!(
+            report.warnings.iter().any(|warning| warning.contains("artifact hash mismatch")),
+            "warnings: {:?}",
+            report.warnings
+        );
+
+        // Dev flag ON: loads, but with the loud bypass warning.
+        std::env::set_var("MAW_PLUGIN_DEV", "1");
+        let report = discover_packages(&options);
+        assert_eq!(report.plugins.len(), 1);
+        assert_eq!(report.plugins[0].manifest.name, "symdemo");
+        assert!(
+            report.warnings.iter().any(|warning| warning.contains("BYPASSED")
+                && warning.contains("MAW_PLUGIN_DEV=1")
+                && warning.contains("symdemo")),
+            "warnings: {:?}",
+            report.warnings
+        );
+        std::env::remove_var("MAW_PLUGIN_DEV");
+
+        // Untampered symlinked dir loads cleanly without any flag.
+        let real_pin = hash_file(&real.join("plugin.wasm")).expect("hash");
+        std::fs::write(real.join("plugin.json"), manifest(&real_pin)).expect("manifest repin");
+        let report = discover_packages(&options);
+        assert_eq!(report.plugins.len(), 1);
+        assert!(
+            !report.warnings.iter().any(|warning| warning.contains("symdemo")),
+            "warnings: {:?}",
+            report.warnings
+        );
+
+        match previous {
+            Some(value) => std::env::set_var("MAW_PLUGIN_DEV", value),
+            None => std::env::remove_var("MAW_PLUGIN_DEV"),
+        }
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

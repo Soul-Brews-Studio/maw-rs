@@ -523,6 +523,7 @@ fn done_fleet_config_files(context: &DoneContext) -> Vec<std::path::PathBuf> {
     fleet_load_entries_impl(context.fleet_dirs.clone(), false, "fleet")
         .unwrap_or_default()
         .into_iter()
+        .filter(fleet_entry_is_session)
         .map(|entry| entry.path)
         .collect()
 }
@@ -718,6 +719,21 @@ mod done_tests {
     fn done_parse_matches_js_extra_positionals() {
         let err = done_parse_args(&["all".to_owned(), "x".to_owned()]).unwrap_err();
         assert!(err.contains("did you mean `maw done --all`?"), "{err}");
+    }
+
+    #[test]
+    fn done_removes_session_window_without_mutating_squad_roster() {
+        let root = DoneTempRoot::new("squad-boundary");
+        done_write_fleet(&root, "worker", "acme/app");
+        let roster = root.fleet_dir().join("squads/01-core/squad.json");
+        std::fs::create_dir_all(roster.parent().expect("roster parent")).expect("roster dir");
+        let roster_body = r#"{"name":"01-core","windows":[{"name":"worker","repo":"acme/roster"}],"members":[]}"#;
+        std::fs::write(&roster, roster_body).expect("roster");
+
+        assert!(done_remove_from_fleet_config("worker", &root.context(), &mut String::new()));
+        assert_eq!(std::fs::read_to_string(roster).expect("roster remains"), roster_body);
+        let session = std::fs::read_to_string(root.fleet_dir().join("s.json")).expect("session");
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&session).expect("json")["windows"], serde_json::json!([]));
     }
 
     #[test]

@@ -54,6 +54,7 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+<script id="p2p-share-config" type="application/json">__MAW_P2P_SHARE_CONFIG__</script>
 <script>
 const statusEl = document.getElementById('status');
 const peerEl = document.getElementById('peer-info');
@@ -83,10 +84,15 @@ function initTerminal(cols, rows) {
     fontSize: 14,
     cursorBlink: false,
     scrollback: 0,
-    disableStdin: true,
+    // input enabled: raw UTF-8 keystrokes go back on the pty-stream channel;
+    // the sharer replays them via `tmux send-keys -l` (verified round-trip).
+    disableStdin: false,
     convertEol: false,
   });
   term.open(wrap);
+
+  // forward every keystroke to the shared pane over the same DataChannel
+  term.onData((data) => { if (dc && dc.readyState === "open") dc.send(data); });
 
   requestAnimationFrame(() => {
     try {
@@ -155,8 +161,7 @@ function formatBytes(b) {
 }
 
 async function start() {
-  const configRes = await fetch('/config');
-  const config = await configRes.json();
+  const config = JSON.parse(document.getElementById('p2p-share-config').textContent);
   const { signalUrl, peerName, target, authKey } = config;
 
   peerEl.textContent = `${target} via ${peerName}`;

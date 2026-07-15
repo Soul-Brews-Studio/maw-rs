@@ -329,6 +329,7 @@ mod tests {
     use axum::http::StatusCode;
     use std::{
         net::Ipv4Addr,
+        sync::atomic::{AtomicU64, Ordering},
         time::{Duration, SystemTime, UNIX_EPOCH},
     };
     use tokio::sync::oneshot;
@@ -366,11 +367,16 @@ mod tests {
     }
 
     fn worktrees_temp(name: &str) -> PathBuf {
+        static SEQ: AtomicU64 = AtomicU64::new(0);
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("time")
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("maw-rs-worktrees-{name}-{nonce}"));
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "maw-rs-worktrees-{name}-{}-{nonce}-{seq}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&path).expect("temp");
         path
     }
@@ -386,10 +392,19 @@ mod tests {
     }
 
     fn worktrees_run(root: &Path, args: &[&str]) {
+        let test_root = root.parent().unwrap_or(root);
+        let template = test_root.join(".git-template");
+        let home = test_root.join(".home");
+        std::fs::create_dir_all(&template).expect("git template");
+        std::fs::create_dir_all(&home).expect("git home");
         let output = Command::new(worktrees_git_for_tests())
             .arg("-C")
             .arg(root)
             .args(args)
+            .env("GIT_TEMPLATE_DIR", &template)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("HOME", &home)
+            .env("XDG_CONFIG_HOME", home.join(".config"))
             .output()
             .expect("git");
         assert!(
@@ -453,6 +468,7 @@ mod tests {
         const KEY: &str = "worktrees-test-secret";
         const NOW: i64 = 1_700_000_000;
         let headers = maw_auth::sign_headers_v3_at(
+            KEY,
             KEY,
             "gm-bo:test",
             "POST",

@@ -13,9 +13,7 @@ pub use paths::{
     maw_cache_path, maw_config_dir, maw_config_path, maw_core_paths, maw_data_dir, maw_data_path,
     maw_runtime_home_dir, maw_state_dir, maw_state_path, resolve_home,
 };
-pub use types::{
-    MawConfigLayerSource, MawConfigScope, MawCorePaths, MawXdgEnv, MergedMawConfig,
-};
+pub use types::{MawConfigLayerSource, MawConfigScope, MawCorePaths, MawXdgEnv, MergedMawConfig};
 
 #[cfg(test)]
 mod tests;

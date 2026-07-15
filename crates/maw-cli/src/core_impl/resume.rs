@@ -435,7 +435,7 @@ mod resume_tests {
 
     #[test]
     fn resume_builds_safe_tmux_args_with_cwd() {
-        let _lock = super::env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lock = super::env_test_lock();
         let _env = ResumeEnvGuard::resume_new();
         let window = ResumeWindow { name: "wish".to_owned(), repo: "tonkmac/wish".to_owned() };
 
@@ -468,7 +468,7 @@ mod resume_tests {
 
     #[test]
     fn resume_reads_tab_order_names_hermetically() {
-        let _lock = super::env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lock = super::env_test_lock();
         let _env = ResumeEnvGuard::resume_new();
         let path = maw_state_path(&current_xdg_env(), &["tab-order", "01-wish.json"]);
         std::fs::write(&path, r#"[{"index":1,"name":"logs"},{"index":0,"name":"wish"},{"name":"-bad"}]"#).expect("write");

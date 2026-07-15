@@ -47,7 +47,7 @@ fn team_t5b_exec_bring(team: &str, opts: &TeamT3Options124) -> Result<String, St
     let mut actions = Vec::new();
     for oracle in team_message_targets(team) {
         team_t5b_validate_member(&oracle)?;
-        let item = TeamRosterItem124 { role: oracle.clone(), identity: oracle.clone(), engine: opts.engine.clone().unwrap_or_else(|| "claude".to_owned()), worktree: oracle.clone(), state: "missing".to_owned(), action: String::new(), pane: None };
+        let item = TeamRosterItem124 { role: oracle.clone(), identity: oracle.clone(), engine: opts.engine.clone().unwrap_or_else(|| "claude".to_owned()), worktree: oracle.clone(), worktree_opt_out: false, state: "missing".to_owned(), action: String::new(), pane: None };
         team_t5b_wake_window(&mut runner, &item, opts, &session)?;
         actions.push(format!("{oracle}\tmissing\twake"));
     }
@@ -121,10 +121,14 @@ fn team_t5b_gather(runner: &mut TeamT5bTmuxRunner128, roster: &[TeamRosterItem12
 }
 
 fn team_t5b_maw_wake_args(item: &TeamRosterItem124, opts: &TeamT3Options124, session: &str) -> Result<Vec<String>, String> {
-    let repo = team_t5b_bound_worktree(&item.worktree)?;
     let engine = opts.engine.clone().unwrap_or_else(|| item.engine.clone());
     team_t5b_validate_member(&engine)?;
-    Ok(vec!["wake".to_owned(), item.identity.clone(), "--no-attach".to_owned(), "--session".to_owned(), session.to_owned(), "-e".to_owned(), engine, "--repo-path".to_owned(), repo.display().to_string()])
+    let mut args = vec!["wake".to_owned(), item.identity.clone(), "--no-attach".to_owned(), "--session".to_owned(), session.to_owned(), "-e".to_owned(), engine];
+    if !item.worktree_opt_out {
+        let repo = team_t5b_bound_worktree(&item.worktree)?;
+        args.extend(["--repo-path".to_owned(), repo.display().to_string()]);
+    }
+    Ok(args)
 }
 
 fn team_t5b_maw_resume_args(item: &TeamRosterItem124, opts: &TeamT3Options124, session: &str) -> Result<Vec<String>, String> {
@@ -166,7 +170,20 @@ fn team_t5b_validate_charter_members(charter: &TeamCharter122) -> Result<(), Str
     Ok(())
 }
 
-fn team_t5b_validate_item(item: &TeamRosterItem124) -> Result<(), String> { team_t5b_validate_member(&item.role)?; team_t5b_validate_member(&item.identity)?; team_t5b_validate_member(&item.engine)?; team_t5_validate_work_path(&item.worktree)?; if let Some(pane) = &item.pane { team_t5b_validate_session(&pane.session)?; team_t5b_validate_window(&pane.window)?; team_t5b_validate_pane_id(&pane.pane_id)?; } Ok(()) }
+fn team_t5b_validate_item(item: &TeamRosterItem124) -> Result<(), String> {
+    team_t5b_validate_member(&item.role)?;
+    team_t5b_validate_member(&item.identity)?;
+    team_t5b_validate_member(&item.engine)?;
+    if !item.worktree_opt_out {
+        team_t5_validate_work_path(&item.worktree)?;
+    }
+    if let Some(pane) = &item.pane {
+        team_t5b_validate_session(&pane.session)?;
+        team_t5b_validate_window(&pane.window)?;
+        team_t5b_validate_pane_id(&pane.pane_id)?;
+    }
+    Ok(())
+}
 
 fn team_t5b_validate_member(value: &str) -> Result<(), String> {
     if value.is_empty() { return Err("team member is empty".to_owned()); }
@@ -202,5 +219,13 @@ mod team_t5b_tests {
     fn team_t5b_shell_quote_escapes_embedded_single_quote() {
         assert_eq!(team_t5b_shell_quote("builder'one"), "'builder'\\''one'");
         assert_eq!(team_t5b_shell_quote("plain"), "'plain'");
+    }
+
+    #[test]
+    fn team_t5b_worktree_opt_out_omits_repo_path_and_validation() {
+        let item = TeamRosterItem124 { role: "lead".to_owned(), identity: "lead-window".to_owned(), engine: "claude".to_owned(), worktree: "false".to_owned(), worktree_opt_out: true, state: "missing".to_owned(), action: String::new(), pane: None };
+        let args = team_t5b_maw_wake_args(&item, &TeamT3Options124::default(), "alpha").expect("wake args");
+        assert_eq!(args, team_t5b_strings(&["wake", "lead-window", "--no-attach", "--session", "alpha", "-e", "claude"]));
+        assert!(team_t5b_validate_item(&item).is_ok());
     }
 }

@@ -87,20 +87,30 @@ impl MoreSpawnRuntime for MoreSpawnSystemRuntime {
 /// `git worktree add` fails, the created worktree cannot be found on disk, or the `.maw-engine`
 /// marker cannot be written.
 pub fn more_spawn_codex(prefix: &str, n: u32, base: &str) -> Result<SpawnResult, String> {
+    more_spawn_codex_engine(prefix, n, base, MORE_SPAWN_CODEX_ENGINE)
+}
+
+fn more_spawn_codex_engine(
+    prefix: &str,
+    n: u32,
+    base: &str,
+    engine: &str,
+) -> Result<SpawnResult, String> {
     let mut runtime = MoreSpawnSystemRuntime;
-    more_spawn_codex_with_runtime(prefix, n, base, &mut runtime)
+    more_spawn_codex_with_runtime(prefix, n, base, engine, &mut runtime)
 }
 
 fn more_spawn_codex_with_runtime(
     prefix: &str,
     n: u32,
     base: &str,
+    engine: &str,
     runtime: &mut impl MoreSpawnRuntime,
 ) -> Result<SpawnResult, String> {
     more_spawn_validate_token(prefix, "prefix")?;
     more_spawn_validate_index(n)?;
     more_spawn_validate_base(base)?;
-    more_spawn_validate_token(MORE_SPAWN_CODEX_ENGINE, "engine")?;
+    more_spawn_validate_token(engine, "engine")?;
 
     let window_name = format!("{prefix}-{MORE_SPAWN_CODEX_ENGINE}-{n}");
     let worktree_relative = std::path::PathBuf::from("agents").join(&window_name);
@@ -123,14 +133,14 @@ fn more_spawn_codex_with_runtime(
 
     runtime.more_spawn_write_file(
         &worktree_path.join(MORE_SPAWN_ENGINE_MARKER),
-        MORE_SPAWN_CODEX_ENGINE,
+        engine,
     )?;
 
     Ok(SpawnResult {
         window_name,
         worktree_path,
         branch,
-        engine: MORE_SPAWN_CODEX_ENGINE.to_owned(),
+        engine: engine.to_owned(),
         success: true,
     })
 }
@@ -225,8 +235,9 @@ mod more_spawn_tests {
             ..FakeMoreSpawnRuntime::default()
         };
 
-        let result = more_spawn_codex_with_runtime("mawjs", 2, "origin/alpha", &mut runtime)
-            .expect("codex spawn succeeds");
+        let result =
+            more_spawn_codex_with_runtime("mawjs", 2, "origin/alpha", "omx-3", &mut runtime)
+                .expect("codex spawn succeeds");
 
         let worktree_path = std::path::PathBuf::from("/repo/agents/mawjs-codex-2");
         assert_eq!(
@@ -235,7 +246,7 @@ mod more_spawn_tests {
                 window_name: "mawjs-codex-2".to_owned(),
                 worktree_path: worktree_path.clone(),
                 branch: "agents/mawjs-codex-2".to_owned(),
-                engine: "codex".to_owned(),
+                engine: "omx-3".to_owned(),
                 success: true,
             }
         );
@@ -255,7 +266,7 @@ mod more_spawn_tests {
         );
         assert_eq!(
             runtime.writes,
-            vec![(worktree_path.join(".maw-engine"), "codex".to_owned())]
+            vec![(worktree_path.join(".maw-engine"), "omx-3".to_owned())]
         );
     }
 
@@ -266,7 +277,7 @@ mod more_spawn_tests {
             ..FakeMoreSpawnRuntime::default()
         };
 
-        let error = more_spawn_codex_with_runtime("mawjs", 1, "alpha", &mut runtime)
+        let error = more_spawn_codex_with_runtime("mawjs", 1, "alpha", "codex", &mut runtime)
             .expect_err("missing worktree is an error");
 
         assert!(error.contains("worktree missing after git add"), "{error}");
@@ -277,17 +288,21 @@ mod more_spawn_tests {
     fn codex_spawn_rejects_unsafe_inputs_before_git() {
         let mut runtime = FakeMoreSpawnRuntime::default();
 
-        let prefix_error = more_spawn_codex_with_runtime("../bad", 1, "alpha", &mut runtime)
+        let prefix_error = more_spawn_codex_with_runtime("../bad", 1, "alpha", "codex", &mut runtime)
             .expect_err("bad prefix rejected");
-        let index_error = more_spawn_codex_with_runtime("mawjs", 0, "alpha", &mut runtime)
+        let index_error = more_spawn_codex_with_runtime("mawjs", 0, "alpha", "codex", &mut runtime)
             .expect_err("bad index rejected");
         let base_error =
-            more_spawn_codex_with_runtime("mawjs", 1, "--upload-pack=sh", &mut runtime)
+            more_spawn_codex_with_runtime("mawjs", 1, "--upload-pack=sh", "codex", &mut runtime)
                 .expect_err("bad base rejected");
+        let engine_error =
+            more_spawn_codex_with_runtime("mawjs", 1, "alpha", "bad/engine", &mut runtime)
+                .expect_err("bad engine rejected");
 
         assert!(prefix_error.contains("invalid prefix"), "{prefix_error}");
         assert!(index_error.contains("index"), "{index_error}");
         assert!(base_error.contains("base"), "{base_error}");
+        assert!(engine_error.contains("invalid engine"), "{engine_error}");
         assert!(runtime.git_calls.is_empty());
     }
 

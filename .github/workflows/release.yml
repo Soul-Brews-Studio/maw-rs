@@ -9,6 +9,28 @@ permissions:
   contents: write
 
 jobs:
+  publish-wasm-sdk:
+    name: Publish @maw-rs/wasm-sdk
+    runs-on: ubuntu-latest
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+          cache: npm
+          cache-dependency-path: packages/wasm-sdk/package-lock.json
+      - name: Publish SDK when npm token is configured
+        if: env.NODE_AUTH_TOKEN != ''
+        working-directory: packages/wasm-sdk
+        run: |
+          npm ci
+          npm run build
+          VERSION=$(node -p "require('./package.json').version")
+          npm view "@maw-rs/wasm-sdk@$VERSION" version >/dev/null 2>&1 || npm publish --access public
+
   build-linux-musl:
     name: Build linux x86_64-musl (static)
     runs-on: ubuntu-latest
@@ -23,7 +45,7 @@ jobs:
       - name: Build maw-rs (musl static)
         env:
           MAW_BUILD_VERSION: ${{ github.ref_name }}
-        run: cargo build --release --target x86_64-unknown-linux-musl --bin maw-rs
+        run: cargo build --release --target x86_64-unknown-linux-musl --bin maw-rs --features wasm-host
       - name: Stage binary
         run: |
           mkdir -p dist
@@ -42,7 +64,7 @@ jobs:
       - name: Build maw-rs (arm64)
         env:
           MAW_BUILD_VERSION: ${{ github.ref_name }}
-        run: cargo build --release --bin maw-rs
+        run: cargo build --release --bin maw-rs --features wasm-host
       - name: Stage binary
         run: |
           mkdir -p dist
@@ -67,6 +89,11 @@ jobs:
           mkdir -p release
           find artifacts -type f -exec cp {} release/ \;
           cp install.sh release/install.sh
+          if [[ "$GITHUB_REF_NAME" != *-* ]]; then
+            scripts/generate-homebrew-formula.sh \
+              "$GITHUB_REF_NAME" release/maw-rs-macos-arm64.sha256 > release/maw.rb
+            ruby -c release/maw.rb
+          fi
           ls -la release/
       - name: Create release
         uses: softprops/action-gh-release@v2
@@ -81,3 +108,33 @@ jobs:
 
             - `maw-rs-macos-arm64` — macOS Apple Silicon
             - `maw-rs-linux-x86_64-musl` — Linux x86_64 (static, no libc dependency)
+
+            **Homebrew (stable releases):** `brew install soul-brews-studio/maw/maw`
+
+  update-homebrew-tap:
+    name: Update Homebrew tap
+    if: ${{ !contains(github.ref_name, '-') }}
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download generated formula
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern maw.rb
+      - name: Check out tap
+        uses: actions/checkout@v4
+        with:
+          repository: Soul-Brews-Studio/homebrew-maw
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+      - name: Publish formula
+        run: |
+          mkdir -p tap/Formula
+          cp maw.rb tap/Formula/maw.rb
+          cd tap
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Formula/maw.rb
+          git diff --cached --quiet && exit 0
+          git commit -m "maw ${GITHUB_REF_NAME}"
+          git push

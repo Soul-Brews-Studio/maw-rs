@@ -128,3 +128,149 @@ fn tmux_send_host_allows_destructive_send_with_force_cap() {
     );
 }
 
+#[test]
+fn tmux_command_host_requires_manage_cap_and_restricts_argv() {
+    let dir = temp("tmux-command");
+    let denied = call(
+        &host(&dir, &["tmux:read"]),
+        "maw.tmux.command",
+        &json!({"command":"unlink-window","args":["-t","view:oracle"]}),
+    );
+    assert_eq!(denied["code"], "capability_denied", "{denied}");
+
+    let host = host(&dir, &["tmux:raw:new-session", "tmux:raw:unlink-window"])
+        .with_tmux_dry_run();
+    let invalid = call(
+        &host,
+        "maw.tmux.command",
+        &json!({"command":"new-session","args":["-d","-s","view","sh","-c","id"]}),
+    );
+    assert_eq!(invalid["code"], "invalid_args", "{invalid}");
+
+    let allowed = call(
+        &host,
+        "maw.tmux.command",
+        &json!({"command":"unlink-window","args":["-t","view:oracle"]}),
+    );
+    assert_eq!(allowed["ok"], true, "{allowed}");
+    assert!(
+        host.audit_json_lines()
+            .contains("\"capability\":\"tmux:raw:unlink-window\"")
+    );
+}
+
+#[test]
+fn tmux_command_host_allows_only_managed_demo_shapes() {
+    let dir = temp("tmux-command-demo");
+    let host = host(
+        &dir,
+        &["tmux:read", "tmux:raw:split-window", "tmux:raw:kill-pane"],
+    )
+    .with_tmux_dry_run();
+
+    for request in [
+        json!({"command":"display-message","args":["-p","#{pane_id}"]}),
+        json!({"command":"list-panes","args":["-a","-F","#{pane_id}"]}),
+        json!({"command":"split-window","args":["-t","%1","-h","-l","50%","bash -lc 'echo demo'"]}),
+        json!({"command":"kill-pane","args":["-t","%2"]}),
+    ] {
+        let allowed = call(&host, "maw.tmux.command", &request);
+        assert_eq!(allowed["ok"], true, "{allowed}");
+    }
+
+    for request in [
+        json!({"command":"list-panes","args":["-a","-F","#{pane_pid}"]}),
+        json!({"command":"split-window","args":["-t","-bad","-h","-l","50%","bash -lc 'id'"]}),
+        json!({"command":"split-window","args":["-t","%1","-h","-l","40%","bash -lc 'id'"]}),
+        json!({"command":"kill-pane","args":["-t","-a"]}),
+    ] {
+        let denied = call(&host, "maw.tmux.command", &request);
+        assert_eq!(denied["code"], "invalid_args", "{denied}");
+    }
+}
+
+#[test]
+fn tmux_command_host_manages_mega_read_and_kill_shapes() {
+    let dir = temp("tmux-command-mega");
+    let read_host = host(&dir, &["tmux:read"]).with_tmux_dry_run();
+    let list = call(
+        &read_host,
+        "maw.tmux.command",
+        &json!({"command":"list-windows","args":["-t","01-alpha","-F","#{window_index}\t#{window_name}\t#{window_active}\t#{window_panes}"]}),
+    );
+    assert_eq!(list["ok"], true, "{list}");
+
+    let denied = call(
+        &read_host,
+        "maw.tmux.command",
+        &json!({"command":"kill-session","args":["-t","01-alpha"]}),
+    );
+    assert_eq!(denied["code"], "capability_denied", "{denied}");
+
+    let kill_host = host(&dir, &["tmux:raw:kill-session"]).with_tmux_dry_run();
+    let kill = call(
+        &kill_host,
+        "maw.tmux.command",
+        &json!({"command":"kill-session","args":["-t","01-alpha"]}),
+    );
+    assert_eq!(kill["ok"], true, "{kill}");
+    let injected = call(
+        &kill_host,
+        "maw.tmux.command",
+        &json!({"command":"kill-session","args":["-t","-Sbad"]}),
+    );
+    assert_eq!(injected["code"], "invalid_args", "{injected}");
+}
+
+#[test]
+fn tmux_command_host_manages_tile_shapes_exactly() {
+    let dir = temp("tmux-tile");
+    let host = host(&dir, &[
+        "tmux:read", "tmux:raw:list-panes", "tmux:raw:split-window",
+        "tmux:raw:select-pane", "tmux:raw:set-option", "tmux:raw:send-keys",
+        "tmux:raw:select-layout", "tmux:raw:swap-pane", "tmux:raw:kill-pane",
+    ]).with_tmux_dry_run();
+    let allowed = [
+        json!({"command":"display-message","args":["-p","#{pane_id}"]}),
+        json!({"command":"list-panes","args":["-t","@7","-F","#{pane_id}|||#{pane_title}|||#{@maw_tile}"]}),
+        json!({"command":"split-window","args":["-t","%1","-h","-P","-F","#{pane_id}","export MAW_TILE_ROLE='tile-1'; exec zsh"]}),
+        json!({"command":"select-pane","args":["-t","%2","-T","tile-1"]}),
+        json!({"command":"set-option","args":["-p","-t","%2","@maw_tile","1"]}),
+        json!({"command":"send-keys","args":["-t","%2","-l","claude"]}),
+        json!({"command":"select-layout","args":["-t","@7","main-vertical"]}),
+        json!({"command":"swap-pane","args":["-s","%2","-t","%3"]}),
+        json!({"command":"kill-pane","args":["-t","%2"]}),
+    ];
+    for request in allowed {
+        let result = call(&host, "maw.tmux.command", &request);
+        assert_eq!(result["ok"], true, "{request}: {result}");
+    }
+    for request in [
+        json!({"command":"split-window","args":["-t","%1","sh","-c","id"]}),
+        json!({"command":"set-option","args":["-p","-t","%2","@evil","1"]}),
+        json!({"command":"send-keys","args":["-t","%2","-l","rm -rf"]}),
+    ] {
+        let result = call(&host, "maw.tmux.command", &request);
+        assert_eq!(result["code"], "invalid_args", "{request}: {result}");
+    }
+}
+
+#[test]
+fn tmux_command_host_manages_select_layout_exactly() {
+    let dir = temp("tmux-select-layout");
+    let host = host(&dir, &["tmux:raw:select-layout"]).with_tmux_dry_run();
+
+    for args in [json!(["main-vertical"]), json!(["-t", "team:work", "tiled"])] {
+        let allowed = call(&host, "maw.tmux.command", &json!({"command":"select-layout","args":args}));
+        assert_eq!(allowed["ok"], true, "{allowed}");
+    }
+
+    for args in [
+        json!(["broken"]),
+        json!(["-t", "bad\ntarget", "tiled"]),
+        json!(["-t", "team:work", "tiled", "extra"]),
+    ] {
+        let denied = call(&host, "maw.tmux.command", &json!({"command":"select-layout","args":args}));
+        assert_eq!(denied["code"], "invalid_args", "{denied}");
+    }
+}

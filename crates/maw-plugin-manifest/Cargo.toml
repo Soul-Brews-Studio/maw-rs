@@ -6,9 +6,13 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+default = []
+wasm-host = ["dep:extism"]
+
 [dependencies]
 base64 = "0.22"
-extism = "1.30.0"
+extism = { version = "1.30.0", optional = true }
 maw-tmux = { path = "../maw-tmux" }
 maw-transport = { path = "../maw-transport" }
 serde = { version = "1", features = ["derive"] }

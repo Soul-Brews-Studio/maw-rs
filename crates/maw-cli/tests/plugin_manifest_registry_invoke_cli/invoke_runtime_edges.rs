@@ -1,3 +1,5 @@
+// Runs the triggers fixture on the real Extism runtime; wasm-host CI job only.
+#[cfg(feature = "wasm-host")]
 #[test]
 fn plugin_manifest_invoke_uses_real_extism_wasm_and_refuses_unbuilt_ts() {
     let root = make_temp_dir("invoke-runtime");
@@ -75,6 +77,7 @@ fn write_invoke_ts_plugin(
     write_entry_plugin(root, name, manifest);
 }
 
+#[cfg(feature = "wasm-host")]
 fn copy_fixture_plugin(name: &str, plugins_dir: &Path) {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -88,6 +91,7 @@ fn copy_fixture_plugin(name: &str, plugins_dir: &Path) {
     copy_dir(&fixture, &target);
 }
 
+#[cfg(feature = "wasm-host")]
 fn copy_dir(source: &Path, target: &Path) {
     create_dir_all(target).expect("copy target");
     for entry in std::fs::read_dir(source).expect("read fixture dir") {

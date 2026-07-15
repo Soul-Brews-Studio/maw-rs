@@ -10,6 +10,7 @@ pub struct HttpRequest {
     pub timeout_ms: Option<u64>,
     pub follow_redirects: bool,
     pub pinned_addr: Option<SocketAddr>,
+    pub max_response_bytes: Option<u64>,
 }
 
 /// Generic HTTP response returned to WASM plugins.
@@ -71,10 +72,27 @@ impl ReqwestHttpTransportIo {
                     .map(|value| (name.as_str().to_owned(), value.to_owned()))
             })
             .collect::<BTreeMap<_, _>>();
-        let body = response
-            .text()
-            .await
-            .map_err(|error| format!("network error reading {}: {error}", request.url))?;
+        let body = if let Some(max_bytes) = request.max_response_bytes {
+            let mut response = response;
+            let mut body = Vec::new();
+            while let Some(chunk) = response
+                .chunk()
+                .await
+                .map_err(|error| format!("network error reading {}: {error}", request.url))?
+            {
+                body.extend_from_slice(&chunk);
+                if body.len() as u64 > max_bytes {
+                    return Err("response exceeds maxBytes".to_owned());
+                }
+            }
+            String::from_utf8(body)
+                .map_err(|error| format!("network response body was not utf-8: {error}"))?
+        } else {
+            response
+                .text()
+                .await
+                .map_err(|error| format!("network error reading {}: {error}", request.url))?
+        };
         Ok(HttpResponse {
             status,
             headers,

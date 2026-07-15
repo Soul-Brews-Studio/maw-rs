@@ -28,8 +28,26 @@ fn team_prune(argv: &[String]) -> Result<String, String> {
     Ok(team_prune_render(&pruned))
 }
 
+fn team_gc(argv: &[String]) -> Result<String, String> {
+    let options = team_gc_parse(argv)?;
+    let candidates = team_gc_candidates(&options);
+    if options.confirm {
+        for candidate in &candidates {
+            team_delete_archive_team(&candidate.name)?;
+            for path in team_delete_paths(&candidate.name) { team_bounded_remove_dir_all(&path.root, &path.target, &format!("team gc {}", candidate.name))?; }
+        }
+    }
+    Ok(team_gc_render(&candidates, options.confirm))
+}
+
 #[derive(Debug, Clone)]
 struct TeamDeletePath131 { label: String, root: std::path::PathBuf, target: std::path::PathBuf }
+
+#[derive(Debug, Clone)]
+struct TeamGcOptions251 { confirm: bool, keep_empty: bool, age_ms: u64 }
+
+#[derive(Debug, Clone)]
+struct TeamGcCandidate251 { name: String, reason: &'static str, members: usize }
 
 fn team_delete_paths(team: &str) -> Vec<TeamDeletePath131> {
     let paths = team_paths(team);
@@ -92,6 +110,59 @@ fn team_prune_is_empty_team(team: &str) -> bool {
     config.members.is_empty()
 }
 
+fn team_gc_parse(argv: &[String]) -> Result<TeamGcOptions251, String> {
+    let mut options = TeamGcOptions251 { confirm: false, keep_empty: false, age_ms: 7 * 24 * 60 * 60 * 1000 };
+    let mut index = 1;
+    while index < argv.len() {
+        match argv[index].as_str() {
+            "--confirm" => options.confirm = true,
+            "--keep-empty" => options.keep_empty = true,
+            "--age" => {
+                index += 1;
+                let value = argv.get(index).ok_or_else(|| "usage: maw team gc [--confirm] [--age 7d] [--keep-empty]".to_owned())?;
+                options.age_ms = team_gc_parse_age_ms(value)?;
+            }
+            value if value.starts_with("--age=") => options.age_ms = team_gc_parse_age_ms(&value["--age=".len()..])?,
+            value if value.starts_with('-') => return Err(format!("team gc: unknown argument {value}")),
+            value => return Err(format!("team gc: unexpected argument {value}")),
+        }
+        index += 1;
+    }
+    Ok(options)
+}
+
+fn team_gc_parse_age_ms(value: &str) -> Result<u64, String> {
+    let (number, multiplier) = match value.as_bytes().last().copied() {
+        Some(b'd') => (&value[..value.len() - 1], 24 * 60 * 60 * 1000),
+        Some(b'h') => (&value[..value.len() - 1], 60 * 60 * 1000),
+        Some(b'm') => (&value[..value.len() - 1], 60 * 1000),
+        Some(b's') => (&value[..value.len() - 1], 1000),
+        _ => (value, 1),
+    };
+    let amount = number.parse::<u64>().map_err(|_| format!("team gc: invalid --age {value:?}"))?;
+    Ok(amount.saturating_mul(multiplier))
+}
+
+fn team_gc_candidates(options: &TeamGcOptions251) -> Vec<TeamGcCandidate251> {
+    let root = team_home_dir().join(".claude").join("teams");
+    team_read_tool_teams(&root).into_iter().filter_map(|(name, config)| team_gc_candidate(&name, &config, options)).collect()
+}
+
+fn team_gc_candidate(name: &str, config: &TeamConfig122, options: &TeamGcOptions251) -> Option<TeamGcCandidate251> {
+    if team_validate_name(name).is_err() || config.members.iter().any(|member| member.is_active) { return None; }
+    let members = config.members.len();
+    let reason = if members == 0 && !options.keep_empty {
+        "empty"
+    } else if name.starts_with("session-") {
+        "session-temp"
+    } else if members > 0 && team_now_millis().saturating_sub(config.created_at) >= options.age_ms {
+        "all-inactive"
+    } else {
+        return None;
+    };
+    Some(TeamGcCandidate251 { name: name.to_owned(), reason, members })
+}
+
 fn team_delete_render(team: &str, removed: &[String]) -> String {
     use std::fmt::Write as _;
     let mut out = format!("team delete: {team}\n");
@@ -114,6 +185,15 @@ fn team_prune_render(pruned: &[String]) -> String {
     for team in pruned {
         writeln!(out, "  pruned {team}").expect("write string");
     }
+    out
+}
+
+fn team_gc_render(candidates: &[TeamGcCandidate251], confirm: bool) -> String {
+    use std::fmt::Write as _;
+    if candidates.is_empty() { return if confirm { "team gc: no candidates removed\n".to_owned() } else { "team gc dry-run: no candidates\n".to_owned() }; }
+    let mut out = if confirm { format!("team gc: {} removed\n", candidates.len()) } else { format!("team gc dry-run: {} candidate(s)\n", candidates.len()) };
+    for candidate in candidates { writeln!(out, "  - {} [{}] members={}", candidate.name, candidate.reason, candidate.members).expect("write string"); }
+    if !confirm { out.push_str("  rerun with --confirm to remove\n"); }
     out
 }
 

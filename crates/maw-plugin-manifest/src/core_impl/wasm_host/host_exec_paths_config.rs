@@ -1,4 +1,43 @@
 impl MawWasmHost {
+    fn cli_run(&self, input: &str) -> HostResult<Value> {
+        let start = Instant::now();
+        let args = match parse_args::<CliRunArgs>(input) {
+            Ok(args) => args,
+            Err(err) => return err,
+        };
+        if args.command.is_empty()
+            || args.command.starts_with('-')
+            || args.command.chars().any(char::is_control)
+        {
+            return HostResult::err(HostErrorCode::InvalidArgs, "invalid CLI command");
+        }
+        let cap = match self.caps.require("cli", "run", Some(&args.command)) {
+            Ok(cap) => cap,
+            Err(err) => return err,
+        };
+        let Ok(exe) = std::env::current_exe() else {
+            return HostResult::err(
+                HostErrorCode::ProcessFailed,
+                "failed to resolve current maw executable",
+            );
+        };
+        let mut command = Command::new(exe);
+        command.arg(&args.command).args(&args.args);
+        if let Some(cwd) = &self.cwd {
+            command.current_dir(cwd);
+        }
+        let result = match command.output() {
+            Ok(output) => HostResult::ok(json!({
+                "status": output.status.code().unwrap_or(-1),
+                "stdout": String::from_utf8_lossy(&output.stdout),
+                "stderr": String::from_utf8_lossy(&output.stderr),
+            })),
+            Err(_) => HostResult::err(HostErrorCode::ProcessFailed, "CLI command failed to run"),
+        };
+        self.audit("maw.cli.run", &cap, &args.command, status_of(&result), start);
+        result
+    }
+
     fn exec_run(&self, input: &str) -> HostResult<Value> {
         let start = Instant::now();
         let args = match parse_args::<ExecRunArgs>(input) {
@@ -92,17 +131,63 @@ impl MawWasmHost {
         let value = match name {
             "home" => self.home.clone(),
             "cwd" => self.cwd.clone(),
-            "teams" => self.home.as_ref().map(|home| {
-                Path::new(home)
-                    .join(".claude")
-                    .join("teams")
-                    .to_string_lossy()
-                    .into_owned()
+            "repos" | "fleet-state" | "fleet-legacy" | "fleet-config" => self
+                .fs_roots
+                .get(name)
+                .map(|root| root.to_string_lossy().into_owned()),
+            "teams" => self.fs_roots.get("teams").map(|root| root.to_string_lossy().into_owned()).or_else(|| {
+                self.home.as_ref().map(|home| {
+                    Path::new(home).join(".claude").join("teams").to_string_lossy().into_owned()
+                })
             }),
+            "claude-projects" => {
+                if !self.has_exact_cap("fs:read:claude-projects") {
+                    return HostResult::err(
+                        HostErrorCode::CapabilityDenied,
+                        "capability denied: fs:read:claude-projects",
+                    );
+                }
+                self.fs_roots.get("claude-projects").map(|root| root.to_string_lossy().into_owned())
+            }
+            "psi" => {
+                if !self.has_exact_cap("fs:read:psi") {
+                    return HostResult::err(
+                        HostErrorCode::CapabilityDenied,
+                        "capability denied: fs:read:psi",
+                    );
+                }
+                self.fs_roots
+                    .get("psi")
+                    .map(|root| root.to_string_lossy().into_owned())
+            }
+            "maw-cache" => return self.paths_get_maw_cache(name, start),
+            "vault" => {
+                if !self.has_exact_cap("fs:read:vault") {
+                    return HostResult::err(
+                        HostErrorCode::CapabilityDenied,
+                        "capability denied: fs:read:vault",
+                    );
+                }
+                if let Some(root) = self.fs_roots.get("vault") {
+                    Some(root.to_string_lossy().into_owned())
+                } else {
+                    match self.home.as_ref() {
+                        Some(home) => match configured_vault_root(
+                            Path::new(home),
+                            self.config_root.as_deref(),
+                            self.vault_root.as_deref(),
+                        ) {
+                            Ok(path) => Some(path.to_string_lossy().into_owned()),
+                            Err(err) => return err,
+                        },
+                        None => None,
+                    }
+                }
+            }
             _ => {
                 return HostResult::err(
                     HostErrorCode::InvalidArgs,
-                    format!("unknown path name '{name}'; allowed: home, cwd, teams"),
+                    format!("unknown path name '{name}'; allowed: home, cwd, repos, fleet-state, fleet-legacy, fleet-config, teams, claude-projects, maw-cache, psi, vault"),
                 );
             }
         };
@@ -115,8 +200,41 @@ impl MawWasmHost {
             },
             |path| HostResult::ok(json!({ "name": name, "path": path })),
         );
-        self.audit("maw.paths.get", "paths:get", name, status_of(&result), start);
+        self.audit(
+            "maw.paths.get",
+            "paths:get",
+            name,
+            status_of(&result),
+            start,
+        );
         result
+    }
+
+    fn paths_get_maw_cache(&self, name: &str, start: Instant) -> HostResult<Value> {
+        if !self.has_exact_cap("fs:read:maw-cache") {
+            return HostResult::err(
+                HostErrorCode::CapabilityDenied,
+                "capability denied: fs:read:maw-cache",
+            );
+        }
+        let Some(root) = self.fs_roots.get("maw-cache") else {
+            return HostResult::err(
+                HostErrorCode::NotFound,
+                "path 'maw-cache' is not available in this context",
+            );
+        };
+        let mut value = json!({"name": name, "path": root});
+        if std::env::var_os("MAW_HOME").is_none()
+            && std::env::var_os("MAW_CACHE_DIR").is_none()
+        {
+            if let Some(legacy) = self.fs_roots.get("maw-legacy") {
+                if legacy != root {
+                    value["legacyPath"] = json!(legacy.join("artifacts"));
+                }
+            }
+        }
+        self.audit("maw.paths.get", "paths:get", name, "ok", start);
+        HostResult::ok(value)
     }
 
     fn config_get(&self, input: &str) -> HostResult<Value> {
@@ -155,5 +273,4 @@ impl MawWasmHost {
         self.audit("maw.config.get", &cap, &resource, status_of(&result), start);
         result
     }
-
 }

@@ -31,7 +31,7 @@ fn parse_plugin_manifest_registry_args(
     let mut plan_json = false;
     let mut scan_dirs = Vec::new();
     let mut disabled_plugins = Vec::new();
-    let mut runtime_version = "1.0.0".to_owned();
+    let mut runtime_version = maw_plugin_manifest::host_abi_version();
     let mut use_cache = false;
     let mut plugin = None;
     let mut symbol = None;

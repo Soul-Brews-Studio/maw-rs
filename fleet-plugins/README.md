@@ -15,8 +15,11 @@ Facts below come from each plugin's `plugin.json` and `NOTES.md`.
 
 | plugin | tier | verbs | needs | tests | ship-tier blocker |
 | ------ | ---- | ----- | ----- | ----- | ----------------- |
-| `squad` | ship-wasm | `start`, `join <oracle> [color]`, `say <member> <text>`, `ls` | No creds; team roster fs read/write, tmux read, `proc:exec:date` wall-clock subprocess. | Rust acceptance suite (`crates/maw-cli/tests/squad_acceptance.rs`) plus pin check (`crates/maw-cli/tests/fleet_plugins_pin_check.rs`). | None; active manifest is `target=wasm` with `plugin.wasm` pinned by `artifact.sha256`. |
-| `hermes` | bun-dev | Discord REST: `whoami`, `send`, `read`, `channels`, `threads`, `line`; user/API turns: `chat`, `sessions`, `health`, `server-api`, `api`. | Creds from env or `pass`; Discord/API/webhook-relay network; `pass` subprocess secret lookup; `arra` subprocess for `line`. | `bun test fleet-plugins/hermes/src/plugin.test.ts` | Network capability shape, host-mediated secrets instead of `pass`, and replacing the `arra` subprocess delegation. |
+| `squad` | ship-wasm | `start`, `join <oracle> [color]`, `say <member> <text>`, `ls` | No creds; team roster fs read/write, tmux read/send nudge, `proc:exec:date` wall-clock subprocess. | Rust acceptance suite (`crates/maw-cli/tests/squad_acceptance.rs`) plus pin check (`crates/maw-cli/tests/fleet_plugins_pin_check.rs`). | None; active manifest is `target=wasm` with `plugin.wasm` pinned by `artifact.sha256`. |
+| `cross-team-queue` | ship-wasm | `--json`, optional `--recipient <name>` | No creds; read-only `fs:read:vault` access to the host-provided vault root. | Real artifact install/invoke scanner and recipient-filter coverage plus pin check (`crates/maw-cli/tests/fleet_plugins_pin_check.rs`). | None; the active manifest is `target=wasm` and the scanner artifact is pinned. |
+| `hermes` | ship-wasm | Discord REST read-only core: `whoami`, `channels`, `read`, `threads list`, `threads read`. | Host-mediated Discord bot secret; GET-only `net:fetch:discord-rest` endpoint policy. | Real artifact install/invoke golden coverage plus pin check (`crates/maw-cli/tests/fleet_plugins_pin_check.rs`). | None for the shipped read-only slice; broader mutation, API-server, and LINE behaviors remain in the Bun reference implementation. |
+| `atlas` | ship-wasm | Discord fleet read-only state: `whoami`, `ls`, `read`, `threads`. | Host-mediated Atlas bot secret; GET-only `net:fetch:discord-rest` endpoint policy. | Real artifact install/invoke golden coverage plus pin check (`crates/maw-cli/tests/fleet_plugins_pin_check.rs`). | None for the shipped read-only slice; mutation, backfill, SQLite, subprocess, and daemon behaviors remain in the Bun reference implementation. |
+| `team` | ship-wasm | Read-only team inventory: default, `list`, `ls`. | No creds; read-only `fs:read:teams`, `fs:read:vault`, and `tmux:read`. | Real artifact invocation coverage for tool/vault stores plus pin check (`crates/maw-cli/tests/fleet_plugins_pin_check.rs`). | None for slice 1; native `maw team` retains dispatch while task/member state, writes, lifecycle operations, and invitation/consent await typed ABI design. |
 | `share` | bun-dev | `start`, `ls`, `url`, `stop` with optional `--name <label>`. | `sshx` subprocess dependency, optional `MAW_SHARE_SERVER`/`MAW_SHARE_SSHX_BIN`, local `~/.maw/share` state, pid signal management. | `bun test fleet-plugins/share/src/plugin.test.ts` | Long-lived child process lifecycle, process spawn/signal delivery, and local private state need host capability design. |
 | `p2p-share` | bun-dev | `share <pane> [--signal <url>] [--name <name>] [--port <port>]`; `status`/`help`. | Optional `P2P_SHARE_KEY`/`AUTH_KEY`; `werift` from `bun install`; local HTTP listen, WebSocket signaling, WebRTC UDP/STUN, tmux/`mkfifo`/`cat`, temp FIFO. | `bun test fleet-plugins/p2p-share/src/plugin.test.ts` | `werift` is a native Node/Bun WebRTC dependency; needs WebRTC-in-WASM or host-WebRTC, plus networking, PTY, fs, and lifecycle contracts. |
 
@@ -101,6 +104,12 @@ The `artifact.sha256` in the manifest is the pin. It is enforced at **two** poin
      rebuilt `plugin.wasm` reproduces the committed pin. Run it explicitly:
      `cargo test -p maw-cli --test fleet_plugins_pin_check -- --ignored` (after
      `npm ci` in `packages/wasm-sdk`).
+   - The **invoke tests** in the same file (cross-team-queue / team / hermes / atlas
+     running their committed `plugin.wasm` on the real Extism runtime) are compiled only
+     with `--features wasm-host` and run in the dedicated `wasm-host` CI job
+     (`cargo test -p maw-cli -p maw-plugin-manifest --features wasm-host`). The Extism
+     runtime is off the default build since the wasm-host feature gate; deploy binaries
+     are built with `--features wasm-host` and keep every WASM verb.
 
 This mirrors how `examples/wasm-parity` fixtures are CI-verified
 (`npm --prefix packages/wasm-sdk run check:fixtures` rebuilds and `git diff --exit-code`s

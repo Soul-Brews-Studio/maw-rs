@@ -1,0 +1,9 @@
+{
+  "result": {
+    "error": null,
+    "ok": true,
+    "output": "alpha beta"
+  },
+  "stderr": "",
+  "stdout": "alpha beta"
+}

@@ -1,10 +1,24 @@
+// Dispatcher registration pins (and other pre-invoke coverage) run on the
+// default test path; tests that execute plugin.wasm need the real Extism
+// runtime and run in the wasm-host CI job
+// (`cargo test -p maw-cli --features wasm-host`).
+use maw_cli::{dispatcher_status, DispatchKind};
+#[cfg(feature = "wasm-host")]
 use std::path::{Path, PathBuf};
+#[cfg(feature = "wasm-host")]
 use std::process::Command;
 
+#[cfg(feature = "wasm-host")]
 fn maw_rs_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_maw-rs"))
 }
 
+#[cfg(feature = "wasm-host")]
+fn plugin_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native-mega")
+}
+
+#[cfg(feature = "wasm-host")]
 fn write_file(path: &Path, text: &str) {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).expect("parent dir");
@@ -12,6 +26,7 @@ fn write_file(path: &Path, text: &str) {
     std::fs::write(path, text).expect("write file");
 }
 
+#[cfg(feature = "wasm-host")]
 fn seed_mega_env(name: &str) -> (PathBuf, PathBuf, PathBuf) {
     let root =
         std::env::temp_dir().join(format!("maw-rs-native-mega-{name}-{}", std::process::id()));
@@ -33,6 +48,7 @@ fn seed_mega_env(name: &str) -> (PathBuf, PathBuf, PathBuf) {
     (root, home, config)
 }
 
+#[cfg(feature = "wasm-host")]
 fn command_with_env(root: &Path, home: &Path, config: &Path) -> Command {
     let mut command = Command::new(maw_rs_bin());
     command
@@ -45,10 +61,12 @@ fn command_with_env(root: &Path, home: &Path, config: &Path) -> Command {
         .env("XDG_CACHE_HOME", root.join("cache"))
         .env("TMUX", "hermetic-tmux")
         .env("MAW_JS_REF_DIR", "/nonexistent")
+        .env("MAW_PLUGINS_DIR", plugin_dir())
         .env("PATH", root.join("bin"));
     command
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn mega_ls_team_lead_is_hermetic_and_does_not_need_tmux() {
     let (root, home, config) = seed_mega_env("ls");
@@ -71,6 +89,7 @@ fn mega_ls_team_lead_is_hermetic_and_does_not_need_tmux() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn mega_status_tree_and_kill_use_fake_tmux_and_guard_targets() {
     let (root, home, config) = seed_mega_env("tmux");
@@ -170,4 +189,9 @@ esac
         "guarded target reached tmux: {log_text}"
     );
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn mega_dispatcher_registration_is_removed_for_plugin_fallthrough() {
+    assert_eq!(dispatcher_status("mega"), DispatchKind::NativeError);
 }

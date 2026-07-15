@@ -13,10 +13,18 @@ struct ExecRunArgs {
 }
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct CliRunArgs {
+    command: String,
+    #[serde(default)]
+    args: Vec<String>,
+}
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct FsReadArgs {
     path: String,
     encoding: Option<String>,
     max_bytes: Option<u64>,
+    offset: Option<u64>,
 }
 #[derive(Debug, Deserialize)]
 struct FsPathArgs {
@@ -44,6 +52,8 @@ struct FsListArgs {
     path: String,
     recursive: Option<bool>,
     max_entries: Option<usize>,
+    offset: Option<usize>,
+    cursor: Option<String>,
     include_dirs: Option<bool>,
 }
 #[derive(Debug, Deserialize)]
@@ -89,12 +99,23 @@ struct LocalserverArgs {
 }
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct NetFetchArgs {
+    endpoint: String,
+    method: Option<String>,
+    path: String,
+    query: Option<BTreeMap<String, String>>,
+    body: Option<String>,
+    timeout_ms: Option<u64>,
+}
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct PeerSendArgs {
     peer_url: String,
     target: String,
     text: String,
     inbox: Option<bool>,
     from: String,
+    federation_token_ref: Option<String>,
     peer_key_ref: Option<String>,
     timestamp: Option<i64>,
 }
@@ -105,6 +126,7 @@ struct PeerWakeArgs {
     target: String,
     task: Option<String>,
     from: String,
+    federation_token_ref: Option<String>,
     peer_key_ref: Option<String>,
     timestamp: Option<i64>,
 }
@@ -130,6 +152,12 @@ struct TmuxSendArgs {
 struct TmuxRunArgs {
     target: String,
     text: String,
+}
+#[derive(Debug, Deserialize)]
+struct TmuxCommandArgs {
+    command: String,
+    #[serde(default)]
+    args: Vec<String>,
 }
 #[derive(Debug, Deserialize)]
 struct TmuxEnterArgs {

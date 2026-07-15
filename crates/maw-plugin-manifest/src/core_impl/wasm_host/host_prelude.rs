@@ -1,15 +1,15 @@
+#[cfg(target_os = "macos")]
+use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
 use std::io::Read;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
-#[cfg(target_os = "macos")]
-use std::ffi::OsString;
 #[cfg(target_os = "macos")]
 use std::os::fd::AsFd;
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
 #[cfg(target_os = "macos")]
 use std::os::unix::ffi::OsStringExt;
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +37,7 @@ use serde_json::json;
 use url::Url;
 
 const MAX_HTTP_TIMEOUT_MS: u64 = 30_000;
+const MAX_NET_FETCH_RESPONSE_BYTES: u64 = 1024 * 1024;
 const MAX_EXEC_TIMEOUT_MS: u64 = 30_000;
 const MAX_READ_BYTES: u64 = 10 * 1024 * 1024;
 const O_NOFOLLOW_FLAG: i32 = libc::O_NOFOLLOW;
@@ -201,6 +202,8 @@ struct FakeHostResponse {
 pub struct MawWasmHost {
     plugin_name: String,
     caps: CapabilitySet,
+    endpoints: PluginEndpointPolicies,
+    secrets: PluginSecretPolicies,
     fs_roots: BTreeMap<String, PathBuf>,
     secret_store: BTreeMap<String, String>,
     fake_responses: BTreeMap<(String, String), FakeHostResponse>,
@@ -212,5 +215,6 @@ pub struct MawWasmHost {
     http_resolver_overrides: BTreeMap<String, Vec<IpAddr>>,
     cwd: Option<String>,
     home: Option<String>,
+    vault_root: Option<PathBuf>,
+    config_root: Option<PathBuf>,
 }
-

@@ -67,7 +67,7 @@ case "$cmd" in
     done
     case "$target" in
       sess:1.0) printf 'native peek body\n' ;;
-      sess:0) printf 'older\nlast line\n' ;;
+      sess:0) printf 'older\n\n\n' ;;
       sess:1) printf '\n  \n' ;;
       *) printf 'missing target %s\n' "$target" >&2; exit 1 ;;
     esac
@@ -142,4 +142,26 @@ fn peek_native_rejects_injection_before_fake_tmux_or_maw() {
     let stderr = String::from_utf8(output.stderr).expect("stderr");
     assert_eq!(stderr, include_str!("fixtures/native-peek/reject.stderr"));
     assert!(!stderr.contains("DELEGATED-MAW"));
+}
+
+#[test]
+fn peek_missing_explicit_window_freezes_waiver_error_format() {
+    assert_eq!(dispatcher_status("peek"), DispatchKind::Native);
+    let root = temp_dir("missing-window");
+    let output = run(&root, &["peek", "sess:9"]);
+    assert!(!output.status.success());
+    assert_eq!(String::from_utf8(output.stdout).expect("stdout"), "");
+    assert_eq!(String::from_utf8(output.stderr).expect("stderr"), "no window '9' in session 'sess' — windows: sess:0 (active), sess:1 (blank)\n");
+}
+
+#[test]
+fn peek_help_flags_print_usage_to_stdout() {
+    assert_eq!(dispatcher_status("peek"), DispatchKind::Native);
+    let root = temp_dir("help");
+    for flag in ["--help", "-h"] {
+        let output = run(&root, &["peek", flag]);
+        assert!(output.status.success(), "{flag}: status {:?}", output.status);
+        assert_eq!(String::from_utf8(output.stderr).expect("stderr"), "", "{flag}");
+        assert_eq!(String::from_utf8(output.stdout).expect("stdout"), "usage: maw peek <tmux-target> [--lines N] [--history]\n       maw peek [--lines N]\n", "{flag}");
+    }
 }

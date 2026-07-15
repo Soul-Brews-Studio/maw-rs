@@ -5,7 +5,7 @@ const DISPATCH_95: &[DispatcherEntry] = &[DispatcherEntry {
 
 const SERVEIDENTITY_USAGE: &str = "usage: maw serve-identity";
 #[allow(dead_code)]
-const SERVEIDENTITY_DEFAULT_ORACLE: &str = "mawjs";
+const SERVEIDENTITY_DEFAULT_ORACLE: &str = "mawjs"; // node identity fallback; not per-message sender identity
 #[allow(dead_code)]
 const SERVEIDENTITY_DEFAULT_HOST: &str = "local";
 #[allow(dead_code)]
@@ -123,6 +123,7 @@ fn serveidentity_identity_payload(config: &ServeidentityConfig, deps: &Serveiden
     let mut payload = serde_json::json!({
         "node": resolved.node,
         "host": resolved.host,
+        // GET /api/identity publishes this node identity, so it stays config/default based.
         "oracle": config.oracle.as_deref().unwrap_or(SERVEIDENTITY_DEFAULT_ORACLE),
         "version": deps.version,
         "agents": agents,
@@ -357,9 +358,7 @@ mod serveidentity_tests {
 
     #[test]
     fn serveidentity_http_provider_reads_peer_key_without_creating_one() {
-        let _guard = env_test_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _restore_home = EnvVarRestore::capture("HOME");
         let _restore_maw_home = EnvVarRestore::capture("MAW_HOME");
         let _restore_maw_state = EnvVarRestore::capture("MAW_STATE_DIR");

@@ -1,0 +1,43 @@
+{
+  "name": "maw-menubar",
+  "version": "0.1.0",
+  "sdk": "^1.0.0",
+  "runtime": "bun-dev",
+  "target": "js",
+  "entry": "src/plugin.ts",
+  "description": "Native macOS menu bar companion for local maw fleet status.",
+  "author": "Soul Brews Studio",
+  "license": "MIT",
+  "weight": 50,
+  "schemaVersion": 1,
+  "capabilities": [
+    "net:fetch:maw-serve",
+    "proc:exec:maw",
+    "proc:exec:launchctl",
+    "fs:read:plugin",
+    "fs:write:launch-agents"
+  ],
+  "endpoints": {
+    "maw-serve": {
+      "baseUrl": "http://127.0.0.1:3456",
+      "methods": ["GET"],
+      "paths": [
+        "/api/health",
+        "/api/sessions",
+        "/api/agents",
+        "/api/feed",
+        "/api/schedule/status"
+      ]
+    }
+  },
+  "cli": {
+    "command": "menubar",
+    "help": "maw menubar <install|start|stop|status|uninstall|run>"
+  },
+  "bundledArtifacts": [
+    {
+      "path": "bin/maw-menubar",
+      "sha256": "sha256:f8df31fb2ed01936768505608a7c47a2bf50b76e965ce4a571f16ed386b4394a"
+    }
+  ]
+}

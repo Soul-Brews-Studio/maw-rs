@@ -1,0 +1,1 @@
+{"name":"03-alpha","squadName":"alpha","windows":[{"name":"maw","repo":"acme/maw-rs"},{"name":"ghost","repo":"acme/missing","kind":"project"}],"syncPeers":["beta"],"projectRepos":[]}

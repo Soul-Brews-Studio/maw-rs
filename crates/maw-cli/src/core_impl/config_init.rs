@@ -146,8 +146,12 @@ fn init_write_config(opts: &InitNativeOptions, interactive: bool) -> CliOutput {
         };
         let _ = writeln!(stdout, "\x1b[32m✓\x1b[0m backed up to {}", backup.display());
     }
+    let before = match init_read_config(&path) {
+        Ok(config) => config,
+        Err(error) => return init_port_error(&error),
+    };
     let federation_token = opts.federate.then(|| opts.federation_token.clone().unwrap_or_else(init_generate_federation_token));
-    let mut config = serde_json::json!({
+    let mut updated = serde_json::json!({
         "host": "local",
         "node": opts.node,
         "port": 3456,
@@ -156,19 +160,29 @@ fn init_write_config(opts: &InitNativeOptions, interactive: bool) -> CliOutput {
         "commands": { "default": "claude --dangerously-skip-permissions --continue" },
         "sessions": {},
     });
-    if let Some(token) = &opts.token { config["env"]["CLAUDE_CODE_OAUTH_TOKEN"] = serde_json::json!(token); }
-    if let Some(root) = &opts.ghq_root { config["ghqRoot"] = serde_json::json!(root); }
+    if let Some(token) = &opts.token { updated["env"]["CLAUDE_CODE_OAUTH_TOKEN"] = serde_json::json!(token); }
+    if let Some(root) = &opts.ghq_root { updated["ghqRoot"] = serde_json::json!(root); }
     if opts.federate {
-        config["federationToken"] = serde_json::json!(federation_token.clone().unwrap_or_default());
-        config["namedPeers"] = serde_json::Value::Array(opts.peers.iter().map(|(name, url)| serde_json::json!({"name": name, "url": url})).collect());
+        updated["federationToken"] = serde_json::json!(federation_token.clone().unwrap_or_default());
+        updated["namedPeers"] = serde_json::Value::Array(opts.peers.iter().map(|(name, url)| serde_json::json!({"name": name, "url": url})).collect());
     }
+    let mut config = before.clone();
+    maw_xdg::deep_merge_config(&mut config, &updated);
     if let Err(error) = init_write_json_atomic(&path, &config) { return init_port_error(&error); }
+    config_audit_write(&path, &before, &config);
     if interactive { stdout.push_str("\x1b[1mmaw init\x1b[0m — first-run setup\n\n"); }
     let _ = writeln!(stdout, "\x1b[32m✓\x1b[0m Wrote {}", path.display());
     if opts.federate {
         let _ = writeln!(stdout, "\x1b[36mfederation token\x1b[0m: {}", federation_token.unwrap_or_default());
     }
     CliOutput { code: 0, stdout, stderr: init_port_token_warning(opts) }
+}
+
+fn init_read_config(path: &std::path::Path) -> Result<serde_json::Value, String> {
+    if !path.exists() { return Ok(serde_json::json!({})); }
+    let raw = std::fs::read_to_string(path).map_err(|error| format!("init: read {}: {error}", path.display()))?;
+    let value = serde_json::from_str::<serde_json::Value>(&raw).map_err(|error| format!("init: parse {}: {error}", path.display()))?;
+    if value.is_object() { Ok(value) } else { Err(format!("init: config root must be an object: {}", path.display())) }
 }
 
 fn init_port_token_warning(opts: &InitNativeOptions) -> String {
@@ -222,4 +236,3 @@ fn init_port_usage() -> String {
     "maw init [--non-interactive --node <name> --token <t> --federate --peer <url> --peer-name <name> --federation-token <hex> --force]\n\nInteractive 3-question wizard. Writes ~/.config/maw/maw.config.json.\n".to_owned()
 }
 fn init_port_error(message: &str) -> CliOutput { CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") } }
-

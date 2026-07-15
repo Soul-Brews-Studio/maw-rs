@@ -5,6 +5,7 @@ const DISPATCH_104: &[DispatcherEntry] = &[
 
 const PEERS_HELP: &str = "usage: maw peers <add|list|info|probe|probe-all|accept|remove|forget> [...]\n  add       <alias> <url> [--node <name>] [--ssh <target>] [--user <name>] [--allow-unreachable]\n            — register alias (auto-probes /info). Exits non-zero on handshake failure:\n              2=UNKNOWN/BAD_BODY/TLS  3=DNS  4=REFUSED  5=TIMEOUT  6=HTTP_4XX/5XX\n            --ssh sets the SSH config alias/target for cross-node attach; --user overrides SSH user.\n            --allow-unreachable keeps exit 0 even when the probe fails (CI/bootstrap).\n  list      [--discovered] [--all] [--json] [--limit N]\n            — tabular list of all peers. --discovered: LAN candidates from Scout (#1237).\n              --all: include already-paired (default hides). --limit: cap rows (default 50).\n  info      <alias>                         — JSON details for one peer (includes lastError if set)\n  probe     <alias>                         — re-run /info handshake; updates lastSeen / lastError (#565)\n  probe-all [--timeout <ms>] [--allow-unreachable]\n            — probe every peer in parallel; prints liveness table. Exit = worst PROBE_EXIT_CODE (#669).\n  accept    <node|zid-prefix> [--alias X] | --all (#1237)\n            — pair with a Scout-discovered peer. Shortest unambiguous prefix wins.\n              Refuses if pubkey already pins under a different alias (impersonation guard).\n  remove    <alias>                         — remove (idempotent)\n  forget    <alias>                         — clear cached pubkey so next contact re-TOFUs (#804 Step 2)\n\nstorage: maw state peers.json (v1; reads legacy ~/.maw/peers.json during migration)";
 const PEERS_DEFAULT_STALE_TTL_MS: u64 = 7 * 24 * 60 * 60 * 1000;
+const PEERS_DEFAULT_PROBE_TIMEOUT_MS: u64 = 2_000;
 const PEERS_FAKE_NOW_ENV: &str = "MAW_RS_PEERS_FAKE_NOW";
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, Default)]
@@ -105,14 +106,26 @@ fn peers_cmd_add(argv: &[String], positional: &[&str]) -> Result<CliOutput, Stri
     let mut store = peers_load_store();
     let overwrote = store.peers.contains_key(alias);
     let now = peers_now_iso();
-    let peer = PeersPeerNative { url: url.to_owned(), node, added_at: now, last_seen: None, ssh, ssh_user, ..PeersPeerNative::default() };
+    let mut peer = PeersPeerNative { url: url.to_owned(), node, added_at: now.clone(), last_seen: None, ssh, ssh_user, ..PeersPeerNative::default() };
+    let probe = if argv.iter().any(|arg| arg == "--allow-unreachable") {
+        None
+    } else {
+        let probe = peers_probe_peer(&peer.url, PEERS_DEFAULT_PROBE_TIMEOUT_MS, &now);
+        peers_apply_probe_result(&mut peer, &probe, &now)?;
+        Some(probe)
+    };
     store.peers.insert(alias.to_owned(), peer.clone());
     peers_save_store(&store)?;
     let mut stdout = String::new();
     if overwrote { let _ = writeln!(stdout, "warning: alias \"{alias}\" already existed — overwriting"); }
     let _ = writeln!(stdout, "added {alias} → {url}{}", peer.node.as_ref().map(|node| format!(" ({node})")).unwrap_or_default());
-    if argv.iter().any(|arg| arg == "--allow-unreachable") { return Ok(peers_ok(&stdout)); }
-    Ok(CliOutput { code: 2, stdout, stderr: "peer handshake failed: UNKNOWN — pass --allow-unreachable to bypass\n".to_owned() })
+    let Some(probe) = probe else { return Ok(peers_ok(&stdout)); };
+    let code = peers_probe_exit_code(&probe);
+    if code == 0 {
+        let _ = writeln!(stdout, "\x1b[32m✓\x1b[0m peer handshake ok");
+        return Ok(peers_ok(&stdout));
+    }
+    Ok(CliOutput { code, stdout, stderr: peers_probe_stderr(alias, &peer.url, &probe) })
 }
 
 fn peers_cmd_list(argv: &[String]) -> Result<CliOutput, String> {
@@ -170,19 +183,39 @@ fn peers_cmd_forget(positional: &[&str]) -> Result<CliOutput, String> {
 fn peers_cmd_probe(positional: &[&str]) -> Result<CliOutput, String> {
     let alias = *positional.get(1).ok_or("usage: maw peers probe <alias>")?;
     peers_validate_alias(alias)?;
-    let store = peers_load_store();
+    let mut store = peers_load_store();
     let Some(peer) = store.peers.get(alias) else { return Err(format!("peer \"{alias}\" not found")); };
-    Ok(CliOutput { code: 2, stdout: format!("probing {alias} → {} ...\n", peer.url), stderr: "\x1b[31m✗\x1b[0m UNKNOWN probing peer\n".to_owned() })
+    let url = peer.url.clone();
+    let now = peers_now_iso();
+    let probe = peers_probe_peer(&url, PEERS_DEFAULT_PROBE_TIMEOUT_MS, &now);
+    if let Some(peer) = store.peers.get_mut(alias) { peers_apply_probe_result(peer, &probe, &now)?; }
+    peers_save_store(&store)?;
+    let code = peers_probe_exit_code(&probe);
+    let mut stdout = format!("probing {alias} → {url} ...\n");
+    if code == 0 { let _ = writeln!(stdout, "\x1b[32m✓\x1b[0m ok"); }
+    Ok(CliOutput { code, stdout, stderr: peers_probe_stderr(alias, &url, &probe) })
 }
 
 fn peers_cmd_probe_all(argv: &[String]) -> Result<CliOutput, String> {
-    if let Some(raw) = peers_flag_value(argv, "--timeout") { peers_parse_positive_u64(&raw, "usage: maw peers probe-all [--timeout <ms>]")?; }
-    let store = peers_load_store();
+    let timeout = if let Some(raw) = peers_flag_value(argv, "--timeout") { peers_parse_positive_u64(&raw, "usage: maw peers probe-all [--timeout <ms>]")? } else { PEERS_DEFAULT_PROBE_TIMEOUT_MS };
+    let mut store = peers_load_store();
     if store.peers.is_empty() { return Ok(peers_ok("alias  url  status\n-----  ---  ------\n")); }
     let mut stdout = String::from("alias  url  status\n-----  ---  ------\n");
-    for (alias, peer) in store.peers { let _ = writeln!(stdout, "{alias}  {}  UNKNOWN", peer.url); }
+    let aliases = store.peers.keys().cloned().collect::<Vec<_>>();
+    let mut worst = 0;
+    for alias in aliases {
+        let url = store.peers.get(&alias).map(|peer| peer.url.clone()).unwrap_or_default();
+        let now = peers_now_iso();
+        let probe = peers_probe_peer(&url, timeout, &now);
+        if let Some(peer) = store.peers.get_mut(&alias) { peers_apply_probe_result(peer, &probe, &now)?; }
+        let code = peers_probe_exit_code(&probe);
+        worst = worst.max(code);
+        let status = probe.error.as_ref().map_or("OK", |error| error.code.as_str());
+        let _ = writeln!(stdout, "{alias}  {url}  {status}");
+    }
+    peers_save_store(&store)?;
     let allow = argv.iter().any(|arg| arg == "--allow-unreachable");
-    Ok(CliOutput { code: if allow { 0 } else { 2 }, stdout, stderr: String::new() })
+    Ok(CliOutput { code: if allow { 0 } else { worst }, stdout, stderr: String::new() })
 }
 
 fn peers_cmd_accept(argv: &[String], positional: &[&str]) -> Result<CliOutput, String> {
@@ -196,6 +229,118 @@ fn peers_list_row(alias: String, peer: PeersPeerNative) -> (String, PeersPeerNat
     let age = peers_stale_age_ms(&peer);
     let stale = age.is_none_or(|value| value > peers_stale_ttl_ms());
     (alias, peer, stale, age)
+}
+
+fn peers_probe_peer(url: &str, timeout_ms: u64, now: &str) -> maw_peer::ProbePeerResult {
+    maw_peer::probe_peer_from_plan(&maw_peer::ProbePeerPlan { url: url.to_owned(), now: now.to_owned(), dns_error: None, info: peers_fetch_info(url, timeout_ms), identity: None })
+}
+
+fn peers_fetch_info(url: &str, timeout_ms: u64) -> maw_peer::ProbeInfoOutcome {
+    let info_url = match peers_probe_info_url(url) {
+        Ok(value) => value,
+        Err(error) => return maw_peer::ProbeInfoOutcome::FetchName { name: "TypeError".to_owned(), message: error },
+    };
+    let handle = std::thread::spawn(move || {
+        let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+            Ok(value) => value,
+            Err(error) => return maw_peer::ProbeInfoOutcome::FetchName { name: "Error".to_owned(), message: format!("probe runtime failed: {error}") },
+        };
+        runtime.block_on(peers_fetch_info_async(&info_url, std::time::Duration::from_millis(timeout_ms)))
+    });
+    handle.join().unwrap_or_else(|_| maw_peer::ProbeInfoOutcome::FetchName { name: "Error".to_owned(), message: "probe runtime panicked".to_owned() })
+}
+
+async fn peers_fetch_info_async(url: &str, timeout: std::time::Duration) -> maw_peer::ProbeInfoOutcome {
+    let client = match reqwest::Client::builder().timeout(timeout).redirect(reqwest::redirect::Policy::none()).build() {
+        Ok(value) => value,
+        Err(error) => return peers_reqwest_error(&error),
+    };
+    let response = match client.get(url).send().await {
+        Ok(value) => value,
+        Err(error) => return peers_reqwest_error(&error),
+    };
+    let status = response.status();
+    if !status.is_success() { return maw_peer::ProbeInfoOutcome::HttpStatus { status: status.as_u16(), ok: false }; }
+    match response.json::<serde_json::Value>().await {
+        Ok(value) => peers_probe_info_body(&value),
+        Err(_) => maw_peer::ProbeInfoOutcome::InvalidJson,
+    }
+}
+
+fn peers_probe_info_url(url: &str) -> Result<String, String> {
+    reqwest::Url::parse(url).and_then(|base| base.join("/info")).map(|url| url.to_string()).map_err(|error| error.to_string())
+}
+
+fn peers_reqwest_error(error: &reqwest::Error) -> maw_peer::ProbeInfoOutcome {
+    let message = error.to_string();
+    if error.is_timeout() { return maw_peer::ProbeInfoOutcome::FetchName { name: "TimeoutError".to_owned(), message }; }
+    if let Some(code) = peers_reqwest_error_code(error, &message) {
+        return maw_peer::ProbeInfoOutcome::FetchCode { code: code.to_owned(), message };
+    }
+    maw_peer::ProbeInfoOutcome::FetchName { name: "Error".to_owned(), message }
+}
+
+fn peers_reqwest_error_code(error: &reqwest::Error, message: &str) -> Option<&'static str> {
+    let mut source = std::error::Error::source(error);
+    while let Some(cause) = source {
+        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+            match io.kind() {
+                std::io::ErrorKind::ConnectionRefused => return Some("ECONNREFUSED"),
+                std::io::ErrorKind::TimedOut => return Some("ETIMEDOUT"),
+                _ => {}
+            }
+        }
+        source = cause.source();
+    }
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("connection refused") { return Some("ECONNREFUSED"); }
+    if lower.contains("timed out") { return Some("ETIMEDOUT"); }
+    if lower.contains("dns") || lower.contains("name or service") || lower.contains("failed to lookup") || lower.contains("nodename nor servname") { return Some("ENOTFOUND"); }
+    if lower.contains("certificate") || lower.contains("tls") { return Some("CERT_HAS_EXPIRED"); }
+    None
+}
+
+fn peers_probe_info_body(value: &serde_json::Value) -> maw_peer::ProbeInfoOutcome {
+    maw_peer::ProbeInfoOutcome::Body(maw_peer::ProbeInfoBody { maw: peers_probe_maw_handshake(value.get("maw")), node: peers_json_string(value, "node"), name: peers_json_string(value, "name"), nickname: peers_json_string(value, "nickname") })
+}
+
+fn peers_probe_maw_handshake(value: Option<&serde_json::Value>) -> maw_peer::ProbeMawHandshake {
+    match value {
+        Some(serde_json::Value::Bool(true)) => maw_peer::ProbeMawHandshake::LegacyTrue,
+        Some(serde_json::Value::Object(map)) if map.is_empty() => maw_peer::ProbeMawHandshake::EmptyObject,
+        Some(serde_json::Value::Object(map)) => maw_peer::ProbeMawHandshake::SchemaObject(map.get("schema").and_then(serde_json::Value::as_str).filter(|schema| !schema.is_empty()).unwrap_or("object").to_owned()),
+        None => maw_peer::ProbeMawHandshake::Missing,
+        Some(_) => maw_peer::ProbeMawHandshake::OtherTruthy,
+    }
+}
+
+fn peers_json_string(value: &serde_json::Value, key: &str) -> Option<String> {
+    value.get(key).and_then(serde_json::Value::as_str).filter(|value| !value.is_empty()).map(str::to_owned)
+}
+
+fn peers_apply_probe_result(peer: &mut PeersPeerNative, probe: &maw_peer::ProbePeerResult, now: &str) -> Result<(), String> {
+    if let Some(error) = &probe.error {
+        peer.last_error = Some(serde_json::to_value(error).map_err(|error| format!("peers: render probe error: {error}"))?);
+        return Ok(());
+    }
+    peer.last_seen = Some(now.to_owned());
+    peer.last_error = None;
+    if let Some(node) = &probe.node { peer.node = Some(node.clone()); }
+    if let Some(nickname) = &probe.nickname { peer.nickname = Some(nickname.clone()); }
+    if let Some(pubkey) = &probe.pubkey {
+        if peer.pubkey.as_ref() != Some(pubkey) { peer.pubkey_first_seen = Some(now.to_owned()); }
+        peer.pubkey = Some(pubkey.clone());
+    }
+    if let Some(identity) = &probe.identity { peer.identity = Some(serde_json::to_value(identity).map_err(|error| format!("peers: render identity: {error}"))?); }
+    Ok(())
+}
+
+fn peers_probe_exit_code(probe: &maw_peer::ProbePeerResult) -> i32 {
+    probe.error.as_ref().map_or(0, |error| probe_exit_code(error.code))
+}
+
+fn peers_probe_stderr(alias: &str, url: &str, probe: &maw_peer::ProbePeerResult) -> String {
+    probe.error.as_ref().map_or_else(String::new, |error| format!("{}\n", maw_peer::format_probe_error(error, url, alias)))
 }
 
 fn peers_format_list(rows: &[(String, PeersPeerNative, bool, Option<u64>)]) -> String {

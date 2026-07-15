@@ -133,6 +133,26 @@ fn parse_manifest_preserves_lifecycle_and_v1_fields() {
     assert_eq!(bare.wasm, None);
     assert_eq!(bare.entry, None);
     assert_eq!(bare.artifact, None);
+    let manifest = parse_manifest(
+        &json!({ "name": "endpoint-plugin", "version": "1.0.0", "entry": "index.ts", "sdk": "*", "capabilities": ["net:fetch:discord-rest"], "endpoints": { "discord-rest": { "baseUrl": "https://discord.com/api/v10", "paths": ["/channels/*/messages"] } } }).to_string(),
+        &dir,
+    )
+    .expect("endpoint manifest");
+    let endpoint = manifest
+        .endpoints
+        .expect("endpoints")
+        .remove("discord-rest")
+        .expect("policy");
+    let pattern = &endpoint.paths[0];
+    assert!(pattern.matches("/channels/123/messages"));
+    for path in [
+        "/channels/../messages",
+        "https://evil.test/channels/123/messages",
+        "//evil.test/channels/123/messages",
+        "/channels/https://evil.test/messages",
+    ] {
+        assert!(!pattern.matches(path), "{path} should not match");
+    }
     remove_dir_all(dir).expect("cleanup");
 }
 
@@ -188,6 +208,16 @@ fn parse_manifest_validation_failures_match_maw_js_tests() {
         &json!({ "name": "bad-caps", "version": "1.0.0", "entry": "index.ts", "sdk": "*", "capabilities": "sdk:identity" }).to_string(),
         &dir,
         "plugin.json: capabilities must be an array of strings",
+    );
+    expect_manifest_error(
+        &json!({ "name": "missing-endpoint", "version": "1.0.0", "entry": "index.ts", "sdk": "*", "capabilities": ["net:fetch:discord-rest"], "endpoints": { "hermes-api": { "baseUrl": "http://127.0.0.1:8642", "paths": ["/health"] } } }).to_string(),
+        &dir,
+        "references missing endpoint",
+    );
+    expect_manifest_error(
+        &json!({ "name": "bad-endpoint-path", "version": "1.0.0", "entry": "index.ts", "sdk": "*", "endpoints": { "bad-api": { "baseUrl": "https://example.test", "paths": ["/channels/**"] } } }).to_string(),
+        &dir,
+        "only full-segment * wildcards",
     );
     expect_manifest_error(
         &json!({ "name": "bad-art", "version": "1.0.0", "entry": "index.ts", "sdk": "*", "artifact": "dist/index.js" }).to_string(),

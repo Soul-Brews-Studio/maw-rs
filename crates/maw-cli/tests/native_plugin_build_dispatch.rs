@@ -148,19 +148,24 @@ fn plugin_build_route_a_builds_dist_and_extism_loads_fixture() {
         Some("wasm")
     );
     assert_eq!(plugin.kind.as_str(), "wasm");
-    let mut runtime = maw_plugin_manifest::ExtismWasmInvokeRuntime::default();
-    let result = maw_plugin_manifest::invoke_plugin(
-        &plugin,
-        &maw_plugin_manifest::InvokeContext {
-            source: maw_plugin_manifest::InvokeSource::Cli,
-            args: vec!["probe".to_owned()],
-            cwd: None,
-            home: None,
-        },
-        &mut runtime,
-    );
-    assert!(result.ok, "invoke error: {:?}", result.error);
-    assert_eq!(result.output.as_deref(), Some("route-probe:called"));
+    // Loading the built artifact on the real Extism runtime needs the wasm-host
+    // feature; the build/dist assertions above stay on the default test path.
+    #[cfg(feature = "wasm-host")]
+    {
+        let mut runtime = maw_plugin_manifest::ExtismWasmInvokeRuntime::default();
+        let result = maw_plugin_manifest::invoke_plugin(
+            &plugin,
+            &maw_plugin_manifest::InvokeContext {
+                source: maw_plugin_manifest::InvokeSource::Cli,
+                args: vec!["probe".to_owned()],
+                cwd: None,
+                home: None,
+            },
+            &mut runtime,
+        );
+        assert!(result.ok, "invoke error: {:?}", result.error);
+        assert_eq!(result.output.as_deref(), Some("route-probe:called"));
+    }
 }
 
 #[test]
@@ -213,6 +218,8 @@ fn plugin_build_ts_missing_local_toolchain_does_not_delegate_to_maw_or_bun() {
 
 #[test]
 #[cfg(unix)]
+// 3 lines over the pedantic cap from the wasm-host dispatch guard below.
+#[allow(clippy::too_many_lines)]
 fn plugin_build_ts_assemblyscript_fixture_graduates_to_wasm_and_dispatch_avoids_bun() {
     let root = temp_dir("ts-ship");
     let sdk_dir = root.join("wasm-sdk");
@@ -288,6 +295,11 @@ fn plugin_build_ts_assemblyscript_fixture_graduates_to_wasm_and_dispatch_avoids_
         json!({"path":"./plugin.wasm","sha256":sha256})
     );
 
+    // Dispatch proof: the CARGO_BIN_EXE binary shares this test run's features,
+    // so running the graduated plugin.wasm needs wasm-host (wasm-host CI job).
+    if !cfg!(feature = "wasm-host") {
+        return;
+    }
     let bun_args = root.join("bun-args");
     write_executable(
         &bin_dir.join("bun"),

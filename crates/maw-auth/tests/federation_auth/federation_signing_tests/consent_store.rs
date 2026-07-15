@@ -20,6 +20,18 @@ fn consent_pin_hash_and_verify_match_maw_js_normalized_shape_contract() {
     assert!(!verify_consent_pin("ABCDE0", &h1));
 }
 
+// FleetRecruit consent action (#292): wire literal, parse/format, trust key.
+#[test]
+fn consent_action_fleet_recruit_round_trips_wire_literal_and_trust_key() {
+    use maw_auth::{trust_key, ConsentAction};
+
+    assert_eq!(ConsentAction::FleetRecruit.as_str(), "fleet-recruit");
+    assert_eq!(ConsentAction::parse("fleet-recruit"), Some(ConsentAction::FleetRecruit));
+    assert_eq!(ConsentAction::parse("team-invite"), Some(ConsentAction::TeamInvite));
+    assert_eq!(ConsentAction::parse("fleet_recruit"), None);
+    assert_eq!(trust_key("neo", "mawjs", ConsentAction::FleetRecruit), "neo→mawjs:fleet-recruit");
+}
+
 // Ported from maw-js `src/core/consent/store.ts` and
 // `test/core/consent/consent.test.ts` trust/pending store cases.
 #[test]

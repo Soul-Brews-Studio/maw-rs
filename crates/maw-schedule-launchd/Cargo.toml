@@ -1,0 +1,13 @@
+[package]
+name = "maw-schedule-launchd"
+version = "0.1.0-alpha.1"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+maw-schedule = { path = "../maw-schedule" }
+
+[lints]
+workspace = true

@@ -277,7 +277,7 @@ fn consent_mutating_subcommands_are_refused_without_delegation() {
     assert_ne!(output.code, 0);
     assert!(output.stdout.is_empty());
     assert!(
-        output.stderr.contains("not native in maw-rs ZERO-BUN B2"),
+        output.stderr.contains("request not found: req-1"),
         "{}",
         output.stderr
     );
@@ -287,5 +287,13 @@ fn consent_mutating_subcommands_are_refused_without_delegation() {
         output.stderr
     );
     assert!(!root.join("state/trust.json").exists());
+
+    let trust = run_cli(&args(&["consent", "trust", "peer"]));
+    assert_ne!(trust.code, 0);
+    assert!(
+        trust.stderr.contains("not native in maw-rs ZERO-BUN B2"),
+        "{}",
+        trust.stderr
+    );
     let _ = std::fs::remove_dir_all(root);
 }

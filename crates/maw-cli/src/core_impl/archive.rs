@@ -72,7 +72,7 @@ fn archive_validate_oracle(value: &str) -> Result<(), String> {
 }
 
 fn archive_find_entry(oracle: &str) -> Result<Option<ArchiveFleetEntry>, String> {
-    for entry in fleet_load_entries_result("archive")? {
+    for entry in fleet_load_entries_result("archive")?.into_iter().filter(fleet_entry_is_session) {
         if archive_session_oracle_name(&entry.session.name) == oracle {
             return Ok(Some(ArchiveFleetEntry {
                 file: entry.file,
@@ -294,10 +294,6 @@ mod archive_tests {
     }
 
     impl SoulsyncHost for ArchiveSoulsyncFakeHost {
-        fn soulsync_current_dir(&mut self) -> std::path::PathBuf { std::path::PathBuf::from(".") }
-        fn soulsync_tmux_cwd(&mut self) -> Option<std::path::PathBuf> { None }
-        fn soulsync_git_common_dir(&mut self, _: &std::path::Path) -> Option<std::path::PathBuf> { None }
-        fn soulsync_git_top_level(&mut self, _: &std::path::Path) -> Option<std::path::PathBuf> { None }
         fn soulsync_now(&mut self) -> String { self.now.clone() }
     }
 

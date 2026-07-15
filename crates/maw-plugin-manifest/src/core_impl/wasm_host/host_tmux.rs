@@ -123,6 +123,57 @@ impl MawWasmHost {
         )
     }
 
+    fn tmux_command(&self, input: &str) -> HostResult<Value> {
+        let start = Instant::now();
+        let args = match parse_args::<TmuxCommandArgs>(input) {
+            Ok(args) => args,
+            Err(err) => return err,
+        };
+        let capability = if matches!(
+            args.command.as_str(),
+            "display-message" | "show-options" | "list-windows" | "list-panes"
+        ) {
+            "tmux:read".to_owned()
+        } else {
+            format!("tmux:raw:{}", args.command)
+        };
+        if !self.has_exact_cap(&capability) {
+            return HostResult::err(
+                HostErrorCode::CapabilityDenied,
+                format!("capability denied: {capability}"),
+            );
+        }
+        if !valid_tmux_command_argv(&args.command, &args.args) {
+            return HostResult::err(
+                HostErrorCode::InvalidArgs,
+                "tmux command or arguments are outside the managed ABI",
+            );
+        }
+        let output = if self.tmux_dry_run {
+            String::new()
+        } else {
+            let mut runner = CommandTmuxRunner::new();
+            match maw_tmux::TmuxRunner::run(&mut runner, &args.command, &args.args) {
+                Ok(output) => output,
+                Err(error) => return HostResult::err(HostErrorCode::IoError, error.message),
+            }
+        };
+        let resource = format!("tmux://{}", args.command);
+        let result = HostResult::ok(json!({
+            "command": args.command,
+            "args": args.args,
+            "stdout": output,
+        }));
+        self.audit(
+            "maw.tmux.command",
+            &capability,
+            &resource,
+            status_of(&result),
+            start,
+        );
+        result
+    }
+
     fn tmux_send_enter(&self, input: &str) -> HostResult<Value> {
         let args = match parse_args::<TmuxEnterArgs>(input) {
             Ok(args) => args,
@@ -191,4 +242,113 @@ impl MawWasmHost {
         }
     }
 
+}
+
+fn valid_tmux_value(value: &str) -> bool {
+    !value.is_empty()
+        && value == value.trim()
+        && !value.starts_with('-')
+        && !value.chars().any(char::is_control)
+}
+
+fn valid_tmux_command_argv(command: &str, args: &[String]) -> bool {
+    let safe = valid_tmux_value;
+    let token = |value: &str| safe(value) && value.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'));
+    let layout = |value: &str| matches!(value, "even-horizontal" | "even-vertical" | "main-horizontal" | "main-vertical" | "tiled");
+    match (command, args) {
+        ("display-message", [print, format]) => {
+            print == "-p" && matches!(format.as_str(), "#{session_name}" | "#{window_name}" | "#{pane_id}" | "#{window_id}")
+        }
+        ("display-message", [target_flag, target, print, format]) => {
+            target_flag == "-t" && safe(target) && print == "-p" && matches!(format.as_str(), "#{pane_current_command}" | "#{session_name}:#{window_index}.#{pane_index}" | "#{session_name}:#{window_index}")
+        }
+        ("list-panes", [all, format_flag, format]) => {
+            all == "-a" && format_flag == "-F" && format == "#{pane_id}"
+        }
+        ("split-window", [target_flag, target, orientation, size_flag, size, shell]) => {
+            target_flag == "-t"
+                && safe(target)
+                && matches!(orientation.as_str(), "-h" | "-v")
+                && size_flag == "-l"
+                && size == "50%"
+                && safe(shell)
+                && shell.starts_with("bash -lc ")
+                && shell.len() <= 16_384
+        }
+        ("show-options", [target, session, global, option]) => {
+            target == "-t" && safe(session) && global == "-gv" && option == "base-index"
+        }
+        ("list-windows", [target, session, format_flag, format]) => {
+            target == "-t"
+                && safe(session)
+                && format_flag == "-F"
+                && format == "#{window_index}\t#{window_name}\t#{window_active}\t#{window_panes}"
+        }
+        ("new-session", [detached, session_flag, session, name_flag, name]) => {
+            detached == "-d"
+                && session_flag == "-s"
+                && safe(session)
+                && name_flag == "-n"
+                && name == "maw-stream-placeholder"
+        }
+        ("link-window", [detached, source_flag, source, target_flag, target]) => {
+            detached == "-d"
+                && source_flag == "-s"
+                && safe(source)
+                && target_flag == "-t"
+                && safe(target)
+        }
+        ("rename-window", [target_flag, target, alias]) => {
+            target_flag == "-t" && safe(target) && safe(alias) && !alias.contains(':')
+        }
+        ("set-window-option", [target_flag, target, key, source]) => {
+            target_flag == "-t"
+                && safe(target)
+                && key == "@maw-linked-from"
+                && safe(source)
+        }
+        ("kill-window", [target_flag, target]) => {
+            target_flag == "-t"
+                && safe(target)
+                && target.ends_with(":maw-stream-placeholder")
+        }
+        ("kill-session" | "unlink-window" | "kill-pane", [target_flag, target]) => {
+            target_flag == "-t" && safe(target)
+        }
+        ("list-panes", [target_flag, target, format_flag, format]) => {
+            target_flag == "-t" && safe(target) && format_flag == "-F" && matches!(format.as_str(), "#{pane_id}|||#{pane_title}|||#{@maw_tile}" | "#{pane_index}|||#{pane_id}|||#{pane_title}|||#{pane_top}" | "#{pane_id}" | "#{pane_height}")
+        }
+        ("split-window", [target_flag, target, horizontal, print, format_flag, format, shell]) => {
+            target_flag == "-t" && safe(target) && horizontal == "-h" && print == "-P" && format_flag == "-F" && format == "#{pane_id}" && !shell.is_empty() && !shell.chars().any(char::is_control)
+        }
+        ("select-pane", [target_flag, target, title_flag, title]) => {
+            target_flag == "-t" && safe(target) && title_flag == "-T" && token(title)
+        }
+        ("set-option", [pane, target_flag, target, key, value]) if pane == "-p" => {
+            target_flag == "-t" && safe(target) && match key.as_str() {
+                "pane-border-format" => value.starts_with("#[fg=") && value.ends_with(",bold] #{pane_title}"),
+                "pane-active-border-style" => value.starts_with("fg=") && token(&value[3..]),
+                "@maw_tile" => value == "1",
+                "@maw_tile_parent" | "@maw_tile_role" => safe(value),
+                _ => false,
+            }
+        }
+        ("set-option", [window, target_flag, target, key, value]) if window == "-w" => {
+            target_flag == "-t" && safe(target) && key == "pane-border-status" && value == "top"
+        }
+        ("send-keys", [target_flag, target, key]) => {
+            target_flag == "-t" && safe(target) && matches!(key.as_str(), "C-u" | "Enter")
+        }
+        ("send-keys", [target_flag, target, literal, value]) => {
+            target_flag == "-t" && safe(target) && literal == "-l" && token(value)
+        }
+        ("select-layout", [preset]) => layout(preset),
+        ("select-layout", [target_flag, target, preset]) => {
+            target_flag == "-t" && safe(target) && layout(preset)
+        }
+        ("swap-pane", [source_flag, source, target_flag, target]) => {
+            source_flag == "-s" && safe(source) && target_flag == "-t" && safe(target)
+        }
+        _ => false,
+    }
 }

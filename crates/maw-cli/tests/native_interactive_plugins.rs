@@ -31,6 +31,29 @@ fn run(args: &[&str], maw_home: &Path) -> std::process::Output {
         .expect("run maw-rs")
 }
 
+#[cfg(feature = "wasm-host")]
+fn run_stream(args: &[&str], root: &Path) -> std::process::Output {
+    let plugin = root.join("plugins/stream");
+    fs::create_dir_all(&plugin).expect("stream plugin dir");
+    fs::write(
+        plugin.join("plugin.json"),
+        include_str!("fixtures/native-interactive/stream-plugin/plugin.json"),
+    )
+    .expect("stream plugin json");
+    fs::write(
+        plugin.join("plugin.wasm"),
+        include_bytes!("fixtures/native-interactive/stream-plugin/plugin.wasm"),
+    )
+    .expect("stream plugin wasm");
+    Command::new(bin())
+        .args(args)
+        .env("MAW_HOME", root)
+        .env("MAW_JS_REF_DIR", "/nonexistent")
+        .env("MAW_PLUGINS_DIR", root.join("plugins"))
+        .output()
+        .expect("run stream plugin")
+}
+
 #[test]
 fn interactive_plugin_commands_are_native_not_bun_fallback() {
     for command in ["init", "tmux", "view", "split"] {
@@ -83,6 +106,38 @@ fn init_non_interactive_writes_maw_home_bounded_config_atomically() {
     assert!(String::from_utf8(output.stdout)
         .expect("stdout")
         .contains("Wrote"));
+}
+
+#[test]
+fn init_force_preserves_unknown_config_keys() {
+    let root = temp_dir("init-round-trip");
+    fs::create_dir_all(root.join("config")).expect("config dir");
+    fs::write(
+        root.join("config/maw.config.json"),
+        r#"{"node":"old","hooks":{"postWake":["echo arrange"]}}"#,
+    )
+    .expect("seed config");
+
+    let output = run(
+        &["init", "--non-interactive", "--node", "new-node", "--force"],
+        &root,
+    );
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let config: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(root.join("config/maw.config.json")).expect("config body"),
+    )
+    .expect("config json");
+    assert_eq!(config["node"], "new-node");
+    assert_eq!(config["hooks"]["postWake"][0], "echo arrange");
+    let audit = fs::read_to_string(root.join("audit.jsonl")).expect("audit log");
+    let write: serde_json::Value = audit
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("audit row"))
+        .find(|row: &serde_json::Value| row["cmd"] == "config-write")
+        .expect("config-write row");
+    assert!(write["path"].as_str().expect("path").ends_with("maw.config.json"));
+    assert!(write["keysDiff"]["changed"].as_array().expect("changed").contains(&serde_json::json!("node")));
 }
 
 #[test]
@@ -174,13 +229,8 @@ fn init_interactive_wizard_uses_isolated_pty_when_script_is_available() {
 
 #[test]
 fn subset2_commands_are_native_not_bun_fallback() {
-    for command in ["stream", "attach-ssh"] {
-        assert_eq!(
-            dispatcher_status(command),
-            DispatchKind::Native,
-            "{command}"
-        );
-    }
+    assert_eq!(dispatcher_status("stream"), DispatchKind::NativeError);
+    assert_eq!(dispatcher_status("attach-ssh"), DispatchKind::Native);
 }
 
 #[test]
@@ -264,10 +314,11 @@ fn attach_ssh_refuses_unsafe_session_before_ssh() {
     assert_eq!(String::from_utf8(output.stdout).expect("stdout"), "");
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn stream_unlink_dry_run_matches_committed_golden_without_ref_checkout() {
     let root = temp_dir("stream-unlink-dry-run");
-    let output = run(&["stream", "--unlink", "view:oracle", "--dry-run"], &root);
+    let output = run_stream(&["stream", "--unlink", "view:oracle", "--dry-run"], &root);
 
     assert!(
         output.status.success(),
@@ -281,10 +332,11 @@ fn stream_unlink_dry_run_matches_committed_golden_without_ref_checkout() {
     assert_eq!(String::from_utf8(output.stderr).expect("stderr"), "");
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn stream_unlink_plan_json_matches_committed_golden_without_ref_checkout() {
     let root = temp_dir("stream-unlink-plan-json");
-    let output = run(&["stream", "--unlink", "view:oracle", "--plan-json"], &root);
+    let output = run_stream(&["stream", "--unlink", "view:oracle", "--plan-json"], &root);
 
     assert!(
         output.status.success(),

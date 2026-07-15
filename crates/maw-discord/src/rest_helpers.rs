@@ -6,11 +6,20 @@ pub(super) fn resolve_bot_for_rest(
     log: &mut Vec<String>,
 ) -> Option<(BotResolved, String, String)> {
     let pre = resolve_bot(env, bot, log)?;
-    let token = decrypt_token(&pre.token_name)?;
+    let token = match decrypt_token_result(&pre.token_name) {
+        Ok(token) => token,
+        Err(error) => {
+            log.push(error.to_string());
+            return None;
+        }
+    };
     Some((pre, token, bot.to_owned()))
 }
 
-pub(super) async fn fetch_guilds(rest: &dyn DiscordRest, token: &str) -> Result<Vec<Guild>, String> {
+pub(super) async fn fetch_guilds(
+    rest: &dyn DiscordRest,
+    token: &str,
+) -> Result<Vec<Guild>, String> {
     let res = rest.get_json("/users/@me/guilds", token).await?;
     if !(200..300).contains(&res.status) {
         return Err(format!("guilds REST {}", res.status));
@@ -35,7 +44,11 @@ pub(super) async fn fetch_channels(
     serde_json::from_value(res.body).map_err(|e| e.to_string())
 }
 
-pub(super) async fn resolve_user_list(rest: &dyn DiscordRest, token: &str, ids: &[String]) -> Vec<Value> {
+pub(super) async fn resolve_user_list(
+    rest: &dyn DiscordRest,
+    token: &str,
+    ids: &[String],
+) -> Vec<Value> {
     let mut out = Vec::new();
     for id in ids {
         if !is_numeric_snowflake(id) {

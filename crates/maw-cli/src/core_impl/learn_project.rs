@@ -499,9 +499,7 @@ mod missing_cmds_tests291 {
 
     #[test]
     fn missing_cmds_fake_maw_no_delegate_proof() {
-        let _lock = env_test_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lock = env_test_lock();
         let _path = EnvVarRestore::capture("PATH");
         let _ref_dir = EnvVarRestore::capture("MAW_JS_REF_DIR");
         let root = std::env::temp_dir().join(format!(

@@ -87,7 +87,7 @@ fn team_remove_member_matches(member: &TeamCharterMember122, selector: &str, ide
 }
 
 fn team_remove_has_worktree(charter: &TeamCharter122, role: &str) -> bool {
-    charter.members.iter().find(|member| member.role == role).and_then(|member| member.worktree.as_deref()).is_none_or(|value| value != "false")
+    charter.members.iter().find(|member| member.role == role).is_none_or(|member| !member.worktree_opt_out && member.worktree.as_deref().is_none_or(|value| value != "false"))
 }
 
 fn team_remove_validate_live_target(session: &str, target: &str) -> Result<(), String> {

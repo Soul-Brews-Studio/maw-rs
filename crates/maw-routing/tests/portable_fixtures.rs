@@ -171,3 +171,21 @@ fn routing_fixtures_match_maw_js_portable_spec() {
         );
     }
 }
+
+#[test]
+fn routing_differential_corpus_matches_maw_js_generated_fixtures() {
+    // Regenerate with: bun scripts/gen-routing-corpus.ts
+    let fixtures: FixtureRoot =
+        serde_json::from_str(include_str!("fixtures/differential/generated.json"))
+            .expect("valid differential routing corpus json");
+    for fixture in fixtures.cases {
+        let config = merged_config(&fixtures.base_config, fixture.config.as_ref());
+        let sessions: Vec<Session> = fixture.sessions.into_iter().map(Into::into).collect();
+        assert_eq!(
+            resolve_target(&fixture.query, &config, &sessions),
+            expected_result(fixture.expected),
+            "{}",
+            fixture.name
+        );
+    }
+}

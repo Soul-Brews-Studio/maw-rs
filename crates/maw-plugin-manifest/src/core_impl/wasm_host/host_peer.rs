@@ -8,6 +8,10 @@ impl MawWasmHost {
             Ok(key) => key,
             Err(err) => return err,
         };
+        let federation_token = match self.secret_ref(args.federation_token_ref.as_deref()) {
+            Ok(token) => token,
+            Err(err) => return err,
+        };
         let url = match Url::parse(&args.peer_url) {
             Ok(url) => url,
             Err(error) => {
@@ -39,6 +43,7 @@ impl MawWasmHost {
             text: args.text,
             inbox: args.inbox,
             from: args.from,
+            federation_token,
             peer_key: key,
             timestamp: args.timestamp.unwrap_or(0),
         };
@@ -71,6 +76,10 @@ impl MawWasmHost {
             Ok(key) => key,
             Err(err) => return err,
         };
+        let federation_token = match self.secret_ref(args.federation_token_ref.as_deref()) {
+            Ok(token) => token,
+            Err(err) => return err,
+        };
         let url = Url::parse(&args.peer_url).map_err(|_| ()).ok();
         let Some(url) = url else {
             return HostResult::err(HostErrorCode::InvalidArgs, "invalid peerUrl");
@@ -89,6 +98,7 @@ impl MawWasmHost {
             target: args.target,
             task: args.task,
             from: args.from,
+            federation_token,
             peer_key: key,
             timestamp: args.timestamp.unwrap_or(0),
         };
@@ -111,5 +121,4 @@ impl MawWasmHost {
             Err(error) => HostResult::err(HostErrorCode::NetworkError, error),
         }
     }
-
 }

@@ -109,7 +109,6 @@ fn run_auth_verify_request_d2(
     }
 }
 
-
 fn auth_ed25519_cli_pins(
     headers: &Headers,
     cached_pubkey: Option<&str>,
@@ -411,6 +410,7 @@ fn run_auth_sign_v3(
         Ok(signature) => {
             let headers = sign_headers_v3_at(
                 peer_key,
+                peer_key,
                 from_address,
                 method,
                 path,
@@ -547,4 +547,3 @@ enum AuthPlanAction {
         workspace_key_env: Option<String>,
     },
 }
-

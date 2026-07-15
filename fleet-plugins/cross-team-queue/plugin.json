@@ -1,0 +1,28 @@
+{
+  "artifact": {
+    "path": "./plugin.wasm",
+    "sha256": "sha256:5f8fd46790d85bd9e8f13a99b255cee6412a8aca676b75ee5ad4b0ac5c0a84a9"
+  },
+  "author": "Soul-Brews-Studio",
+  "capabilities": [
+    "fs:read:vault"
+  ],
+  "cli": {
+    "command": "cross-team-queue",
+    "help": "maw cross-team-queue [--json] [--recipient <name>]"
+  },
+  "description": "Unified inbox queue scanner. Ship-tier WASM reads the configured vault via fs:read:vault and returns the queue contract.",
+  "entry": {
+    "export": "handle",
+    "kind": "wasm",
+    "path": "plugin.wasm"
+  },
+  "license": "BUSL-1.1",
+  "name": "cross-team-queue",
+  "schemaVersion": 1,
+  "sdk": "^1.0.0",
+  "target": "wasm",
+  "version": "0.1.0",
+  "wasm": "./plugin.wasm",
+  "weight": 50
+}

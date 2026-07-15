@@ -53,6 +53,20 @@ fn ls_plan_compact_default_shows_all_sessions_and_fleet_only_filters_shape() {
 }
 
 #[test]
+fn ls_json_counts_version_shaped_claude_command_as_agent() {
+    let output = run_cli(&args(&[
+        "ls",
+        "--plan-json",
+        "--pane",
+        "%1|2.1.207|50-mawjs:1.0|Claude Code|100|/repo|1700000000",
+    ]));
+
+    assert_eq!(output.code, 0, "{}", output.stderr);
+    let value: serde_json::Value = serde_json::from_str(&output.stdout).expect("ls json");
+    assert_eq!(value["sessions"][0]["agents"], 1, "{value}");
+}
+
+#[test]
 fn ls_plan_positional_filters_local_sessions_without_peer_stub() {
     let output = run_cli(&args(&[
         "ls",

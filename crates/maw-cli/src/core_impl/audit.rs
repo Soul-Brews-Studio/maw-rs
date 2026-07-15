@@ -122,7 +122,7 @@ fn audit_read_lines(count: usize) -> Vec<String> {
 }
 
 fn audit_file_path() -> std::path::PathBuf {
-    maw_state_path(&audit_xdg_env(), &["audit.jsonl"])
+    audit_jsonl_path(&audit_xdg_env())
 }
 
 fn audit_parse_rows(lines: &[String]) -> Vec<AuditRowNative> {
@@ -250,7 +250,7 @@ mod audit_tests {
     }
 
     fn audit_seed_env(name: &str) -> (std::sync::MutexGuard<'static, ()>, std::path::PathBuf, Vec<AuditEnvRestore>) {
-        let lock = super::env_test_lock().lock().expect("env lock");
+        let lock = super::env_test_lock();
         let root = audit_temp_root(name);
         let restores = ["HOME", "XDG_STATE_HOME", "MAW_STATE_DIR", "MAW_HOME", "MAW_XDG", "TMUX"]
             .into_iter().map(AuditEnvRestore::audit_capture).collect::<Vec<_>>();

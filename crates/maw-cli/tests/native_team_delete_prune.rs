@@ -67,6 +67,43 @@ fn seed_prune(root: &Path) {
     fs::create_dir_all(root.join("home/.claude/teams/bad/name")).expect("ignored nested bad");
 }
 
+fn seed_gc(root: &Path) {
+    for (name, members, created_at) in [
+        ("active", "[{\"name\":\"worker\",\"isActive\":true}]", "1"),
+        ("empty", "[]", "1"),
+        (
+            "inactive-future",
+            "[{\"name\":\"worker\"}]",
+            "18446744073709551615",
+        ),
+        ("inactive-old", "[{\"name\":\"worker\"}]", "1"),
+        (
+            "session-dead",
+            "[{\"name\":\"worker\"}]",
+            "18446744073709551615",
+        ),
+    ] {
+        fs::create_dir_all(root.join(format!("home/.claude/teams/{name}"))).expect("team dir");
+        fs::write(
+            root.join(format!("home/.claude/teams/{name}/config.json")),
+            format!(r#"{{"name":"{name}","members":{members},"createdAt":{created_at}}}"#),
+        )
+        .expect("config");
+    }
+    fs::create_dir_all(root.join("home/.claude/teams/malformed")).expect("malformed dir");
+    fs::write(
+        root.join("home/.claude/teams/malformed/config.json"),
+        "not-json",
+    )
+    .expect("malformed config");
+    fs::create_dir_all(root.join("maw-home/teams/inactive-old/tasks")).expect("tasks");
+    fs::write(
+        root.join("maw-home/teams/inactive-old/tasks/1.json"),
+        r#"{"id":1}"#,
+    )
+    .expect("task");
+}
+
 fn run(args: &[&str], root: &Path) -> std::process::Output {
     Command::new(bin())
         .args(args)
@@ -155,6 +192,56 @@ fn team_prune_skips_active_memberful_malformed_and_archives() {
     );
     assert!(root
         .join("ψ/memory/mailbox/teams/empty/delete-archive-fixed/tool-team/config.json")
+        .exists());
+}
+
+#[test]
+fn team_gc_dry_run_then_confirm_removes_only_stale_inactive_candidates() {
+    let root = temp_dir("gc");
+    seed_gc(&root);
+    let dry = run(&["team", "gc"], &root);
+    assert!(
+        dry.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&dry.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(dry.stdout).expect("stdout"),
+        "team gc dry-run: 3 candidate(s)\n  - empty [empty] members=0\n  - inactive-old [all-inactive] members=1\n  - session-dead [session-temp] members=1\n  rerun with --confirm to remove\n"
+    );
+    assert!(
+        root.join("home/.claude/teams/empty").exists(),
+        "dry-run must not remove"
+    );
+
+    let confirmed = run(&["team", "gc", "--confirm"], &root);
+    assert!(
+        confirmed.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&confirmed.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(confirmed.stdout).expect("stdout"),
+        "team gc: 3 removed\n  - empty [empty] members=0\n  - inactive-old [all-inactive] members=1\n  - session-dead [session-temp] members=1\n"
+    );
+    for name in ["empty", "inactive-old", "session-dead"] {
+        assert!(
+            !root.join(format!("home/.claude/teams/{name}")).exists(),
+            "{name} removed"
+        );
+    }
+    for name in ["active", "inactive-future", "malformed"] {
+        assert!(
+            root.join(format!("home/.claude/teams/{name}")).exists(),
+            "{name} kept"
+        );
+    }
+    assert!(
+        !root.join("maw-home/teams/inactive-old/tasks").exists(),
+        "gc removes archived team tasks"
+    );
+    assert!(root
+        .join("ψ/memory/mailbox/teams/inactive-old/delete-archive-fixed/tasks/1.json")
         .exists());
 }
 
