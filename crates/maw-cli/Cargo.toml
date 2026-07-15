@@ -19,7 +19,7 @@ maw-auto-wake = { path = "../maw-auto-wake" }
 maw-auth = { path = "../maw-auth" }
 maw-bring = { path = "../maw-bring" }
 maw-bind = { path = "../maw-bind" }
-maw-calver = { path = "../maw-calver" }
+maw-calver = { git = "https://github.com/Soul-Brews-Studio/maw-calver", rev = "c74522b2b7cb5b831c456b2a2fa333849aa85eef" }
 maw-discord = { path = "../maw-discord" }
 maw-feed = { path = "../maw-feed" }
 maw-fuzzy = { path = "../maw-fuzzy" }

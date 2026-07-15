@@ -24,7 +24,10 @@ Both must pass before any PR.
 ## Releases (CalVer)
 
 Version scheme (day-based CalVer, decided 2026-07-05; matches `maw-calver`'s
-`compute_version()`):
+`compute_version()`). `maw-calver` lives in the external
+[Soul-Brews-Studio/maw-calver](https://github.com/Soul-Brews-Studio/maw-calver)
+repo (extracted 2026-07-15, repo split phase 3) and is consumed by `maw-cli`
+as a rev-pinned Cargo git dependency:
 
 ```
 stable:  v<YY>.<M>.<DD>                 one per day
