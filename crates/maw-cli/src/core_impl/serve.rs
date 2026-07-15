@@ -39,6 +39,7 @@ struct ServeState {
     requests: Mutex<RequestReplyStore>,
     delivery: Arc<dyn ServeDelivery>,
     receiver_inbox: Arc<dyn ServeReceiverInbox>,
+    wake: Arc<dyn ServeWakeExecutor>,
     delivery_idempotency: Mutex<DeliveryIdempotencyStore>,
     feed: Mutex<Vec<Value>>,
     #[cfg(test)]
@@ -103,6 +104,33 @@ trait ServeDelivery: Send + Sync {
 }
 
 struct ServeSystemDelivery;
+
+trait ServeWakeExecutor: Send + Sync {
+    fn execute_wake(&self, target: &str, task: Option<&str>) -> Result<String, String>;
+}
+
+struct ServeSystemWakeExecutor;
+
+impl ServeWakeExecutor for ServeSystemWakeExecutor {
+    fn execute_wake(&self, target: &str, task: Option<&str>) -> Result<String, String> {
+        // Receiver-side federation wake runs the LOCAL native wake only —
+        // never the peer-routing path — so a federated wake cannot re-forward
+        // to another node and loop.
+        let mut argv = vec!["wake".to_owned(), target.to_owned(), "--no-attach".to_owned()];
+        if let Some(task) = task {
+            argv.push("--task".to_owned());
+            argv.push(task.to_owned());
+        }
+        let output = run_wake_command(&argv);
+        if output.code == 0 {
+            return Ok(output.stdout);
+        }
+        let stderr = output.stderr.trim();
+        let detail = if stderr.is_empty() { output.stdout.trim() } else { stderr };
+        let detail = if detail.is_empty() { "wake failed" } else { detail };
+        Err(format!("wake exited {}: {detail}", output.code))
+    }
+}
 
 trait ServeReceiverInbox: Send + Sync {
     fn write_receiver_inbox(&self, input: ReceiverInboxInput<'_>) -> ReceiverInboxResult;
@@ -247,6 +275,7 @@ async fn run_serve_async_impl(raw_args: &[String]) -> CliOutput {
         requests: Mutex::new(RequestReplyStore::default()),
         delivery: Arc::new(ServeSystemDelivery),
         receiver_inbox: Arc::new(ServeSystemReceiverInbox::default()),
+        wake: Arc::new(ServeSystemWakeExecutor),
         delivery_idempotency: Mutex::new(DeliveryIdempotencyStore::default()),
         feed: Mutex::new(Vec::new()),
         #[cfg(test)]
@@ -2050,9 +2079,24 @@ async fn api_wake(
     body: Bytes,
 ) -> impl IntoResponse {
     if let Some(response) = verify_protected_request(&state, peer, &method, &uri, &headers, &body) {
-        response
-    } else {
-        Json(json!({"ok": true})).into_response()
+        return response;
+    }
+    let parsed = serde_json::from_slice::<WakeBody>(&body).unwrap_or_default();
+    let target = parsed.target.unwrap_or_default();
+    if target.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"ok": false, "error": "empty-target"})),
+        )
+            .into_response();
+    }
+    match state.wake.execute_wake(&target, parsed.task.as_deref()) {
+        Ok(_) => Json(json!({"ok": true, "target": target})).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"ok": false, "target": target, "error": error})),
+        )
+            .into_response(),
     }
 }
 
@@ -2918,6 +2962,12 @@ struct SendBody {
 }
 
 #[derive(Default, Deserialize)]
+struct WakeBody {
+    target: Option<String>,
+    task: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
 struct FeedQuery {
     limit: Option<usize>,
 }
@@ -3236,6 +3286,39 @@ mod serve_tests {
         Arc::new(FakeServeDelivery::with_capture_agent())
     }
 
+    #[derive(Default)]
+    struct FakeServeWake {
+        wakes: Mutex<Vec<(String, Option<String>)>>,
+        error: Mutex<Option<String>>,
+    }
+
+    impl FakeServeWake {
+        fn set_error(&self, error: &str) {
+            *self.error.lock().expect("wake error") = Some(error.to_owned());
+        }
+
+        fn wakes(&self) -> Vec<(String, Option<String>)> {
+            self.wakes.lock().expect("wakes").clone()
+        }
+    }
+
+    impl ServeWakeExecutor for FakeServeWake {
+        fn execute_wake(&self, target: &str, task: Option<&str>) -> Result<String, String> {
+            if let Some(error) = self.error.lock().expect("wake error").clone() {
+                return Err(error);
+            }
+            self.wakes
+                .lock()
+                .expect("wakes")
+                .push((target.to_owned(), task.map(ToOwned::to_owned)));
+            Ok(format!("woke {target}\n"))
+        }
+    }
+
+    fn serve_test_wake() -> Arc<dyn ServeWakeExecutor> {
+        Arc::new(FakeServeWake::default())
+    }
+
     fn serve_test_receiver_inbox() -> Arc<dyn ServeReceiverInbox> {
         Arc::new(ServeSystemReceiverInbox {
             enabled: Some(false),
@@ -3285,6 +3368,31 @@ mod serve_tests {
             requests: Mutex::new(RequestReplyStore::default()),
             delivery: serve_test_delivery(),
             receiver_inbox: serve_test_receiver_inbox(),
+            wake: serve_test_wake(),
+            delivery_idempotency: Mutex::new(DeliveryIdempotencyStore::default()),
+            feed: Mutex::new(Vec::new()),
+            peer_addr_override: Some(NON_LOOPBACK_TEST_PEER),
+            now_override: Some(1_782_277_200),
+            serve_core_state_override: None,
+            trust_store_path,
+            plugin_serve_routes: Vec::new(),
+            api_token_auth: ServeApiTokenAuth::open(),
+        })
+    }
+
+    fn serve_test_app_with_wake(
+        trust_store_path: std::path::PathBuf,
+        wake: Arc<dyn ServeWakeExecutor>,
+    ) -> Router {
+        serve_router(ServeState {
+            cached_pubkey: Some(KEY.to_owned()),
+            peer_pubkeys: Vec::new(),
+            workspace_key: Some(KEY.to_owned()),
+            workspaces: Mutex::new(WorkspaceStore::default()),
+            requests: Mutex::new(RequestReplyStore::default()),
+            delivery: serve_test_delivery(),
+            receiver_inbox: serve_test_receiver_inbox(),
+            wake,
             delivery_idempotency: Mutex::new(DeliveryIdempotencyStore::default()),
             feed: Mutex::new(Vec::new()),
             peer_addr_override: Some(NON_LOOPBACK_TEST_PEER),
@@ -3305,6 +3413,7 @@ mod serve_tests {
             requests: Mutex::new(RequestReplyStore::default()),
             delivery: serve_test_delivery(),
             receiver_inbox: serve_test_receiver_inbox(),
+            wake: serve_test_wake(),
             delivery_idempotency: Mutex::new(DeliveryIdempotencyStore::default()),
             feed: Mutex::new(Vec::new()),
             peer_addr_override: Some(NON_LOOPBACK_TEST_PEER),
@@ -3325,6 +3434,7 @@ mod serve_tests {
             requests: Mutex::new(RequestReplyStore::default()),
             delivery: serve_test_delivery(),
             receiver_inbox: serve_test_receiver_inbox(),
+            wake: serve_test_wake(),
             delivery_idempotency: Mutex::new(DeliveryIdempotencyStore::default()),
             feed: Mutex::new(Vec::new()),
             peer_addr_override: Some(NON_LOOPBACK_TEST_PEER),
@@ -3439,6 +3549,7 @@ mod serve_tests {
             requests: Mutex::new(RequestReplyStore::default()),
             delivery,
             receiver_inbox,
+            wake: serve_test_wake(),
             delivery_idempotency: Mutex::new(DeliveryIdempotencyStore::default()),
             feed: Mutex::new(Vec::new()),
             peer_addr_override,
@@ -3551,6 +3662,74 @@ mod serve_tests {
         let app = serve_test_app(serve_test_trust_store_path("v3-mismatch"));
         let response = app.oneshot(request).await.expect("mismatch");
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn serve_wake_executes_receiver_side_and_reports_result() {
+        let wake = Arc::new(FakeServeWake::default());
+        let app = serve_test_app_with_wake(serve_test_trust_store_path("wake-exec"), wake.clone());
+        let body = r#"{"target":"capture-agent","task":"fix issue"}"#;
+        let response = app
+            .oneshot(signed_json_request("POST", "/api/wake", body, KEY, FROM, 1_782_277_200))
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = response_json(response).await;
+        assert_eq!(json["ok"], true);
+        assert_eq!(json["target"], "capture-agent");
+        assert_eq!(
+            wake.wakes(),
+            vec![("capture-agent".to_owned(), Some("fix issue".to_owned()))]
+        );
+    }
+
+    #[tokio::test]
+    async fn serve_wake_surfaces_receiver_failure_not_false_success() {
+        let wake = Arc::new(FakeServeWake::default());
+        wake.set_error("wake exited 1: wake: repo not found for bare-shell");
+        let app = serve_test_app_with_wake(serve_test_trust_store_path("wake-fail"), wake.clone());
+        let body = r#"{"target":"bare-shell"}"#;
+        let response = app
+            .oneshot(signed_json_request("POST", "/api/wake", body, KEY, FROM, 1_782_277_200))
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let json = response_json(response).await;
+        assert_eq!(json["ok"], false);
+        assert_eq!(json["target"], "bare-shell");
+        assert!(json["error"]
+            .as_str()
+            .expect("error")
+            .contains("repo not found for bare-shell"));
+        assert!(wake.wakes().is_empty());
+    }
+
+    #[tokio::test]
+    async fn serve_wake_rejects_empty_target_without_executing() {
+        let wake = Arc::new(FakeServeWake::default());
+        let app = serve_test_app_with_wake(serve_test_trust_store_path("wake-empty"), wake.clone());
+        let response = app
+            .oneshot(signed_json_request("POST", "/api/wake", "{}", KEY, FROM, 1_782_277_200))
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let json = response_json(response).await;
+        assert_eq!(json["ok"], false);
+        assert_eq!(json["error"], "empty-target");
+        assert!(wake.wakes().is_empty());
+    }
+
+    #[tokio::test]
+    async fn serve_wake_rejects_tampered_signature_without_executing() {
+        let wake = Arc::new(FakeServeWake::default());
+        let app = serve_test_app_with_wake(serve_test_trust_store_path("wake-tampered"), wake.clone());
+        let signed_body = r#"{"target":"capture-agent"}"#;
+        let mut request =
+            signed_json_request("POST", "/api/wake", signed_body, KEY, FROM, 1_782_277_200);
+        *request.body_mut() = Body::from(r#"{"target":"tampered"}"#);
+        let response = app.oneshot(request).await.expect("tampered");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(wake.wakes().is_empty());
     }
 
     #[test]
@@ -4532,6 +4711,7 @@ mod serve_tests {
             requests: Mutex::new(RequestReplyStore::default()),
             delivery: serve_test_delivery(),
             receiver_inbox: serve_test_receiver_inbox(),
+            wake: serve_test_wake(),
             delivery_idempotency: Mutex::new(DeliveryIdempotencyStore::default()),
             feed: Mutex::new(Vec::new()),
             peer_addr_override: Some(NON_LOOPBACK_TEST_PEER),
@@ -5043,6 +5223,7 @@ mod serve_tests {
             requests: Mutex::new(RequestReplyStore::default()),
             delivery: serve_test_delivery(),
             receiver_inbox: serve_test_receiver_inbox(),
+            wake: serve_test_wake(),
             delivery_idempotency: Mutex::new(DeliveryIdempotencyStore::default()),
             feed: Mutex::new(Vec::new()),
             peer_addr_override: Some(NON_LOOPBACK_TEST_PEER),
