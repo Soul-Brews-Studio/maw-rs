@@ -100,7 +100,7 @@ Cargo workspace scaffolded and pushed to `main`.
 | Crate | maw-js source | Portable fixture |
 | --- | --- | --- |
 | `maw-matcher` | `src/core/matcher/resolve-target.ts`, `normalize-target.ts` | `matcher-resolve-target.fixtures.json`, `normalize-target.fixtures.json` |
-| `maw-calver` | `scripts/calver.ts` | `calver.fixtures.json` |
+| [`maw-calver`](https://github.com/Soul-Brews-Studio/maw-calver) (external repo since 2026-07-15, consumed as a pinned git dependency) | `scripts/calver.ts` | `calver.fixtures.json` |
 | `maw-policy` | `src/plugin/default-active.ts`, `src/plugin/tier.ts`, `src/plugin/manifest-constants.ts` | `plugin-policy.fixtures.json` |
 | `maw-worktree` | `src/core/fleet/worktree-window-match.ts` | `worktree-window-match.fixtures.json` |
 | `maw-transport` | `src/core/transport/transport.ts` | `transport-router.fixtures.json` |

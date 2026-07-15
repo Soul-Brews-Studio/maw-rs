@@ -1845,10 +1845,7 @@ dependencies = [
 [[package]]
 name = "maw-calver"
 version = "0.1.0-alpha.1"
-dependencies = [
- "serde",
- "serde_json",
-]
+source = "git+https://github.com/Soul-Brews-Studio/maw-calver?rev=c74522b2b7cb5b831c456b2a2fa333849aa85eef#c74522b2b7cb5b831c456b2a2fa333849aa85eef"
 
 [[package]]
 name = "maw-cli"
