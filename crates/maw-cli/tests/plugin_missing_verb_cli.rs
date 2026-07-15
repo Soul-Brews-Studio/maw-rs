@@ -3,9 +3,11 @@
 //! A verb that resolves to no native handler and no installed plugin, but is a
 //! KNOWN extracted verb (fleet-plugins table or plugins.lock pin), must print
 //! an actionable message instead of the bare unknown-command exit; true typos
-//! keep the unknown-command path. Also pins the fleet table to the real
-//! `fleet-plugins/*/plugin.json` manifests and asserts every shipped manifest
-//! still passes the ABI-derived SDK floor.
+//! keep the unknown-command path. Also pins the fleet table to the shipped
+//! `plugin.json` manifests and asserts every shipped manifest still passes
+//! the ABI-derived SDK floor — `#[ignore]`d since the plugins moved to
+//! `Soul-Brews-Studio/maw-plugins` `packages/` (repo split phase 1,
+//! 2026-07-15); see the repo-split test rework follow-up.
 
 use maw_cli::{run_cli, KNOWN_FLEET_PLUGIN_VERBS};
 use maw_plugin_manifest::{host_abi_version, satisfies};
@@ -94,6 +96,7 @@ fn fleet_plugins_root() -> PathBuf {
 }
 
 #[test]
+#[ignore = "TODO(repo-split test rework): fleet-plugins/ moved to Soul-Brews-Studio/maw-plugins packages/ — repoint this parity gate at vendored manifests or relocate it"]
 fn fleet_verb_table_matches_shipped_manifests_and_all_pass_the_sdk_floor() {
     let root = fleet_plugins_root();
     let mut manifest_rows = Vec::new();
@@ -154,7 +157,7 @@ fn known_fleet_verb_without_installed_plugin_prints_install_hint_not_unknown_com
     assert!(
         output
             .stderr
-            .contains("maw plugin install Soul-Brews-Studio/maw-rs/fleet-plugins/maw-menubar"),
+            .contains("maw plugin install Soul-Brews-Studio/maw-plugins/packages/maw-menubar"),
         "stderr: {}",
         output.stderr
     );

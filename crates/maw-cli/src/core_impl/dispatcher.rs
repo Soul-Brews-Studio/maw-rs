@@ -662,7 +662,7 @@ fn dispatch_cli_plugin_or_unknown(argv: &[String], command: &str) -> CliOutput {
         return output;
     }
     // No runnable plugin matched. If the verb is a KNOWN extracted verb
-    // (fleet-plugins table or a plugins.lock pin), never degrade to the bare
+    // (KNOWN_FLEET_PLUGIN_VERBS table or a plugins.lock pin), never degrade to the bare
     // unknown-command exit: surface the discovery refusal (sdk floor, hash
     // mismatch, …) or the actionable install hint instead. True typos keep
     // the existing unknown-command path.

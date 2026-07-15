@@ -4,9 +4,12 @@
 /// actionable install hint instead of the bare `unknown command` exit 2
 /// (issue #522 defense 4 — a missing plugin must never read as a typo).
 ///
-/// Rows: (cli verb, plugin name, fleet-plugins/ dir). Kept in lockstep with
-/// `fleet-plugins/*/plugin.json` by the parity test in
-/// `crates/maw-cli/tests/plugin_missing_verb_cli.rs`.
+/// Rows: (cli verb, plugin name, `Soul-Brews-Studio/maw-plugins`
+/// `packages/` dir). The plugins themselves live in the external
+/// `Soul-Brews-Studio/maw-plugins` monorepo (extracted from this repo's
+/// former `fleet-plugins/` on 2026-07-15, repo split phase 1); the parity
+/// test in `crates/maw-cli/tests/plugin_missing_verb_cli.rs` is `#[ignore]`d
+/// until it is repointed at that repo's manifests (repo-split test rework).
 pub const KNOWN_FLEET_PLUGIN_VERBS: &[(&str, &str, &str)] = &[
     ("atlas", "atlas", "atlas"),
     ("cross-team-queue", "cross-team-queue", "cross-team-queue"),
@@ -34,7 +37,7 @@ fn known_extracted_verb(command: &str) -> Option<KnownExtractedVerb> {
     {
         return Some(KnownExtractedVerb {
             plugin_name: (*plugin).to_owned(),
-            install_hint: format!("maw plugin install Soul-Brews-Studio/maw-rs/fleet-plugins/{dir}"),
+            install_hint: format!("maw plugin install Soul-Brews-Studio/maw-plugins/packages/{dir}"),
         });
     }
     let entry = read_plugin_lock_entry_full(command).ok().flatten()?;
@@ -100,7 +103,7 @@ mod known_verb_tests {
         assert_eq!(verb.plugin_name, "maw-menubar");
         assert_eq!(
             verb.install_hint,
-            "maw plugin install Soul-Brews-Studio/maw-rs/fleet-plugins/maw-menubar"
+            "maw plugin install Soul-Brews-Studio/maw-plugins/packages/maw-menubar"
         );
     }
 
