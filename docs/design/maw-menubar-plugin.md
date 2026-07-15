@@ -11,9 +11,12 @@ turning the menu bar into another fleet implementation. It displays local sessio
 agent, recent activity, and schedule outcome summaries, then delegates actions to the
 HTTP API or real `maw` verbs.
 
-It is a plugin under `fleet-plugins/maw-menubar/`, not a core command and not a WASM
-artifact. The plugin uses the `bun-dev` native-subprocess tier established by
-`fleet-plugins/p2p-share`: Bun owns install and lifecycle commands, while a separately
+It is a plugin under `packages/maw-menubar/` in
+[Soul-Brews-Studio/maw-plugins](https://github.com/Soul-Brews-Studio/maw-plugins)
+(originally this repo's `fleet-plugins/maw-menubar/`, extracted 2026-07-15 in repo
+split phase 1), not a core command and not a WASM artifact. The plugin uses the
+`bun-dev` native-subprocess tier established by
+`packages/p2p-share`: Bun owns install and lifecycle commands, while a separately
 built native helper owns the long-running UI. This tier is intentionally unsandboxed;
 manifest capabilities are an auditable declaration, not an enforcement claim.
 
@@ -53,7 +56,7 @@ References: [Apple `NSStatusItem`](https://developer.apple.com/documentation/app
 Proposed layout:
 
 ```text
-fleet-plugins/maw-menubar/
+packages/maw-menubar/        # in Soul-Brews-Studio/maw-plugins
   plugin.json
   src/plugin.ts
   native/MawMenubar.swift

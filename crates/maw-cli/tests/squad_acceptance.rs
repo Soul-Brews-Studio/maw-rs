@@ -6,9 +6,13 @@
 //!
 //! The tests drive the REAL user-facing CLI dispatch path (`run_cli(["squad", …])`
 //! → `dispatch_cli_plugin`) against the ported plugin at repo-root
-//! `fleet-plugins/squad/` (sibling agent's surface, on a parallel branch). Until that
-//! directory exists every test SKIPS with a clear message, so this file is green
-//! standalone and lights up automatically when the port merges.
+//! `fleet-plugins/squad/`. Whenever that directory is absent every test SKIPS with
+//! a clear message, so this file is green standalone.
+//!
+//! NOTE (repo split phase 1, 2026-07-15): `fleet-plugins/` moved to
+//! `Soul-Brews-Studio/maw-plugins` `packages/squad`, so these tests now skip
+//! permanently. TODO(repo-split test rework): repoint the harness at a checkout
+//! of maw-plugins (e.g. via an env var) or relocate it.
 //!
 //! Isolation: squad writes under `~/.claude/teams/` (`~` = `os.homedir()` = `HOME` on
 //! POSIX) and derives the team name from the *lead repo* — the directory the user runs

@@ -1,14 +1,20 @@
 # Adding a plugin artifact
 
-This is the dev-Bun → ship-WASM ladder used by `fleet-plugins/`, including the squad
-path through #145, #149, and #235. The full reference remains `fleet-plugins/README.md`.
+This is the dev-Bun → ship-WASM ladder used by the fleet plugins, including the squad
+path through #145, #149, and #235.
+
+> **Repo split phase 1 (2026-07-15):** the fleet plugin packages moved out of this
+> repo's `fleet-plugins/` into
+> [Soul-Brews-Studio/maw-plugins](https://github.com/Soul-Brews-Studio/maw-plugins)
+> under `packages/<name>/`. The full reference is that repo's
+> `docs/fleet-plugins.md`. Paths below are relative to a maw-plugins checkout.
 
 ## Source layout
 
 A fleet plugin directory normally contains:
 
 ```text
-fleet-plugins/<name>/
+packages/<name>/
   plugin.json          # active manifest
   plugin.wasm          # committed WASM artifact, when ship tier exists
   plugin.source.json   # AssemblyScript source manifest for rebuilding
@@ -54,27 +60,30 @@ Declare only what the plugin needs.
 
 ## Rebuild and pin lifecycle
 
-Build from the repo root:
+Build against a maw-plugins checkout:
 
 ```bash
-maw plugin build fleet-plugins/<name>
+maw plugin build <maw-plugins-checkout>/packages/<name>
 ```
 
-If the AssemblyScript toolchain is missing, run `npm ci` in `packages/wasm-sdk` first.
+If the AssemblyScript toolchain is missing, run `npm ci` in **maw-rs's**
+`packages/wasm-sdk` first.
 The build emits `plugin.wasm` and a fresh `artifact.sha256`; keep the active manifest
 shape appropriate for the plugin tier, then commit the artifact and updated pin together.
 
 ## Tests
 
-Run the normal PR gates plus plugin checks:
+Run the normal maw-rs PR gates:
 
 ```bash
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test -p maw-cli --test fleet_plugins_pin_check
 ```
 
-For squad-like behavior, keep acceptance coverage in `crates/maw-cli/tests/` and let the
-pin check prove committed artifact bytes match the manifest hash. The ignored deterministic
-rebuild test is available with `cargo test -p maw-cli --test fleet_plugins_pin_check -- --ignored`
-when the AS toolchain is installed.
+The sha256 pin-hash gate (formerly maw-rs's
+`crates/maw-cli/tests/fleet_plugins_pin_check.rs`, deleted in the repo split)
+now runs in maw-plugins CI: it proves every committed `plugin.wasm` matches its
+manifest pin (`plugin.json`, falling back to `plugin.source.json`) and that the
+maw-menubar universal helper matches its `bundledArtifacts` pin. Host-side
+invoke coverage against the committed artifacts is pending the repo-split test
+rework.

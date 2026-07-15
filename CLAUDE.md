@@ -99,4 +99,7 @@ Oracle intelligence = engine × written memory × asking the right peer.
 See `docs/` for deeper references — including the parity matrix, wire
 protocol, "adding a command" guide, agent/coder team spawn conventions, and
 the WASM migration design. Shipped fleet plugin artifacts (WASM ship tier,
-sha256 pin lifecycle) live in `fleet-plugins/` — see its README.
+sha256 pin lifecycle) live in the external
+[Soul-Brews-Studio/maw-plugins](https://github.com/Soul-Brews-Studio/maw-plugins)
+repo under `packages/<name>/` (extracted from this repo's `fleet-plugins/`
+on 2026-07-15, repo split phase 1) — see its `docs/fleet-plugins.md`.
