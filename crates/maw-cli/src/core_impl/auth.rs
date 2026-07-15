@@ -255,9 +255,7 @@ mod auth_native_tests {
 
     #[test]
     fn auth_verify_request_d2_hmac_uses_workspace_key_env_and_redacts_secret() {
-        let _guard = env_test_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _restore = EnvVarRestore::capture(AUTH_D2_ENV);
         std::env::set_var(AUTH_D2_ENV, AUTH_D2_SECRET);
         let mut args = vec![

@@ -791,9 +791,7 @@ mod attach_tests {
     }
 
     fn attach_with_fleet_env(root: &std::path::Path, test: impl FnOnce()) {
-        let _guard = env_test_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _restore = [
             "HOME",
             "MAW_HOME",

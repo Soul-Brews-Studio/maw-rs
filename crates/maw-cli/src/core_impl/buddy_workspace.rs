@@ -711,7 +711,7 @@ mod bud_tests {
 
     #[test]
     fn bud_dry_run_matches_golden_without_ref() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _restore_ghq = EnvVarRestore::capture("GHQ_ROOT");
         let _restore_home = EnvVarRestore::capture("HOME");
         std::env::set_var("GHQ_ROOT", ".");
@@ -798,7 +798,7 @@ mod bud_tests {
 
     #[test]
     fn bud_flow_bootstraps_env_and_allows_before_wake() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _restore_ghq = EnvVarRestore::capture("GHQ_ROOT");
         std::env::set_var("GHQ_ROOT", "/repos");
         let mut gh = FakeGh::default(); let mut fs = FakeFs::default(); let mut wake = FakeWake::default(); let mut http = FakeHttp::default();
@@ -815,7 +815,7 @@ mod bud_tests {
 
     #[test]
     fn bud_flow_hard_fails_direnv_before_wake() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _restore_ghq = EnvVarRestore::capture("GHQ_ROOT");
         std::env::set_var("GHQ_ROOT", "/repos");
         let mut gh = FakeGh { fail: ["direnv allow".to_owned()].into(), ..Default::default() };
@@ -832,9 +832,7 @@ mod bud_tests {
 
     #[test]
     fn bud_sync_peers_archives_before_overwrite_and_redacts() {
-        let _guard = env_test_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _restore_state = EnvVarRestore::capture("MAW_STATE_DIR");
         std::env::set_var("MAW_STATE_DIR", "/tmp/maw-bud-test-state");
         let mut fs = FakeFs::default();
@@ -848,7 +846,7 @@ mod bud_tests {
 
     #[test]
     fn bud_repos_root_uses_ghq_root_before_home_fallback() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _restore_ghq = EnvVarRestore::capture("GHQ_ROOT");
         let _restore_home = EnvVarRestore::capture("HOME");
         std::env::remove_var("GHQ_ROOT");
@@ -864,7 +862,7 @@ mod bud_tests {
 
     #[test]
     fn bud_repos_root_env_wins_over_ghq_root_command() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _restore_ghq = EnvVarRestore::capture("GHQ_ROOT");
         let _restore_home = EnvVarRestore::capture("HOME");
         std::env::set_var("GHQ_ROOT", "/env/Code");
@@ -880,7 +878,7 @@ mod bud_tests {
 
     #[test]
     fn bud_repos_root_falls_back_to_home_when_ghq_root_fails() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _restore_ghq = EnvVarRestore::capture("GHQ_ROOT");
         let _restore_home = EnvVarRestore::capture("HOME");
         std::env::remove_var("GHQ_ROOT");
@@ -903,7 +901,7 @@ mod bud_tests {
 
     #[test]
     fn bud_engine_flag_passes_through_to_wake_and_dry_run() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _restore_ghq = EnvVarRestore::capture("GHQ_ROOT");
         let _restore_home = EnvVarRestore::capture("HOME");
         std::env::set_var("GHQ_ROOT", ".");

@@ -340,7 +340,7 @@ fn schedule_log334(path: &Path, message: &str) -> Result<(), String> {
         assert!(joined.contains("exec /opt/bin/maw-rs schedule exec odin-daily-1 '/tmp/custom state'")); assert!(!joined.contains("WHO Matrix"));
     }
     #[test] fn shell_fire_loads_config_reserves_executes_and_publishes_outcome() {
-        let _lock = env_test_lock().lock().unwrap(); let _home = EnvVarRestore::capture("MAW_HOME");
+        let _lock = env_test_lock(); let _home = EnvVarRestore::capture("MAW_HOME");
         let root = std::env::temp_dir().join(format!("maw-schedule-cli-{}", std::process::id())); let repo = root.join("odin-oracle");
         let _ = std::fs::remove_dir_all(&root); std::fs::create_dir_all(repo.join(".maw")).unwrap(); std::env::set_var("MAW_HOME", root.join("home"));
         std::fs::write(repo.join(".maw/schedule.toml"), "[[schedule]]\nid='canary'\ncommand='printf ok > artifact'\ncadence='every 1h'\nexec='shell'\nexpected_output='artifact'\n").unwrap();
@@ -349,7 +349,7 @@ fn schedule_log334(path: &Path, message: &str) -> Result<(), String> {
         assert!(root.join("home/schedule/runs/latest.json").is_file()); let _ = std::fs::remove_dir_all(root);
     }
     #[test] fn private_exec_uses_explicit_state_root_when_tmux_environment_is_stale() {
-        let _lock = env_test_lock().lock().unwrap(); let _home = EnvVarRestore::capture("MAW_HOME"); let _tmux = EnvVarRestore::capture("TMUX_TMPDIR");
+        let _lock = env_test_lock(); let _home = EnvVarRestore::capture("MAW_HOME"); let _tmux = EnvVarRestore::capture("TMUX_TMPDIR");
         let root = std::env::temp_dir().join(format!("maw-schedule-state-root-{}", std::process::id()));
         let correct = root.join("custom-home"); let wrong = root.join("wrong-home"); let repo = root.join("repo");
         let _ = std::fs::remove_dir_all(&root); std::fs::create_dir_all(&repo).unwrap(); std::fs::create_dir_all(&wrong).unwrap();

@@ -604,7 +604,7 @@ mod sleep_tests {
 
     #[test]
     fn sleep_all_done_dry_run_is_hermetic_golden_and_non_mutating() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _restore = EnvVarRestore::capture("MAW_JS_REF_DIR");
         std::env::set_var("MAW_JS_REF_DIR", "/nonexistent");
         let mut tmux = SleepFakeTmux::sleep_all_done_fixture();
@@ -617,7 +617,7 @@ mod sleep_tests {
 
     #[test]
     fn sleep_all_done_live_validates_ownership_before_kill_and_uses_golden() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _restore = EnvVarRestore::capture("MAW_JS_REF_DIR");
         std::env::set_var("MAW_JS_REF_DIR", "/nonexistent");
         let mut tmux = SleepFakeTmux::sleep_all_done_fixture();
@@ -675,7 +675,7 @@ mod sleep_tests {
 
     #[test]
     fn sleep_fs_log_path_is_hermetic_with_xdg_env() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let root = std::env::temp_dir().join(format!("maw-sleep-test-{}", sleep_snapshot_stamp()));
         let state = root.join("state");
         let _restore = EnvVarRestore::capture("MAW_STATE_DIR");

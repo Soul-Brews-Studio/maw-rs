@@ -213,7 +213,7 @@ mod profile_tests {
 
     #[test]
     fn profile_use_writes_active_pointer_atomically() {
-        let _lock = super::env_test_lock().lock().expect("env lock");
+        let _lock = super::env_test_lock();
         let _home = EnvVarRestore::capture("MAW_HOME");
         let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
         let root = std::env::temp_dir().join(format!("maw-rs-profile-unit-{}", std::process::id()));

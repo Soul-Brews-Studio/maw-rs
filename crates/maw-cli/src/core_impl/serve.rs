@@ -3718,7 +3718,7 @@ mod serve_tests {
     // reach real resolution ("repo not found"), never the usage guard.
     #[test]
     fn serve_system_wake_executor_passes_verb_stripped_argv() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _home = EnvVarRestore::capture("HOME");
         let _xdg = EnvVarRestore::capture("XDG_CONFIG_HOME");
         let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
@@ -4224,7 +4224,7 @@ mod serve_tests {
 
     impl ServeInboxManifestEnv {
         fn new(label: &str) -> Self {
-            let guard = env_test_lock().lock().unwrap_or_else(|error| error.into_inner());
+            let guard = env_test_lock();
             let keys = [
                 "HOME",
                 "MAW_HOME",
@@ -4979,7 +4979,7 @@ mod serve_tests {
     #[tokio::test]
     async fn serve_mounts_discovered_plugin_engine_serve_health_and_skips_bad_manifest() {
         let (root, plugin_routes) = {
-            let _guard = env_test_lock().lock().unwrap_or_else(|error| error.into_inner());
+            let _guard = env_test_lock();
             let _plugins_restore = EnvVarRestore::capture("MAW_PLUGINS_DIR");
             let root = std::env::temp_dir().join(format!(
                 "maw-serve-plugin-{}-{}",
@@ -5134,7 +5134,7 @@ mod serve_tests {
 
     #[test]
     fn serve_default_bind_matches_maw_js_parity_and_ignores_maw_host() {
-        let _guard = env_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = env_test_lock();
         let _restore = EnvVarRestore::capture("MAW_HOST");
         std::env::set_var("MAW_HOST", "127.0.0.1");
         let args = parse_serve_args(&[]).expect("default serve args");

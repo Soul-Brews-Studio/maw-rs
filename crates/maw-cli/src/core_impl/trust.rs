@@ -591,7 +591,7 @@ mod trust_native_tests {
 
     #[test]
     fn trust_add_list_and_remove_mutate_store_without_key_echo() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _restore = EnvVarRestore::capture(TRUST_FAKE_STORE_ENV);
         let path = std::env::temp_dir().join(format!(
             "maw-rs-trust-cli-{}-{}.json",

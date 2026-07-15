@@ -1082,7 +1082,7 @@ mod workon_tests {
         let repo = WorkonRepo { repo_path: temp.join("acme/demo"), repo_name: "demo".to_owned(), parent_dir: temp.join("acme") };
         let options = workon_test_options("demo", None);
         let mut runner = WorkonMockTmux { session: "50-mawjs\n".to_owned(), windows: "demo\n".to_owned(), ..Default::default() };
-        let _guard = env_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = env_test_lock();
         let _restore = EnvVarRestore::capture("TMUX");
         std::env::set_var("TMUX", "/tmp/tmux,1,0");
 
@@ -1102,7 +1102,7 @@ mod workon_tests {
             sessions: "team-demo\n188-other\n".to_owned(),
             ..Default::default()
         };
-        let _guard = env_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = env_test_lock();
         let _restore = EnvVarRestore::capture("TMUX");
         std::env::remove_var("TMUX");
 
@@ -1134,7 +1134,7 @@ mod workon_tests {
             windows: "demo\n".to_owned(),
             ..Default::default()
         };
-        let _guard = env_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = env_test_lock();
         let _restore = EnvVarRestore::capture("TMUX");
         std::env::remove_var("TMUX");
 
@@ -1158,7 +1158,7 @@ mod workon_tests {
             windows: "maw-rs\n".to_owned(),
             ..Default::default()
         };
-        let _guard = env_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = env_test_lock();
         let _restore = EnvVarRestore::capture("TMUX");
         std::env::remove_var("TMUX");
 
@@ -1182,7 +1182,7 @@ mod workon_tests {
             sessions: "188-maw-rs\n187-maw-rs\n".to_owned(),
             ..Default::default()
         };
-        let _guard = env_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = env_test_lock();
         let _restore = EnvVarRestore::capture("TMUX");
         std::env::remove_var("TMUX");
 
@@ -1199,7 +1199,7 @@ mod workon_tests {
     #[test]
     fn workon_path_arg_resolves_via_git_toplevel() {
         // shells out to real git — hold the env lock so PATH-mutating tests can't race us
-        let _guard = env_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = env_test_lock();
         let base = std::env::temp_dir().join(format!("maw-rs-workon-dot-{}", std::process::id()));
         let repo_dir = base.join("acme").join("demo");
         std::fs::create_dir_all(repo_dir.join("sub")).expect("mkdirs");
@@ -1223,7 +1223,7 @@ mod workon_tests {
         let repo = WorkonRepo { repo_path: temp.join("acme/demo"), repo_name: "demo".to_owned(), parent_dir: temp.join("acme") };
         let options = workon_test_options("demo", None);
         let mut runner = WorkonMockTmux { session: "-Sbad\n".to_owned(), windows: String::new(), ..Default::default() };
-        let _guard = env_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = env_test_lock();
         let _restore = EnvVarRestore::capture("TMUX");
         std::env::set_var("TMUX", "/tmp/tmux,1,0");
 
@@ -1235,7 +1235,7 @@ mod workon_tests {
 
     #[test]
     fn workon_build_command_resolves_weighted_only_commands_config() {
-        let _guard = env_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = env_test_lock();
         let _home = EnvVarRestore::capture("MAW_HOME");
         let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
         let root = workon_temp_root("commands");

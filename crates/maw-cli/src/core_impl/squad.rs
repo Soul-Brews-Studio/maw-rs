@@ -126,7 +126,7 @@ mod squad_tests {
 
     #[test]
     fn squad_token_set_preserves_unknown_fields_and_sets_member_override() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let (root, _env) = squad_env("token-set");
         let dir = root.join("state/fleet/squads/01-core");
         std::fs::create_dir_all(&dir).expect("squad dir");
@@ -142,7 +142,7 @@ mod squad_tests {
 
     #[test]
     fn squad_import_creates_seven_fleet_seed() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let (root, _env) = squad_env("import");
         let seed = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/native-fleet-roster/seven-fleet-seed.json");

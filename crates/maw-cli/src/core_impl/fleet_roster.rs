@@ -316,7 +316,7 @@ mod fleet_roster_tests {
 
     #[test]
     fn fleet_create_allocates_one_number_namespace_across_all_roots() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let (root, _env) = roster_env("numbering");
         for (path, body) in [
             (
@@ -344,7 +344,7 @@ mod fleet_roster_tests {
 
     #[test]
     fn fleet_create_show_round_trip_cache_resolution_and_legacy_files() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let (root, _env) = roster_env("round-trip");
         let created = run_fleet_command(&roster_args(&["create", "3e"]));
         assert_eq!(created.code, 0, "{}", created.stderr);
@@ -382,7 +382,7 @@ mod fleet_roster_tests {
 
     #[test]
     fn fleet_roster_squads_fixture_and_flat_roster_migrates() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let (root, _env) = roster_env("migration");
         let fleet_dir = root.join("state/fleet");
         std::fs::create_dir_all(fleet_dir.join("groups/01-3e")).expect("squad dir");
@@ -408,7 +408,7 @@ mod fleet_roster_tests {
 
     #[test]
     fn fleet_remove_and_leave_round_trip_roster_members() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let (root, _env) = roster_env("remove-leave");
         let _oracle = EnvVarRestore::capture("MAW_ORACLE");
         let _now = EnvVarRestore::capture("MAW_RS_FLEET_REGISTRY_NOW");

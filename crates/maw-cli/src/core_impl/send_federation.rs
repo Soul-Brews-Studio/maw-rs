@@ -2190,7 +2190,7 @@ mod send_acl_hotpath_tests {
 
     #[test]
     fn send_identity_uses_invocation_oracle_for_wire_and_local_tags() {
-        let _lock = env_test_lock().lock().unwrap();
+        let _lock = env_test_lock();
         let _sender = EnvVarRestore::capture("MAW_SENDER");
         std::env::remove_var("MAW_SENDER");
         let config = HeyConfig {
@@ -2215,7 +2215,7 @@ mod send_acl_hotpath_tests {
 
     #[test]
     fn send_identity_targets_callers_non_active_tmux_pane_and_marks_focused_fallback() {
-        let _lock = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lock = env_test_lock();
         let (root, _restores) = send_audit_test_env("sender-pane");
         let _pane = EnvVarRestore::capture("TMUX_PANE");
         let _session = EnvVarRestore::capture("MAW_SESSION_WINDOW");
@@ -2251,7 +2251,7 @@ mod send_acl_hotpath_tests {
 
     #[test]
     fn send_identity_headless_never_queries_focused_window() {
-        let _lock = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lock = env_test_lock();
         let (root, _restores) = send_audit_test_env("sender-headless");
         let _pane = EnvVarRestore::capture("TMUX_PANE");
         let _session = EnvVarRestore::capture("MAW_SESSION_WINDOW");
@@ -2277,7 +2277,7 @@ mod send_acl_hotpath_tests {
 
     #[test]
     fn send_identity_headless_signs_job_repo_stem() {
-        let _lock = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lock = env_test_lock();
         let (root, _restores) = send_audit_test_env("sender-headless-repo");
         let _pane = EnvVarRestore::capture("TMUX_PANE");
         let _session = EnvVarRestore::capture("MAW_SESSION_WINDOW");
@@ -2319,7 +2319,7 @@ mod send_acl_hotpath_tests {
 
     #[test]
     fn send_success_writes_sane_audit_records() {
-        let _lock = env_test_lock().lock().unwrap();
+        let _lock = env_test_lock();
         let (root, _restores) = send_audit_test_env("schema");
         let config = HeyConfig { node: Some("m5".to_owned()), oracle: Some("atlas".to_owned()), route: RouteConfig::default() };
         let args = send_audit_args("hey", &send_acl_vec(&["agent", "hello"]));
@@ -2342,7 +2342,7 @@ mod send_acl_hotpath_tests {
 
     #[test]
     fn message_sinks_normalize_explicit_wire_from_to_host_handle() {
-        let _lock = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lock = env_test_lock();
         if std::process::Command::new("sqlite3").arg("-version").output().is_err() { return; }
         let (root, _restores) = send_audit_test_env("identity-order");
         let config = HeyConfig { node: Some("m5".to_owned()), oracle: None, route: RouteConfig::default() };
@@ -2359,7 +2359,7 @@ mod send_acl_hotpath_tests {
 
     #[test]
     fn message_sinks_prefer_claude_handle_spelling_over_pane_label() {
-        let _lock = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lock = env_test_lock();
         if std::process::Command::new("sqlite3").arg("-version").output().is_err() { return; }
         let (root, _restores) = send_audit_test_env("identity-spelling");
         let _pane = EnvVarRestore::capture("TMUX_PANE");
@@ -2383,7 +2383,7 @@ mod send_acl_hotpath_tests {
 
     #[test]
     fn message_sinks_mark_unresolved_pane_fallback() {
-        let _lock = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lock = env_test_lock();
         if std::process::Command::new("sqlite3").arg("-version").output().is_err() { return; }
         let (root, _restores) = send_audit_test_env("identity-pane-fallback");
         let _session = EnvVarRestore::capture("MAW_SESSION_WINDOW");
@@ -2402,7 +2402,7 @@ mod send_acl_hotpath_tests {
 
     #[test]
     fn sink_registry_preserves_audit_and_maw_log_bytes() {
-        let _lock = env_test_lock().lock().unwrap();
+        let _lock = env_test_lock();
         let config = HeyConfig { node: Some("m5".to_owned()), oracle: Some("atlas".to_owned()), route: RouteConfig::default() };
         let args = send_audit_args("hey", &send_acl_vec(&["agent", "hello"]));
 
@@ -2421,7 +2421,7 @@ mod send_acl_hotpath_tests {
 
     #[test]
     fn message_ledger_sink_writes_signed_column_default() {
-        let _lock = env_test_lock().lock().unwrap();
+        let _lock = env_test_lock();
         if std::process::Command::new("sqlite3").arg("-version").output().is_err() { return; }
         let (root, _restores) = send_audit_test_env("ledger");
         let config = HeyConfig { node: Some("m5".to_owned()), oracle: Some("atlas".to_owned()), route: RouteConfig::default() };
@@ -2440,7 +2440,7 @@ mod send_acl_hotpath_tests {
 
     #[test]
     fn message_ledger_sink_marks_signed_records() {
-        let _lock = env_test_lock().lock().unwrap();
+        let _lock = env_test_lock();
         if std::process::Command::new("sqlite3").arg("-version").output().is_err() { return; }
         let (root, _restores) = send_audit_test_env("ledger-signed");
         let config = HeyConfig { node: Some("m5".to_owned()), oracle: Some("atlas".to_owned()), route: RouteConfig::default() };
@@ -2456,7 +2456,7 @@ mod send_acl_hotpath_tests {
 
     #[test]
     fn send_message_signature_rejects_forged_from_and_prefix_bypass() {
-        let _lock = env_test_lock().lock().unwrap();
+        let _lock = env_test_lock();
         let (_root, _restores) = send_audit_test_env("signature-forge");
         let config = HeyConfig { node: Some("m5".to_owned()), oracle: Some("atlas".to_owned()), route: RouteConfig::default() };
         assert!(send_message_signature(&config, "atlas", None, "hello").unwrap().is_some());
@@ -2466,7 +2466,7 @@ mod send_acl_hotpath_tests {
 
     #[test]
     fn concurrent_send_audit_appends_remain_parseable_jsonl() {
-        let _lock = env_test_lock().lock().unwrap();
+        let _lock = env_test_lock();
         let (root, _restores) = send_audit_test_env("concurrent");
         std::env::set_var("MAW_MESSAGE_LEDGER_DISABLE", "1");
         let config = HeyConfig { node: Some("m5".to_owned()), oracle: Some("atlas".to_owned()), route: RouteConfig::default() };
@@ -2489,7 +2489,7 @@ mod send_acl_hotpath_tests {
 
     #[test]
     fn hey_log_correlates_fixture_jsonl_and_flags_suspicious_rows() {
-        let _lock = env_test_lock().lock().unwrap();
+        let _lock = env_test_lock();
         let (root, _restores) = send_audit_test_env("hey-log");
         std::fs::write(root.join("maw/audit.jsonl"), include_str!("../../tests/fixtures/hey-log/audit.jsonl")).unwrap();
         std::fs::write(root.join("maw/maw-log.jsonl"), include_str!("../../tests/fixtures/hey-log/maw-log.jsonl")).unwrap();
@@ -2507,7 +2507,7 @@ mod send_acl_hotpath_tests {
 
     #[test]
     fn hey_log_reader_missing_logs_returns_fast() {
-        let _lock = env_test_lock().lock().unwrap();
+        let _lock = env_test_lock();
         let (_root, _restores) = send_audit_test_env("hey-log-missing");
         let started = std::time::Instant::now();
 
@@ -2530,7 +2530,7 @@ mod send_acl_hotpath_tests {
 
     #[test]
     fn send_acl_no_scope_same_scope_and_trusted_allow_peer_send() {
-        let _lock = env_test_lock().lock().unwrap();
+        let _lock = env_test_lock();
         let _env = SendAclEnvGuard::new("allow");
         let config = send_acl_config("alice");
         let sender = config.oracle.as_deref().expect("test oracle");
@@ -2573,7 +2573,7 @@ mod send_acl_hotpath_tests {
 
     #[test]
     fn send_acl_cross_scope_queues_without_body_or_peer_key() {
-        let _lock = env_test_lock().lock().unwrap();
+        let _lock = env_test_lock();
         let env = SendAclEnvGuard::new("queue");
         send_acl_write_scope("team", &["alice", "carol"]);
         let args = send_acl_args("remote-bob", "SECRET_BODY token=abc123");
@@ -2594,7 +2594,7 @@ mod send_acl_hotpath_tests {
 
     #[test]
     fn send_acl_approve_bypass_and_human_only_trust_rules() {
-        let _lock = env_test_lock().lock().unwrap();
+        let _lock = env_test_lock();
         let _env = SendAclEnvGuard::new("approve");
         send_acl_write_scope("team", &["alice", "carol"]);
         let config = send_acl_config("alice");
@@ -2624,7 +2624,7 @@ mod send_acl_hotpath_tests {
 
     #[test]
     fn send_acl_env_bypass_is_ignored_and_explicit_param_writes_no_trust() {
-        let _lock = env_test_lock().lock().unwrap();
+        let _lock = env_test_lock();
         let _env = SendAclEnvGuard::new("bypass");
         send_acl_write_scope("team", &["alice", "carol"]);
         std::env::set_var("MAW_ACL_BYPASS", "1");
@@ -2640,7 +2640,7 @@ mod send_acl_hotpath_tests {
 
     #[test]
     fn send_acl_corrupt_acl_fails_open_with_loud_warning() {
-        let _lock = env_test_lock().lock().unwrap();
+        let _lock = env_test_lock();
         let _env = SendAclEnvGuard::new("corrupt");
         let dir = scope_native_dir();
         std::fs::create_dir_all(&dir).unwrap();
@@ -2715,7 +2715,7 @@ mod send_acl_hotpath_tests {
 
     #[test]
     fn send_acl_notify_cross_scope_queues_before_peer_transport() {
-        let _lock = env_test_lock().lock().unwrap();
+        let _lock = env_test_lock();
         let env = SendAclEnvGuard::new("notify-callsite");
         send_acl_write_scope("team", &["alice", "carol"]);
         let config = send_acl_config("alice");
@@ -2746,7 +2746,7 @@ mod send_acl_hotpath_tests {
 
     #[test]
     fn send_acl_talkto_cross_scope_queues_before_fake_or_real_transport() {
-        let _lock = env_test_lock().lock().unwrap();
+        let _lock = env_test_lock();
         let env = SendAclEnvGuard::new("talkto-callsite");
         let _fake = EnvVarRestore::capture("MAW_RS_TALKTO_FAKE_PEER_LOG");
         let fake_log = env.root.join("talkto-peer.jsonl");
@@ -2786,7 +2786,7 @@ mod send_acl_hotpath_tests {
 
     #[test]
     fn hey_file_source_delivers_shell_hostile_bytes_identical_to_sinks() {
-        let _lock = env_test_lock().lock().unwrap();
+        let _lock = env_test_lock();
         let (root, _restores) = send_audit_test_env("file-source");
         let payload = "review: `cargo test` ate $YESTERDAY and $(point-c)\nline2 'single' \"double\" \\backslash\n";
         let path = root.join("message.txt");

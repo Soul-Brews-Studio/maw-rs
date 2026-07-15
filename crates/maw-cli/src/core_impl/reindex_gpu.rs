@@ -371,7 +371,7 @@ mod reindex_tests290 {
 
     #[test]
     fn reindex_parse_rejects_endpoint_and_path_injection() {
-        let _guard = env_test_lock().lock().expect("env lock");
+        let _guard = env_test_lock();
         let _endpoint = EnvVarRestore::capture("MAW_REINDEX_GPU_ENDPOINT");
         std::env::set_var("MAW_REINDEX_GPU_ENDPOINT", "http://user:pw@example.test/api/embed");
         assert!(reindex_parse_args(&[]).expect_err("creds").contains("credentials"));
@@ -385,7 +385,7 @@ mod reindex_tests290 {
 
     #[test]
     fn reindex_mock_gateway_writes_atomic_index_and_matches_golden() {
-        let _guard = env_test_lock().lock().expect("env lock");
+        let _guard = env_test_lock();
         let restores = [
             EnvVarRestore::capture("MAW_REINDEX_GPU_ENDPOINT"),
             EnvVarRestore::capture("MAW_REINDEX_GPU_ALT_ENDPOINT"),
@@ -414,7 +414,7 @@ mod reindex_tests290 {
 
     #[test]
     fn reindex_unreachable_does_not_write_partial_index_and_alt_is_remote_only() {
-        let _guard = env_test_lock().lock().expect("env lock");
+        let _guard = env_test_lock();
         let restores = [
             EnvVarRestore::capture("MAW_REINDEX_GPU_ENDPOINT"),
             EnvVarRestore::capture("MAW_REINDEX_GPU_ALT_ENDPOINT"),

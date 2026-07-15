@@ -197,7 +197,7 @@ mod tmux_break_tests {
 
     #[test]
     fn tmux_break_fake_maw_no_delegate_and_no_bun_runtime() {
-        let _guard = env_test_lock().lock().expect("env lock");
+        let _guard = env_test_lock();
         let _restore = EnvVarRestore::capture("MAW_JS_REF_DIR");
         std::env::set_var("MAW_JS_REF_DIR", "/nonexistent");
         let mut runner = BreakFakeRunner::default();

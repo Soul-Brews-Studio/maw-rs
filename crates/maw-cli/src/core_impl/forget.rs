@@ -776,7 +776,7 @@ mod forget_tests {
 
     #[test]
     fn forget_native_done_runner_uses_explicit_cwd_without_path_maw_or_global_cwd_change() {
-        let _lock = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lock = env_test_lock();
         let _home = EnvVarRestore::capture("HOME");
         let _maw_home = EnvVarRestore::capture("MAW_HOME");
         let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");

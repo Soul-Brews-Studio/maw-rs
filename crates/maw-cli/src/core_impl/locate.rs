@@ -829,7 +829,7 @@ mod locate_tests {
 
     #[test]
     fn locate_json_matches_committed_golden_and_ignores_missing_js_ref() {
-        let _guard = env_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = env_test_lock();
         let env = LocateHermeticEnv::new("json");
         assert_eq!(std::env::var_os("TMUX"), None);
         assert_eq!(current_xdg_env().home_dir(), env.home.as_path());
@@ -871,7 +871,7 @@ mod locate_tests {
 
     #[test]
     fn locate_path_is_one_clean_line_from_temp_home() {
-        let _guard = env_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = env_test_lock();
         let env = LocateHermeticEnv::new("path");
         assert_eq!(std::env::var_os("TMUX"), None);
         let repo = env.ghq.join("github.com/acme/pathfinder-oracle");
@@ -893,7 +893,7 @@ mod locate_tests {
 
     #[test]
     fn locate_json_uses_explicit_site_before_derived_pages_default() {
-        let _guard = env_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = env_test_lock();
         let env = LocateHermeticEnv::new("site");
         locate_write(
             &env.maw_config_path(&["fleet", "kru32.json"]),
@@ -911,7 +911,7 @@ mod locate_tests {
 
     #[test]
     fn locate_json_omits_site_when_manifest_and_repo_are_absent() {
-        let _guard = env_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = env_test_lock();
         let env = LocateHermeticEnv::new("no-site");
         locate_write(&env.maw_config_path(&["maw.config.json"]), r#"{"agents":{"ghost":"edge"}}"#);
 
@@ -925,7 +925,7 @@ mod locate_tests {
 
     #[test]
     fn locate_repo_resolution_uses_declared_kind_before_suffix() {
-        let _guard = env_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = env_test_lock();
         let env = LocateHermeticEnv::new("kind");
         let foo = env.ghq.join("github.com/acme/foo");
         let bar = env.ghq.join("github.com/acme/bar-oracle");
@@ -953,7 +953,7 @@ mod locate_tests {
 
     #[test]
     fn locate_prefixed_names_resolve_with_stripped_stem() {
-        let _guard = env_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = env_test_lock();
         let env = LocateHermeticEnv::new("prefixed");
         let repo = env.ghq.join("github.com/acme/track-oracle");
         std::fs::create_dir_all(&repo).expect("repo");
@@ -996,7 +996,7 @@ mod locate_tests {
 
     #[test]
     fn locate_typed_inventory_routes_exact_and_asks_on_fuzzy() {
-        let _guard = env_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = env_test_lock();
         let env = LocateHermeticEnv::new("typed-picker");
         let repo = env.ghq.join("github.com/acme/track-oracle");
         std::fs::create_dir_all(&repo).expect("repo");

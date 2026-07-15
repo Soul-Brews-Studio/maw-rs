@@ -358,9 +358,7 @@ mod serveidentity_tests {
 
     #[test]
     fn serveidentity_http_provider_reads_peer_key_without_creating_one() {
-        let _guard = env_test_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _restore_home = EnvVarRestore::capture("HOME");
         let _restore_maw_home = EnvVarRestore::capture("MAW_HOME");
         let _restore_maw_state = EnvVarRestore::capture("MAW_STATE_DIR");

@@ -1846,7 +1846,7 @@ mod fleet_tests {
     where
         F: FnOnce(&std::path::Path),
     {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _home = EnvVarRestore::capture("HOME");
         let _xdg = EnvVarRestore::capture("XDG_CONFIG_HOME");
         let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
@@ -2022,7 +2022,7 @@ mod fleet_tests {
 
     #[test]
     fn fleet_doctor_uses_ghq_root_once_for_host_prefixed_repo_slugs() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _home = EnvVarRestore::capture("HOME");
         let _xdg = EnvVarRestore::capture("XDG_CONFIG_HOME");
         let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
@@ -2054,7 +2054,7 @@ mod fleet_tests {
 
     #[test]
     fn fleet_add_registers_live_session_windows_from_fake_tmux() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _home = EnvVarRestore::capture("HOME");
         let _xdg = EnvVarRestore::capture("XDG_CONFIG_HOME");
         let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
@@ -2368,7 +2368,7 @@ mod fleet_tests {
 
     #[test]
     fn fleet_upsert_never_writes_a_session_snapshot_into_a_squad_folder() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _home = EnvVarRestore::capture("HOME");
         let _state = EnvVarRestore::capture("MAW_STATE_DIR");
         let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
@@ -2402,7 +2402,7 @@ mod fleet_tests {
 
     #[test]
     fn fleet_upsert_session_follows_stem_matches_and_repo_overlap_across_state_and_home_dirs() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _home = EnvVarRestore::capture("HOME");
         let _xdg = EnvVarRestore::capture("XDG_CONFIG_HOME");
         let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
@@ -2437,7 +2437,7 @@ mod fleet_tests {
 
     #[test]
     fn fleet_upsert_uses_canonical_repo_overlap_to_merge_symlinked_paths() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _home = EnvVarRestore::capture("HOME");
         let _state = EnvVarRestore::capture("MAW_STATE_DIR");
         let _ghq = EnvVarRestore::capture("GHQ_ROOT");
@@ -2479,7 +2479,7 @@ mod fleet_tests {
 
     #[test]
     fn fleet_upsert_deduplicates_bud_and_wake_names_for_one_live_window() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _home = EnvVarRestore::capture("HOME");
         let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
         let _ghq = EnvVarRestore::capture("GHQ_ROOT");
@@ -2532,7 +2532,7 @@ mod fleet_tests {
         // re-registers itself the upsert must update its own entry in place —
         // not get treated as a duplicate of an earlier-sorting same-stem
         // sibling (which would mint a second entry with the same name).
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let _home = EnvVarRestore::capture("HOME");
         let _xdg = EnvVarRestore::capture("XDG_CONFIG_HOME");
         let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");

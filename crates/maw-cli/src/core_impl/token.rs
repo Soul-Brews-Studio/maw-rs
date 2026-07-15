@@ -809,7 +809,7 @@ mod token_apply_tests {
 
     #[test]
     fn token_status_reports_assigned_and_running_tokens() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let root = temp("status-root");
         let _restore = ["HOME", "MAW_HOME", "MAW_CONFIG_DIR", "MAW_STATE_DIR", "MAW_CACHE_DIR", "GHQ_ROOT"].map(EnvVarRestore::capture);
         for (key, dir) in [("HOME", "home"), ("MAW_CONFIG_DIR", "config"), ("MAW_STATE_DIR", "state"), ("MAW_CACHE_DIR", "cache"), ("GHQ_ROOT", "ghq")] {
@@ -834,7 +834,7 @@ mod token_apply_tests {
 
     #[test]
     fn token_resolve_prefers_member_then_squad_then_legacy_fallbacks() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let root = temp("resolve-root");
         let cwd = root.join("atlas-oracle");
         std::fs::create_dir_all(&cwd).expect("cwd");
@@ -885,7 +885,7 @@ mod token_apply_tests {
 
     #[test]
     fn token_apply_live_writes_envrc_then_restarts_idle_pane() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let mut runner = runner(temp("live-root"), "green");
         let cwd = temp("live-cwd");
         let old = std::env::current_dir().expect("cwd old");

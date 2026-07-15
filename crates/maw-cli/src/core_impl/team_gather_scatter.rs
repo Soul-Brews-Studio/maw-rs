@@ -187,7 +187,7 @@ mod team_gather_scatter_tests {
 
     #[test]
     fn gather_joins_live_members_and_warns_missing() {
-        let _guard = env_test_lock().lock().expect("lock");
+        let _guard = env_test_lock();
         let _cwd = fixture_team();
         let _panes = EnvVarRestore::capture("MAW_RS_TEAM_TMUX_PANES");
         std::env::set_var("MAW_RS_TEAM_TMUX_PANES", "s|lead|codex|/repo/lead|%1\ns|codex-1|codex|/repo/codex-1|%2\n");
@@ -201,7 +201,7 @@ mod team_gather_scatter_tests {
 
     #[test]
     fn scatter_breaks_non_lead_panes_in_current_window() {
-        let _guard = env_test_lock().lock().expect("lock");
+        let _guard = env_test_lock();
         let _cwd = fixture_team();
         let _panes = EnvVarRestore::capture("MAW_RS_TEAM_TMUX_PANES");
         std::env::set_var("MAW_RS_TEAM_TMUX_PANES", "s|lead|codex|/repo/lead|%1\ns|lead|codex|/repo/codex-1|%2\n");

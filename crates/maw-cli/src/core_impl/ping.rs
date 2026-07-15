@@ -232,7 +232,7 @@ mod ping_tests133 {
     fn args(values: &[&str]) -> Vec<String> { values.iter().map(|value| (*value).to_owned()).collect() }
 
     fn ping_no_peer_store_env() -> (std::sync::MutexGuard<'static, ()>, EnvVarRestore) {
-        let lock = env_test_lock().lock().expect("env lock");
+        let lock = env_test_lock();
         let restore = EnvVarRestore::capture("PEERS_FILE");
         std::env::set_var("PEERS_FILE", "/tmp/maw-rs-ping-native-no-peers.json");
         (lock, restore)

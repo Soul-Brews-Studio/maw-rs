@@ -656,7 +656,7 @@ mod completions_tests {
 
     #[test]
     fn completions_squads_lists_roster_squad_names_from_fleet_files() {
-        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = env_test_lock();
         let root = std::env::temp_dir().join(format!("maw-rs-completions-squads-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let _restore = ["HOME", "MAW_HOME", "MAW_CONFIG_DIR", "MAW_STATE_DIR", "MAW_CACHE_DIR", "GHQ_ROOT"].map(EnvVarRestore::capture);
