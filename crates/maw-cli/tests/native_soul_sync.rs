@@ -1,3 +1,8 @@
+// Dispatcher registration pins (and other pre-invoke coverage) run on the
+// default test path; tests that execute plugin.wasm need the real Extism
+// runtime and run in the wasm-host CI job
+// (`cargo test -p maw-cli --features wasm-host`).
+#[cfg(feature = "wasm-host")]
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -5,10 +10,12 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(feature = "wasm-host")]
 fn bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_maw-rs"))
 }
 
+#[cfg(feature = "wasm-host")]
 fn temp_dir(name: &str) -> PathBuf {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -19,11 +26,13 @@ fn temp_dir(name: &str) -> PathBuf {
     path
 }
 
+#[cfg(feature = "wasm-host")]
 fn write(path: &Path, text: &str) {
     fs::create_dir_all(path.parent().expect("parent")).expect("dirs");
     fs::write(path, text).expect("write");
 }
 
+#[cfg(feature = "wasm-host")]
 fn install_plugin(root: &Path) -> PathBuf {
     let plugin = root.join("plugins/soul-sync");
     fs::create_dir_all(&plugin).expect("plugin dir");
@@ -40,6 +49,7 @@ fn install_plugin(root: &Path) -> PathBuf {
     root.join("plugins")
 }
 
+#[cfg(feature = "wasm-host")]
 fn seed(root: &Path) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
     let home = root.join("home");
     let maw_home = root.join("maw-home");
@@ -60,6 +70,7 @@ fn seed(root: &Path) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
     (home, maw_home, ghq, neo)
 }
 
+#[cfg(feature = "wasm-host")]
 fn run(command: &str, root: &Path) -> std::process::Output {
     let (home, maw_home, ghq, cwd) = seed(root);
     let plugins = install_plugin(root);
@@ -76,6 +87,7 @@ fn run(command: &str, root: &Path) -> std::process::Output {
         .expect("run maw-rs")
 }
 
+#[cfg(feature = "wasm-host")]
 fn assert_push_parity(command: &str) {
     let root = temp_dir(command);
     let output = run(command, &root);
@@ -102,11 +114,13 @@ fn assert_push_parity(command: &str) {
     );
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn soul_sync_plugin_matches_native_push_golden() {
     assert_push_parity("soul-sync");
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn soul_sync_plugin_aliases_match_native_push_golden() {
     assert_push_parity("soulsync");

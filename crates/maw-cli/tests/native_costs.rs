@@ -1,3 +1,8 @@
+// Dispatcher registration pins (and other pre-invoke coverage) run on the
+// default test path; tests that execute plugin.wasm need the real Extism
+// runtime and run in the wasm-host CI job
+// (`cargo test -p maw-cli --features wasm-host`).
+#[cfg(feature = "wasm-host")]
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -5,10 +10,12 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(feature = "wasm-host")]
 fn bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_maw-rs"))
 }
 
+#[cfg(feature = "wasm-host")]
 fn temp_dir(name: &str) -> PathBuf {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -19,6 +26,7 @@ fn temp_dir(name: &str) -> PathBuf {
     path
 }
 
+#[cfg(feature = "wasm-host")]
 fn run(args: &[&str], cwd: &Path, maw_home: &Path, projects_dir: &Path, plugins_dir: &Path) -> std::process::Output {
     Command::new(bin())
         .args(args)
@@ -33,6 +41,7 @@ fn run(args: &[&str], cwd: &Path, maw_home: &Path, projects_dir: &Path, plugins_
         .expect("run maw-rs")
 }
 
+#[cfg(feature = "wasm-host")]
 fn install_costs_plugin(root: &Path) -> PathBuf {
     let plugin = root.join("plugins").join("costs");
     fs::create_dir_all(&plugin).expect("plugin dir");
@@ -41,6 +50,7 @@ fn install_costs_plugin(root: &Path) -> PathBuf {
     root.join("plugins")
 }
 
+#[cfg(feature = "wasm-host")]
 fn assistant_line(model: &str, timestamp: &str, input: u64, output: u64) -> String {
     serde_json::json!({
         "type": "assistant",
@@ -58,6 +68,7 @@ fn assistant_line(model: &str, timestamp: &str, input: u64, output: u64) -> Stri
     .to_string()
 }
 
+#[cfg(feature = "wasm-host")]
 fn seed_projects(projects: &Path) {
     let alpha = projects.join("-home-agent-github-com-tonkmac-alpha-oracle");
     let beta = projects.join("-tmp-random-beta-agent");
@@ -97,6 +108,7 @@ fn seed_projects(projects: &Path) {
     .expect("old file");
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn native_costs_summary_matches_committed_golden_without_ref_checkout() {
     let root = temp_dir("summary");
@@ -121,6 +133,7 @@ fn native_costs_summary_matches_committed_golden_without_ref_checkout() {
     assert_eq!(String::from_utf8(output.stderr).expect("stderr"), "");
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn native_costs_daily_json_matches_committed_golden_without_ref_checkout() {
     let root = temp_dir("daily-json");

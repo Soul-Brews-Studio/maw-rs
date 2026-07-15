@@ -1,3 +1,8 @@
+// Dispatcher registration pins (and other pre-invoke coverage) run on the
+// default test path; tests that execute plugin.wasm need the real Extism
+// runtime and run in the wasm-host CI job
+// (`cargo test -p maw-cli --features wasm-host`).
+#[cfg(feature = "wasm-host")]
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -6,12 +11,15 @@ use std::{
 };
 
 use maw_cli::{dispatcher_status, DispatchKind};
+#[cfg(feature = "wasm-host")]
 use serde_json::Value;
 
+#[cfg(feature = "wasm-host")]
 fn bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_maw-rs"))
 }
 
+#[cfg(feature = "wasm-host")]
 fn temp_dir(name: &str) -> PathBuf {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -22,6 +30,7 @@ fn temp_dir(name: &str) -> PathBuf {
     path
 }
 
+#[cfg(feature = "wasm-host")]
 fn run(args: &[&str], cwd: &Path, maw_home: &Path, plugins_dir: &Path) -> std::process::Output {
     Command::new(bin())
         .args(args)
@@ -34,6 +43,7 @@ fn run(args: &[&str], cwd: &Path, maw_home: &Path, plugins_dir: &Path) -> std::p
         .expect("run maw-rs")
 }
 
+#[cfg(feature = "wasm-host")]
 fn install_contacts_plugin(root: &Path) -> PathBuf {
     let plugin = root.join("plugins/contacts");
     fs::create_dir_all(&plugin).expect("plugin dir");
@@ -50,6 +60,7 @@ fn install_contacts_plugin(root: &Path) -> PathBuf {
     root.join("plugins")
 }
 
+#[cfg(feature = "wasm-host")]
 fn assert_success(output: &std::process::Output) {
     assert!(
         output.status.success(),
@@ -59,6 +70,7 @@ fn assert_success(output: &std::process::Output) {
     );
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn contacts_plugin_add_list_remove_matches_committed_golden_without_ref_checkout() {
     let root = temp_dir("golden");
@@ -149,6 +161,7 @@ fn contacts_plugin_add_list_remove_matches_committed_golden_without_ref_checkout
     assert_eq!(String::from_utf8(after_remove.stderr).expect("stderr"), "");
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn contacts_plugin_honors_configured_psi_path_in_temp_maw_home() {
     let root = temp_dir("psi-path");

@@ -3,5 +3,6 @@ include!("capability_parsers.rs");
 include!("discovery_runtime.rs");
 include!("wasm_mvp_runtime.rs");
 include!("discovery_helpers.rs");
+#[cfg(feature = "wasm-host")]
 include!("wasm_host.rs");
 include!("js_plugin_build.rs");

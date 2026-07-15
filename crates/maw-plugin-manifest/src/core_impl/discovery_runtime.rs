@@ -16,6 +16,70 @@ impl PluginInvokeRuntime for MvpWasmInvokeRuntime {
     }
 }
 
+/// Host functions the real wasm-host runtime registers for ship-tier plugins.
+///
+/// Lives outside the `wasm-host`-gated module on purpose: the featureless
+/// `plugin-manifest invoke --plan-json` render reports `hostFnCount` and must
+/// keep working in builds without the Extism runtime.
+pub const HOST_FN_NAMES: &[&str] = &[
+    "maw.cli.run",
+    "maw.exec.run",
+    "maw.exec.spawn",
+    "maw.paths.get",
+    "maw.time.now",
+    "maw.config.get",
+    "maw.config.set",
+    "maw.consent.read",
+    "maw.fs.read",
+    "maw.fs.write",
+    "maw.fs.mkdir",
+    "maw.fs.remove",
+    "maw.fs.list",
+    "maw.fs.stat",
+    "maw.http.request",
+    "maw.net.fetch",
+    "maw.localserver.request",
+    "maw.http.peer_send",
+    "maw.http.peer_wake",
+    "maw.tmux.list_sessions",
+    "maw.tmux.capture",
+    "maw.tmux.send_keys",
+    "maw.tmux.run",
+    "maw.tmux.command",
+    "maw.tmux.send_enter",
+    "maw.tmux.tags_read",
+    "maw.tmux.tags_write",
+    "maw.ssh.exec",
+    "maw.ssh.tmux_capture",
+    "maw.ssh.tmux_send_keys",
+];
+
+/// Stand-in wasm runtime for binaries compiled without the `wasm-host`
+/// feature. Discovery, manifest parse, sha256 hash-verify, and universal
+/// `--help`/`--version` handling all run before this is reached, so a wasm
+/// verb in a featureless build fails loudly here — never as `UnknownCommand`.
+#[derive(Debug, Clone, Default)]
+pub struct WasmHostUnavailableRuntime;
+
+impl PluginInvokeRuntime for WasmHostUnavailableRuntime {
+    fn invoke_ts(&mut self, _plugin: &LoadedPlugin, _ctx: &InvokeContext) -> InvokeResult {
+        InvokeResult::error("TS plugin runtime is not available in Extism runtime")
+    }
+
+    fn invoke_wasm(
+        &mut self,
+        plugin: &LoadedPlugin,
+        _ctx: &InvokeContext,
+        _wasm_bytes: &[u8],
+    ) -> InvokeResult {
+        InvokeResult::error(format!(
+            "plugin '{}' is a ship-tier WASM plugin but this maw binary was built without the 'wasm-host' feature. Rebuild with: cargo install --path crates/maw-cli --features wasm-host",
+            plugin.manifest.name
+        ))
+    }
+}
+
+#[cfg_attr(not(feature = "wasm-host"), allow(dead_code))]
 fn parse_invoke_result_stdout(stdout: &[u8]) -> Result<InvokeResult, String> {
     let value: Value = serde_json::from_slice(stdout)
         .map_err(|error| format!("failed to parse InvokeResult JSON: {error}"))?;
@@ -43,6 +107,7 @@ fn optional_string_field(
     })
 }
 
+#[cfg_attr(not(feature = "wasm-host"), allow(dead_code))]
 fn invoke_context_json(ctx: &InvokeContext) -> String {
     serde_json::json!({
         "source": ctx.source.as_str(),

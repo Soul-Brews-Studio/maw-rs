@@ -1,3 +1,8 @@
+// Dispatcher registration pins (and other pre-invoke coverage) run on the
+// default test path; tests that execute plugin.wasm need the real Extism
+// runtime and run in the wasm-host CI job
+// (`cargo test -p maw-cli --features wasm-host`).
+#[cfg(feature = "wasm-host")]
 use std::{
     fs,
     io::{Read as _, Write as _},
@@ -8,10 +13,12 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(feature = "wasm-host")]
 fn bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_maw-rs"))
 }
 
+#[cfg(feature = "wasm-host")]
 fn temp_dir(name: &str) -> PathBuf {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -22,6 +29,7 @@ fn temp_dir(name: &str) -> PathBuf {
     path
 }
 
+#[cfg(feature = "wasm-host")]
 fn install_plugin(root: &Path) -> PathBuf {
     let plugin = root.join("plugins/avengers");
     fs::create_dir_all(&plugin).expect("plugin dir");
@@ -38,6 +46,7 @@ fn install_plugin(root: &Path) -> PathBuf {
     root.join("plugins")
 }
 
+#[cfg(feature = "wasm-host")]
 fn serve_json(path: &str, body: &'static str) -> String {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind server");
     let port = listener.local_addr().expect("server address").port();
@@ -59,6 +68,7 @@ fn serve_json(path: &str, body: &'static str) -> String {
     format!("http://127.0.0.1:{port}{path}")
 }
 
+#[cfg(feature = "wasm-host")]
 fn run(root: &Path, base: Option<&str>, args: &[&str]) -> Output {
     let home = root.join("home");
     let config = home.join("config");
@@ -83,6 +93,7 @@ fn run(root: &Path, base: Option<&str>, args: &[&str]) -> Output {
         .expect("run maw-rs")
 }
 
+#[cfg(feature = "wasm-host")]
 fn assert_success(output: Output, expected: &str) {
     assert!(
         output.status.success(),
@@ -93,6 +104,7 @@ fn assert_success(output: Output, expected: &str) {
     assert_eq!(String::from_utf8(output.stderr).expect("stderr"), "");
 }
 
+#[cfg(feature = "wasm-host")]
 fn normalize_health_latency(mut output: String) -> String {
     let marker = "\x1b[90m";
     let start = output.find(marker).expect("latency color") + marker.len();
@@ -101,6 +113,7 @@ fn normalize_health_latency(mut output: String) -> String {
     output
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn avengers_plugin_fallthrough_matches_native_status_output() {
     let root = temp_dir("status");
@@ -118,6 +131,7 @@ fn avengers_plugin_fallthrough_matches_native_status_output() {
     assert_success(output, &expected);
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn avengers_plugin_fallthrough_matches_native_json_and_health_outputs() {
     for (name, path, body, title) in [
@@ -165,6 +179,7 @@ fn avengers_plugin_fallthrough_matches_native_json_and_health_outputs() {
     assert_eq!(String::from_utf8(output.stderr).expect("stderr"), "");
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn avengers_plugin_keeps_missing_config_contract() {
     let output = run(&temp_dir("missing"), None, &["avengers"]);

@@ -39,10 +39,14 @@ use maw_peer::{
     NamedPeerConfig, PeerConfig, PeerSourceMode, PeerSourceResult, ProbeErrorCode,
     ProbeFailureInput, ProbeLastError, ProbeMawHandshake,
 };
+#[cfg(feature = "wasm-host")]
+use maw_plugin_manifest::ExtismWasmInvokeRuntime;
+#[cfg(not(feature = "wasm-host"))]
+use maw_plugin_manifest::WasmHostUnavailableRuntime;
 use maw_plugin_manifest::{
     build_js_plugin_dir, discover_packages, hash_file, import_plugin_symbol, infer_plugin_capabilities,
     init_js_plugin_dir, install_built_plugin_dir, invoke_plugin, load_manifest_from_dir,
-    parse_manifest, DiscoverPackagesOptions, ExtismWasmInvokeRuntime, HOST_FN_NAMES, InvokeContext,
+    parse_manifest, DiscoverPackagesOptions, HOST_FN_NAMES, InvokeContext,
     InvokeResult, InvokeSource, LoadedPlugin, LoadedPluginKind,
     PluginManifest, PluginTier,
 };
@@ -677,8 +681,27 @@ fn dispatch_cli_plugin(argv: &[String]) -> Option<CliOutput> {
     // tests in maw-plugin-manifest. with_manifest_fs_roots grants declared fs caps
     // from the fixed registry (e.g. fs:read:teams) — same wiring as the internal
     // plugin-manifest invoke path; without it every maw.fs.* call is denied here.
-    let mut runtime = ExtismWasmInvokeRuntime::default().with_manifest_fs_roots();
+    // The Extism runtime is compiled in only with the 'wasm-host' feature (deploy
+    // builds); a default (featureless) build routes through ship_tier_wasm_runtime()
+    // to a stand-in whose invoke_wasm fails loudly with a rebuild hint — discovery,
+    // manifest parse, hash-verify, and universal --help/--version stay featureless.
+    let mut runtime = ship_tier_wasm_runtime();
     Some(render_cli_plugin_result(invoke_plugin(plugin, &ctx, &mut runtime)))
+}
+
+/// Single construction point for the ship-tier wasm runtime used by both the
+/// CLI plugin fallthrough (`dispatch_cli_plugin`) and the internal
+/// `plugin-manifest invoke` plan path (`run_plugin_manifest_invoke_plan`).
+#[cfg(feature = "wasm-host")]
+fn ship_tier_wasm_runtime() -> ExtismWasmInvokeRuntime {
+    ExtismWasmInvokeRuntime::default().with_manifest_fs_roots()
+}
+
+/// Featureless builds get a runtime whose `invoke_wasm` errors with an
+/// actionable rebuild message instead of degrading to `UnknownCommand`.
+#[cfg(not(feature = "wasm-host"))]
+fn ship_tier_wasm_runtime() -> WasmHostUnavailableRuntime {
+    WasmHostUnavailableRuntime
 }
 
 fn dispatch_ts_cli_plugin(plugin: &LoadedPlugin, ctx: &InvokeContext) -> CliOutput {

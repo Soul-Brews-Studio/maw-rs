@@ -1,3 +1,7 @@
+// Exercises MawWasmHost (wasm-host feature): run via
+// `cargo test -p maw-plugin-manifest --features wasm-host` (the wasm-host CI job).
+#![cfg(feature = "wasm-host")]
+
 include!("wasm_host_security/common.rs");
 include!("wasm_host_security/manifest_fs_localserver.rs");
 include!("wasm_host_security/exec_ssh_capabilities.rs");

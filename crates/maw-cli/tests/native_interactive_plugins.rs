@@ -31,6 +31,7 @@ fn run(args: &[&str], maw_home: &Path) -> std::process::Output {
         .expect("run maw-rs")
 }
 
+#[cfg(feature = "wasm-host")]
 fn run_stream(args: &[&str], root: &Path) -> std::process::Output {
     let plugin = root.join("plugins/stream");
     fs::create_dir_all(&plugin).expect("stream plugin dir");
@@ -313,6 +314,7 @@ fn attach_ssh_refuses_unsafe_session_before_ssh() {
     assert_eq!(String::from_utf8(output.stdout).expect("stdout"), "");
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn stream_unlink_dry_run_matches_committed_golden_without_ref_checkout() {
     let root = temp_dir("stream-unlink-dry-run");
@@ -330,6 +332,7 @@ fn stream_unlink_dry_run_matches_committed_golden_without_ref_checkout() {
     assert_eq!(String::from_utf8(output.stderr).expect("stderr"), "");
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn stream_unlink_plan_json_matches_committed_golden_without_ref_checkout() {
     let root = temp_dir("stream-unlink-plan-json");

@@ -10,6 +10,10 @@ publish = false
 name = "maw-rs"
 path = "src/main.rs"
 
+[features]
+default = []
+wasm-host = ["maw-plugin-manifest/wasm-host"]
+
 [dependencies]
 maw-auto-wake = { path = "../maw-auto-wake" }
 maw-auth = { path = "../maw-auth" }

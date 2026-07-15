@@ -1,3 +1,7 @@
+// Exercises MawWasmHost (wasm-host feature): run via
+// `cargo test -p maw-plugin-manifest --features wasm-host` (the wasm-host CI job).
+#![cfg(feature = "wasm-host")]
+
 use std::fs::{create_dir_all, write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};

@@ -16,6 +16,12 @@
 //! into a passing gate. `probe_builds_via_pipeline` re-derives the artifact through the
 //! real `maw plugin build` pipeline and needs the `AssemblyScript` toolchain, so it is
 //! `#[ignore]` too.
+//!
+//! The whole file drives host-fn imports on the real Extism runtime, so it is
+//! gated behind the `wasm-host` feature and runs in the wasm-host CI job
+//! (`cargo test -p maw-cli --features wasm-host`).
+
+#![cfg(feature = "wasm-host")]
 
 use maw_cli::run_cli;
 use std::fs::{create_dir_all, read_to_string, write};

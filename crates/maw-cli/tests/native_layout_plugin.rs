@@ -1,15 +1,23 @@
+// Dispatcher registration pin runs on the default test path; the invoke tests
+// need the real Extism runtime and run in the wasm-host CI job
+// (`cargo test -p maw-cli --features wasm-host`).
 use maw_cli::{dispatcher_status, DispatchKind};
+#[cfg(feature = "wasm-host")]
 use maw_plugin_manifest::{
     invoke_plugin, load_manifest_from_dir, ExtismWasmInvokeRuntime, InvokeContext, InvokeSource,
     MawWasmHost,
 };
+#[cfg(feature = "wasm-host")]
 use serde_json::json;
+#[cfg(feature = "wasm-host")]
 use std::path::PathBuf;
 
+#[cfg(feature = "wasm-host")]
 fn fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native-layout/layout-plugin")
 }
 
+#[cfg(feature = "wasm-host")]
 fn invoke(args: &[&str]) -> maw_plugin_manifest::InvokeResult {
     let plugin = load_manifest_from_dir(&fixture())
         .expect("load layout fixture")
@@ -29,6 +37,7 @@ fn invoke(args: &[&str]) -> maw_plugin_manifest::InvokeResult {
     invoke_plugin(&plugin, &context, &mut runtime)
 }
 
+#[cfg(feature = "wasm-host")]
 fn tmux_args(args: &[&str]) -> Vec<String> {
     if args.len() == 1 {
         vec![args[0].to_owned()]
@@ -37,6 +46,7 @@ fn tmux_args(args: &[&str]) -> Vec<String> {
     }
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn layout_plugin_matches_current_window_and_targeted_output() {
     let current = invoke(&["main-vertical"]);
@@ -54,6 +64,7 @@ fn layout_plugin_matches_current_window_and_targeted_output() {
     );
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn layout_plugin_rejects_invalid_preset_before_host_call() {
     let result = invoke(&["broken"]);

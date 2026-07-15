@@ -1,11 +1,19 @@
+// Dispatcher registration pins (and other pre-invoke coverage) run on the
+// default test path; tests that execute plugin.wasm need the real Extism
+// runtime and run in the wasm-host CI job
+// (`cargo test -p maw-cli --features wasm-host`).
 use maw_cli::{dispatcher_status, DispatchKind};
+#[cfg(feature = "wasm-host")]
 use std::path::{Path, PathBuf};
+#[cfg(feature = "wasm-host")]
 use std::process::Command;
 
+#[cfg(feature = "wasm-host")]
 fn dream_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_maw-rs"))
 }
 
+#[cfg(feature = "wasm-host")]
 fn dream_write(path: &Path, text: &str) {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).expect("parent dir");
@@ -13,6 +21,7 @@ fn dream_write(path: &Path, text: &str) {
     std::fs::write(path, text).expect("write file");
 }
 
+#[cfg(feature = "wasm-host")]
 fn dream_git(repo: &Path, args: &[&str]) {
     let output = Command::new("git")
         .arg("-C")
@@ -35,6 +44,7 @@ fn dream_git(repo: &Path, args: &[&str]) {
     );
 }
 
+#[cfg(feature = "wasm-host")]
 fn dream_seed_repo(root: &Path, slug: &str, message: &str, date: &str) -> PathBuf {
     let repo = root.join("ghq/github.com").join(slug);
     std::fs::create_dir_all(repo.join("ψ")).expect("psi dir");
@@ -66,6 +76,7 @@ fn dream_seed_repo(root: &Path, slug: &str, message: &str, date: &str) -> PathBu
     repo
 }
 
+#[cfg(feature = "wasm-host")]
 fn dream_seed(name: &str) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
     let root =
         std::env::temp_dir().join(format!("maw-rs-native-dream-{name}-{}", std::process::id()));
@@ -99,6 +110,7 @@ fn dream_seed(name: &str) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
     (root, home, config, cache)
 }
 
+#[cfg(feature = "wasm-host")]
 fn dream_command(root: &Path, home: &Path, config: &Path, cache: &Path) -> Command {
     let plugins = root.join("plugins");
     let fixture =
@@ -135,6 +147,7 @@ fn dream_command(root: &Path, home: &Path, config: &Path, cache: &Path) -> Comma
     command
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn dream_plugin_porcelain_golden_is_hermetic() {
     let (root, home, config, cache) = dream_seed("porcelain");
@@ -156,7 +169,6 @@ fn dream_plugin_porcelain_golden_is_hermetic() {
     );
     let expected = include_str!("fixtures/native-dream/porcelain.stdout");
     assert_eq!(String::from_utf8(output.stdout).expect("stdout"), expected);
-    assert_eq!(dispatcher_status("dream"), DispatchKind::NativeError);
     assert!(
         !root.join("ψ/writing/dreams").exists(),
         "porcelain should not write dream state"
@@ -164,6 +176,7 @@ fn dream_plugin_porcelain_golden_is_hermetic() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn dream_plugin_writes_seeded_state_and_guards_values() {
     let (root, home, config, cache) = dream_seed("write");
@@ -202,4 +215,9 @@ fn dream_plugin_writes_seeded_state_and_guards_values() {
         "dream: --project requires a value\n"
     );
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn dream_dispatcher_registration_is_removed_for_plugin_fallthrough() {
+    assert_eq!(dispatcher_status("dream"), DispatchKind::NativeError);
 }

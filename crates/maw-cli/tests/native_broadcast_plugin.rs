@@ -1,11 +1,18 @@
+// Dispatcher registration pin runs on the default test path; the invoke tests
+// drive plugin.wasm through the binary and run in the wasm-host CI job
+// (`cargo test -p maw-cli --features wasm-host`).
 use maw_cli::{dispatcher_status, DispatchKind};
+#[cfg(feature = "wasm-host")]
 use std::path::{Path, PathBuf};
+#[cfg(feature = "wasm-host")]
 use std::process::Command;
 
+#[cfg(feature = "wasm-host")]
 fn broadcast_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_maw-rs"))
 }
 
+#[cfg(feature = "wasm-host")]
 fn broadcast_write(path: &Path, text: &str) {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).expect("parent dir");
@@ -13,6 +20,7 @@ fn broadcast_write(path: &Path, text: &str) {
     std::fs::write(path, text).expect("write file");
 }
 
+#[cfg(feature = "wasm-host")]
 fn broadcast_chmod(path: &Path) {
     #[cfg(unix)]
     {
@@ -23,6 +31,7 @@ fn broadcast_chmod(path: &Path) {
     }
 }
 
+#[cfg(feature = "wasm-host")]
 fn broadcast_seed(name: &str) -> (PathBuf, PathBuf, PathBuf) {
     let root = std::env::temp_dir().join(format!(
         "maw-rs-native-broadcast-{name}-{}",
@@ -76,6 +85,7 @@ esac
     (root, home, config)
 }
 
+#[cfg(feature = "wasm-host")]
 fn broadcast_command(root: &Path, home: &Path, config: &Path) -> Command {
     let plugins = root.join("plugins");
     let plugin = plugins.join("broadcast");
@@ -102,6 +112,12 @@ fn broadcast_command(root: &Path, home: &Path, config: &Path) -> Command {
 }
 
 #[test]
+fn broadcast_dispatcher_registration_is_removed_for_plugin_fallthrough() {
+    assert_eq!(dispatcher_status("broadcast"), DispatchKind::NativeError);
+}
+
+#[cfg(feature = "wasm-host")]
+#[test]
 fn broadcast_plugin_session_golden_is_hermetic_without_js_ref() {
     let (root, home, config) = broadcast_seed("session");
     let output = broadcast_command(&root, &home, &config)
@@ -127,10 +143,10 @@ fn broadcast_plugin_session_golden_is_hermetic_without_js_ref() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn broadcast_plugin_registers_team_fleet_and_blocks_option_injection() {
     let (root, home, config) = broadcast_seed("scope");
-    assert_eq!(dispatcher_status("broadcast"), DispatchKind::NativeError);
     let output = broadcast_command(&root, &home, &config)
         .args(["broadcast", "hi", "--team", "tk", "--fleet", "alpha"])
         .output()

@@ -192,7 +192,7 @@ fn doctor_collect_checks(options: &DoctorOptions) -> Vec<DoctorCheckNative> {
     if doctor_should_run(only, &["install", "all"]) { checks.push(doctor_check_install(options)); }
     if only.is_some_and(|value| matches!(value, "xdg" | "all")) { checks.push(doctor_check_xdg(options)); }
     if doctor_should_run(only, &["version", "all"]) { checks.push(doctor_check_version(options)); }
-    if doctor_should_run(only, &["plugins"]) { checks.push(doctor_check_plugins()); }
+    if doctor_should_run(only, &["plugins"]) { checks.push(doctor_check_plugins()); checks.push(doctor_check_wasm_host()); }
     if doctor_should_run(only, &["peers", "all"]) { checks.push(doctor_check_peer_duplicates()); checks.push(doctor_check_stale_peers()); }
     if doctor_should_run(only, &["hub", "all"]) { checks.push(doctor_check_hub()); }
     if doctor_should_run(only, &["hub", "all"]) {
@@ -258,6 +258,50 @@ fn doctor_check_plugins() -> DoctorCheckNative {
         Ok(values) => doctor_info("plugins", &format!("{} loaded (broken symlink scan native)", values.len())),
         Err(error) => doctor_warn("plugins", &format!("{} ({error})", dir.display()), &["maw plugin install"]),
     }
+}
+
+/// Warn when ship-tier wasm plugins are installed but this binary was built
+/// without the `wasm-host` feature (Extism runtime compiled out). Discovery,
+/// manifest parse, and sha256 pin verification still work featureless; only
+/// invoke fails — loudly, with the same rebuild hint surfaced here.
+fn doctor_check_wasm_host() -> DoctorCheckNative {
+    let dir = maw_data_path(&doctor_xdg_env(), &["plugins"]);
+    let wasm_plugins = doctor_installed_wasm_plugins(&dir);
+    if wasm_plugins.is_empty() {
+        return doctor_info("plugins:wasm-host", "no installed wasm plugins require the wasm-host runtime");
+    }
+    let count = wasm_plugins.len();
+    if cfg!(feature = "wasm-host") {
+        return doctor_ok("plugins:wasm-host", &format!("wasm-host runtime compiled in ({count} wasm plugin{})", doctor_plural(count)));
+    }
+    doctor_warn(
+        "plugins:wasm-host",
+        &format!("{count} installed wasm plugin{} cannot run — this maw binary was built without the 'wasm-host' feature: {}", doctor_plural(count), wasm_plugins.join(", ")),
+        &["cargo install --path crates/maw-cli --features wasm-host"],
+    )
+}
+
+fn doctor_installed_wasm_plugins(dir: &std::path::Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let manifest_path = entry.path().join("plugin.json");
+            let text = std::fs::read_to_string(manifest_path).ok()?;
+            let manifest: serde_json::Value = serde_json::from_str(&text).ok()?;
+            let is_wasm = manifest.get("wasm").is_some()
+                || manifest.get("target").and_then(serde_json::Value::as_str) == Some("wasm");
+            if !is_wasm { return None; }
+            Some(
+                manifest
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .map_or_else(|| entry.file_name().to_string_lossy().into_owned(), str::to_owned),
+            )
+        })
+        .collect();
+    names.sort();
+    names
 }
 
 fn doctor_check_peer_duplicates() -> DoctorCheckNative {

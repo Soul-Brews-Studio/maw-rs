@@ -1,4 +1,5 @@
 use maw_cli::run_cli;
+#[cfg(feature = "wasm-host")]
 use maw_plugin_manifest::hash_file;
 use serde_json::json;
 use std::ffi::OsString;
@@ -146,6 +147,7 @@ fn write_ts_plugin_with_runtime(
     write(package_dir.join("plugin.json"), manifest.to_string()).expect("manifest");
 }
 
+#[cfg(feature = "wasm-host")]
 fn write_bun_dev_wasm_plugin(plugins_dir: &Path, dir_name: &str, command: &str) {
     let package_dir = plugins_dir.join(dir_name);
     create_dir_all(&package_dir).expect("plugin dir");
@@ -179,6 +181,7 @@ fn write_bun_dev_wasm_plugin(plugins_dir: &Path, dir_name: &str, command: &str) 
     .expect("manifest");
 }
 
+#[cfg(feature = "wasm-host")]
 fn write_bun_dev_raw_wasm_with_ts_entry_plugin(plugins_dir: &Path, dir_name: &str, command: &str) {
     let package_dir = plugins_dir.join(dir_name);
     create_dir_all(&package_dir).expect("plugin dir");
@@ -214,6 +217,7 @@ fn write_bun_dev_raw_wasm_with_ts_entry_plugin(plugins_dir: &Path, dir_name: &st
     .expect("manifest");
 }
 
+#[cfg(feature = "wasm-host")]
 fn write_ship_tier_wasm_plugin(plugins_dir: &Path, dir_name: &str, command: &str) {
     let package_dir = plugins_dir.join(dir_name);
     create_dir_all(&package_dir).expect("plugin dir");
@@ -250,6 +254,7 @@ fn write_ship_tier_wasm_plugin(plugins_dir: &Path, dir_name: &str, command: &str
 /// functions. The old MVP runtime rejected any import-bearing module ("unresolved
 /// imports" / "failed to parse WebAssembly module"); the Extism runtime instantiates it
 /// and runs it. This drives the real CLI dispatch entrypoint end to end.
+#[cfg(feature = "wasm-host")]
 #[test]
 fn dispatch_cli_plugin_runs_import_bearing_wasm_on_extism_runtime() {
     let _guard = env_lock().lock().expect("env lock");
@@ -433,6 +438,7 @@ fn dispatch_cli_plugin_reports_missing_bun_for_bun_dev_runtime() {
     remove_dir_all(root).expect("cleanup");
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn dispatch_cli_plugin_prefers_wasm_artifact_over_bun_dev_runtime() {
     let _guard = env_lock().lock().expect("env lock");
@@ -466,6 +472,7 @@ fn dispatch_cli_plugin_prefers_wasm_artifact_over_bun_dev_runtime() {
     remove_dir_all(root).expect("cleanup");
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn dispatch_cli_plugin_raw_wasm_field_beats_bun_dev_string_ts_entry() {
     let _guard = env_lock().lock().expect("env lock");
@@ -532,10 +539,12 @@ fn unknown_plugin_command_falls_through_to_cli_error() {
 /// `MvpWasmInvokeRuntime` toy parser rejected any import-bearing module outright, so
 /// this doubles as proof the CLI dispatch path now uses the Extism runtime (#72
 /// blocker 1). Byte-for-byte copy of the committed wasm-parity `triggers` fixture.
+#[cfg(feature = "wasm-host")]
 const WASM_IMPORT_BEARING: &[u8] = include_bytes!("fixtures/wasm-dispatch/import-bearing.wasm");
 
 /// Stable substring of `WASM_IMPORT_BEARING`'s deterministic stdout — asserting on it
 /// proves the module actually instantiated and ran under Extism.
+#[cfg(feature = "wasm-host")]
 const WASM_IMPORT_BEARING_MARKER: &str = "No triggers configured";
 
 #[test]

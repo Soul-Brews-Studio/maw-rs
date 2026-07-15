@@ -1,6 +1,10 @@
+// Dispatcher registration pins (and other pre-invoke coverage) run on the
+// default test path; tests that execute plugin.wasm need the real Extism
+// runtime and run in the wasm-host CI job
+// (`cargo test -p maw-cli --features wasm-host`).
+use std::{path::PathBuf, process::Command};
+#[cfg(feature = "wasm-host")]
 use std::{
-    path::PathBuf,
-    process::Command,
     sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -15,6 +19,7 @@ fn epic55_base() -> Command {
     command
 }
 
+#[cfg(feature = "wasm-host")]
 fn epic55_follow() -> (Command, PathBuf) {
     static NEXT_DIR: AtomicU64 = AtomicU64::new(0);
     let nonce = SystemTime::now()
@@ -57,6 +62,7 @@ fn epic55_activity_matches_committed_golden_without_ref_checkout() {
     assert_eq!(String::from_utf8(output.stderr).expect("stderr"), "");
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn epic55_follow_plugin_preserves_usage_guard() {
     let (mut command, root) = epic55_follow();
@@ -69,7 +75,7 @@ fn epic55_follow_plugin_preserves_usage_guard() {
 }
 
 #[test]
-fn epic55_activity_follow_guard_leading_dash_values_before_io() {
+fn epic55_activity_guard_leading_dash_values_before_io() {
     let activity = epic55_base()
         .args(["activity", "-pane"])
         .output()
@@ -78,17 +84,6 @@ fn epic55_activity_follow_guard_leading_dash_values_before_io() {
     assert!(String::from_utf8(activity.stderr)
         .expect("stderr")
         .contains("usage: maw activity"));
-
-    let (mut follow_command, root) = epic55_follow();
-    let follow = follow_command
-        .args(["follow", "-pane"])
-        .output()
-        .expect("follow");
-    assert!(!follow.status.success());
-    assert!(String::from_utf8(follow.stderr)
-        .expect("stderr")
-        .contains("usage: maw follow"));
-    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]

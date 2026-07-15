@@ -1,14 +1,21 @@
+// Dispatcher registration pins (and other pre-invoke coverage) run on the
+// default test path; tests that execute plugin.wasm need the real Extism
+// runtime and run in the wasm-host CI job
+// (`cargo test -p maw-cli --features wasm-host`).
 use maw_cli::{dispatcher_status, DispatchKind};
+#[cfg(feature = "wasm-host")]
 use std::{
     fs,
     path::{Path, PathBuf},
     process::{Command, Output},
 };
 
+#[cfg(feature = "wasm-host")]
 fn bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_maw-rs"))
 }
 
+#[cfg(feature = "wasm-host")]
 fn temp_dir(name: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!("maw-rs-demo-{name}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
@@ -29,6 +36,7 @@ fn temp_dir(name: &str) -> PathBuf {
     root
 }
 
+#[cfg(feature = "wasm-host")]
 fn command(root: &Path) -> Command {
     let mut command = Command::new(bin());
     command
@@ -45,6 +53,7 @@ fn command(root: &Path) -> Command {
     command
 }
 
+#[cfg(feature = "wasm-host")]
 fn assert_success(output: Output) -> String {
     assert!(
         output.status.success(),
@@ -55,6 +64,7 @@ fn assert_success(output: Output) -> String {
     String::from_utf8(output.stdout).expect("stdout")
 }
 
+#[cfg(feature = "wasm-host")]
 fn install_fake_tmux(root: &Path) {
     fs::write(
         root.join("bin/tmux"),
@@ -86,6 +96,7 @@ esac
     }
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn demo_plugin_no_tmux_matches_committed_maw_js_golden_without_ref_checkout() {
     let root = temp_dir("no-tmux");
@@ -100,6 +111,7 @@ fn demo_plugin_no_tmux_matches_committed_maw_js_golden_without_ref_checkout() {
     fs::remove_dir_all(root).expect("cleanup");
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn demo_plugin_fast_showcase_uses_managed_tmux_argv_and_cleanup() {
     let root = temp_dir("tmux");
