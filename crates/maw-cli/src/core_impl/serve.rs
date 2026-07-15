@@ -116,7 +116,11 @@ impl ServeWakeExecutor for ServeSystemWakeExecutor {
         // Receiver-side federation wake runs the LOCAL native wake only —
         // never the peer-routing path — so a federated wake cannot re-forward
         // to another node and loop.
-        let mut argv = vec!["wake".to_owned(), target.to_owned(), "--no-attach".to_owned()];
+        //
+        // run_wake_command takes a VERB-STRIPPED argv (the CLI dispatcher
+        // strips the `wake` verb before calling it); passing "wake" here made
+        // it a second positional, tripping the usage guard on every call (#533).
+        let mut argv = vec![target.to_owned(), "--no-attach".to_owned()];
         if let Some(task) = task {
             argv.push("--task".to_owned());
             argv.push(task.to_owned());
@@ -3702,6 +3706,50 @@ mod serve_tests {
             .expect("error")
             .contains("repo not found for bare-shell"));
         assert!(wake.wakes().is_empty());
+    }
+
+    // Regression test for #533: `run_wake_command` takes a VERB-STRIPPED argv
+    // (the CLI dispatcher removes the `wake` verb before calling it), so the
+    // receiver-side executor must not prepend the verb. The mock-executor
+    // tests above never exercise the argv the real executor constructs, which
+    // is exactly how `"wake"` slipped in as a second positional and every
+    // receiver-side federation wake exited 1 with the usage error. This test
+    // drives the REAL `ServeSystemWakeExecutor`: a nonexistent target must
+    // reach real resolution ("repo not found"), never the usage guard.
+    #[test]
+    fn serve_system_wake_executor_passes_verb_stripped_argv() {
+        let _guard = env_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _home = EnvVarRestore::capture("HOME");
+        let _xdg = EnvVarRestore::capture("XDG_CONFIG_HOME");
+        let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
+        let _maw_home = EnvVarRestore::capture("MAW_HOME");
+        let _state = EnvVarRestore::capture("MAW_STATE_DIR");
+        let _ghq = EnvVarRestore::capture("GHQ_ROOT");
+        let root = std::env::temp_dir().join(format!(
+            "maw-rs-serve-wake-argv-{}-{}",
+            std::process::id(),
+            random_hex(4)
+        ));
+        std::fs::create_dir_all(root.join("config")).expect("fixture root");
+        std::env::set_var("HOME", root.join("home"));
+        std::env::set_var("XDG_CONFIG_HOME", root.join("xdg-config"));
+        std::env::set_var("MAW_CONFIG_DIR", root.join("config"));
+        std::env::remove_var("MAW_HOME");
+        std::env::set_var("MAW_STATE_DIR", root.join("state"));
+        std::env::set_var("GHQ_ROOT", root.join("ghq/github.com"));
+
+        let error = ServeSystemWakeExecutor
+            .execute_wake("no-such-target-533", Some("issue-533"))
+            .expect_err("nonexistent target must fail resolution, not succeed");
+
+        assert!(
+            !error.contains("usage: maw wake"),
+            "usage error means the verb leaked into argv as a second positional: {error}"
+        );
+        assert!(
+            error.contains("repo not found for no-such-target-533"),
+            "expected real single-positional resolution failure for the target: {error}"
+        );
     }
 
     #[tokio::test]
