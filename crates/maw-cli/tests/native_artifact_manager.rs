@@ -1,3 +1,8 @@
+// Dispatcher registration pins (and other pre-invoke coverage) run on the
+// default test path; tests that execute plugin.wasm need the real Extism
+// runtime and run in the wasm-host CI job
+// (`cargo test -p maw-cli --features wasm-host`).
+#[cfg(feature = "wasm-host")]
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -5,10 +10,12 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(feature = "wasm-host")]
 fn bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_maw-rs"))
 }
 
+#[cfg(feature = "wasm-host")]
 fn temp_dir(name: &str) -> PathBuf {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -19,6 +26,7 @@ fn temp_dir(name: &str) -> PathBuf {
     path
 }
 
+#[cfg(feature = "wasm-host")]
 fn install_plugin(root: &Path) -> PathBuf {
     let plugin = root.join("plugins/artifact-manager");
     fs::create_dir_all(&plugin).expect("plugin dir");
@@ -35,6 +43,7 @@ fn install_plugin(root: &Path) -> PathBuf {
     root.join("plugins")
 }
 
+#[cfg(feature = "wasm-host")]
 fn run(root: &Path, plugins: &Path, args: &[&str]) -> Output {
     Command::new(bin())
         .args(args)
@@ -47,6 +56,7 @@ fn run(root: &Path, plugins: &Path, args: &[&str]) -> Output {
         .expect("run maw-rs")
 }
 
+#[cfg(feature = "wasm-host")]
 fn stdout(output: Output) -> String {
     assert!(
         output.status.success(),
@@ -58,6 +68,7 @@ fn stdout(output: Output) -> String {
     String::from_utf8(output.stdout).expect("utf8 stdout")
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn artifact_manager_plugin_fallthrough_preserves_native_lifecycle_output() {
     let root = temp_dir("lifecycle");

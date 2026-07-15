@@ -18,13 +18,23 @@
 //! `plugin_hostfn_probe_acceptance::probe_builds_via_pipeline` — because it shells out to
 //! `maw plugin build`. It rebuilds from `plugin.source.json` and asserts the artifact
 //! reproduces its committed pin.
+//!
+//! Test-path split (wasm-host feature gate): the sha256 pin-check machinery, the pin
+//! tests, the manifest-contract assertions, and the `#[ignore]` rebuild test all run on
+//! the default toolchain-free `cargo test` path — the pin-integrity gate never depends
+//! on the Extism runtime. The invoke tests (cross-team-queue / team / hermes / atlas
+//! running their committed `plugin.wasm` on `ExtismWasmInvokeRuntime`) are compiled only
+//! with `--features wasm-host` and run in the wasm-host CI job.
 
 use maw_cli::run_cli;
+use maw_plugin_manifest::hash_file;
+#[cfg(feature = "wasm-host")]
 use maw_plugin_manifest::{
-    hash_file, invoke_plugin, load_manifest_from_dir, ExtismWasmInvokeRuntime, InvokeContext,
-    InvokeSource, LoadedPlugin, MawWasmHost,
+    invoke_plugin, load_manifest_from_dir, ExtismWasmInvokeRuntime, InvokeContext, InvokeSource,
+    LoadedPlugin, MawWasmHost,
 };
 use serde_json::Value;
+#[cfg(feature = "wasm-host")]
 use std::fmt::Write as FmtWrite;
 use std::fs::{self, create_dir_all, read_to_string};
 use std::path::{Path, PathBuf};
@@ -82,6 +92,7 @@ fn copy_tree(src: &Path, dst: &Path) {
     }
 }
 
+#[cfg(feature = "wasm-host")]
 fn seed_ctq_vault(root: &Path) {
     let atlas = root.join("vault/atlas/inbox");
     let neo = root.join("vault/neo/inbox");
@@ -91,6 +102,7 @@ fn seed_ctq_vault(root: &Path) {
     fs::write(neo.join("002-question.md"), "---\nfrom: morpheus\nto: zai\nteam: neo\ntype: question\nsubject: Need queue answer\n---\nCan you confirm the queue filter?\n").expect("neo msg");
 }
 
+#[cfg(feature = "wasm-host")]
 fn hermes_fake_body(path: &str) -> &'static str {
     match path {
         "/users/@me" => r#"{"username":"hermes-bot","id":"bot-42","bot":true}"#,
@@ -115,6 +127,7 @@ fn hermes_fake_body(path: &str) -> &'static str {
     }
 }
 
+#[cfg(feature = "wasm-host")]
 fn hermes_host(plugin: &LoadedPlugin) -> MawWasmHost {
     let mut host = MawWasmHost::new(plugin);
     for (path, query) in [
@@ -156,6 +169,7 @@ fn hermes_host(plugin: &LoadedPlugin) -> MawWasmHost {
     host
 }
 
+#[cfg(feature = "wasm-host")]
 #[rustfmt::skip]
 fn atlas_host(plugin: &LoadedPlugin) -> MawWasmHost {
     let responses = [
@@ -173,6 +187,7 @@ fn atlas_host(plugin: &LoadedPlugin) -> MawWasmHost {
     })
 }
 
+#[cfg(feature = "wasm-host")]
 fn normalize_root(root: &Path, output: &str) -> String {
     let raw = root.display().to_string();
     let mut normalized = output.replace(&format!("/private{raw}"), "$ROOT");
@@ -350,6 +365,7 @@ fn fleet_plugins_artifacts_match_manifest_sha256() {
     eprintln!("fleet-plugins pin check: {checked} artifact(s) verified");
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn cross_team_queue_fleet_artifact_installs_and_scans_vault() {
     let source = fleet_plugins_dir().join("cross-team-queue");
@@ -408,7 +424,7 @@ fn cross_team_queue_fleet_artifact_installs_and_scans_vault() {
 }
 
 #[test]
-fn team_fleet_artifact_locks_contract_and_lists_read_only_stores() {
+fn team_fleet_artifact_locks_contract() {
     let source = fleet_plugins_dir().join("team");
     let manifest: Value =
         serde_json::from_str(&read_to_string(source.join("plugin.json")).expect("team manifest"))
@@ -423,7 +439,12 @@ fn team_fleet_artifact_locks_contract_and_lists_read_only_stores() {
         manifest["capabilities"],
         serde_json::json!(["fs:read:teams", "fs:read:vault", "tmux:read"])
     );
+}
 
+#[cfg(feature = "wasm-host")]
+#[test]
+fn team_fleet_artifact_lists_read_only_stores() {
+    let source = fleet_plugins_dir().join("team");
     let root = temp_dir("team-list");
     for (path, body) in [
         (
@@ -475,7 +496,7 @@ fn team_fleet_artifact_locks_contract_and_lists_read_only_stores() {
 }
 
 #[test]
-fn hermes_fleet_artifact_invokes_discord_read_only_verbs() {
+fn hermes_fleet_manifest_locks_capabilities_and_secret_env() {
     let source = fleet_plugins_dir().join("hermes");
     let manifest: Value =
         serde_json::from_str(&read_to_string(source.join("plugin.json")).expect("hermes manifest"))
@@ -488,6 +509,12 @@ fn hermes_fleet_artifact_invokes_discord_read_only_verbs() {
         manifest["secrets"]["discord-bot-token"]["env"],
         "DISCORD_BOT_TOKEN"
     );
+}
+
+#[cfg(feature = "wasm-host")]
+#[test]
+fn hermes_fleet_artifact_invokes_discord_read_only_verbs() {
+    let source = fleet_plugins_dir().join("hermes");
     let root = temp_dir("hermes-invoke");
     let staged = root.join("hermes");
     copy_tree(&source, &staged);
@@ -541,12 +568,19 @@ fn hermes_fleet_artifact_invokes_discord_read_only_verbs() {
 
 #[test]
 #[rustfmt::skip]
-fn atlas_fleet_artifact_invokes_read_only_state_verbs() {
+fn atlas_fleet_manifest_locks_capabilities_secret_and_aliases() {
     let source = fleet_plugins_dir().join("atlas");
     let manifest: Value = serde_json::from_str(&read_to_string(source.join("plugin.json")).expect("atlas manifest")).expect("json");
     assert_eq!(manifest["capabilities"], serde_json::json!(["net:fetch:discord-rest", "secret:use:atlas-bot-token"]));
     assert_eq!(manifest["secrets"]["atlas-bot-token"]["pass"], "discord/atlas-oracle-token");
     assert_eq!(manifest["cli"]["aliases"], serde_json::json!(["at"]));
+}
+
+#[cfg(feature = "wasm-host")]
+#[test]
+#[rustfmt::skip]
+fn atlas_fleet_artifact_invokes_read_only_state_verbs() {
+    let source = fleet_plugins_dir().join("atlas");
     let root = temp_dir("atlas-invoke");
     let install_root = root.join("plugins");
     let install = run_cli(&args(&["plugin", "install", &source.display().to_string(), "--root", &install_root.display().to_string()]));

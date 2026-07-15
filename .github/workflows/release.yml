@@ -45,7 +45,7 @@ jobs:
       - name: Build maw-rs (musl static)
         env:
           MAW_BUILD_VERSION: ${{ github.ref_name }}
-        run: cargo build --release --target x86_64-unknown-linux-musl --bin maw-rs
+        run: cargo build --release --target x86_64-unknown-linux-musl --bin maw-rs --features wasm-host
       - name: Stage binary
         run: |
           mkdir -p dist
@@ -64,7 +64,7 @@ jobs:
       - name: Build maw-rs (arm64)
         env:
           MAW_BUILD_VERSION: ${{ github.ref_name }}
-        run: cargo build --release --bin maw-rs
+        run: cargo build --release --bin maw-rs --features wasm-host
       - name: Stage binary
         run: |
           mkdir -p dist

@@ -47,6 +47,12 @@ The installer verifies the adjacent `.sha256` asset before replacing `maw`.
 For development builds:
 
 ```bash
-cargo install --path crates/maw-cli
+cargo install --path crates/maw-cli --features wasm-host
 ln -sf "$(command -v maw-rs)" "$HOME/.local/bin/maw"
 ```
+
+`--features wasm-host` compiles in the Extism runtime that runs ship-tier WASM
+plugin verbs (the fleet plugins). Omitting it gives the lean dev build — ~44%
+fewer crates to compile — which keeps every native verb plus plugin discovery,
+manifest parsing, and sha256 pin verification, but errors with a rebuild hint
+when a WASM plugin verb is invoked.

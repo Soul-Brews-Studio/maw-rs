@@ -1,26 +1,38 @@
+// Dispatcher registration pin runs on the default test path; the invoke tests
+// need the real Extism runtime and run in the wasm-host CI job
+// (`cargo test -p maw-cli --features wasm-host`).
 use maw_cli::{dispatcher_status, DispatchKind};
+#[cfg(feature = "wasm-host")]
 use maw_plugin_manifest::{
     invoke_plugin, load_manifest_from_dir, ExtismWasmInvokeRuntime, InvokeContext, InvokeSource,
     MawWasmHost,
 };
+#[cfg(feature = "wasm-host")]
 use serde_json::json;
+#[cfg(feature = "wasm-host")]
 use std::path::PathBuf;
 
+#[cfg(feature = "wasm-host")]
 const PANE_FMT: &str = "#{pane_id}|||#{pane_title}|||#{@maw_tile}";
+#[cfg(feature = "wasm-host")]
 const SWAP_FMT: &str = "#{pane_index}|||#{pane_id}|||#{pane_title}|||#{pane_top}";
 
+#[cfg(feature = "wasm-host")]
 fn fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native-tile/tile-plugin")
 }
 
+#[cfg(feature = "wasm-host")]
 fn request(command: &str, args: &[&str]) -> String {
     json!({"command":command,"args":args}).to_string()
 }
 
+#[cfg(feature = "wasm-host")]
 fn response(command: &str, args: &[&str], stdout: &str) -> String {
     json!({"ok":true,"value":{"command":command,"args":args,"stdout":stdout}}).to_string()
 }
 
+#[cfg(feature = "wasm-host")]
 fn fake(host: MawWasmHost, command: &str, args: &[&str], stdout: &str) -> MawWasmHost {
     host.with_fake_response(
         "maw.tmux.command",
@@ -29,6 +41,7 @@ fn fake(host: MawWasmHost, command: &str, args: &[&str], stdout: &str) -> MawWas
     )
 }
 
+#[cfg(feature = "wasm-host")]
 fn plugin_host() -> MawWasmHost {
     let plugin = load_manifest_from_dir(&fixture())
         .expect("load tile fixture")
@@ -36,6 +49,7 @@ fn plugin_host() -> MawWasmHost {
     MawWasmHost::new(&plugin)
 }
 
+#[cfg(feature = "wasm-host")]
 fn invoke(args: &[&str], host: MawWasmHost) -> maw_plugin_manifest::InvokeResult {
     let plugin = load_manifest_from_dir(&fixture())
         .expect("load tile fixture")
@@ -50,11 +64,13 @@ fn invoke(args: &[&str], host: MawWasmHost) -> maw_plugin_manifest::InvokeResult
     invoke_plugin(&plugin, &context, &mut runtime)
 }
 
+#[cfg(feature = "wasm-host")]
 fn common_host() -> MawWasmHost {
     let host = plugin_host();
     fake(host, "display-message", &["-p", "#{pane_id}"], "%1\n")
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn tile_plugin_spawn_uses_managed_split_plan_and_layout() {
     let shell = "cd '.' || exit $?; export MAW_TILE_PARENT='alpha-main:1.0' MAW_TILE_ROLE='alpha-main-tile-1' MAW_TILE_INDEX='1' MAW_TILE_TOTAL='1' MAW_TILE_WINDOW='alpha-main:1' MAW_SESSION_ID='solo'; exec zsh -ic 'echo ok; exec zsh'";
@@ -88,6 +104,7 @@ fn tile_plugin_spawn_uses_managed_split_plan_and_layout() {
     assert!(output.contains("1 panes tiled (path, cmd)"), "{output}");
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn tile_plugin_swap_and_clean_match_native_outputs() {
     let host = fake(
@@ -125,13 +142,18 @@ fn tile_plugin_swap_and_clean_match_native_outputs() {
     assert!(output.contains("cleaned 2 tiles"), "{output}");
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
-fn tile_plugin_guard_and_dispatcher_fallthrough_are_preserved() {
+fn tile_plugin_guard_rejects_double_dash_separator() {
     let result = invoke(&["--", "1"], common_host());
     assert!(!result.ok);
     assert!(result
         .error
         .as_deref()
         .is_some_and(|error| error.contains("-- separator is not supported")));
+}
+
+#[test]
+fn tile_dispatcher_fallthrough_is_preserved() {
     assert_eq!(dispatcher_status("tile"), DispatchKind::NativeError);
 }

@@ -1,18 +1,29 @@
+// Dispatcher registration pin runs on the default test path; the invoke tests
+// need the real Extism runtime and run in the wasm-host CI job
+// (`cargo test -p maw-cli --features wasm-host`).
 use maw_cli::{dispatcher_status, DispatchKind};
+#[cfg(feature = "wasm-host")]
 use maw_plugin_manifest::{
     invoke_plugin, load_manifest_from_dir, ExtismWasmInvokeRuntime, InvokeContext, InvokeSource,
     MawWasmHost,
 };
+#[cfg(feature = "wasm-host")]
 use serde_json::json;
+#[cfg(feature = "wasm-host")]
 use std::fs;
+#[cfg(feature = "wasm-host")]
 use std::path::{Path, PathBuf};
+#[cfg(feature = "wasm-host")]
 use std::sync::{Mutex, OnceLock};
+#[cfg(feature = "wasm-host")]
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(feature = "wasm-host")]
 fn fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native-pulse/pulse-plugin")
 }
 
+#[cfg(feature = "wasm-host")]
 fn temp_dir(name: &str) -> PathBuf {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -23,6 +34,7 @@ fn temp_dir(name: &str) -> PathBuf {
     path
 }
 
+#[cfg(feature = "wasm-host")]
 fn env_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
@@ -30,6 +42,7 @@ fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+#[cfg(feature = "wasm-host")]
 fn exec_input(cmd: &str, args: &[&str], allow_non_zero: bool) -> String {
     json!({
         "cmd": cmd,
@@ -40,6 +53,7 @@ fn exec_input(cmd: &str, args: &[&str], allow_non_zero: bool) -> String {
     .to_string()
 }
 
+#[cfg(feature = "wasm-host")]
 fn exec_ok(stdout: &str) -> String {
     json!({
         "ok": true,
@@ -48,6 +62,7 @@ fn exec_ok(stdout: &str) -> String {
     .to_string()
 }
 
+#[cfg(feature = "wasm-host")]
 fn invoke(args: &[&str], repos: &Path, host: MawWasmHost) -> maw_plugin_manifest::InvokeResult {
     let plugin = load_manifest_from_dir(&fixture())
         .expect("load pulse fixture")
@@ -61,6 +76,7 @@ fn invoke(args: &[&str], repos: &Path, host: MawWasmHost) -> maw_plugin_manifest
     invoke_plugin(&plugin, &context, &mut runtime)
 }
 
+#[cfg(feature = "wasm-host")]
 fn plugin_host() -> MawWasmHost {
     let plugin = load_manifest_from_dir(&fixture())
         .expect("load pulse fixture")
@@ -68,6 +84,7 @@ fn plugin_host() -> MawWasmHost {
     MawWasmHost::new(&plugin)
 }
 
+#[cfg(feature = "wasm-host")]
 fn issue_list_args(repo: &str) -> [&str; 10] {
     [
         "issue",
@@ -83,8 +100,10 @@ fn issue_list_args(repo: &str) -> [&str; 10] {
     ]
 }
 
+#[cfg(feature = "wasm-host")]
 const ISSUES: &str = r#"[{"number":20,"title":"📅 2026-06-25 Daily Thread","labels":[{"name":"daily-thread"}]},{"number":21,"title":"P001 launch board","labels":[{"name":"oracle:nova"}]},{"number":19,"title":"registry cleanup","labels":[]},{"number":22,"title":"ship pulse native","labels":[{"name":"oracle:pulse"}]}]"#;
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn pulse_plugin_list_matches_committed_native_golden() {
     let _guard = env_lock();
@@ -111,6 +130,7 @@ fn pulse_plugin_list_matches_committed_native_golden() {
     assert_eq!(result.output.as_deref(), Some(expected.as_str()));
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn pulse_plugin_ignores_legacy_context_override() {
     let _guard = env_lock();
@@ -145,6 +165,7 @@ fn pulse_plugin_ignores_legacy_context_override() {
         .is_some_and(|output| output.contains("3 open")));
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn pulse_plugin_cleanup_uses_typed_tmux_abi_and_matches_golden() {
     let _guard = env_lock();

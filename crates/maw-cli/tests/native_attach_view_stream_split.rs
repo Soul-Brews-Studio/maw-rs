@@ -83,13 +83,20 @@ fn epic56_attach_view_split_committed_golden_without_js_ref() {
     );
 }
 
+// The stream verb is a ship-tier wasm plugin: its golden needs the real
+// Extism runtime and runs in the wasm-host CI job.
+#[cfg(feature = "wasm-host")]
 #[test]
-fn epic56_stream_attach_ssh_committed_golden_without_js_ref() {
+fn epic56_stream_unlink_committed_golden_without_js_ref() {
     assert_stdout_golden(
         "stream-unlink-dry-run",
         &["stream", "--unlink", "view:oracle", "--dry-run"],
         include_str!("fixtures/epic56/stream-unlink-dry-run.stdout"),
     );
+}
+
+#[test]
+fn epic56_attach_ssh_committed_golden_without_js_ref() {
     assert_stdout_golden(
         "attach-ssh-dry-run",
         &[

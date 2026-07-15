@@ -104,6 +104,12 @@ The `artifact.sha256` in the manifest is the pin. It is enforced at **two** poin
      rebuilt `plugin.wasm` reproduces the committed pin. Run it explicitly:
      `cargo test -p maw-cli --test fleet_plugins_pin_check -- --ignored` (after
      `npm ci` in `packages/wasm-sdk`).
+   - The **invoke tests** in the same file (cross-team-queue / team / hermes / atlas
+     running their committed `plugin.wasm` on the real Extism runtime) are compiled only
+     with `--features wasm-host` and run in the dedicated `wasm-host` CI job
+     (`cargo test -p maw-cli -p maw-plugin-manifest --features wasm-host`). The Extism
+     runtime is off the default build since the wasm-host feature gate; deploy binaries
+     are built with `--features wasm-host` and keep every WASM verb.
 
 This mirrors how `examples/wasm-parity` fixtures are CI-verified
 (`npm --prefix packages/wasm-sdk run check:fixtures` rebuilds and `git diff --exit-code`s

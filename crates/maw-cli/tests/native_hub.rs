@@ -1,3 +1,8 @@
+// Dispatcher registration pins (and other pre-invoke coverage) run on the
+// default test path; tests that execute plugin.wasm need the real Extism
+// runtime and run in the wasm-host CI job
+// (`cargo test -p maw-cli --features wasm-host`).
+#[cfg(feature = "wasm-host")]
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -5,9 +10,11 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(feature = "wasm-host")]
 fn bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_maw-rs"))
 }
+#[cfg(feature = "wasm-host")]
 fn temp_dir(name: &str) -> PathBuf {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -17,6 +24,7 @@ fn temp_dir(name: &str) -> PathBuf {
     fs::create_dir_all(&root).expect("temp dir");
     root
 }
+#[cfg(feature = "wasm-host")]
 fn install_plugin(root: &Path) -> PathBuf {
     let plugin = root.join("plugins/hub");
     fs::create_dir_all(&plugin).expect("plugin dir");
@@ -32,6 +40,7 @@ fn install_plugin(root: &Path) -> PathBuf {
     .expect("wasm");
     root.join("plugins")
 }
+#[cfg(feature = "wasm-host")]
 fn run(root: &Path, args: &[&str]) -> Output {
     let home = root.join("home");
     let config = root.join("config");
@@ -47,6 +56,7 @@ fn run(root: &Path, args: &[&str]) -> Output {
         .output()
         .expect("run hub")
 }
+#[cfg(feature = "wasm-host")]
 fn success(output: Output, expected: &str) {
     assert!(
         output.status.success(),
@@ -57,6 +67,7 @@ fn success(output: Output, expected: &str) {
     assert_eq!(String::from_utf8(output.stderr).expect("stderr"), "");
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn hub_plugin_matches_native_validation_and_constants() {
     let root = temp_dir("validate");
@@ -99,6 +110,7 @@ fn hub_plugin_matches_native_validation_and_constants() {
     );
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn hub_plugin_matches_native_workspace_loader() {
     let root = temp_dir("load");
@@ -152,12 +164,17 @@ fn hub_plugin_matches_native_workspace_loader() {
     );
 }
 
+#[cfg(feature = "wasm-host")]
 #[test]
 fn hub_plugin_keeps_usage_bytes_and_removes_only_hub_dispatch() {
     let output = run(&temp_dir("usage"), &["hub"]);
     assert!(!output.status.success());
     assert_eq!(String::from_utf8(output.stdout).expect("stdout"), "");
     assert_eq!(String::from_utf8(output.stderr).expect("stderr"), "hub: expected validate-workspace or load-workspaces\nusage: maw-rs hub validate-workspace [--id <id>] [--hub-url <ws-url>] [--token <token>] [--shared-agent <agent>]... [--plan-json]\n       maw-rs hub load-workspaces --config-dir <dir> [--plan-json]\n       maw-rs hub constants [--plan-json]\n");
+}
+
+#[test]
+fn hub_dispatcher_removes_only_hub_dispatch() {
     assert_eq!(
         maw_cli::dispatcher_status("hub"),
         maw_cli::DispatchKind::NativeError

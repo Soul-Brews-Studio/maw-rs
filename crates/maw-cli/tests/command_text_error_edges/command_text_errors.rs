@@ -190,8 +190,20 @@ fn plugin_manifest_text_rendering_and_parser_errors_are_stable() {
         "wasm-plug".to_owned(),
     ]);
     assert_eq!(invalid_wasm.code, 0, "{}", invalid_wasm.stderr);
+    // With wasm-host the real Extism runtime rejects the garbage module; a
+    // featureless build reaches the same point and reports the loud
+    // wasm-host-missing error instead — never a silent or unknown-command path.
+    #[cfg(feature = "wasm-host")]
     assert!(
         invalid_wasm.stdout.contains("wasm instantiation failed"),
+        "{}",
+        invalid_wasm.stdout
+    );
+    #[cfg(not(feature = "wasm-host"))]
+    assert!(
+        invalid_wasm
+            .stdout
+            .contains("built without the 'wasm-host' feature"),
         "{}",
         invalid_wasm.stdout
     );
