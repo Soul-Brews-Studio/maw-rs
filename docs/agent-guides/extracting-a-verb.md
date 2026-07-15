@@ -81,10 +81,26 @@ Port I/O to the narrowest existing JSON ABI: `maw.fs.*`, `maw.tmux.*`, `maw.exec
 access inside the guest. Declare command-specific process capabilities such as
 `proc:exec:git`, not broad process access.
 
-Rust plugins should depend on `maw-plugin-pdk = "1"`, parse only its byte-frozen
-`InvokeContext { args, source }`, return `InvokeResult`, and use `host_call!` for
-typed host responses. Paths, time, and test overrides belong behind host ABIs, never
-as extra invoke-context fields. A breaking host ABI requires a new PDK major version.
+Rust plugins use **extism-pdk directly** (the pattern every merged `maw-plugins`
+package follows — mirror `packages/20-costs`):
+
+- `Cargo.toml`: `crate-type = ["cdylib"]`, `extism-pdk = "1.4"`, `serde`/`serde_json`;
+  build for `wasm32-unknown-unknown`.
+- Parse the byte-frozen invoke-context JSON (`{"args":[...],"source":"cli"}`, plus
+  optional `cwd`/`home`) directly from the `handle` input string with `serde_json`.
+- Return the byte-frozen result JSON (`{"ok":…,"output":…,"error":…}`) as the
+  `FnResult<String>` output.
+- Declare host functions with `#[link(wasm_import_module = "extism:host/user")]`
+  extern blocks (e.g. `maw.fs.read`, `maw.paths.get`) and call them through a small
+  `Memory`-based `host_call` helper — see `packages/20-costs/src/lib.rs`.
+
+Paths, time, and test overrides belong behind host ABIs, never as extra
+invoke-context fields.
+
+> Historical note: a `maw-plugin-pdk` helper crate existed in maw-rs but was removed
+> on 2026-07-15 (Nat's call) — all 11 merged maw-plugins packages author against
+> extism-pdk directly, and the PDK's only consumer was a dev-dependency. Don't hunt
+> for it; the invoke-context/result JSON contracts above are the stable ABI.
 
 Install the published SDK in the plugin worktree and point the build at that local
 toolchain root:
