@@ -254,7 +254,10 @@ fn parse_x_source(body: &str) -> Result<XSource, String> {
 fn is_x_explicit_git_source(value: &str) -> bool {
     value.contains("://")
         || (value.starts_with("git@") && value.contains(':'))
-        || (value.contains('/') && value.ends_with(".git"))
+        || (value.contains('/')
+            && std::path::Path::new(value)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("git")))
 }
 
 /// `gh:owner/repo[@ref][/sub]` — the canonical scheme form.
