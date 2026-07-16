@@ -117,10 +117,14 @@ fn update_execute(request: &UpdateRequest150) -> Result<String, String> {
     };
 
     let compare = update_compare_to_local(local, &target);
+    let local_is_beta = local.contains("-beta.");
     let (status, proceed) = match compare {
         UpdateCompare::RemoteNewer => ("update available", true),
         UpdateCompare::Equal => ("already up to date", request.force),
         UpdateCompare::RemoteOlder => ("older than the current build", request.force),
+        UpdateCompare::LocalDev if local_is_beta => {
+            ("current build is a beta build — beta is a separate channel, not comparable to stable/alpha", request.force)
+        }
         UpdateCompare::LocalDev => ("current build is a dev build (git describe) — not comparable", request.force),
     };
     let _ = writeln!(out, "  target: {} — {status}", target.tag);
@@ -130,7 +134,11 @@ fn update_execute(request: &UpdateRequest150) -> Result<String, String> {
     }
     if !proceed {
         let advice = if compare == UpdateCompare::LocalDev {
-            "  dev builds update via git + cargo; pass --force to overwrite with the release binary anyway\n"
+            if local_is_beta {
+                "  beta builds are released on their own channel; pass --force to overwrite with the stable/alpha release binary anyway\n"
+            } else {
+                "  dev builds update via git + cargo; pass --force to overwrite with the release binary anyway\n"
+            }
         } else {
             "  nothing to do (pass --force to reinstall)\n"
         };
@@ -147,13 +155,9 @@ fn update_execute(request: &UpdateRequest150) -> Result<String, String> {
         )
     })?;
 
-    let staging = std::env::temp_dir().join(format!("maw-update-{}", std::process::id()));
-    std::fs::create_dir_all(&staging).map_err(|error| format!("cannot create staging dir {}: {error}", staging.display()))?;
-    let result = update_download_verify_replace(&mut out, &target.tag, asset, &staging, &install_target);
-    let _ = std::fs::remove_dir_all(&staging);
-    result?;
+    let backup = update_download_verify_replace(&mut out, &target.tag, asset, &install_target)?;
 
-    let proof = update_spawn_version_proof(&install_target)?;
+    let proof = update_prove_and_finalize(&install_target, backup.as_deref())?;
     let _ = writeln!(out, "  proof (`{} version`):\n{proof}", install_target.display());
     if update_maw_serve_running() {
         out.push_str("  maw-serve runs under PM2 — restart it to pick up the new binary: pm2 restart maw-serve\n");
@@ -161,13 +165,19 @@ fn update_execute(request: &UpdateRequest150) -> Result<String, String> {
     Ok(out)
 }
 
+/// Download the asset + sha256 sidecar and swap the new binary into place.
+///
+/// No shared temp dir: the bytes are staged as a dotfile inside the install
+/// directory itself and the sha256 is verified on that exact file before it
+/// is renamed into place, so there is no verify-then-copy swap window.
+/// Returns the backup path (old binary moved aside); the caller keeps it
+/// until the version proof passes and restores it if the proof fails.
 fn update_download_verify_replace(
     out: &mut String,
     tag: &str,
     asset: &str,
-    staging: &std::path::Path,
     install_target: &std::path::Path,
-) -> Result<(), String> {
+) -> Result<Option<std::path::PathBuf>, String> {
     use std::fmt::Write as _;
 
     let asset_url = update_download_url(tag, asset);
@@ -177,17 +187,10 @@ fn update_download_verify_replace(
     let expected = update_parse_sha256_sidecar(&String::from_utf8_lossy(&sidecar_bytes))
         .ok_or_else(|| format!("malformed sha256 sidecar for {asset} — refusing to install"))?;
 
-    let staged = staging.join(asset);
-    std::fs::write(&staged, &binary_bytes).map_err(|error| format!("cannot write {}: {error}", staged.display()))?;
-    update_verify_sha256(&staged, &expected)?;
+    let backup = update_safe_replace(install_target, &binary_bytes, &expected)?;
     let _ = writeln!(out, "  sha256 verified: {expected}");
-
-    let backup = update_safe_replace(install_target, &staged)?;
-    if let Some(backup) = backup {
-        let _ = std::fs::remove_file(&backup);
-    }
-    let _ = writeln!(out, "  installed: {} (old binary removed first — new inode)", install_target.display());
-    Ok(())
+    let _ = writeln!(out, "  installed: {} (old binary moved aside — new inode)", install_target.display());
+    Ok(backup)
 }
 
 fn update_resolve_install_target() -> Result<std::path::PathBuf, String> {
@@ -216,11 +219,15 @@ fn update_verify_sha256(path: &std::path::Path, expected_hex: &str) -> Result<()
 }
 
 /// Safe replace honoring the macOS code-sign scar: never write into the live
-/// inode. Stage a copy beside the target, move the old binary aside first,
-/// then rename the new file into place. Returns the backup path, if any.
+/// inode. The new bytes are written to a dotfile beside the target, sha256 is
+/// verified on that very file (the one that gets renamed — no swap window),
+/// the old binary is moved aside, then the new file is renamed into place.
+/// Returns the backup path, if any; the caller deletes it only after the
+/// version proof passes.
 fn update_safe_replace(
     target: &std::path::Path,
-    staged: &std::path::Path,
+    new_bytes: &[u8],
+    expected_sha256: &str,
 ) -> Result<Option<std::path::PathBuf>, String> {
     let dir = target.parent().ok_or_else(|| format!("install target {} has no parent directory", target.display()))?;
     let name = target
@@ -228,19 +235,25 @@ fn update_safe_replace(
         .and_then(|value| value.to_str())
         .ok_or_else(|| format!("install target {} has no file name", target.display()))?;
     let tmp = dir.join(format!(".{name}.update-new-{}", std::process::id()));
-    std::fs::copy(staged, &tmp).map_err(|error| {
+    std::fs::write(&tmp, new_bytes).map_err(|error| {
         format!("cannot stage new binary at {} (install dir not writable?): {error}", tmp.display())
     })?;
-    update_mark_executable(&tmp)?;
+    if let Err(error) = update_verify_sha256(&tmp, expected_sha256).and_then(|()| update_mark_executable(&tmp)) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(error);
+    }
     let backup = if target.exists() {
         let aside = dir.join(format!("{name}.bak-update-{}", std::process::id()));
-        std::fs::rename(target, &aside)
-            .map_err(|error| format!("cannot move old binary aside to {}: {error}", aside.display()))?;
+        if let Err(error) = std::fs::rename(target, &aside) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(format!("cannot move old binary aside to {}: {error}", aside.display()));
+        }
         Some(aside)
     } else {
         None
     };
     if let Err(error) = std::fs::rename(&tmp, target) {
+        let _ = std::fs::remove_file(&tmp);
         if let Some(aside) = &backup {
             let _ = std::fs::rename(aside, target);
         }
@@ -259,11 +272,38 @@ fn update_mark_executable(path: &std::path::Path) -> Result<(), String> {
 #[cfg(not(unix))]
 fn update_mark_executable(_path: &std::path::Path) -> Result<(), String> { Ok(()) }
 
+/// Run the version proof on the freshly installed binary, then settle the
+/// backup: proof passes → delete the backup; proof fails → rename the backup
+/// back over the target and say exactly what was restored.
+fn update_prove_and_finalize(
+    target: &std::path::Path,
+    backup: Option<&std::path::Path>,
+) -> Result<String, String> {
+    match update_spawn_version_proof(target) {
+        Ok(proof) => {
+            if let Some(backup) = backup {
+                let _ = std::fs::remove_file(backup);
+            }
+            Ok(proof)
+        }
+        Err(error) => Err(match backup {
+            Some(backup) => match std::fs::rename(backup, target) {
+                Ok(()) => format!("{error} — restored the previous binary from {}", backup.display()),
+                Err(restore_error) => format!(
+                    "{error} — and restoring the previous binary from {} failed: {restore_error}",
+                    backup.display()
+                ),
+            },
+            None => format!("{error} — no previous binary existed to restore"),
+        }),
+    }
+}
+
 fn update_spawn_version_proof(binary: &std::path::Path) -> Result<String, String> {
     let output = std::process::Command::new(binary)
         .arg("version")
         .output()
-        .map_err(|error| format!("new binary failed to spawn ({} version): {error} — backup kept beside it", binary.display()))?;
+        .map_err(|error| format!("new binary failed to spawn (`{} version`): {error}", binary.display()))?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).trim_end().to_owned())
     } else {
@@ -449,6 +489,22 @@ mod update_upgrade_tests150 {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// Bare sha256 hex of `bytes`, via the same hasher production uses.
+    fn update_hex_of(root: &std::path::Path, label: &str, bytes: &[u8]) -> String {
+        let scratch = root.join(format!("hash-scratch-{label}"));
+        std::fs::write(&scratch, bytes).expect("scratch");
+        let digest = hash_file(&scratch).expect("hash");
+        let _ = std::fs::remove_file(&scratch);
+        digest.strip_prefix("sha256:").expect("prefix").to_owned()
+    }
+
+    #[cfg(unix)]
+    fn update_write_script(path: &std::path::Path, body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(path, body).expect("script");
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+
     #[cfg(unix)]
     #[test]
     fn update_safe_replace_puts_new_inode_at_path_and_moves_old_aside() {
@@ -460,10 +516,8 @@ mod update_upgrade_tests150 {
         std::fs::write(&target, b"old binary").expect("old");
         let old_inode = std::fs::metadata(&target).expect("meta").ino();
 
-        let staged = root.join("staged-download");
-        std::fs::write(&staged, b"new binary").expect("staged");
-
-        let backup = update_safe_replace(&target, &staged)
+        let new_hex = update_hex_of(&root, "new", b"new binary");
+        let backup = update_safe_replace(&target, b"new binary", &new_hex)
             .expect("replace")
             .expect("backup path");
         let new_meta = std::fs::metadata(&target).expect("meta");
@@ -476,12 +530,75 @@ mod update_upgrade_tests150 {
             old_inode,
             "old inode moved aside, not overwritten"
         );
+        assert!(backup.exists(), "backup is kept for the version proof, not deleted here");
 
         // no pre-existing target: replace still installs, no backup
         let fresh = root.join("fresh");
-        std::fs::write(&staged, b"fresh binary").expect("staged");
-        assert!(update_safe_replace(&fresh, &staged).expect("replace").is_none());
+        let fresh_hex = update_hex_of(&root, "fresh", b"fresh binary");
+        assert!(update_safe_replace(&fresh, b"fresh binary", &fresh_hex).expect("replace").is_none());
         assert_eq!(std::fs::read(&fresh).expect("read"), b"fresh binary");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn update_safe_replace_refuses_sha_mismatch_and_removes_staged_dotfile() {
+        let root = update_temp_root("replace-mismatch");
+        let target = root.join("maw");
+        std::fs::write(&target, b"old binary").expect("old");
+
+        let wrong_hex = "a".repeat(64);
+        let error = update_safe_replace(&target, b"tampered bytes", &wrong_hex).expect_err("mismatch");
+        assert!(error.contains("sha256 mismatch"), "error={error}");
+        assert!(error.contains("refusing to install"), "error={error}");
+        assert_eq!(std::fs::read(&target).expect("read"), b"old binary", "target untouched");
+
+        let leftovers: Vec<String> = std::fs::read_dir(&root)
+            .expect("read dir")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|entry_name| entry_name.starts_with('.'))
+            .collect();
+        assert!(leftovers.is_empty(), "staged dotfile leaked: {leftovers:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn update_prove_and_finalize_deletes_backup_only_after_proof_passes() {
+        let root = update_temp_root("proof-ok");
+        let target = root.join("maw");
+        update_write_script(&target, "#!/bin/sh\necho proof-marker-26\nexit 0\n");
+        let backup = root.join("maw.bak-update-test");
+        std::fs::write(&backup, b"old binary").expect("backup");
+
+        let proof = update_prove_and_finalize(&target, Some(&backup)).expect("proof");
+        assert!(proof.contains("proof-marker-26"), "proof={proof}");
+        assert!(!backup.exists(), "backup deleted once the new binary proved itself");
+        assert!(target.exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn update_prove_and_finalize_restores_backup_when_proof_fails() {
+        let root = update_temp_root("proof-fail");
+        let target = root.join("maw");
+        update_write_script(&target, "#!/bin/sh\nexit 1\n");
+        let backup = root.join("maw.bak-update-test");
+        std::fs::write(&backup, b"old binary").expect("backup");
+
+        let error = update_prove_and_finalize(&target, Some(&backup)).expect_err("proof fails");
+        assert!(error.contains("exited nonzero"), "error={error}");
+        assert!(error.contains("restored the previous binary"), "error={error}");
+        assert!(!backup.exists(), "backup renamed back over the target");
+        assert_eq!(std::fs::read(&target).expect("target"), b"old binary", "old binary restored");
+
+        // no backup existed (fresh install): the error says so honestly
+        let fresh = root.join("fresh");
+        update_write_script(&fresh, "#!/bin/sh\nexit 1\n");
+        let error = update_prove_and_finalize(&fresh, None).expect_err("proof fails");
+        assert!(error.contains("no previous binary existed to restore"), "error={error}");
         let _ = std::fs::remove_dir_all(&root);
     }
 
