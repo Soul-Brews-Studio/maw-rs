@@ -194,6 +194,11 @@ runs the requested targeted gates; the lead runs the full workspace gate and
 production parity smoke unless the task explicitly says otherwise. Report the exact
 commands, not just “tests green.”
 
+For the standard tiers, prefer `scripts/gate.sh` over hand-typed commands: it
+warm-seeds an isolated `CARGO_TARGET_DIR` from the golden cache, locks against
+concurrent gates on the same dir, and `gate.sh quick`/`full` run the commands
+above plus the 4 CI dimensions respectively — see `docs/guides/gating.md`.
+
 ## 8. Serialize against integration churn
 
 Extraction waves touch dispatcher tables, host allowlists, fixtures, and shared plugin

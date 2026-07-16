@@ -1,6 +1,8 @@
 target/
 # isolated per-agent CARGO_TARGET_DIRs (one gate per target dir)
 .tgt*/
+# scripts/gate.sh isolated target dir + its lock (see docs/guides/gating.md)
+target-gate*/
 node_modules/
 packages/*/node_modules/
 examples/**/dist/
