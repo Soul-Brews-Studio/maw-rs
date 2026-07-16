@@ -1616,7 +1616,7 @@ fn inbox_iso_label(ms: u64) -> String {
 
 fn inbox_file_time_label(ms: u64) -> String {
     let iso = inbox_iso_label(ms);
-    format!("{}_{}", &iso[0..10], &iso[11..16].replace(':', "-"))
+    format!("{}_{}", &iso[0..10], iso[11..16].replace(':', "-"))
 }
 
 fn inbox_civil_from_days(days: i64) -> (i32, u32, u32) {
