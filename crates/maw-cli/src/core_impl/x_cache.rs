@@ -278,12 +278,11 @@ pub fn x_cache_put(
         last_used: request.fetched_at,
         size: u64::try_from(request.bytes.len()).unwrap_or(u64::MAX),
     };
-    let meta = match (healthy, read_x_cache_meta(&dir)) {
-        (true, Some(existing)) => existing,
-        _ => {
-            write_x_cache_meta(&dir, &fresh)?;
-            fresh
-        }
+    let meta = if let (true, Some(existing)) = (healthy, read_x_cache_meta(&dir)) {
+        existing
+    } else {
+        write_x_cache_meta(&dir, &fresh)?;
+        fresh
     };
     Ok(XCacheEntry {
         sha256: pin,
@@ -535,7 +534,7 @@ mod x_cache_tests {
 
     static TEMP_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-    /// Unique-per-test temp root: temp_dir + pid + a monotonic counter
+    /// Unique-per-test temp root: `temp_dir` + pid + a monotonic counter
     /// (never pid alone — parallel tests in one process share the pid).
     fn temp_root(label: &str) -> std::path::PathBuf {
         let counter = TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -581,9 +580,7 @@ mod x_cache_tests {
     }
 
     fn trash_entries(root: &std::path::Path) -> usize {
-        std::fs::read_dir(root.join(X_CACHE_TRASH_DIR))
-            .map(|dir| dir.count())
-            .unwrap_or(0)
+        std::fs::read_dir(root.join(X_CACHE_TRASH_DIR)).map_or(0, std::iter::Iterator::count)
     }
 
     #[test]
