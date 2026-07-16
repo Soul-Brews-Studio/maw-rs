@@ -15,15 +15,26 @@ jobs:
     env:
       NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
+      - name: Check npm token
+        id: gate
+        run: |
+          if [ -n "$NODE_AUTH_TOKEN" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::NPM_TOKEN not configured — skipping npm publish"
+          fi
       - uses: actions/checkout@v4
+        if: steps.gate.outputs.enabled == 'true'
       - uses: actions/setup-node@v4
+        if: steps.gate.outputs.enabled == 'true'
         with:
           node-version: 20
           registry-url: https://registry.npmjs.org
           cache: npm
           cache-dependency-path: packages/wasm-sdk/package-lock.json
       - name: Publish SDK when npm token is configured
-        if: env.NODE_AUTH_TOKEN != ''
+        if: steps.gate.outputs.enabled == 'true'
         working-directory: packages/wasm-sdk
         run: |
           npm ci
@@ -116,18 +127,32 @@ jobs:
     if: ${{ !contains(github.ref_name, '-') }}
     needs: release
     runs-on: ubuntu-latest
+    env:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
     steps:
+      - name: Check Homebrew tap token
+        id: gate
+        run: |
+          if [ -n "$HOMEBREW_TAP_TOKEN" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::HOMEBREW_TAP_TOKEN not configured — skipping Homebrew tap update"
+          fi
       - name: Download generated formula
+        if: steps.gate.outputs.enabled == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern maw.rb
       - name: Check out tap
+        if: steps.gate.outputs.enabled == 'true'
         uses: actions/checkout@v4
         with:
           repository: Soul-Brews-Studio/homebrew-maw
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           path: tap
       - name: Publish formula
+        if: steps.gate.outputs.enabled == 'true'
         run: |
           mkdir -p tap/Formula
           cp maw.rb tap/Formula/maw.rb
