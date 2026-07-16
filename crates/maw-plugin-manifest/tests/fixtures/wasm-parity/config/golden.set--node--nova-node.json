@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": null,
-    "ok": true,
-    "output": "node = \"nova-node\""
-  },
-  "stderr": "",
-  "stdout": "node = \"nova-node\""
-}

@@ -72,7 +72,9 @@ fn run(root: &Path, args: &[&str]) -> std::process::Output {
         .expect("run maw-rs")
 }
 
-/// Golden strings from crates/maw-plugin-manifest/tests/fixtures/wasm-parity/project/
+/// Golden strings from the wasm-parity `project` fixture goldens (extracted in
+/// the repo split to Soul-Brews-Studio/maw-fixtures @aecf20b6, under
+/// crates/maw-plugin-manifest/tests/fixtures/wasm-parity/project/)
 const GOLDEN_NO_ARGS_STDOUT: &str = "usage: maw project <learn|incubate|find|list> [args...]\n  \
      learn    <url>   \u{2014} clone repo for study (symlink in \u{03c8}/learn/)\n  \
      incubate <url>   \u{2014} clone repo for development (symlink in \u{03c8}/incubate/)\n  \

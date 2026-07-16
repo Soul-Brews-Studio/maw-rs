@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": "name required",
-    "ok": false,
-    "output": null
-  },
-  "stderr": "name required",
-  "stdout": ""
-}

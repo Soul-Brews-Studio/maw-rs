@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": "maw project: unknown subcommand \"bogus\" (expected learn|incubate|find|list)",
-    "ok": false,
-    "output": "usage: maw project <learn|incubate|find|list> [args...]\n  learn    <url>   — clone repo for study (symlink in ψ/learn/)\n  incubate <url>   — clone repo for development (symlink in ψ/incubate/)\n  find     <query> — search tracked repos (alias: search)\n  list             — list all tracked repos\n\nsee Oracle skill /project for the full implementation (scaffold tracks https://github.com/Soul-Brews-Studio/maw-js/issues/523)."
-  },
-  "stderr": "maw project: unknown subcommand \"bogus\" (expected learn|incubate|find|list)",
-  "stdout": "usage: maw project <learn|incubate|find|list> [args...]\n  learn    <url>   — clone repo for study (symlink in ψ/learn/)\n  incubate <url>   — clone repo for development (symlink in ψ/incubate/)\n  find     <query> — search tracked repos (alias: search)\n  list             — list all tracked repos\n\nsee Oracle skill /project for the full implementation (scaffold tracks https://github.com/Soul-Brews-Studio/maw-js/issues/523)."
-}

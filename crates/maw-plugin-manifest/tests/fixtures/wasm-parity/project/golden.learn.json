@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": "usage: maw project learn <url>",
-    "ok": false,
-    "output": null
-  },
-  "stderr": "usage: maw project learn <url>",
-  "stdout": ""
-}

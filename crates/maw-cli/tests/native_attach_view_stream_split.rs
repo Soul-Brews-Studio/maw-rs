@@ -25,21 +25,6 @@ fn run(args: &[&str], maw_home: &Path) -> std::process::Output {
         .args(args)
         .env("MAW_HOME", maw_home)
         .env("MAW_JS_REF_DIR", "/nonexistent");
-    if args.first() == Some(&"stream") {
-        let plugin = maw_home.join("plugins/stream");
-        fs::create_dir_all(&plugin).expect("stream plugin dir");
-        fs::write(
-            plugin.join("plugin.json"),
-            include_str!("fixtures/native-interactive/stream-plugin/plugin.json"),
-        )
-        .expect("stream plugin json");
-        fs::write(
-            plugin.join("plugin.wasm"),
-            include_bytes!("fixtures/native-interactive/stream-plugin/plugin.wasm"),
-        )
-        .expect("stream plugin wasm");
-        command.env("MAW_PLUGINS_DIR", maw_home.join("plugins"));
-    }
     command.output().expect("run maw-rs")
 }
 
@@ -83,17 +68,9 @@ fn epic56_attach_view_split_committed_golden_without_js_ref() {
     );
 }
 
-// The stream verb is a ship-tier wasm plugin: its golden needs the real
-// Extism runtime and runs in the wasm-host CI job.
-#[cfg(feature = "wasm-host")]
-#[test]
-fn epic56_stream_unlink_committed_golden_without_js_ref() {
-    assert_stdout_golden(
-        "stream-unlink-dry-run",
-        &["stream", "--unlink", "view:oracle", "--dry-run"],
-        include_str!("fixtures/epic56/stream-unlink-dry-run.stdout"),
-    );
-}
+// The wasm-host stream-unlink golden test was removed in the repo split —
+// the native-interactive/stream-plugin wasm fixture it staged now lives in
+// Soul-Brews-Studio/maw-fixtures @aecf20b6; rework/relocate tracked in #546.
 
 #[test]
 fn epic56_attach_ssh_committed_golden_without_js_ref() {

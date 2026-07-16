@@ -1,7 +1,0 @@
-{
-  "assemblyscript": "0.27.31",
-  "export": "handle",
-  "extismAsPdk": "1.0.0",
-  "wasmBytes": 13071,
-  "wasmSha256": "sha256:c7b8a07d4b4cb687fba9c9bfb8ff2598955d0efeaec9dbe8d33cd92e1dde9584"
-}

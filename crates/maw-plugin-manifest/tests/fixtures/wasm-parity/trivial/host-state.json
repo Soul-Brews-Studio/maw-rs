@@ -1,9 +1,0 @@
-{
-  "calls": [
-    {
-      "name": "maw.fs.stat",
-      "input": "{\"path\":\"/fixture.txt\"}",
-      "output": "{\"ok\":true,\"value\":{\"exists\":true,\"kind\":\"file\",\"bytes\":7}}"
-    }
-  ]
-}

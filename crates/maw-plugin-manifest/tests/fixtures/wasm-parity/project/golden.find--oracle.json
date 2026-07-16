@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": null,
-    "ok": true,
-    "output": "project find: would search tracked repos for \"oracle\" across ψ/learn and ψ/incubate — not yet implemented in core plugin; use Oracle skill /project for full behavior.\n  track: https://github.com/Soul-Brews-Studio/maw-js/issues/523"
-  },
-  "stderr": "",
-  "stdout": "project find: would search tracked repos for \"oracle\" across ψ/learn and ψ/incubate — not yet implemented in core plugin; use Oracle skill /project for full behavior.\n  track: https://github.com/Soul-Brews-Studio/maw-js/issues/523"
-}

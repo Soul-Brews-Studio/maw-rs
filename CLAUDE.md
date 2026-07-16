@@ -24,7 +24,10 @@ Both must pass before any PR.
 ## Releases (CalVer)
 
 Version scheme (day-based CalVer, decided 2026-07-05; matches `maw-calver`'s
-`compute_version()`):
+`compute_version()`). `maw-calver` lives in the external
+[Soul-Brews-Studio/maw-calver](https://github.com/Soul-Brews-Studio/maw-calver)
+repo (extracted 2026-07-15, repo split phase 3) and is consumed by `maw-cli`
+as a rev-pinned Cargo git dependency:
 
 ```
 stable:  v<YY>.<M>.<DD>                 one per day
@@ -59,7 +62,12 @@ Layered Cargo workspace:
 
 - **Leaf crates** — self-contained, deterministic, side-effect-free core
   logic (matching, routing, identity, transport, plugin manifest, …) with no
-  internal dependencies.
+  internal dependencies. Eleven single-consumer leaves (auto-wake, bind,
+  bring, feed, fuzzy, hub, identity, plugin-scaffold, policy, routing, split)
+  were extracted to the external
+  [Soul-Brews-Studio/maw-crates](https://github.com/Soul-Brews-Studio/maw-crates)
+  repo (2026-07-16, repo split phase 3 batch) and are consumed by `maw-cli`
+  as rev-pinned Cargo git dependencies, like `maw-calver`.
 - **Mid crates** — compose the leaf crates (e.g. `maw-peer`, `maw-tmux`,
   `maw-worktree`).
 - **Top crate** — `maw-cli`, the binary, depends on the rest of the workspace.
@@ -99,4 +107,7 @@ Oracle intelligence = engine × written memory × asking the right peer.
 See `docs/` for deeper references — including the parity matrix, wire
 protocol, "adding a command" guide, agent/coder team spawn conventions, and
 the WASM migration design. Shipped fleet plugin artifacts (WASM ship tier,
-sha256 pin lifecycle) live in `fleet-plugins/` — see its README.
+sha256 pin lifecycle) live in the external
+[Soul-Brews-Studio/maw-plugins](https://github.com/Soul-Brews-Studio/maw-plugins)
+repo under `packages/<name>/` (extracted from this repo's `fleet-plugins/`
+on 2026-07-15, repo split phase 1) — see its `docs/fleet-plugins.md`.

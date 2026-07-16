@@ -53,10 +53,8 @@ impl ChannelFixture {
 
 #[test]
 fn calver_plan_cli_matches_maw_js_compute_version_fixtures() {
-    let fixtures: FixtureRoot = serde_json::from_str(include_str!(
-        "../../maw-calver/tests/fixtures/calver.fixtures.json"
-    ))
-    .expect("valid calver fixtures");
+    let fixtures: FixtureRoot = serde_json::from_str(maw_calver::PORTABLE_FIXTURES_JSON)
+        .expect("valid calver fixtures");
 
     for fixture in fixtures.compute_version {
         let mut argv = vec![

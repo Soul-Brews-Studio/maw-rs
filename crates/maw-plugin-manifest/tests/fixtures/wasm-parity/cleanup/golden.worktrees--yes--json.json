@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": null,
-    "ok": true,
-    "output": "{\n  \"ok\": true,\n  \"worktrees\": [\n    {\n      \"path\": \"/data/repos/acme/app/agents/cleanup-clean\",\n      \"repo\": \"app\",\n      \"mainRepo\": \"acme/app\",\n      \"mainPath\": \"/data/repos/acme/app\",\n      \"name\": \"cleanup-clean\",\n      \"branch\": \"feat/cleanup-clean\",\n      \"classification\": \"CLEAN\",\n      \"reason\": \"no live pane, clean git state\",\n      \"removed\": true\n    },\n    {\n      \"path\": \"/data/repos/acme/app/agents/cleanup-dirty\",\n      \"repo\": \"app\",\n      \"mainRepo\": \"acme/app\",\n      \"mainPath\": \"/data/repos/acme/app\",\n      \"name\": \"cleanup-dirty\",\n      \"branch\": \"feat/cleanup-dirty\",\n      \"classification\": \"ASK\",\n      \"reason\": \"uncommitted changes\"\n    }\n  ]\n}"
-  },
-  "stderr": "",
-  "stdout": "{\n  \"ok\": true,\n  \"worktrees\": [\n    {\n      \"path\": \"/data/repos/acme/app/agents/cleanup-clean\",\n      \"repo\": \"app\",\n      \"mainRepo\": \"acme/app\",\n      \"mainPath\": \"/data/repos/acme/app\",\n      \"name\": \"cleanup-clean\",\n      \"branch\": \"feat/cleanup-clean\",\n      \"classification\": \"CLEAN\",\n      \"reason\": \"no live pane, clean git state\",\n      \"removed\": true\n    },\n    {\n      \"path\": \"/data/repos/acme/app/agents/cleanup-dirty\",\n      \"repo\": \"app\",\n      \"mainRepo\": \"acme/app\",\n      \"mainPath\": \"/data/repos/acme/app\",\n      \"name\": \"cleanup-dirty\",\n      \"branch\": \"feat/cleanup-dirty\",\n      \"classification\": \"ASK\",\n      \"reason\": \"uncommitted changes\"\n    }\n  ]\n}"
-}

@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": null,
-    "ok": true,
-    "output": "{\n  \"key\": \"port\",\n  \"value\": 4567\n}"
-  },
-  "stderr": "",
-  "stdout": "{\n  \"key\": \"port\",\n  \"value\": 4567\n}"
-}

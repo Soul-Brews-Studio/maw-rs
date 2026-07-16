@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": null,
-    "ok": true,
-    "output": "\n  \u001b[36mOracle \u2014 athena\u001b[0m\n\n  Repo:      /repos/athena-oracle\n  Session:   athena (2 windows)\n    \u001b[32m●\u001b[0m athena-oracle\n    \u001b[33m●\u001b[0m notes\n  Worktrees: 2\n    athena-oracle → /repos/athena-oracle\n    athena-agent → /repos/athena-oracle/agents/athena-agent\n  Fleet:     alpha.json (1 registered, 2 running)\n  \u001b[33m⚠\u001b[0m  1 window(s) not in fleet config \u2014 won't survive reboot\n    \u001b[33m→\u001b[0m notes\n\n  \u001b[90mFix: add to fleet/alpha.json\u001b[0m\n  \u001b[90m  maw fleet init          # regenerate all configs\u001b[0m\n  \u001b[90m  maw fleet validate      # check for problems\u001b[0m\n"
-  },
-  "stderr": "",
-  "stdout": "\n  \u001b[36mOracle \u2014 athena\u001b[0m\n\n  Repo:      /repos/athena-oracle\n  Session:   athena (2 windows)\n    \u001b[32m●\u001b[0m athena-oracle\n    \u001b[33m●\u001b[0m notes\n  Worktrees: 2\n    athena-oracle → /repos/athena-oracle\n    athena-agent → /repos/athena-oracle/agents/athena-agent\n  Fleet:     alpha.json (1 registered, 2 running)\n  \u001b[33m⚠\u001b[0m  1 window(s) not in fleet config \u2014 won't survive reboot\n    \u001b[33m→\u001b[0m notes\n\n  \u001b[90mFix: add to fleet/alpha.json\u001b[0m\n  \u001b[90m  maw fleet init          # regenerate all configs\u001b[0m\n  \u001b[90m  maw fleet validate      # check for problems\u001b[0m\n"
-}

@@ -210,7 +210,7 @@ fn atlas_namespace_without_plugin_fails_fast_instead_of_hanging() {
         "{stderr}"
     );
     assert!(
-        stderr.contains("maw plugin install Soul-Brews-Studio/maw-rs/fleet-plugins/atlas"),
+        stderr.contains("maw plugin install Soul-Brews-Studio/maw-plugins/packages/atlas"),
         "{stderr}"
     );
 

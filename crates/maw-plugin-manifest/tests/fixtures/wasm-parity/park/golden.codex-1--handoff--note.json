@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": null,
-    "ok": true,
-    "output": "\u001b[32m✓\u001b[0m parked \u001b[33mcodex-1\u001b[0m — \"handoff note\""
-  },
-  "stderr": "",
-  "stdout": "\u001b[32m✓\u001b[0m parked \u001b[33mcodex-1\u001b[0m — \"handoff note\""
-}

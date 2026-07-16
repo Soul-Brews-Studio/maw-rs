@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": null,
-    "ok": true,
-    "output": "project list: would list all tracked repos from ψ/learn and ψ/incubate — not yet implemented in core plugin; use Oracle skill /project for full behavior.\n  track: https://github.com/Soul-Brews-Studio/maw-js/issues/523"
-  },
-  "stderr": "",
-  "stdout": "project list: would list all tracked repos from ψ/learn and ψ/incubate — not yet implemented in core plugin; use Oracle skill /project for full behavior.\n  track: https://github.com/Soul-Brews-Studio/maw-js/issues/523"
-}

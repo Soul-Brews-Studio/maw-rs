@@ -1,9 +1,0 @@
-{
-  "result": {
-    "error": null,
-    "ok": true,
-    "output": "\u001b[36m--- wasm-parity-peek:0 ---\u001b[0m\nwasm parity peek line 1\nwasm parity peek line 2"
-  },
-  "stderr": "",
-  "stdout": "\u001b[36m--- wasm-parity-peek:0 ---\u001b[0m\nwasm parity peek line 1\nwasm parity peek line 2"
-}

@@ -1,8 +1,8 @@
 # maw-rs agent contract
 
 Read this once before taking an issue. Keep changes small, verified, and sourced from repo truth.
-For how-to detail, see `docs/agent-guides/adding-a-plugin-artifact.md` and
-`docs/agent-guides/release-and-calver.md`.
+For how-to detail, see `docs/guides/adding-a-plugin-artifact.md` and
+`docs/guides/release-and-calver.md`.
 
 ## Build gate
 
@@ -13,15 +13,19 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Plugin artifact work also needs:
+Fleet plugin artifacts live in the external
+[Soul-Brews-Studio/maw-plugins](https://github.com/Soul-Brews-Studio/maw-plugins)
+repo under `packages/<name>/` (extracted from this repo's `fleet-plugins/` on
+2026-07-15, repo split phase 1). Plugin artifact work happens there:
 
 ```bash
-maw plugin build fleet-plugins/<name>
-cargo test -p maw-cli --test fleet_plugins_pin_check
+maw plugin build <maw-plugins-checkout>/packages/<name>
 ```
 
-If you intentionally run the ignored deterministic rebuild check, install the AssemblyScript
-toolchain first with `npm ci` in `packages/wasm-sdk`.
+The sha256 pin-hash gate (formerly `cargo test -p maw-cli --test
+fleet_plugins_pin_check`) now runs in maw-plugins CI. If you rebuild an
+AssemblyScript artifact, install the toolchain first with `npm ci` in this
+repo's `packages/wasm-sdk`.
 
 ## Cargo isolation rule (replaces the old "cargo queue rule", 2026-07-11)
 

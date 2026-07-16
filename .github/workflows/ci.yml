@@ -36,49 +36,14 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Fleet-plugin bun tests
-        shell: bash
-        run: |
-          set -euo pipefail
-          found=0
-          for plugin in fleet-plugins/*; do
-            [ -d "$plugin" ] || continue
+      # "Fleet-plugin bun tests" moved to Soul-Brews-Studio/maw-plugins CI
+      # (fleet-bun-tests job) with the fleet-plugins/ -> packages/ extraction
+      # (repo split phase 1, 2026-07-15).
 
-            if [ -f "$plugin/package.json" ]; then
-              echo "::group::bun install $(basename "$plugin")"
-              (cd "$plugin" && bun install)
-              echo "::endgroup::"
-            fi
-
-            shopt -s nullglob
-            tests=("$plugin"/src/*.test.ts)
-            shopt -u nullglob
-            if [ "${#tests[@]}" -eq 0 ]; then
-              echo "No bun tests in $plugin; skipping"
-              continue
-            fi
-
-            found=1
-            rel_tests=()
-            for test in "${tests[@]}"; do
-              rel_tests+=("./${test#$plugin/}")
-            done
-
-            echo "::group::bun test $(basename "$plugin")"
-            (cd "$plugin" && bun test "${rel_tests[@]}")
-            echo "::endgroup::"
-          done
-
-          if [ "$found" -eq 0 ]; then
-            echo "No fleet-plugin bun tests found; skipping"
-          fi
-
-      - name: Setup Node cache for WASM fixtures
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: packages/wasm-sdk/package-lock.json
+      # The "Build deterministic AssemblyScript WASM fixtures" step
+      # (packages/wasm-sdk check:fixtures) moved to
+      # Soul-Brews-Studio/maw-fixtures with the wasm fixture + examples/
+      # extraction (repo split phase 2, 2026-07-16).
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
@@ -86,11 +51,6 @@ jobs:
           shared-key: rust-workspace-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           cache-all-crates: true
           cache-targets: true
-
-      - name: Build deterministic AssemblyScript WASM fixtures
-        run: |
-          npm --prefix packages/wasm-sdk ci
-          npm --prefix packages/wasm-sdk run check:fixtures
 
       - name: Fetch Cargo dependencies
         shell: bash
@@ -177,30 +137,20 @@ jobs:
       - name: Test with wasm-host feature
         env:
           CARGO_BUILD_JOBS: 2
+          # No debuginfo: each test binary links the full Extism/wasmtime
+          # runtime; with debug info the links OOM the runner's linker
+          # (ld terminated with signal 7 [Bus error]).
+          CARGO_PROFILE_TEST_DEBUG: "0"
+          CARGO_PROFILE_DEV_DEBUG: "0"
         run: cargo test -p maw-cli -p maw-plugin-manifest --features wasm-host --locked
 
       - name: Clippy with wasm-host feature
+        env:
+          CARGO_BUILD_JOBS: 2
+          CARGO_PROFILE_TEST_DEBUG: "0"
+          CARGO_PROFILE_DEV_DEBUG: "0"
         run: cargo clippy -p maw-cli -p maw-plugin-manifest --all-targets --features wasm-host --locked -- -D warnings
 
-  maw-menubar-native:
-    name: maw-menubar universal helper
-    runs-on: macos-15
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Verify committed helper pin and architecture slices
-        working-directory: fleet-plugins/maw-menubar
-        run: |
-          set -euo pipefail
-          expected=$(jq -r '.bundledArtifacts[] | select(.path == "bin/maw-menubar") | .sha256' plugin.json)
-          actual="sha256:$(shasum -a 256 bin/maw-menubar | awk '{print $1}')"
-          [[ "$actual" == "$expected" ]]
-          archs=$(/usr/bin/lipo -archs bin/maw-menubar)
-          [[ " $archs " == *" arm64 "* ]]
-          [[ " $archs " == *" x86_64 "* ]]
-          /usr/bin/codesign --verify --strict bin/maw-menubar
-
-      - name: Rebuild universal Swift helper
-        working-directory: fleet-plugins/maw-menubar
-        run: ./scripts/build-universal.sh
+  # The maw-menubar-native macOS job (helper sha256 pin + lipo slices +
+  # codesign + rebuild) moved to Soul-Brews-Studio/maw-plugins CI with the
+  # fleet-plugins/ -> packages/ extraction (repo split phase 1, 2026-07-15).
