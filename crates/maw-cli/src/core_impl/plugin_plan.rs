@@ -366,8 +366,15 @@ fn normalize_plugin_install_subpath(path: std::path::PathBuf) -> Result<std::pat
     }
 }
 
+/// Default install root, unified with discovery (mawx WI-3): an explicit
+/// `MAW_PLUGINS_DIR` — discovery's exclusive scan root — wins, otherwise
+/// `maw_data_path(["plugins"])`, which `scan_dirs()` also scans. Either way
+/// the installed plugin is discoverable by construction.
 fn resolve_default_plugin_root() -> std::path::PathBuf {
-    maw_data_path(&real_xdg_env(), &["plugins"])
+    std::env::var_os("MAW_PLUGINS_DIR").map_or_else(
+        || maw_data_path(&real_xdg_env(), &["plugins"]),
+        std::path::PathBuf::from,
+    )
 }
 
 /// Local-directory install (`maw plugin install <dir>`): verify exactly like

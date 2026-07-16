@@ -108,22 +108,33 @@ fn scan_dirs_uses_explicit_plugins_dir_env() {
     let _guard = ENV_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let original = std::env::var_os("MAW_PLUGINS_DIR");
-    let original_maw_home = std::env::var_os("MAW_HOME");
-    let original_home = std::env::var_os("HOME");
+    // Every env var scan_dirs() consults (incl. the WI-3 install-root vars).
+    let saved: Vec<(&str, Option<std::ffi::OsString>)> = [
+        "MAW_PLUGINS_DIR",
+        "MAW_HOME",
+        "HOME",
+        "MAW_DATA_DIR",
+        "MAW_XDG",
+        "XDG_DATA_HOME",
+    ]
+    .into_iter()
+    .map(|key| {
+        let original = std::env::var_os(key);
+        std::env::remove_var(key);
+        (key, original)
+    })
+    .collect();
     let explicit = temp_dir("explicit-env").join("plugins");
 
     std::env::set_var("MAW_PLUGINS_DIR", &explicit);
     assert_eq!(scan_dirs(), vec![explicit.clone()]);
 
     std::env::remove_var("MAW_PLUGINS_DIR");
-    std::env::remove_var("MAW_HOME");
-    std::env::remove_var("HOME");
     assert_eq!(scan_dirs(), vec![PathBuf::from(".maw/plugins")]);
 
-    restore_env("MAW_PLUGINS_DIR", original);
-    restore_env("MAW_HOME", original_maw_home);
-    restore_env("HOME", original_home);
+    for (key, original) in saved {
+        restore_env(key, original);
+    }
     let _ = remove_dir_all(explicit.parent().expect("temp root"));
 }
 

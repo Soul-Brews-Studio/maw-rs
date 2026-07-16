@@ -1660,6 +1660,7 @@ dependencies = [
  "libc",
  "maw-tmux",
  "maw-transport",
+ "maw-xdg",
  "rustix 1.1.4",
  "serde",
  "serde_json",
