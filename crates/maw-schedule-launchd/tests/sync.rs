@@ -1,5 +1,7 @@
-use maw_schedule_launchd::{load_config, remove_job, sync_job, DesiredJob, JobState, LaunchctlOutput,
-    LaunchctlRunner, PlistState, SyncMode};
+use maw_schedule_launchd::{
+    load_config, remove_job, sync_job, DesiredJob, JobState, LaunchctlOutput, LaunchctlRunner,
+    PlistState, SyncMode,
+};
 use std::path::PathBuf;
 #[rustfmt::skip]
 #[derive(Default)]
@@ -74,5 +76,7 @@ fn job(root: &std::path::Path) -> DesiredJob {
 }
 fn temp(name: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("schedule-launchd-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&path); std::fs::create_dir_all(&path).unwrap(); path
+    let _ = std::fs::remove_dir_all(&path);
+    std::fs::create_dir_all(&path).unwrap();
+    path
 }

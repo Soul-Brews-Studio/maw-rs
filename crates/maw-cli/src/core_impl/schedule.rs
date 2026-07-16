@@ -312,6 +312,14 @@ fn schedule_log334(path: &Path, message: &str) -> Result<(), String> {
 
 #[cfg(test)] mod schedule_tests334 {
     use super::*;
+    // Monotonic per-invocation suffix so each test's temp root is unique even
+    // within the same pid+nanosecond. pid-only roots (the old scheme) are a
+    // single fixed path per test binary and collide the moment any sibling
+    // reuses the prefix — the crate's own idiom appends a unique tail.
+    static SCHEDULE_TEST_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    fn schedule_test_seq() -> u64 {
+        SCHEDULE_TEST_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
     #[derive(Default)] struct Fake { calls: Vec<(String, Vec<String>)> }
     impl maw_tmux::TmuxRunner for Fake { fn run(&mut self, subcommand: &str, args: &[String]) -> Result<String, maw_tmux::TmuxError> { self.calls.push((subcommand.into(), args.to_vec())); Ok(String::new()) } }
     #[test] fn schedule_registers_and_rejects_bad_private_ids() {
@@ -341,7 +349,7 @@ fn schedule_log334(path: &Path, message: &str) -> Result<(), String> {
     }
     #[test] fn shell_fire_loads_config_reserves_executes_and_publishes_outcome() {
         let _lock = env_test_lock(); let _home = EnvVarRestore::capture("MAW_HOME");
-        let root = std::env::temp_dir().join(format!("maw-schedule-cli-{}", std::process::id())); let repo = root.join("odin-oracle");
+        let root = std::env::temp_dir().join(format!("maw-schedule-cli-{}-{}", std::process::id(), schedule_test_seq())); let repo = root.join("odin-oracle");
         let _ = std::fs::remove_dir_all(&root); std::fs::create_dir_all(repo.join(".maw")).unwrap(); std::env::set_var("MAW_HOME", root.join("home"));
         std::fs::write(repo.join(".maw/schedule.toml"), "[[schedule]]\nid='canary'\ncommand='printf ok > artifact'\ncadence='every 1h'\nexec='shell'\nexpected_output='artifact'\n").unwrap();
         let output = schedule_fire334(&["odin-oracle".into(), "canary".into(), repo.to_string_lossy().into_owned(), "--force".into()]).unwrap();
@@ -350,7 +358,7 @@ fn schedule_log334(path: &Path, message: &str) -> Result<(), String> {
     }
     #[test] fn private_exec_uses_explicit_state_root_when_tmux_environment_is_stale() {
         let _lock = env_test_lock(); let _home = EnvVarRestore::capture("MAW_HOME"); let _tmux = EnvVarRestore::capture("TMUX_TMPDIR");
-        let root = std::env::temp_dir().join(format!("maw-schedule-state-root-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("maw-schedule-state-root-{}-{}", std::process::id(), schedule_test_seq()));
         let correct = root.join("custom-home"); let wrong = root.join("wrong-home"); let repo = root.join("repo");
         let _ = std::fs::remove_dir_all(&root); std::fs::create_dir_all(&repo).unwrap(); std::fs::create_dir_all(&wrong).unwrap();
         let log = correct.join("logs/odin.canary.log"); let store = maw_schedule_runner::FireStore::new(correct.clone());

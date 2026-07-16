@@ -316,6 +316,11 @@ mod missing_cmds_tests291 {
     #[test]
     fn cleanup_refuses_nonzero_without_delegation_text() {
         // cleanup is still fail-closed; project and park are now native.
+        // run_cli dispatches the native `cleanup` surface, which logs an audit
+        // row; lock + XDG isolation keeps that row out of a concurrent
+        // sibling's audit file under the wasm-host test partitioning.
+        let _guard = env_test_lock();
+        let (_state_root, _restores) = cli_dispatch_test_env();
         let output = run_cli(&args(&["cleanup", "--anything"]));
         assert_eq!(output.code, 1, "cleanup");
         assert!(output.stdout.is_empty(), "cleanup: stdout={}", output.stdout);
@@ -500,6 +505,11 @@ mod missing_cmds_tests291 {
     #[test]
     fn missing_cmds_fake_maw_no_delegate_proof() {
         let _lock = env_test_lock();
+        // Isolate HOME/XDG so the native learn/project/park/cleanup dispatches
+        // below write their audit rows to a throwaway dir, not a concurrent
+        // sibling's file or the real user state dir. PATH is set separately
+        // (for the fake `maw` delegation probe) and is untouched by this.
+        let (_state_root, _restores) = cli_dispatch_test_env();
         let _path = EnvVarRestore::capture("PATH");
         let _ref_dir = EnvVarRestore::capture("MAW_JS_REF_DIR");
         let root = std::env::temp_dir().join(format!(

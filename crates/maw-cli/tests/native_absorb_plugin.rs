@@ -117,9 +117,16 @@ fn absorb_native_resolves_bare_receiver_repo_across_orgs() {
         .args(["absorb", "donor", "--into", "display-census", "--dry-run"])
         .output()
         .expect("run absorb");
-    assert!(output.status.success(), "stderr={}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8(output.stdout).expect("stdout");
-    assert!(stdout.contains(&format!("-> {}", receiver.display())), "stdout={stdout}");
+    assert!(
+        stdout.contains(&format!("-> {}", receiver.display())),
+        "stdout={stdout}"
+    );
     let _ = std::fs::remove_dir_all(root);
 }
 

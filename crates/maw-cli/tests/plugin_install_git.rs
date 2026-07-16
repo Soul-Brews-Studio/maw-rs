@@ -118,8 +118,11 @@ fn write_wasm_plugin_manifest(dir: &Path, name: &str, sha256: &str) {
 /// Write a committed-artifact wasm package and return the artifact's real pin.
 fn write_wasm_plugin(dir: &Path, name: &str) -> String {
     fs::create_dir_all(dir).expect("plugin dir");
-    fs::write(dir.join("plugin.wasm"), b"\0asm\x01\x00\x00\x00wasm-fixture")
-        .expect("wasm artifact");
+    fs::write(
+        dir.join("plugin.wasm"),
+        b"\0asm\x01\x00\x00\x00wasm-fixture",
+    )
+    .expect("wasm artifact");
     let sha256 = maw_plugin_manifest::hash_file(&dir.join("plugin.wasm")).expect("hash wasm");
     write_wasm_plugin_manifest(dir, name, &sha256);
     sha256
@@ -452,8 +455,11 @@ fn plugin_install_git_wasm_tampered_artifact_refuses() {
     let repo = root.join("repo");
     let package = repo.join("packages").join("tampered-wasm");
     let _ = write_wasm_plugin(&package, "tampered-wasm");
-    fs::write(package.join("plugin.wasm"), b"\0asm\x01\x00\x00\x00tampered")
-        .expect("tamper wasm");
+    fs::write(
+        package.join("plugin.wasm"),
+        b"\0asm\x01\x00\x00\x00tampered",
+    )
+    .expect("tamper wasm");
     commit_fixture_repo(&repo);
     let install_root = root.join("plugins");
     let file_url = format!(
@@ -494,8 +500,11 @@ fn plugin_install_git_wasm_missing_pin_refuses_with_actionable_error() {
     let repo = root.join("repo");
     let package = repo.join("packages").join("unpinned-wasm");
     fs::create_dir_all(&package).expect("plugin dir");
-    fs::write(package.join("plugin.wasm"), b"\0asm\x01\x00\x00\x00unpinned")
-        .expect("wasm artifact");
+    fs::write(
+        package.join("plugin.wasm"),
+        b"\0asm\x01\x00\x00\x00unpinned",
+    )
+    .expect("wasm artifact");
     fs::write(
         package.join("plugin.json"),
         r#"{
@@ -535,8 +544,7 @@ fn plugin_install_git_wasm_missing_pin_refuses_with_actionable_error() {
     assert!(String::from_utf8_lossy(&output.stdout).is_empty());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("package 'unpinned-wasm' targets wasm")
-            && stderr.contains("artifact.path"),
+        stderr.contains("package 'unpinned-wasm' targets wasm") && stderr.contains("artifact.path"),
         "stderr: {stderr}"
     );
     assert!(!install_root.join("unpinned-wasm").exists());
@@ -581,8 +589,7 @@ fn plugin_install_git_wasm_missing_artifact_file_refuses() {
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("package 'ghost-wasm'")
-            && stderr.contains("plugin.wasm is not committed"),
+        stderr.contains("package 'ghost-wasm'") && stderr.contains("plugin.wasm is not committed"),
         "stderr: {stderr}"
     );
     assert!(!install_root.join("ghost-wasm").exists());
@@ -695,7 +702,10 @@ fn plugin_install_git_wasm_success_writes_plugins_lock_pin() {
     assert_eq!(entry["sha256"], serde_json::json!(sha256));
     let source = entry["source"].as_str().expect("source");
     assert!(source.starts_with("file://"), "source: {source}");
-    assert!(source.ends_with("#packages/lockwrite-fixture"), "source: {source}");
+    assert!(
+        source.ends_with("#packages/lockwrite-fixture"),
+        "source: {source}"
+    );
 
     // Reinstall of the identical pinned artifact passes the lock gate.
     let reinstall = with_host_plugin_env(

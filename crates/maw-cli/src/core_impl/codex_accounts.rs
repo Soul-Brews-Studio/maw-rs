@@ -434,9 +434,9 @@ fn codex_accounts_env_text_value(line: &str, key: &str) -> Option<String> {
 #[cfg(test)]
 mod codex_accounts_tests273 {
     use super::{
-        codex_accounts_json, codex_accounts_parse, codex_accounts_parse_ps,
-        codex_accounts_parse_tmux_panes, codex_accounts_rows, dispatcher_status, run_cli,
-        CodexProcess273, DispatchKind,
+        cli_dispatch_test_env, codex_accounts_json, codex_accounts_parse, codex_accounts_parse_ps,
+        codex_accounts_parse_tmux_panes, codex_accounts_rows, dispatcher_status, env_test_lock,
+        run_cli, CodexProcess273, DispatchKind,
     };
 
     fn strings(values: &[&str]) -> Vec<String> {
@@ -445,6 +445,11 @@ mod codex_accounts_tests273 {
 
     #[test]
     fn codex_accounts_dispatch_registers_codex_surface() {
+        // run_cli dispatches the native `codex` surface, which logs an audit
+        // row; lock + XDG isolation keeps that row out of a concurrent
+        // sibling's audit file under the wasm-host test partitioning.
+        let _guard = env_test_lock();
+        let (_state_root, _restores) = cli_dispatch_test_env();
         assert_eq!(dispatcher_status("codex"), DispatchKind::Native);
         let output = run_cli(&strings(&["codex", "bogus"]));
         assert_eq!(output.code, 2);

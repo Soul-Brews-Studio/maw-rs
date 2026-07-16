@@ -1,6 +1,9 @@
 use maw_schedule::{ExecMode, RunStatus};
 use maw_schedule_runner::{FinishRequest, FireStore, StartRequest};
-use std::{path::PathBuf, sync::atomic::{AtomicU64, Ordering}};
+use std::{
+    path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
+};
 #[rustfmt::skip]
 fn root() -> PathBuf {
     static NEXT: AtomicU64 = AtomicU64::new(0);

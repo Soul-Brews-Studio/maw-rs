@@ -1,6 +1,13 @@
 use maw_schedule::{ExecMode, RunStatus};
-use maw_schedule_runner::{exec::{execute, resolve_binary_in}, FireStore, StartRequest};
-use std::{os::unix::fs::PermissionsExt, path::{Path, PathBuf}, sync::atomic::{AtomicU64, Ordering}};
+use maw_schedule_runner::{
+    exec::{execute, resolve_binary_in},
+    FireStore, StartRequest,
+};
+use std::{
+    os::unix::fs::PermissionsExt,
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
+};
 #[rustfmt::skip]
 fn root() -> PathBuf {
     static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -9,7 +16,8 @@ fn root() -> PathBuf {
 }
 fn script(path: &Path, body: &str) {
     std::fs::write(path, body).unwrap();
-    let mut permissions = path.metadata().unwrap().permissions(); permissions.set_mode(0o755);
+    let mut permissions = path.metadata().unwrap().permissions();
+    permissions.set_mode(0o755);
     std::fs::set_permissions(path, permissions).unwrap();
 }
 #[rustfmt::skip]
@@ -78,7 +86,14 @@ fn expected_output_expands_yesterday_across_month_and_year_end() {
 }
 #[test]
 fn fixed_path_resolution_never_needs_ambient_path() {
-    let root = root(); let binary = root.join("claude"); script(&binary, "#!/bin/sh\n");
-    assert_eq!(resolve_binary_in("claude", std::slice::from_ref(&root)).unwrap(), binary);
-    assert!(resolve_binary_in("missing", &[root]).unwrap_err().contains("fixed search path"));
+    let root = root();
+    let binary = root.join("claude");
+    script(&binary, "#!/bin/sh\n");
+    assert_eq!(
+        resolve_binary_in("claude", std::slice::from_ref(&root)).unwrap(),
+        binary
+    );
+    assert!(resolve_binary_in("missing", &[root])
+        .unwrap_err()
+        .contains("fixed search path"));
 }

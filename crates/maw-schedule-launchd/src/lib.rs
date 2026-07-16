@@ -77,7 +77,11 @@ pub fn sync_job<R: LaunchctlRunner>(
     validate_target(&job.label, domain)?;
     let before = inspect(job, domain, runner)?;
     if mode == SyncMode::Check || before.is_healthy() {
-        return Ok(SyncResult { before, after: before, changed: false });
+        return Ok(SyncResult {
+            before,
+            after: before,
+            changed: false,
+        });
     }
     let plist_changed = before.plist != PlistState::Current;
     if plist_changed {
@@ -87,27 +91,48 @@ pub fn sync_job<R: LaunchctlRunner>(
         launchctl(runner, &["bootout", &format!("{domain}/{}", job.label)])?;
     }
     if !before.loaded || plist_changed {
-        launchctl(runner, &["bootstrap", domain, &job.plist_path.to_string_lossy()])?;
+        launchctl(
+            runner,
+            &["bootstrap", domain, &job.plist_path.to_string_lossy()],
+        )?;
     }
     let after = inspect(job, domain, runner)?;
     if !after.is_healthy() {
         return Err(format!("{} remains out of sync after repair", job.label));
     }
-    Ok(SyncResult { before, after, changed: true })
+    Ok(SyncResult {
+        before,
+        after,
+        changed: true,
+    })
 }
 /// Check or remove a stale plist and its loaded launchd job.
 ///
 /// # Errors
 /// Returns invalid target, filesystem, or launchctl failures.
-pub fn remove_job<R: LaunchctlRunner>(label: &str, path: &Path, domain: &str,
-    mode: SyncMode, runner: &mut R) -> Result<bool, String> {
+pub fn remove_job<R: LaunchctlRunner>(
+    label: &str,
+    path: &Path,
+    domain: &str,
+    mode: SyncMode,
+    runner: &mut R,
+) -> Result<bool, String> {
     validate_target(label, domain)?;
-    let exists = path.try_exists().map_err(|error| format!("inspect {}: {error}", path.display()))?;
+    let exists = path
+        .try_exists()
+        .map_err(|error| format!("inspect {}: {error}", path.display()))?;
     let target = format!("{domain}/{label}");
     let loaded = runner.run(&["print".to_owned(), target.clone()])?.success;
-    if mode == SyncMode::Check { return Ok(exists || loaded); }
-    if loaded { launchctl(runner, &["bootout", &target])?; }
-    if exists { std::fs::remove_file(path).map_err(|error| format!("remove {}: {error}", path.display()))?; }
+    if mode == SyncMode::Check {
+        return Ok(exists || loaded);
+    }
+    if loaded {
+        launchctl(runner, &["bootout", &target])?;
+    }
+    if exists {
+        std::fs::remove_file(path)
+            .map_err(|error| format!("remove {}: {error}", path.display()))?;
+    }
     Ok(exists || loaded)
 }
 fn inspect<R: LaunchctlRunner>(
@@ -126,7 +151,10 @@ fn inspect<R: LaunchctlRunner>(
     Ok(JobState { plist, loaded })
 }
 fn launchctl<R: LaunchctlRunner>(runner: &mut R, args: &[&str]) -> Result<(), String> {
-    let args = args.iter().map(|value| (*value).to_owned()).collect::<Vec<_>>();
+    let args = args
+        .iter()
+        .map(|value| (*value).to_owned())
+        .collect::<Vec<_>>();
     let output = runner.run(&args)?;
     if output.success {
         Ok(())
@@ -135,18 +163,30 @@ fn launchctl<R: LaunchctlRunner>(runner: &mut R, args: &[&str]) -> Result<(), St
     }
 }
 fn atomic_write(path: &Path, body: &str) -> Result<(), String> {
-    let parent = path.parent().ok_or_else(|| "plist path has no parent".to_owned())?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "plist path has no parent".to_owned())?;
     std::fs::create_dir_all(parent)
         .map_err(|error| format!("create {}: {error}", parent.display()))?;
-    let name = path.file_name().and_then(|value| value.to_str()).unwrap_or("schedule.plist");
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("schedule.plist");
     let temp = path.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
     std::fs::write(&temp, body).map_err(|error| format!("write {}: {error}", temp.display()))?;
     std::fs::rename(&temp, path).map_err(|error| format!("replace {}: {error}", path.display()))
 }
 fn validate_target(label: &str, domain: &str) -> Result<(), String> {
     let label_ok = !label.is_empty()
-        && label.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte));
-    let domain_ok = domain.strip_prefix("gui/").is_some_and(|uid|
-        !uid.is_empty() && uid.bytes().all(|byte| byte.is_ascii_digit()));
-    if label_ok && domain_ok { Ok(()) } else { Err("invalid launchctl label or domain".to_owned()) }
+        && label
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte));
+    let domain_ok = domain
+        .strip_prefix("gui/")
+        .is_some_and(|uid| !uid.is_empty() && uid.bytes().all(|byte| byte.is_ascii_digit()));
+    if label_ok && domain_ok {
+        Ok(())
+    } else {
+        Err("invalid launchctl label or domain".to_owned())
+    }
 }

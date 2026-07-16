@@ -5,7 +5,12 @@ use maw_schedule::{
     RunStatus,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use std::{collections::BTreeMap, fs::OpenOptions, io::Write, path::{Path, PathBuf}};
+use std::{
+    collections::BTreeMap,
+    fs::OpenOptions,
+    io::Write,
+    path::{Path, PathBuf},
+};
 type Counters = BTreeMap<String, BTreeMap<String, u32>>;
 #[rustfmt::skip] #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StartRequest { pub run_id: String, pub oracle: String, pub job_id: String, pub local_date: String, pub reserved_at: u64, pub cadence_seconds: u64, pub boot_identity: String, pub cap: u32, pub forced: bool, pub exec: ExecMode, pub expected_output: Option<String>, pub command: String, pub cwd: String, pub log_path: String, pub output_path: Option<String>, pub token_name: String, pub bash_path: String, pub claude_path: Option<String>, pub pass_path: Option<String> }
@@ -20,7 +25,9 @@ pub struct LatestIndex { pub schema_version: u8, pub generated_at: u64, pub jobs
 #[rustfmt::skip] #[derive(Debug, Clone)] pub struct FireStore { root: PathBuf }
 impl FireStore {
     #[must_use]
-    pub fn new(root: PathBuf) -> Self { Self { root } }
+    pub fn new(root: PathBuf) -> Self {
+        Self { root }
+    }
     /// Reserve a quota slot and atomically publish its run/latest witnesses.
     ///
     /// # Errors
@@ -134,11 +141,21 @@ impl FireStore {
             .filter(|path| path.extension().is_some_and(|ext| ext == "json")
                 && path.file_name().is_some_and(|name| name != "latest.json")).collect())
     }
-    fn runs_dir(&self) -> PathBuf { self.root.join("schedule/runs") }
-    fn run_path(&self, id: &str) -> PathBuf { self.runs_dir().join(format!("{id}.json")) }
+    fn runs_dir(&self) -> PathBuf {
+        self.root.join("schedule/runs")
+    }
+    fn run_path(&self, id: &str) -> PathBuf {
+        self.runs_dir().join(format!("{id}.json"))
+    }
 }
 impl Default for LatestIndex {
-    fn default() -> Self { Self { schema_version: 1, generated_at: 0, jobs: BTreeMap::new() } }
+    fn default() -> Self {
+        Self {
+            schema_version: 1,
+            generated_at: 0,
+            jobs: BTreeMap::new(),
+        }
+    }
 }
 #[rustfmt::skip]
 fn validate(value: &str) -> Result<(), String> {
