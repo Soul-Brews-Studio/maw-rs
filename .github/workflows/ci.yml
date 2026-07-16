@@ -19,6 +19,16 @@ concurrency:
 permissions:
   contents: read
 
+# CI has no cross-run incremental reuse (each scheduled run starts from the
+# rust-cache restore, not a prior incremental target dir), so incremental
+# codegen units only bloat the target dir + the saved cache with no compile
+# win. Disabling it shrinks every job's target dir → smaller/faster caches and
+# better hit-rate under GitHub's 10 GB per-repo cache cap (matters now that the
+# musl job also caches, adding a third large key). OOM-neutral: touches neither
+# the debuginfo strip nor CARGO_BUILD_JOBS, so it cannot re-approach #543.
+env:
+  CARGO_INCREMENTAL: "0"
+
 jobs:
   rust:
     name: Rust workspace
@@ -69,6 +79,12 @@ jobs:
           shared-key: rust-workspace
           cache-all-crates: true
           cache-targets: true
+          # Persist the rebuilt target dir even when the job fails. All recent
+          # scheduled runs are RED (real clippy/test reds), and rust-cache only
+          # saves on SUCCESS by default — so the extism/workspace stack was
+          # recompiling COLD every 4h. cache-on-failure lets a red run still
+          # save its artifacts, so the next run restores warm.
+          cache-on-failure: true
 
       # Retry loop is insurance against transient crates.io/registry network
       # blips on shared runners — NOT for the current fmt/test reds. It only
@@ -100,6 +116,13 @@ jobs:
         shell: bash
         env:
           CARGO_BUILD_JOBS: 2
+          # Strip debuginfo (same mechanism as the #543 fix on wasm-host/musl,
+          # applied here purely as a speed/size win — this job does NOT link the
+          # extism stack, so it was never at OOM risk). Faster links + a smaller
+          # target dir → smaller/faster cache. This can only REDUCE link memory,
+          # never increase it, so it cannot reintroduce #543.
+          CARGO_PROFILE_TEST_DEBUG: "0"
+          CARGO_PROFILE_DEV_DEBUG: "0"
         run: |
           set -euo pipefail
           for attempt in 1 2 3; do
@@ -115,6 +138,8 @@ jobs:
       - name: Test workspace
         env:
           CARGO_BUILD_JOBS: 2
+          CARGO_PROFILE_TEST_DEBUG: "0"
+          CARGO_PROFILE_DEV_DEBUG: "0"
         run: cargo test --workspace --locked
 
       - name: Clippy
@@ -142,6 +167,24 @@ jobs:
 
       - name: Install Rust musl target
         run: rustup target add x86_64-unknown-linux-musl
+
+      # This job previously had NO cache at all — it rebuilt the entire
+      # ~145-crate cranelift/extism stack for the musl target COLD every 4h,
+      # ~400s of pure cold compile. Add rust-cache with a DISTINCT shared-key
+      # (rust-musl): the musl target dir must never cross-contaminate the
+      # workspace (rust-workspace) or wasm-host (rust-wasm-host) caches — those
+      # are different targets/features. cache-on-failure persists artifacts even
+      # though this whole job is continue-on-error. OOM-neutral: caching changes
+      # WHAT is recompiled, not HOW it is linked — the debuginfo strip is
+      # unaffected (this job's build still runs at the release profile without
+      # the CARGO_PROFILE_*_DEBUG override, unchanged from before).
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: rust-musl
+          cache-all-crates: true
+          cache-targets: true
+          cache-on-failure: true
 
       - name: Build maw-cli for musl static
         # --features wasm-host is REQUIRED here: with empty default features this
@@ -182,6 +225,11 @@ jobs:
           shared-key: rust-wasm-host
           cache-all-crates: true
           cache-targets: true
+          # Persist the extism/wasmtime target dir even on a red run (all recent
+          # scheduled runs fail), so the next run restores warm instead of
+          # recompiling the ~145-crate cranelift stack cold. OOM-neutral: a cache
+          # restore adds no link memory; the debuginfo strip below is untouched.
+          cache-on-failure: true
 
       # Pre-warm the registry with the same 3x network-retry as the rust job.
       # Wraps ONLY `cargo fetch` (a pure network op) — NEVER the test step, so it
