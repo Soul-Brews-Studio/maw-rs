@@ -24,19 +24,19 @@ up any existing `maw`, and installs to `~/.local/bin/maw` by default.
 Stable release installer:
 
 ```bash
-curl -fsSL https://github.com/tonkmac/maw-rs/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/Soul-Brews-Studio/maw-rs/releases/latest/download/install.sh | sh
 ```
 
 Bleeding-edge installer from `alpha`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tonkmac/maw-rs/alpha/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Soul-Brews-Studio/maw-rs/alpha/install.sh | sh
 ```
 
 Pin the installer and binary to a specific release (day-based CalVer tags, e.g. `v26.7.16`):
 
 ```bash
-curl -fsSL https://github.com/tonkmac/maw-rs/releases/download/v26.7.16/install.sh | MAW_VERSION=v26.7.16 sh
+curl -fsSL https://github.com/Soul-Brews-Studio/maw-rs/releases/download/v26.7.16/install.sh | MAW_VERSION=v26.7.16 sh
 ```
 
 Options:
