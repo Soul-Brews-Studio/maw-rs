@@ -347,6 +347,9 @@ fn schedule_log334(path: &Path, message: &str) -> Result<(), String> {
         assert_eq!(fake.calls[0].0, "new-session"); let joined = fake.calls[0].1.join(" ");
         assert!(joined.contains("exec /opt/bin/maw-rs schedule exec odin-daily-1 '/tmp/custom state'")); assert!(!joined.contains("WHO Matrix"));
     }
+    // `schedule_fire334` is `#[cfg(target_os = "macos")]` (launchd-only); on other
+    // platforms it returns Err by design, so this end-to-end fire test is macOS-only.
+    #[cfg(target_os = "macos")]
     #[test] fn shell_fire_loads_config_reserves_executes_and_publishes_outcome() {
         let _lock = env_test_lock(); let _home = EnvVarRestore::capture("MAW_HOME");
         let root = std::env::temp_dir().join(format!("maw-schedule-cli-{}-{}", std::process::id(), schedule_test_seq())); let repo = root.join("odin-oracle");
