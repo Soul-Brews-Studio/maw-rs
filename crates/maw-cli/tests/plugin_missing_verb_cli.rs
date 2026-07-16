@@ -9,7 +9,7 @@
 //! `Soul-Brews-Studio/maw-plugins` `packages/` (repo split phase 1,
 //! 2026-07-15); see the repo-split test rework follow-up.
 
-use maw_cli::{run_cli, KNOWN_FLEET_PLUGIN_VERBS};
+use maw_cli::{resolve_plugin_source, run_cli, ResolvedPluginSource, KNOWN_FLEET_PLUGIN_VERBS};
 use maw_plugin_manifest::{host_abi_version, satisfies};
 use std::ffi::OsString;
 use std::fs::{create_dir_all, write};
@@ -168,6 +168,84 @@ fn known_fleet_verb_without_installed_plugin_prints_install_hint_not_unknown_com
         "stderr: {}",
         output.stderr
     );
+    // Golden (mawx WI-2): the hint text is BYTE-IDENTICAL to the
+    // pre-ResolvedPluginSource output — the struct refactor must not move
+    // a single byte of the user-facing hint.
+    assert_eq!(
+        output.stderr,
+        "maw-rs: verb 'menubar' is provided by plugin 'maw-menubar', which is not installed on this machine\n  install: maw plugin install Soul-Brews-Studio/maw-plugins/packages/maw-menubar\n"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn resolved_plugin_source_exposes_verb_source_and_pin_programmatically() {
+    // mawx WI-2: the same resolution the hint printer consumes is available
+    // as a struct — `maw x` (WI-8) reads source + pin from here instead of
+    // re-parsing hint text.
+    let _guard = env_lock()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _restore = EnvRestore::capture();
+    let root = temp_dir("struct-lookup");
+    seed_hermetic_env(&root);
+    let sha = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    write(
+        root.join("plugins.lock"),
+        format!(
+            r#"{{"schema":1,"plugins":{{"locked-demo":{{"version":"1.0.0","sha256":"{sha}","source":"github:o/r@v1"}}}}}}"#
+        ),
+    )
+    .expect("lock");
+
+    let resolved = resolve_plugin_source("menubar").expect("menubar is a known fleet verb");
+    assert_eq!(
+        resolved,
+        ResolvedPluginSource {
+            verb: "menubar".to_owned(),
+            plugin_name: "maw-menubar".to_owned(),
+            source: Some("Soul-Brews-Studio/maw-plugins/packages/maw-menubar".to_owned()),
+            sha256: None,
+        }
+    );
+    assert_eq!(
+        resolved.install_hint(),
+        "maw plugin install Soul-Brews-Studio/maw-plugins/packages/maw-menubar"
+    );
+
+    // Every baked fleet verb resolves, with the packages/<dir> source and
+    // no pin (the static table carries none).
+    for (verb, plugin, dir) in KNOWN_FLEET_PLUGIN_VERBS {
+        let resolved = resolve_plugin_source(verb).expect("fleet verb resolves");
+        assert_eq!(resolved.verb, *verb);
+        assert_eq!(resolved.plugin_name, *plugin);
+        assert_eq!(
+            resolved.source.as_deref(),
+            Some(format!("Soul-Brews-Studio/maw-plugins/packages/{dir}").as_str())
+        );
+        assert_eq!(resolved.sha256, None);
+    }
+
+    // A plugins.lock pin resolves with its source (github: prefix already
+    // stripped to install grammar) and sha256 pin carried on the struct.
+    let locked = resolve_plugin_source("locked-demo").expect("lock pin resolves");
+    assert_eq!(
+        locked,
+        ResolvedPluginSource {
+            verb: "locked-demo".to_owned(),
+            plugin_name: "locked-demo".to_owned(),
+            source: Some("o/r@v1".to_owned()),
+            sha256: Some(sha.to_owned()),
+        }
+    );
+    assert_eq!(
+        locked.install_hint(),
+        format!("maw plugin install o/r@v1 --sha256 {sha}")
+    );
+
+    // True typos stay unresolvable — the struct never invents a source.
+    assert!(resolve_plugin_source("definitely-not-a-verb").is_none());
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -205,6 +283,13 @@ fn lock_pinned_verb_without_installed_plugin_prints_lock_derived_install_hint() 
             .contains(&format!("maw plugin install o/r@v1 --sha256 {sha}")),
         "stderr: {}",
         output.stderr
+    );
+    // Golden (mawx WI-2): byte-identical lock-derived hint.
+    assert_eq!(
+        output.stderr,
+        format!(
+            "maw-rs: verb 'foo-fleet' is provided by plugin 'foo-fleet', which is not installed on this machine\n  install: maw plugin install o/r@v1 --sha256 {sha}\n"
+        )
     );
 
     let _ = std::fs::remove_dir_all(root);
