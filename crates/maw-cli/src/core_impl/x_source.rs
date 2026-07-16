@@ -151,6 +151,11 @@ pub struct XResolutionPlan {
     pub capabilities: Option<Vec<String>>,
     /// Manifest `sdk` requirement — only known after the manifest is fetched.
     pub sdk: Option<String>,
+    /// `Some(true)` when a locally installed copy shadows the fetch (#576):
+    /// the plan describes the installed package that would dispatch, not a
+    /// network fetch. Absent (`None`, not serialized) for fetch plans.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub installed: Option<bool>,
 }
 
 /// IO-edge tuning for the fetch executor.
@@ -570,6 +575,7 @@ pub fn x_resolution_plan(resolved: &ResolvedFetch) -> XResolutionPlan {
             sha256: registry.as_ref().map(|meta| meta.sha256.clone()),
             capabilities: registry.as_ref().map(|meta| meta.capabilities.clone()),
             sdk: None,
+            installed: None,
         },
         XFetchPlan::Clone { subpath, .. } => XResolutionPlan {
             source: resolved.canonical_source.clone(),
@@ -578,6 +584,7 @@ pub fn x_resolution_plan(resolved: &ResolvedFetch) -> XResolutionPlan {
             sha256: None,
             capabilities: None,
             sdk: None,
+            installed: None,
         },
         XFetchPlan::Local { path } => XResolutionPlan {
             source: resolved.canonical_source.clone(),
@@ -586,6 +593,7 @@ pub fn x_resolution_plan(resolved: &ResolvedFetch) -> XResolutionPlan {
             sha256: None,
             capabilities: None,
             sdk: None,
+            installed: None,
         },
     }
 }
@@ -613,31 +621,45 @@ fn normalize_x_manifest_file(path: &str) -> Result<String, String> {
 
 /// One raw HTTP GET with a timeout. NO auth headers — public repos only
 /// (mirrors the http host-fn posture). Errors always name the URL.
+///
+/// The `x` verb runs under the dispatcher's tokio runtime, so a `block_on`
+/// on the calling thread panics ("Cannot start a runtime from within a
+/// runtime", #576). Mirror `peers_fetch_identity` (#572): each fetch gets a
+/// dedicated thread owning its own current-thread runtime, safe from both
+/// sync and async callers.
 fn x_http_get(url: &str, timeout_secs: u64) -> Result<Vec<u8>, String> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| format!("x fetch: tokio runtime: {error}"))?;
-    runtime.block_on(async {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(timeout_secs))
+    let url = url.to_owned();
+    let handle = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
             .build()
-            .map_err(|error| format!("x fetch: http client: {error}"))?;
-        let response = client
-            .get(url)
-            .send()
-            .await
-            .map_err(|error| format!("x fetch: GET {url} failed: {error}"))?;
-        let status = response.status();
-        if !status.is_success() {
-            return Err(format!("x fetch: GET {url} returned HTTP {status}"));
-        }
-        response
-            .bytes()
-            .await
-            .map(|bytes| bytes.to_vec())
-            .map_err(|error| format!("x fetch: reading body of {url} failed: {error}"))
-    })
+            .map_err(|error| format!("x fetch: tokio runtime: {error}"))?;
+        runtime.block_on(x_http_get_async(&url, timeout_secs))
+    });
+    handle
+        .join()
+        .map_err(|_| "x fetch: fetch thread panicked".to_owned())?
+}
+
+async fn x_http_get_async(url: &str, timeout_secs: u64) -> Result<Vec<u8>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .build()
+        .map_err(|error| format!("x fetch: http client: {error}"))?;
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|error| format!("x fetch: GET {url} failed: {error}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("x fetch: GET {url} returned HTTP {status}"));
+    }
+    response
+        .bytes()
+        .await
+        .map(|bytes| bytes.to_vec())
+        .map_err(|error| format!("x fetch: reading body of {url} failed: {error}"))
 }
 
 /// sha256 of in-memory bytes via the shared file hasher (no extra hash dep):
@@ -837,6 +859,7 @@ fn execute_x_raw_fetch(
                 .capabilities
                 .or_else(|| registry.map(|meta| meta.capabilities.clone())),
             sdk: info.sdk,
+            installed: None,
         },
         package_dir: entry.dir,
         cached: true,
@@ -932,6 +955,7 @@ fn execute_x_clone_fetch_in_temp(
             sha256: Some(pin),
             capabilities: info.capabilities,
             sdk: info.sdk,
+            installed: None,
         },
         package_dir: entry.dir,
         cached: true,
@@ -966,6 +990,7 @@ fn execute_x_local(
             sha256,
             capabilities,
             sdk,
+            installed: None,
         },
         package_dir: dir,
         cached: false,
@@ -1022,8 +1047,8 @@ mod x_source_tests {
     use super::{
         check_x_pin_chain, execute_x_fetch, lookup_x_registry_verb, parse_x_registry, parse_x_spec,
         resolve_x_registry_verb, resolve_x_spec, route_x_spec, verify_x_fetched_artifact,
-        x_raw_file_url, x_registry_url, x_resolution_plan, x_sha256_of_bytes, ResolvedFetch,
-        XFetchOptions, XFetchPlan, XGitRef, XRegistryEntry, XRoute,
+        x_http_get, x_raw_file_url, x_registry_url, x_resolution_plan, x_sha256_of_bytes,
+        ResolvedFetch, XFetchOptions, XFetchPlan, XGitRef, XRegistryEntry, XRoute,
         X_DEFAULT_REGISTRY_OWNER, X_DEFAULT_REGISTRY_REPO,
     };
 
@@ -1060,6 +1085,26 @@ mod x_source_tests {
             XRoute::Resolved(resolved) => resolved,
             XRoute::Registry { .. } => panic!("spec '{spec}' should resolve without the registry"),
         }
+    }
+
+    // ── fetch executor runtime seam (#576) ──────────────────────────────
+
+    /// #576 regression: the `x` verb executes on the dispatcher's tokio
+    /// runtime, and a caller-thread `block_on` inside `x_http_get` panicked
+    /// with "Cannot start a runtime from within a runtime". The executor now
+    /// runs each fetch on a dedicated thread owning its own current-thread
+    /// runtime (the `peers_fetch_identity` pattern, #572) — calling it from
+    /// WITHIN a live runtime must return an error result, never panic.
+    #[test]
+    fn x_http_get_runs_safely_inside_a_tokio_runtime() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("outer runtime");
+        let result = runtime
+            .block_on(async { x_http_get("http://127.0.0.1:9/x-576-regression.json", 1) });
+        let error = result.expect_err("unreachable URL must fail with an error, not a panic");
+        assert!(error.contains("x fetch:"), "{error}");
     }
 
     // ── plan construction per scheme (pure, no network) ────────────────
