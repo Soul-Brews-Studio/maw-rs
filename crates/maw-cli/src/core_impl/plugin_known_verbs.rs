@@ -21,41 +21,78 @@ pub const KNOWN_FLEET_PLUGIN_VERBS: &[(&str, &str, &str)] = &[
     ("team", "team", "team"),
 ];
 
-struct KnownExtractedVerb {
-    plugin_name: String,
-    install_hint: String,
+/// A known plugin verb resolved to its install source + pin — the
+/// programmatic "verb → known source + sha256" lookup (mawx WI-2,
+/// spec §2.2 step 3b/3c). The missing-verb install-hint printer
+/// (`missing_plugin_output`) is one consumer; `maw x` resolution (WI-8)
+/// is the next.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedPluginSource {
+    /// The CLI verb that resolved (e.g. `menubar`).
+    pub verb: String,
+    /// The plugin that provides the verb (e.g. `maw-menubar`).
+    pub plugin_name: String,
+    /// Canonical install source in `maw plugin install` grammar
+    /// (`github:` prefix already stripped; `path:` prefix preserved).
+    /// `None` when a `plugins.lock` pin recorded no source.
+    pub source: Option<String>,
+    /// The `plugins.lock` sha256 pin (`sha256:<64hex>` form). `None` for
+    /// baked fleet-table rows, which carry no pin.
+    pub sha256: Option<String>,
 }
 
-/// Resolve `command` against the known extracted verbs: the baked
+impl ResolvedPluginSource {
+    /// The actionable `maw plugin install …` line for this resolution.
+    #[must_use]
+    pub fn install_hint(&self) -> String {
+        match (&self.source, &self.sha256) {
+            (Some(source), _) if source.starts_with("path:") => {
+                format!("maw plugin install {}", source.trim_start_matches("path:"))
+            }
+            (Some(source), Some(sha256)) => {
+                format!("maw plugin install {source} --sha256 {sha256}")
+            }
+            (Some(source), None) => format!("maw plugin install {source}"),
+            (None, Some(sha256)) => format!(
+                "maw plugin install <source-of {}> --sha256 {sha256}",
+                self.plugin_name
+            ),
+            (None, None) => format!("maw plugin install <source-of {}>", self.plugin_name),
+        }
+    }
+}
+
+/// Normalize a `plugins.lock` source string into `maw plugin install`
+/// grammar: the `github:` prefix is implicit there, so strip it; every
+/// other form (`path:`, bare `owner/repo@ref`) passes through unchanged.
+fn canonical_lock_source(source: Option<&str>) -> Option<String> {
+    source.map(|value| value.strip_prefix("github:").unwrap_or(value).to_owned())
+}
+
+/// Resolve `verb` against the known extracted verbs: the baked
 /// fleet-plugins table first, then this machine's `plugins.lock` pins
 /// (a lock entry means this machine expects the plugin; the verb defaults
 /// to the plugin name).
-fn known_extracted_verb(command: &str) -> Option<KnownExtractedVerb> {
+#[must_use]
+pub fn resolve_plugin_source(verb: &str) -> Option<ResolvedPluginSource> {
     if let Some((_, plugin, dir)) = KNOWN_FLEET_PLUGIN_VERBS
         .iter()
-        .find(|(verb, _, _)| *verb == command)
+        .find(|(known_verb, _, _)| *known_verb == verb)
     {
-        return Some(KnownExtractedVerb {
+        return Some(ResolvedPluginSource {
+            verb: verb.to_owned(),
             plugin_name: (*plugin).to_owned(),
-            install_hint: format!("maw plugin install Soul-Brews-Studio/maw-plugins/packages/{dir}"),
+            source: Some(format!("Soul-Brews-Studio/maw-plugins/packages/{dir}")),
+            sha256: None,
         });
     }
-    let entry = read_plugin_lock_entry_full(command).ok().flatten()?;
-    Some(KnownExtractedVerb {
-        plugin_name: command.to_owned(),
-        install_hint: plugin_lock_install_hint(command, entry.source.as_deref(), &entry.sha256),
+    let entry = read_plugin_lock_entry_full(verb).ok().flatten()?;
+    Some(ResolvedPluginSource {
+        verb: verb.to_owned(),
+        plugin_name: verb.to_owned(),
+        source: canonical_lock_source(entry.source.as_deref()),
+        sha256: Some(entry.sha256),
     })
-}
-
-fn plugin_lock_install_hint(name: &str, source: Option<&str>, sha256: &str) -> String {
-    let source = source.map(|value| value.strip_prefix("github:").unwrap_or(value).to_owned());
-    match source {
-        Some(source) if source.starts_with("path:") => {
-            format!("maw plugin install {}", source.trim_start_matches("path:"))
-        }
-        Some(source) => format!("maw plugin install {source} --sha256 {sha256}"),
-        None => format!("maw plugin install <source-of {name}> --sha256 {sha256}"),
-    }
 }
 
 /// Loud fallthrough for a verb with no native handler and no runnable plugin.
@@ -67,9 +104,12 @@ fn plugin_lock_install_hint(name: &str, source: Option<&str>, sha256: &str) -> S
 ///   actionable install hint (exit 2).
 /// - Anything else (true typo) returns `None` and keeps the existing
 ///   `unknown command` path.
+///
+/// This printer is ONE consumer of [`ResolvedPluginSource`]; the struct is
+/// the reusable resolution result (mawx WI-2).
 fn missing_plugin_output(command: &str, discovery_warnings: &[String]) -> Option<CliOutput> {
-    let known = known_extracted_verb(command)?;
-    let needle = format!("'{}'", known.plugin_name);
+    let resolved = resolve_plugin_source(command)?;
+    let needle = format!("'{}'", resolved.plugin_name);
     if let Some(refusal) = discovery_warnings
         .iter()
         .find(|warning| warning.contains(&needle))
@@ -79,7 +119,7 @@ fn missing_plugin_output(command: &str, discovery_warnings: &[String]) -> Option
             stdout: String::new(),
             stderr: format!(
                 "maw-rs: verb '{command}' is provided by plugin '{}' but the plugin refused to load:\n{refusal}\n",
-                known.plugin_name
+                resolved.plugin_name
             ),
         });
     }
@@ -88,7 +128,8 @@ fn missing_plugin_output(command: &str, discovery_warnings: &[String]) -> Option
         stdout: String::new(),
         stderr: format!(
             "maw-rs: verb '{command}' is provided by plugin '{}', which is not installed on this machine\n  install: {}\n",
-            known.plugin_name, known.install_hint
+            resolved.plugin_name,
+            resolved.install_hint()
         ),
     })
 }
@@ -98,11 +139,19 @@ mod known_verb_tests {
     use super::*;
 
     #[test]
-    fn fleet_table_resolves_verbs_to_install_hints() {
-        let verb = known_extracted_verb("menubar").expect("menubar known");
-        assert_eq!(verb.plugin_name, "maw-menubar");
+    fn fleet_table_resolves_verbs_to_sources_and_install_hints() {
+        let resolved = resolve_plugin_source("menubar").expect("menubar known");
         assert_eq!(
-            verb.install_hint,
+            resolved,
+            ResolvedPluginSource {
+                verb: "menubar".to_owned(),
+                plugin_name: "maw-menubar".to_owned(),
+                source: Some("Soul-Brews-Studio/maw-plugins/packages/maw-menubar".to_owned()),
+                sha256: None,
+            }
+        );
+        assert_eq!(
+            resolved.install_hint(),
             "maw plugin install Soul-Brews-Studio/maw-plugins/packages/maw-menubar"
         );
     }
@@ -119,18 +168,54 @@ mod known_verb_tests {
     }
 
     #[test]
-    fn lock_hint_strips_github_prefix_and_keeps_paths() {
+    fn canonical_lock_source_strips_github_prefix_and_keeps_paths() {
         assert_eq!(
-            plugin_lock_install_hint("demo", Some("github:o/r@v1"), "sha256:aa"),
+            canonical_lock_source(Some("github:o/r@v1")),
+            Some("o/r@v1".to_owned())
+        );
+        assert_eq!(
+            canonical_lock_source(Some("path:/tmp/demo")),
+            Some("path:/tmp/demo".to_owned())
+        );
+        assert_eq!(canonical_lock_source(None), None);
+    }
+
+    #[test]
+    fn install_hint_covers_pinned_path_sourceless_and_unpinned_shapes() {
+        let pinned = ResolvedPluginSource {
+            verb: "demo".to_owned(),
+            plugin_name: "demo".to_owned(),
+            source: Some("o/r@v1".to_owned()),
+            sha256: Some("sha256:aa".to_owned()),
+        };
+        assert_eq!(
+            pinned.install_hint(),
             "maw plugin install o/r@v1 --sha256 sha256:aa"
         );
+
+        let path = ResolvedPluginSource {
+            source: Some("path:/tmp/demo".to_owned()),
+            ..pinned.clone()
+        };
+        assert_eq!(path.install_hint(), "maw plugin install /tmp/demo");
+
+        let sourceless = ResolvedPluginSource {
+            source: None,
+            ..pinned.clone()
+        };
         assert_eq!(
-            plugin_lock_install_hint("demo", Some("path:/tmp/demo"), "sha256:aa"),
-            "maw plugin install /tmp/demo"
-        );
-        assert_eq!(
-            plugin_lock_install_hint("demo", None, "sha256:aa"),
+            sourceless.install_hint(),
             "maw plugin install <source-of demo> --sha256 sha256:aa"
+        );
+
+        let unpinned = ResolvedPluginSource {
+            source: None,
+            sha256: None,
+            ..pinned
+        };
+        assert_eq!(
+            unpinned.install_hint(),
+            "maw plugin install <source-of demo>"
         );
     }
 }

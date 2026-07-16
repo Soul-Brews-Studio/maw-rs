@@ -40,7 +40,7 @@ fn info_payload(node: Option<&str>) -> Value {
         .unwrap_or("local");
     let mut payload = json!({
         "node": node,
-        "version": env!("CARGO_PKG_VERSION"),
+        "version": crate::core_impl::MAW_RS_BUILD_VERSION,
         "ts": info_now_iso(),
         "maw": {
             "schema": "1",
@@ -141,7 +141,7 @@ mod tests {
     fn info_payload_matches_maw_js_probe_shape() {
         let payload = info_payload(Some("node-a"));
         assert_eq!(payload["node"], "node-a");
-        assert_eq!(payload["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(payload["version"], crate::core_impl::MAW_RS_BUILD_VERSION);
         assert_eq!(payload["maw"]["schema"], "1");
         assert_eq!(
             payload["maw"]["plugins"]["manifestEndpoint"],

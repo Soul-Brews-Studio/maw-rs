@@ -1,3 +1,12 @@
+// Offline integration surface for `maw update` / `maw upgrade`.
+//
+// Every test here must stay network-free: only argv parsing, --help, and
+// error surfaces are exercised (never a code path that reaches the GitHub
+// releases API). The single allowed live-network test is the #[ignore]d
+// `update_live_releases_api_lists_channel_tags` unit test in update.rs,
+// run manually. The fake `maw`/`bun` markers on PATH prove the handler is
+// native — it must never delegate to an external maw or bun.
+
 use maw_cli::{dispatcher_status, DispatchKind};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -57,49 +66,97 @@ fn update_assert_no_delegation(output: &std::process::Output) {
     assert!(!stderr.contains("DELEGATED-BUN"), "stderr={stderr}");
 }
 
-#[test]
-fn update_upgrade_runtime_fake_maw_no_delegate_proof() {
-    assert_eq!(dispatcher_status("update"), DispatchKind::Native);
-    assert_eq!(dispatcher_status("upgrade"), DispatchKind::Native);
-    let root = update_temp_dir("runtime-proof");
+fn update_fake_maw_bun_root(label: &str) -> PathBuf {
+    let root = update_temp_dir(label);
     let bin_dir = root.join("bin");
     update_write_fake_marker(&bin_dir, "maw", "DELEGATED-MAW");
     update_write_fake_marker(&bin_dir, "bun", "DELEGATED-BUN");
+    root
+}
 
-    let update = update_run(&root, &["update", "--yes"]);
+#[test]
+fn update_upgrade_help_is_native_offline_and_never_delegates() {
+    assert_eq!(dispatcher_status("update"), DispatchKind::Native);
+    assert_eq!(dispatcher_status("upgrade"), DispatchKind::Native);
+    let root = update_fake_maw_bun_root("help");
+
+    for command in ["update", "upgrade"] {
+        let output = update_run(&root, &[command, "--help"]);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        update_assert_no_delegation(&output);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("usage: maw update"), "stdout={stdout}");
+        assert!(stdout.contains("sha256"), "stdout={stdout}");
+        assert!(
+            output.stderr.is_empty(),
+            "stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn update_rejects_unknown_channel_with_parse_error_before_any_network() {
+    let root = update_fake_maw_bun_root("bad-channel");
+
+    let output = update_run(&root, &["update", "--channel", "beta"]);
     assert_eq!(
-        update.status.code(),
+        output.status.code(),
         Some(1),
         "stderr={}",
-        String::from_utf8_lossy(&update.stderr)
+        String::from_utf8_lossy(&output.stderr)
     );
-    update_assert_no_delegation(&update);
+    update_assert_no_delegation(&output);
     assert!(
-        update.stdout.is_empty(),
+        output.stdout.is_empty(),
         "stdout={}",
-        String::from_utf8_lossy(&update.stdout)
+        String::from_utf8_lossy(&output.stdout)
     );
-    assert_eq!(
-        String::from_utf8_lossy(&update.stderr),
-        include_str!("fixtures/native-update-upgrade/update-main.stderr")
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unknown channel \"beta\""),
+        "stderr={stderr}"
     );
+    assert!(
+        stderr.contains("expected stable or alpha"),
+        "stderr={stderr}"
+    );
+    let _ = fs::remove_dir_all(root);
+}
 
-    let upgrade = update_run(&root, &["upgrade", "alpha", "--yes"]);
-    assert_eq!(
-        upgrade.status.code(),
-        Some(1),
-        "stderr={}",
-        String::from_utf8_lossy(&upgrade.stderr)
-    );
-    update_assert_no_delegation(&upgrade);
-    assert!(
-        upgrade.stdout.is_empty(),
-        "stdout={}",
-        String::from_utf8_lossy(&upgrade.stdout)
-    );
-    assert_eq!(
-        String::from_utf8_lossy(&upgrade.stderr),
-        include_str!("fixtures/native-update-upgrade/upgrade-alpha.stderr")
-    );
+#[test]
+fn update_upgrade_reject_bogus_flags_with_command_specific_usage_hint() {
+    let root = update_fake_maw_bun_root("bogus-flag");
+
+    for command in ["update", "upgrade"] {
+        let output = update_run(&root, &[command, "--bogus-flag"]);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        update_assert_no_delegation(&output);
+        assert!(
+            output.stdout.is_empty(),
+            "stdout={}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("unknown flag \"--bogus-flag\""),
+            "stderr={stderr}"
+        );
+        assert!(
+            stderr.contains(&format!("maw {command} --help")),
+            "stderr={stderr}"
+        );
+    }
     let _ = fs::remove_dir_all(root);
 }

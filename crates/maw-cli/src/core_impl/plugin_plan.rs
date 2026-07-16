@@ -366,8 +366,15 @@ fn normalize_plugin_install_subpath(path: std::path::PathBuf) -> Result<std::pat
     }
 }
 
+/// Default install root, unified with discovery (mawx WI-3): an explicit
+/// `MAW_PLUGINS_DIR` — discovery's exclusive scan root — wins, otherwise
+/// `maw_data_path(["plugins"])`, which `scan_dirs()` also scans. Either way
+/// the installed plugin is discoverable by construction.
 fn resolve_default_plugin_root() -> std::path::PathBuf {
-    maw_data_path(&real_xdg_env(), &["plugins"])
+    std::env::var_os("MAW_PLUGINS_DIR").map_or_else(
+        || maw_data_path(&real_xdg_env(), &["plugins"]),
+        std::path::PathBuf::from,
+    )
 }
 
 /// Local-directory install (`maw plugin install <dir>`): verify exactly like
@@ -380,11 +387,9 @@ fn install_from_local_dir(
     root: &std::path::Path,
     force: bool,
 ) -> Result<PluginInstallOutcome, String> {
-    let verification = match read_raw_plugin_install_manifest(source)? {
-        Some(raw) if raw.get("target").and_then(serde_json::Value::as_str) == Some("wasm") => {
-            verify_wasm_package_install(source, &raw, expected_sha256, false, force)?
-        }
-        _ => verify_local_artifact_install(source, expected_sha256, force)?,
+    let verification = match verify_package_dir(source, expected_sha256, false, force)? {
+        ResolvedPackage::Wasm(verification) => verification,
+        ResolvedPackage::NotWasm => verify_local_artifact_install(source, expected_sha256, force)?,
     };
     let summary = install_plugin_dir(source, root, force)?;
     record_plugin_install_pin(
@@ -514,12 +519,10 @@ fn install_from_git_in_temp(
     if !source.is_dir() {
         return Err(format!("plugin install: subpath not found: {}", source.display()));
     }
-    let verification = match read_raw_plugin_install_manifest(&source)? {
-        Some(raw) if raw.get("target").and_then(serde_json::Value::as_str) == Some("wasm") => {
-            verify_wasm_package_install(&source, &raw, expected_sha256, warn_unpinned, target.force)?
-        }
+    let verification = match verify_package_dir(&source, expected_sha256, warn_unpinned, target.force)? {
+        ResolvedPackage::Wasm(verification) => verification,
         // target=js (or absent): the JS builder owns validation and errors.
-        _ => {
+        ResolvedPackage::NotWasm => {
             let build = build_js_plugin_dir(&source, false)?;
             verify_plugin_install_pin(
                 &build.name,
@@ -552,6 +555,44 @@ fn read_raw_plugin_install_manifest(
     serde_json::from_str(&text)
         .map(Some)
         .map_err(|error| format!("invalid plugin.json: {error}"))
+}
+
+/// Outcome of [`verify_package_dir`]: either a fully pin-verified wasm
+/// package, or a non-wasm package whose verification/build the calling route
+/// owns.
+#[derive(Debug)]
+enum ResolvedPackage {
+    /// `target=wasm`: the committed artifact exists, stays inside the
+    /// package, hashes to the manifest `artifact.sha256` pin, and satisfies
+    /// the `--sha256`/plugins.lock rules.
+    Wasm(PluginInstallVerification),
+    /// No plugin.json, or `target` is not `wasm` — the caller owns the rest
+    /// of the route (local artifact verify / JS build).
+    NotWasm,
+}
+
+/// The ONE canonical package-dir verification every install route calls
+/// (git clone and local dir today; the mawx fetch routes — WI-5/WI-6 —
+/// later). Reads the raw plugin.json and, for `target=wasm` packages, runs
+/// the full pin gate via [`verify_wasm_package_install`]: artifact.path
+/// present, traversal-guarded, committed artifact hashing to the
+/// `artifact.sha256` pin, and the `--sha256`/plugins.lock rules (explicit
+/// `--sha256` mismatch stays fatal even with `force`; `warn_unpinned`
+/// surfaces the unpinned-source warning). Non-wasm packages return
+/// [`ResolvedPackage::NotWasm`] untouched.
+fn verify_package_dir(
+    dir: &std::path::Path,
+    expected_sha256: Option<&str>,
+    warn_unpinned: bool,
+    force: bool,
+) -> Result<ResolvedPackage, String> {
+    match read_raw_plugin_install_manifest(dir)? {
+        Some(raw) if raw.get("target").and_then(serde_json::Value::as_str) == Some("wasm") => {
+            verify_wasm_package_install(dir, &raw, expected_sha256, warn_unpinned, force)
+                .map(ResolvedPackage::Wasm)
+        }
+        _ => Ok(ResolvedPackage::NotWasm),
+    }
 }
 
 /// Verify a `target=wasm` package before install (shared by the git clone and
@@ -910,7 +951,10 @@ fn render_plugin_install_summary(
 
 #[cfg(test)]
 mod plugin_install_tests {
-    use super::{classify_plugin_install_source, verify_plugin_install_pin, InstallSource};
+    use super::{
+        classify_plugin_install_source, verify_package_dir, verify_plugin_install_pin,
+        InstallSource, ResolvedPackage,
+    };
     use std::sync::{Mutex, OnceLock};
 
     fn lock_guard() -> std::sync::MutexGuard<'static, ()> {
@@ -1119,6 +1163,177 @@ mod plugin_install_tests {
         assert_eq!(names, vec!["demo".to_owned(), "other".to_owned()]);
         assert!(super::read_plugin_lock_entry_full("demo").expect("read").is_some());
         match old { Some(value) => std::env::set_var("MAW_PLUGINS_LOCK", value), None => std::env::remove_var("MAW_PLUGINS_LOCK") }
+    }
+
+    fn write_wasm_package_manifest(
+        dir: &std::path::Path,
+        name: &str,
+        artifact_path: &str,
+        sha256: &str,
+    ) {
+        std::fs::write(
+            dir.join("plugin.json"),
+            format!(
+                r#"{{"name":"{name}","version":"1.0.0","target":"wasm","sdk":"*","entry":{{"kind":"wasm","path":"plugin.wasm","export":"handle"}},"wasm":"./plugin.wasm","artifact":{{"path":"{artifact_path}","sha256":"{sha256}"}},"cli":{{"command":"{name}"}}}}"#
+            ),
+        )
+        .expect("wasm manifest");
+    }
+
+    fn write_wasm_package_fixture(dir: &std::path::Path, name: &str) -> String {
+        std::fs::create_dir_all(dir).expect("package dir");
+        std::fs::write(dir.join("plugin.wasm"), b"\0asm\x01\x00\x00\x00verify-fixture")
+            .expect("wasm artifact");
+        let sha256 = maw_plugin_manifest::hash_file(&dir.join("plugin.wasm")).expect("hash wasm");
+        write_wasm_package_manifest(dir, name, "plugin.wasm", &sha256);
+        sha256
+    }
+
+    #[test]
+    fn verify_package_dir_accepts_matching_pin_and_resolves_sha() {
+        let _guard = lock_guard();
+        let old = std::env::var_os("MAW_PLUGINS_LOCK");
+        let root = temp_existing_dir("verify-pin-match");
+        std::env::set_var("MAW_PLUGINS_LOCK", root.join("plugins.lock"));
+        let package = root.join("pkg");
+        let sha256 = write_wasm_package_fixture(&package, "verify-match-demo");
+
+        let ResolvedPackage::Wasm(verification) =
+            verify_package_dir(&package, None, false, false).expect("pin match")
+        else {
+            panic!("expected wasm verification");
+        };
+        assert_eq!(verification.resolved_sha256.as_deref(), Some(sha256.as_str()));
+        assert_eq!(verification.warning, None);
+
+        // Explicit --sha256 equal to the manifest pin still verifies.
+        let ResolvedPackage::Wasm(verification) =
+            verify_package_dir(&package, Some(&sha256), false, false).expect("explicit pin match")
+        else {
+            panic!("expected wasm verification");
+        };
+        assert_eq!(verification.resolved_sha256.as_deref(), Some(sha256.as_str()));
+
+        match old { Some(value) => std::env::set_var("MAW_PLUGINS_LOCK", value), None => std::env::remove_var("MAW_PLUGINS_LOCK") }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn verify_package_dir_refuses_manifest_pin_mismatch() {
+        let root = temp_existing_dir("verify-tamper");
+        let package = root.join("pkg");
+        write_wasm_package_fixture(&package, "verify-tamper-demo");
+        std::fs::write(package.join("plugin.wasm"), b"\0asm\x01\x00\x00\x00TAMPERED")
+            .expect("tamper");
+        let error = verify_package_dir(&package, None, false, false).expect_err("refused");
+        assert!(error.contains("artifact sha256 mismatch — refusing to install"), "{error}");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn verify_package_dir_refuses_wasm_missing_pin() {
+        let root = temp_existing_dir("verify-missing-pin");
+        let package = root.join("pkg");
+        std::fs::create_dir_all(&package).expect("package dir");
+        std::fs::write(package.join("plugin.wasm"), b"\0asm\x01\x00\x00\x00unpinned")
+            .expect("wasm artifact");
+        std::fs::write(
+            package.join("plugin.json"),
+            r#"{"name":"verify-unpinned-demo","version":"1.0.0","target":"wasm","sdk":"*","artifact":{"path":"plugin.wasm"},"cli":{"command":"verify-unpinned-demo"}}"#,
+        )
+        .expect("manifest");
+        let error = verify_package_dir(&package, None, false, false).expect_err("refused");
+        assert!(error.contains("has no artifact.sha256"), "{error}");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn verify_package_dir_guards_artifact_path_traversal() {
+        let root = temp_existing_dir("verify-traversal");
+        let package = root.join("pkg");
+        std::fs::create_dir_all(&package).expect("package dir");
+        std::fs::write(root.join("outside.wasm"), b"\0asm\x01\x00\x00\x00outside")
+            .expect("outside wasm");
+        let sha256 = maw_plugin_manifest::hash_file(&root.join("outside.wasm")).expect("hash");
+        write_wasm_package_manifest(&package, "verify-traversal-demo", "../outside.wasm", &sha256);
+        let error = verify_package_dir(&package, None, false, false).expect_err("refused");
+        assert!(error.contains("must stay inside the package"), "{error}");
+
+        // Absolute artifact.path is refused by the same guard.
+        let absolute = root.join("outside.wasm").display().to_string();
+        write_wasm_package_manifest(&package, "verify-traversal-demo", &absolute, &sha256);
+        let error = verify_package_dir(&package, None, false, false).expect_err("refused absolute");
+        assert!(error.contains("must stay inside the package"), "{error}");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn verify_package_dir_explicit_sha256_mismatch_fatal_even_with_force() {
+        let _guard = lock_guard();
+        let old = std::env::var_os("MAW_PLUGINS_LOCK");
+        let root = temp_existing_dir("verify-force-proof");
+        std::env::set_var("MAW_PLUGINS_LOCK", root.join("plugins.lock"));
+        let package = root.join("pkg");
+        write_wasm_package_fixture(&package, "verify-force-proof-demo");
+        let wrong = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+        let error = verify_package_dir(&package, Some(wrong), false, true).expect_err("refused");
+        assert!(error.contains("sha256 mismatch — refusing to install"), "{error}");
+        match old { Some(value) => std::env::set_var("MAW_PLUGINS_LOCK", value), None => std::env::remove_var("MAW_PLUGINS_LOCK") }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn verify_package_dir_warn_unpinned_semantics() {
+        let _guard = lock_guard();
+        let old = std::env::var_os("MAW_PLUGINS_LOCK");
+        let root = temp_existing_dir("verify-warn-unpinned");
+        std::env::set_var("MAW_PLUGINS_LOCK", root.join("plugins.lock"));
+        let package = root.join("pkg");
+        let sha256 = write_wasm_package_fixture(&package, "verify-warn-demo");
+
+        // warn_unpinned=true, no lock entry, no --sha256 → unpinned warning.
+        let ResolvedPackage::Wasm(verification) =
+            verify_package_dir(&package, None, true, false).expect("warn")
+        else {
+            panic!("expected wasm verification");
+        };
+        assert!(verification.warning.expect("warning").contains("unpinned"));
+
+        // warn_unpinned=true with an explicit --sha256 pin → no warning.
+        let ResolvedPackage::Wasm(verification) =
+            verify_package_dir(&package, Some(&sha256), true, false).expect("pinned")
+        else {
+            panic!("expected wasm verification");
+        };
+        assert_eq!(verification.warning, None);
+
+        match old { Some(value) => std::env::set_var("MAW_PLUGINS_LOCK", value), None => std::env::remove_var("MAW_PLUGINS_LOCK") }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn verify_package_dir_passes_through_non_wasm_packages() {
+        let root = temp_existing_dir("verify-not-wasm");
+        let package = root.join("pkg");
+        std::fs::create_dir_all(&package).expect("package dir");
+
+        // No plugin.json at all → the caller owns the route.
+        assert!(matches!(
+            verify_package_dir(&package, None, false, false).expect("no manifest"),
+            ResolvedPackage::NotWasm
+        ));
+
+        // target=js → the caller owns the route (JS build / local verify).
+        std::fs::write(
+            package.join("plugin.json"),
+            r#"{"name":"verify-js-demo","version":"0.1.0","sdk":"*","target":"js","entry":"index.ts","cli":{"command":"verify-js-demo"}}"#,
+        )
+        .expect("manifest");
+        assert!(matches!(
+            verify_package_dir(&package, None, false, false).expect("js manifest"),
+            ResolvedPackage::NotWasm
+        ));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

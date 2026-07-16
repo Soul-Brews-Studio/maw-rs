@@ -9,11 +9,14 @@ For repo-wide agent execution conventions, read `AGENTS.md` first; this file rem
 ## Build Gate
 
 ```bash
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
+scripts/gate.sh quick   # iterating (fmt + clippy + affected-crate tests)
+scripts/gate.sh full    # pre-merge bar — all 4 CI dimensions
 ```
 
-Both must pass before any PR.
+`full` must pass before any merge/promote (it wraps `cargo fmt --all --check`,
+`cargo test --workspace --locked`, `cargo clippy --workspace --all-targets --
+-D warnings` on stable + 1.97.0, and the wasm-host subset). See
+`docs/guides/gating.md` for tiers, the golden warm cache, and merge-trains.
 
 ## Branches
 

@@ -51,6 +51,7 @@ struct ServeState {
     trust_store_path: std::path::PathBuf,
     plugin_serve_routes: Vec<ServePluginRoute>,
     api_token_auth: ServeApiTokenAuth,
+    bound_port: u16,
 }
 
 #[derive(Debug, Clone)]
@@ -291,6 +292,7 @@ async fn run_serve_async_impl(raw_args: &[String]) -> CliOutput {
         trust_store_path: trust_store_path(),
         plugin_serve_routes: serve_discover_plugin_routes(),
         api_token_auth: api_token_auth.clone(),
+        bound_port: local_addr.port(),
     });
     println!("maw-rs serve listening http://{local_addr}");
     println!("maw-rs serve auth: {}", api_token_auth.mode_label());
@@ -2142,8 +2144,8 @@ async fn api_transport_send(
     }
 }
 
-async fn api_health() -> impl IntoResponse {
-    Json(json!({"ok": true, "source": "maw-rs", "server": "local", "port": DEFAULT_SERVE_PORT}))
+async fn api_health(State(state): State<Arc<ServeState>>) -> impl IntoResponse {
+    Json(json!({"ok": true, "source": "maw-rs", "server": "local", "port": state.bound_port}))
 }
 
 async fn api_message_ledger(
@@ -3381,6 +3383,7 @@ mod serve_tests {
             trust_store_path,
             plugin_serve_routes: Vec::new(),
             api_token_auth: ServeApiTokenAuth::open(),
+            bound_port: DEFAULT_SERVE_PORT,
         })
     }
 
@@ -3405,6 +3408,7 @@ mod serve_tests {
             trust_store_path,
             plugin_serve_routes: Vec::new(),
             api_token_auth: ServeApiTokenAuth::open(),
+            bound_port: DEFAULT_SERVE_PORT,
         })
     }
 
@@ -3426,6 +3430,7 @@ mod serve_tests {
             trust_store_path: serve_test_trust_store_path("plugins"),
             plugin_serve_routes,
             api_token_auth: ServeApiTokenAuth::open(),
+            bound_port: DEFAULT_SERVE_PORT,
         })
     }
 
@@ -3456,6 +3461,7 @@ mod serve_tests {
                 process: Arc::new(Mutex::new(None)),
             }],
             api_token_auth,
+            bound_port: DEFAULT_SERVE_PORT,
         })
     }
 
@@ -3562,6 +3568,7 @@ mod serve_tests {
             trust_store_path: serve_test_trust_store_path("o6"),
             plugin_serve_routes: Vec::new(),
             api_token_auth: ServeApiTokenAuth::open(),
+            bound_port: DEFAULT_SERVE_PORT,
         })
     }
 
@@ -4768,6 +4775,7 @@ mod serve_tests {
             trust_store_path: serve_test_trust_store_path("server"),
             plugin_serve_routes: Vec::new(),
             api_token_auth: ServeApiTokenAuth::open(),
+            bound_port: addr.port(),
         });
         let (tx, rx) = oneshot::channel::<()>();
         tokio::spawn(async move {
@@ -4973,6 +4981,55 @@ mod serve_tests {
         let app = serve_test_app_with_api_auth(ServeApiTokenAuth::open());
         let response = app.oneshot(axum::http::Request::get("/api/feed").body(Body::empty()).unwrap()).await.expect("open mode");
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn serve_api_health_reports_configured_non_default_port() {
+        let non_default_port = 3457_u16;
+        assert_ne!(non_default_port, DEFAULT_SERVE_PORT);
+        let app = serve_router(ServeState {
+            cached_pubkey: Some(KEY.to_owned()),
+            peer_pubkeys: Vec::new(),
+            workspace_key: Some(KEY.to_owned()),
+            workspaces: Mutex::new(WorkspaceStore::default()),
+            requests: Mutex::new(RequestReplyStore::default()),
+            delivery: serve_test_delivery(),
+            receiver_inbox: serve_test_receiver_inbox(),
+            wake: serve_test_wake(),
+            delivery_idempotency: Mutex::new(DeliveryIdempotencyStore::default()),
+            feed: Mutex::new(Vec::new()),
+            peer_addr_override: Some(NON_LOOPBACK_TEST_PEER),
+            now_override: Some(1_782_277_200),
+            serve_core_state_override: None,
+            trust_store_path: serve_test_trust_store_path("health-port"),
+            plugin_serve_routes: Vec::new(),
+            api_token_auth: ServeApiTokenAuth::open(),
+            bound_port: non_default_port,
+        });
+        let response = app
+            .oneshot(axum::http::Request::get("/api/health").body(Body::empty()).unwrap())
+            .await
+            .expect("health");
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = response_json(response).await;
+        assert_eq!(payload["ok"], true);
+        assert_eq!(payload["port"], u64::from(non_default_port));
+    }
+
+    #[tokio::test]
+    async fn serve_api_health_real_wire_reports_actually_bound_port() {
+        let addr = spawn_test_server().await;
+        assert_ne!(addr.port(), DEFAULT_SERVE_PORT, "ephemeral bind should not land on the default port");
+        let client = reqwest::Client::builder().build().expect("client");
+        let response = client
+            .get(format!("http://{addr}/api/health"))
+            .send()
+            .await
+            .expect("health");
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = response.json::<Value>().await.expect("json");
+        assert_eq!(payload["ok"], true);
+        assert_eq!(payload["port"], u64::from(addr.port()));
     }
 
 
@@ -5280,6 +5337,7 @@ mod serve_tests {
             trust_store_path: serve_test_trust_store_path("agents"),
             plugin_serve_routes: Vec::new(),
             api_token_auth: ServeApiTokenAuth::open(),
+            bound_port: addr.port(),
         });
         let (tx, rx) = oneshot::channel::<()>();
         tokio::spawn(async move {

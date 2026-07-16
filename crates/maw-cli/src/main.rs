@@ -9,8 +9,28 @@ use maw_tmux::{resolve_tmux_attach_session, TmuxAttachSessionResolution, TmuxCli
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
+    let program = std::env::args().next();
     let argv: Vec<String> = std::env::args().skip(1).collect();
+    let argv = mawx_shim_argv(program.as_deref(), argv);
     std::process::exit(main_code_async(&argv).await);
+}
+
+/// mawx argv[0] shim (mawx WI-8, spec §2.1): `mawx` ships as a symlink or
+/// hardlink to `maw`; when the invoked program's basename starts with
+/// "mawx", inject "x" as the first argument so `mawx costs` ≡ `maw x costs`.
+/// Plain `maw` (even from a directory named `mawx/`) is untouched.
+fn mawx_shim_argv(program: Option<&str>, mut argv: Vec<String>) -> Vec<String> {
+    let is_mawx = program.is_some_and(|program| {
+        std::path::Path::new(program)
+            .file_name()
+            .and_then(OsStr::to_str)
+            .unwrap_or(program)
+            .starts_with("mawx")
+    });
+    if is_mawx {
+        argv.insert(0, "x".to_owned());
+    }
+    argv
 }
 
 async fn main_code_async(argv: &[String]) -> i32 {
@@ -171,13 +191,42 @@ fn attach_exec_tmux_args(
 #[cfg(test)]
 mod tests {
     use super::{
-        attach_exec_tmux_args, main_code, main_code_async_with, main_code_with,
+        attach_exec_tmux_args, main_code, main_code_async_with, main_code_with, mawx_shim_argv,
         maybe_exec_attach_with, run_tmux_attach_with,
     };
     use std::ffi::OsStr;
 
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    #[test]
+    fn mawx_shim_injects_x_for_mawx_argv0_only() {
+        // Basename starts with "mawx" → inject "x" first.
+        assert_eq!(
+            mawx_shim_argv(Some("mawx"), args(&["costs"])),
+            args(&["x", "costs"])
+        );
+        assert_eq!(
+            mawx_shim_argv(Some("/usr/local/bin/mawx"), args(&["costs", "--json"])),
+            args(&["x", "costs", "--json"])
+        );
+        assert_eq!(
+            mawx_shim_argv(Some("mawx-dev"), args(&["costs"])),
+            args(&["x", "costs"])
+        );
+        // Plain maw is untouched — even from a directory named "mawx".
+        assert_eq!(
+            mawx_shim_argv(Some("maw"), args(&["costs"])),
+            args(&["costs"])
+        );
+        assert_eq!(
+            mawx_shim_argv(Some("/opt/mawx/maw"), args(&["ls"])),
+            args(&["ls"])
+        );
+        assert_eq!(mawx_shim_argv(None, args(&["costs"])), args(&["costs"]));
+        // No args: `mawx` alone becomes `maw x` (usage, exit 2).
+        assert_eq!(mawx_shim_argv(Some("mawx"), Vec::new()), args(&["x"]));
     }
 
     #[test]

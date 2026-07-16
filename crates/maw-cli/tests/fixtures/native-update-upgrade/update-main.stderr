@@ -1,5 +1,0 @@
-[31merror[0m: `maw update` is native-only in maw-rs
-  maw-rs is a single Rust binary; the maw-js bun self-update path is disabled.
-  requested ref: main
-  install a newer maw-rs binary from the release artifact or your package manager, then re-run `maw --version`.
-  no bun fallback or delegated `maw` process was invoked.
