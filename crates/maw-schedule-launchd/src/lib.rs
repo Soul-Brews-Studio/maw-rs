@@ -36,6 +36,7 @@ pub trait LaunchctlRunner {
 }
 pub struct SystemLaunchctl;
 impl LaunchctlRunner for SystemLaunchctl {
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
     fn run(&mut self, args: &[String]) -> Result<LaunchctlOutput, String> {
         #[cfg(not(target_os = "macos"))]
         return Err("launchd scheduling is supported only on macOS".to_owned());

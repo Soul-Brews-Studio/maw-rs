@@ -184,6 +184,7 @@ fn schedule_run334(argv: &[String]) -> Result<String, String> {
     if forced { fire.push("--force".to_owned()); } schedule_fire334(&fire)
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
 fn schedule_fire334(argv: &[String]) -> Result<String, String> {
     #[cfg(not(target_os = "macos"))]
     return Err("launchd scheduling is supported only on macOS".to_owned());
@@ -267,6 +268,9 @@ fn schedule_exec334(argv: &[String]) -> Result<String, String> {
     serde_json::to_string(&finished).map(|value| format!("{value}\n")).map_err(|error| format!("encode outcome: {error}"))
 }
 
+// macOS-only: only the launchd fire path (schedule_fire334) and the macOS-only
+// handoff test call these; unused in the non-macOS lib build.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn schedule_handoff334<R: maw_tmux::TmuxRunner>(runner: &mut R, run_id: &str, repo: &Path, maw: &Path, state: &Path) -> Result<(), String> {
     schedule_safe334(run_id, "run id")?;
     let maw = maw.to_str().filter(|value| value.starts_with('/') && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"/_+.-".contains(&byte)))
@@ -281,6 +285,7 @@ fn schedule_id_force334(argv: &[String]) -> Result<(String, bool), String> {
     let (id, forced) = match argv { [id] => (id.clone(), false), [id, flag] if flag == "--force" => (id.clone(), true), _ => return Err(SCHEDULE_USAGE334.to_owned()) };
     schedule_safe334(&id, "job id")?; Ok((id, forced))
 }
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn schedule_fire_args334(argv: &[String]) -> Result<(String, String, String, bool), String> {
     let (oracle, id, repo, forced) = match argv { [oracle, id, repo] => (oracle, id, repo, false), [oracle, id, repo, flag] if flag == "--force" => (oracle, id, repo, true), _ => return Err(SCHEDULE_USAGE334.to_owned()) };
     schedule_safe334(oracle, "oracle")?; schedule_safe334(id, "job id")?; Ok((oracle.clone(), id.clone(), repo.clone(), forced))
@@ -288,6 +293,7 @@ fn schedule_fire_args334(argv: &[String]) -> Result<(String, String, String, boo
 fn schedule_safe334(value: &str, name: &str) -> Result<(), String> {
     if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte)) { Ok(()) } else { Err(format!("invalid {name}")) }
 }
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn schedule_cadence_seconds334(job: &maw_schedule::Schedule) -> Result<u64, String> {
     match maw_schedule::plist::parse_cadence(job).map_err(|error| error.to_string())? {
         maw_schedule::plist::CadencePlan::Interval { seconds } => Ok(u64::from(seconds)),
@@ -299,6 +305,7 @@ fn schedule_local_time334() -> Result<(String, String), String> {
     let text = String::from_utf8_lossy(&output.stdout); let mut parts = text.split_whitespace();
     match (output.status.success(), parts.next(), parts.next(), parts.next()) { (true, Some(day), Some(hour), None) => Ok((day.to_owned(), hour.to_owned())), _ => Err("date returned invalid local time".to_owned()) }
 }
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn schedule_boot334() -> Result<String, String> {
     let output = std::process::Command::new("/usr/sbin/sysctl").args(["-n", "kern.boottime"]).output().map_err(|error| format!("boot identity: {error}"))?;
     let identity = String::from_utf8_lossy(&output.stdout).trim().to_owned();
