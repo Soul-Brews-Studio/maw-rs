@@ -1,7 +1,13 @@
 //! Native schedule child execution and terminal outcome finalization.
 use crate::{FinishRequest, FireStore, StoredRun};
 use maw_schedule::ExecMode;
-use std::{fs::{File, OpenOptions}, io::Write, path::{Component, Path, PathBuf}, process::{Command, Stdio}, time::{SystemTime, UNIX_EPOCH}};
+use std::{
+    fs::{File, OpenOptions},
+    io::Write,
+    path::{Component, Path, PathBuf},
+    process::{Command, Stdio},
+    time::{SystemTime, UNIX_EPOCH},
+};
 const BIN_DIRS: &[&str] = &["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"];
 #[rustfmt::skip] #[derive(Debug)]
 struct Attempt { code: i32, output_written: bool, output_bytes: u64, deliverable: Option<bool>, expected: Option<String>, error: Option<String> }
@@ -10,7 +16,10 @@ struct Attempt { code: i32, output_written: bool, output_bytes: u64, deliverable
 /// # Errors
 /// Returns an error when no absolute candidate is a file.
 pub fn resolve_binary(name: &str) -> Result<PathBuf, String> {
-    resolve_binary_in(name, &BIN_DIRS.iter().map(PathBuf::from).collect::<Vec<_>>())
+    resolve_binary_in(
+        name,
+        &BIN_DIRS.iter().map(PathBuf::from).collect::<Vec<_>>(),
+    )
 }
 /// Resolve from explicit search roots, primarily for deterministic tests and sync planning.
 ///
@@ -100,11 +109,20 @@ fn hydrate(existing: Option<&str>, pass: &str, token_name: &str) -> Result<Strin
 }
 fn absolute_file(value: &str, name: &str) -> Result<PathBuf, String> {
     let path = PathBuf::from(value);
-    if path.is_absolute() && path.is_file() { Ok(path) } else { Err(format!("absolute {name} binary is missing")) }
+    if path.is_absolute() && path.is_file() {
+        Ok(path)
+    } else {
+        Err(format!("absolute {name} binary is missing"))
+    }
 }
 fn absolute_dir(value: &str, name: &str) -> Result<PathBuf, String> {
     let path = PathBuf::from(value);
-    if path.is_absolute() && path.is_dir() { path.canonicalize().map_err(|e| format!("resolve {name}: {e}")) } else { Err(format!("absolute {name} is missing")) }
+    if path.is_absolute() && path.is_dir() {
+        path.canonicalize()
+            .map_err(|e| format!("resolve {name}: {e}"))
+    } else {
+        Err(format!("absolute {name} is missing"))
+    }
 }
 #[rustfmt::skip]
 fn expected_path(root: &Path, template: Option<&str>, today: &str, hour: &str) -> Result<Option<PathBuf>, String> {
@@ -135,15 +153,32 @@ fn previous_date(today: &str) -> Result<String, String> {
 }
 const fn days_in_month(year: u32, month: u32) -> Option<u32> {
     match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => Some(31), 4 | 6 | 9 | 11 => Some(30),
-        2 if year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400)) => Some(29),
-        2 => Some(28), _ => None,
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => Some(31),
+        4 | 6 | 9 | 11 => Some(30),
+        2 if year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400)) => {
+            Some(29)
+        }
+        2 => Some(28),
+        _ => None,
     }
 }
 fn fingerprint(path: &Path) -> Option<(u64, u64)> {
     let meta = path.metadata().ok()?;
-    Some((meta.len(), meta.modified().ok()?.duration_since(UNIX_EPOCH).ok()?.as_secs()))
+    Some((
+        meta.len(),
+        meta.modified()
+            .ok()?
+            .duration_since(UNIX_EPOCH)
+            .ok()?
+            .as_secs(),
+    ))
 }
-fn now() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |time| time.as_secs()) }
+fn now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |time| time.as_secs())
+}
 #[allow(clippy::needless_pass_by_value)]
-fn log_error(error: std::io::Error) -> String { format!("write schedule log: {error}") }
+fn log_error(error: std::io::Error) -> String {
+    format!("write schedule log: {error}")
+}

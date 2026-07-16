@@ -37,9 +37,17 @@ fn attach_text_and_readonly_recovery_match_maw_js_surface() {
         .stdout
         .contains("\"tmuxArgs\":[\"attach\",\"-r\",\"-t\",\"50-mawjs\"]"));
 
-    let missing = run(&["a", "unlikely-attach-missing-363", "--alive", "50-mawjs", "--plan-json"]);
+    let missing = run(&[
+        "a",
+        "unlikely-attach-missing-363",
+        "--alive",
+        "50-mawjs",
+        "--plan-json",
+    ]);
     assert_eq!(missing.code, 1);
-    assert!(!missing.stdout.contains("maw wake unlikely-attach-missing-363 --attach"));
+    assert!(!missing
+        .stdout
+        .contains("maw wake unlikely-attach-missing-363 --attach"));
 }
 
 #[test]
@@ -82,8 +90,12 @@ fn attach_alive_equals_and_text_recover_paths_are_covered() {
 
     let recover_text = run(&["a", "unlikely-attach-text-missing-363", "--alive=50-mawjs"]);
     assert_eq!(recover_text.code, 1);
-    assert!(recover_text.stdout.contains("attach: 'unlikely-attach-text-missing-363' not found"));
-    assert!(!recover_text.stdout.contains("maw wake unlikely-attach-text-missing-363 --attach"));
+    assert!(recover_text
+        .stdout
+        .contains("attach: 'unlikely-attach-text-missing-363' not found"));
+    assert!(!recover_text
+        .stdout
+        .contains("maw wake unlikely-attach-text-missing-363 --attach"));
 }
 
 #[test]
@@ -159,5 +171,7 @@ fn attach_without_fake_alive_uses_live_probe_recover_path() {
         "--plan-json",
     ]);
     assert_eq!(missing.code, 1, "{}{}", missing.stdout, missing.stderr);
-    assert!(missing.stdout.contains("attach: 'unlikely-goal-coverage-session-zz-1850' not found"));
+    assert!(missing
+        .stdout
+        .contains("attach: 'unlikely-goal-coverage-session-zz-1850' not found"));
 }

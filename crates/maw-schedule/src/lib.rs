@@ -178,9 +178,15 @@ mod tests {
     use super::*;
     fn request(id: &str) -> ReserveRequest {
         ReserveRequest {
-            run_id: id.into(), reserved_at: 100, cadence_seconds: 60,
-            boot_identity: "boot-a".into(), cap: 1, committed: 0,
-            active_reservations: 0, forced: false, exec: ExecMode::ClaudeHeadless,
+            run_id: id.into(),
+            reserved_at: 100,
+            cadence_seconds: 60,
+            boot_identity: "boot-a".into(),
+            cap: 1,
+            committed: 0,
+            active_reservations: 0,
+            forced: false,
+            exec: ExecMode::ClaudeHeadless,
             expected_output: None,
         }
     }
@@ -191,35 +197,67 @@ mod tests {
             "[[schedule]]\nid=\"argus\"\ncommand=\"rotate\"\ncadence=\"daily at 00:15\"\n",
             "exec=\"shell\"\nexpected_output=\"ψ/memory/$TODAY/result.md\"\ntoken_name=\"account-b\"\n",
         )).unwrap();
-        assert_eq!((file.schedule[0].max_fires_per_day, file.schedule[0].token_name.as_str()),
-            (24, "t2"));
+        assert_eq!(
+            (
+                file.schedule[0].max_fires_per_day,
+                file.schedule[0].token_name.as_str()
+            ),
+            (24, "t2")
+        );
         assert_eq!(file.schedule[1].exec, ExecMode::Shell);
-        assert_eq!(file.schedule[1].expected_output.as_deref(),
-            Some("ψ/memory/$TODAY/result.md"));
+        assert_eq!(
+            file.schedule[1].expected_output.as_deref(),
+            Some("ψ/memory/$TODAY/result.md")
+        );
     }
     #[test]
     fn quota_commits_only_for_complete_success() {
-        let capped = reserve(ReserveRequest { active_reservations: 1, ..request("cap") });
+        let capped = reserve(ReserveRequest {
+            active_reservations: 1,
+            ..request("cap")
+        });
         assert_eq!(capped.status, RunStatus::CapHit);
-        let forced = reserve(ReserveRequest { active_reservations: 1, forced: true,
-            ..request("force") });
+        let forced = reserve(ReserveRequest {
+            active_reservations: 1,
+            forced: true,
+            ..request("force")
+        });
         assert_eq!(forced.status, RunStatus::Reserved);
         let mut failed = reserve(request("failed"));
         assert!(mark_spawned(&mut failed, 110));
         assert_eq!(finalize(&mut failed, 120, 0, false, None), Some(false));
-        assert_eq!((failed.status, failed.output_file_written), (RunStatus::Failed, Some(false)));
+        assert_eq!(
+            (failed.status, failed.output_file_written),
+            (RunStatus::Failed, Some(false))
+        );
         assert_eq!(reserve(request("retry")).status, RunStatus::Reserved);
-        let mut missing = reserve(ReserveRequest { expected_output: Some("digest.md".into()),
-            ..request("missing") });
+        let mut missing = reserve(ReserveRequest {
+            expected_output: Some("digest.md".into()),
+            ..request("missing")
+        });
         assert!(mark_spawned(&mut missing, 110));
-        assert_eq!(finalize(&mut missing, 120, 0, true, Some(false)), Some(false));
-        assert_eq!((missing.status, missing.deliverable_written, missing.cap_committed),
-            (RunStatus::CompletedWithoutDeliverable, Some(false), false));
-        let mut success = reserve(ReserveRequest { expected_output: Some("digest.md".into()),
-            ..request("success") });
+        assert_eq!(
+            finalize(&mut missing, 120, 0, true, Some(false)),
+            Some(false)
+        );
+        assert_eq!(
+            (
+                missing.status,
+                missing.deliverable_written,
+                missing.cap_committed
+            ),
+            (RunStatus::CompletedWithoutDeliverable, Some(false), false)
+        );
+        let mut success = reserve(ReserveRequest {
+            expected_output: Some("digest.md".into()),
+            ..request("success")
+        });
         assert!(mark_spawned(&mut success, 110));
         assert_eq!(finalize(&mut success, 120, 0, true, Some(true)), Some(true));
-        assert_eq!((success.status, success.cap_committed), (RunStatus::Succeeded, true));
+        assert_eq!(
+            (success.status, success.cap_committed),
+            (RunStatus::Succeeded, true)
+        );
         assert_eq!(finalize(&mut success, 121, 0, true, Some(true)), None);
     }
     #[test]
@@ -228,8 +266,10 @@ mod tests {
         assert!(mark_spawned(&mut age, 105));
         assert!(!abandon_if_stale(&mut age, 220, "boot-a"));
         assert!(abandon_if_stale(&mut age, 221, "boot-a"));
-        assert_eq!((age.status, age.spawned_at, age.exited_at, age.cap_committed),
-            (RunStatus::Abandoned, Some(105), Some(221), false));
+        assert_eq!(
+            (age.status, age.spawned_at, age.exited_at, age.cap_committed),
+            (RunStatus::Abandoned, Some(105), Some(221), false)
+        );
         let mut boot = reserve(request("boot"));
         assert!(abandon_if_stale(&mut boot, 100, "boot-b"));
         assert_eq!(boot.deliverable_written, None);

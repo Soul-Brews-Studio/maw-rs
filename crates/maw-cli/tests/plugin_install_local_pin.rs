@@ -31,8 +31,11 @@ fn temp_dir(label: &str) -> PathBuf {
 
 fn write_wasm_plugin(dir: &Path, name: &str) -> String {
     fs::create_dir_all(dir).expect("plugin dir");
-    fs::write(dir.join("plugin.wasm"), b"\0asm\x01\x00\x00\x00local-fixture")
-        .expect("wasm artifact");
+    fs::write(
+        dir.join("plugin.wasm"),
+        b"\0asm\x01\x00\x00\x00local-fixture",
+    )
+    .expect("wasm artifact");
     let sha256 = maw_plugin_manifest::hash_file(&dir.join("plugin.wasm")).expect("hash wasm");
     write_wasm_manifest(dir, name, &sha256, "1.0.0");
     sha256
@@ -126,7 +129,10 @@ fn local_wasm_install_refuses_tampered_artifact() {
         "stderr: {stderr}"
     );
     assert!(!root.join("plugins/tamper-demo").exists());
-    assert!(!root.join("plugins.lock").exists(), "refused install must not write the lock");
+    assert!(
+        !root.join("plugins.lock").exists(),
+        "refused install must not write the lock"
+    );
 
     let _ = fs::remove_dir_all(root);
 }
@@ -204,8 +210,11 @@ fn unpinned_local_dev_dir_still_installs_without_lock_entry() {
         r#"{"name":"dev-demo","version":"0.1.0","sdk":"*","target":"js","entry":"index.ts","cli":{"command":"dev-demo"}}"#,
     )
     .expect("manifest");
-    fs::write(source.join("index.ts"), "export default async function main() {}\n")
-        .expect("entry");
+    fs::write(
+        source.join("index.ts"),
+        "export default async function main() {}\n",
+    )
+    .expect("entry");
 
     let output = install_local(&root, &source, &[]);
 

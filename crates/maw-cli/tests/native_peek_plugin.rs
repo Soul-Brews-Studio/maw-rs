@@ -151,7 +151,10 @@ fn peek_missing_explicit_window_freezes_waiver_error_format() {
     let output = run(&root, &["peek", "sess:9"]);
     assert!(!output.status.success());
     assert_eq!(String::from_utf8(output.stdout).expect("stdout"), "");
-    assert_eq!(String::from_utf8(output.stderr).expect("stderr"), "no window '9' in session 'sess' — windows: sess:0 (active), sess:1 (blank)\n");
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("stderr"),
+        "no window '9' in session 'sess' — windows: sess:0 (active), sess:1 (blank)\n"
+    );
 }
 
 #[test]
@@ -160,8 +163,20 @@ fn peek_help_flags_print_usage_to_stdout() {
     let root = temp_dir("help");
     for flag in ["--help", "-h"] {
         let output = run(&root, &["peek", flag]);
-        assert!(output.status.success(), "{flag}: status {:?}", output.status);
-        assert_eq!(String::from_utf8(output.stderr).expect("stderr"), "", "{flag}");
-        assert_eq!(String::from_utf8(output.stdout).expect("stdout"), "usage: maw peek <tmux-target> [--lines N] [--history]\n       maw peek [--lines N]\n", "{flag}");
+        assert!(
+            output.status.success(),
+            "{flag}: status {:?}",
+            output.status
+        );
+        assert_eq!(
+            String::from_utf8(output.stderr).expect("stderr"),
+            "",
+            "{flag}"
+        );
+        assert_eq!(
+            String::from_utf8(output.stdout).expect("stdout"),
+            "usage: maw peek <tmux-target> [--lines N] [--history]\n       maw peek [--lines N]\n",
+            "{flag}"
+        );
     }
 }
