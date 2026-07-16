@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-REPO="tonkmac/maw-rs"
+REPO="Soul-Brews-Studio/maw-rs"
 GITHUB_API="https://api.github.com/repos/$REPO/releases/latest"
 GITHUB_RELEASES="https://github.com/$REPO/releases"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
