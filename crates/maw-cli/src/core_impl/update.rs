@@ -555,7 +555,7 @@ mod update_upgrade_tests150 {
 
         let leftovers: Vec<String> = std::fs::read_dir(&root)
             .expect("read dir")
-            .filter_map(|entry| entry.ok())
+            .filter_map(std::result::Result::ok)
             .map(|entry| entry.file_name().to_string_lossy().into_owned())
             .filter(|entry_name| entry_name.starts_with('.'))
             .collect();
