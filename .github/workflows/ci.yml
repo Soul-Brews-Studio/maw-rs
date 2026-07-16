@@ -7,6 +7,15 @@ on:
     - cron: "0 */4 * * *"
   workflow_dispatch:
 
+# Supersede a redundant duplicate run on the same ref (e.g. a manual
+# workflow_dispatch fired during an in-flight scheduled run, or a run
+# overrunning its 4h window). A superseded run reports as 'cancelled', never
+# 'success' — the newer run re-executes the identical fmt/test/clippy checks,
+# so no gate is skipped.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -15,12 +24,13 @@ jobs:
     name: Rust workspace
     # Self-hosted runner deferred until TK's Linux test server is ready.
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@v1.3.1
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
         with:
           tool-cache: true
           large-packages: true
@@ -31,10 +41,10 @@ jobs:
           rustup default stable
           rustup target add wasm32-unknown-unknown
 
-      - name: Install Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
+      # "Install Bun" (oven-sh/setup-bun) removed 2026-07-16: its only consumers
+      # ("Fleet-plugin bun tests" + AssemblyScript fixture build) were extracted
+      # to maw-plugins / maw-fixtures (see the moved-step comments below), so
+      # nothing remaining in this job uses Bun.
 
       # "Fleet-plugin bun tests" moved to Soul-Brews-Studio/maw-plugins CI
       # (fleet-bun-tests job) with the fleet-plugins/ -> packages/ extraction
@@ -46,12 +56,23 @@ jobs:
       # extraction (repo split phase 2, 2026-07-16).
 
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: rust-workspace-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          # shared-key is a STABLE prefix only. rust-cache already hashes
+          # Cargo.lock/Cargo.toml + the rustc version into its internal key and
+          # auto-prefixes runner.os, with restore-key fallback. Baking
+          # hashFiles('**/Cargo.lock') into the prefix (old behavior) cold-caches
+          # the whole extism/wasmtime stack on every dependency bump. Keep this
+          # prefix DISTINCT from the wasm-host job: that job builds
+          # --features wasm-host (different artifacts) and must not
+          # cross-contaminate this workspace cache.
+          shared-key: rust-workspace
           cache-all-crates: true
           cache-targets: true
 
+      # Retry loop is insurance against transient crates.io/registry network
+      # blips on shared runners — NOT for the current fmt/test reds. It only
+      # exit 0s when cargo actually succeeds, so a real failure still fails.
       - name: Fetch Cargo dependencies
         shell: bash
         run: |
@@ -66,6 +87,12 @@ jobs:
             sleep $((attempt * 15))
           done
 
+      # NOTE: CI is the SOURCE OF TRUTH for `cargo fmt --all -- --check` — the
+      # local Build Gate (CLAUDE.md: `cargo test --workspace` +
+      # `cargo clippy ... -D warnings`) does NOT run it, which is why fmt drift
+      # can be invisible locally and only surface here on the 4h schedule. Run
+      # `cargo fmt --all -- --check` before assuming green. (Recommend adding it
+      # to the local Build Gate so local gating matches CI.)
       - name: Format check
         run: cargo fmt --all -- --check
 
@@ -96,10 +123,17 @@ jobs:
   musl-static:
     name: MUSL static Extism linkability
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     continue-on-error: true
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+        with:
+          tool-cache: true
+          large-packages: true
 
       - name: Install musl toolchain
         run: |
@@ -117,9 +151,21 @@ jobs:
   wasm-host:
     name: wasm-host feature (invoke/parity)
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      # Disk-exhaustion guard: this job links the entire Extism/wasmtime runtime
+      # into every test binary, producing large intermediate artifacts. NOTE:
+      # this is a DISK guard only — #543's linker OOM (ld signal 7 / bus error)
+      # is a MEMORY problem fixed by the CARGO_PROFILE_*_DEBUG=0 strip below, not
+      # by freeing disk. Both are needed; neither substitutes for the other.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+        with:
+          tool-cache: true
+          large-packages: true
 
       - name: Install Rust toolchain
         run: |
@@ -128,12 +174,37 @@ jobs:
           rustup target add wasm32-unknown-unknown
 
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: rust-wasm-host-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          # STABLE prefix, DISTINCT from the rust job (this builds
+          # --features wasm-host — different artifacts). See the rust job's Cache
+          # Cargo comment for why hashFiles() is deliberately not baked in here.
+          shared-key: rust-wasm-host
           cache-all-crates: true
           cache-targets: true
 
+      # Pre-warm the registry with the same 3x network-retry as the rust job.
+      # Wraps ONLY `cargo fetch` (a pure network op) — NEVER the test step, so it
+      # cannot mask the wasm-host test-isolation races.
+      - name: Fetch Cargo dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if cargo fetch --locked; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 15))
+          done
+
+      # NOTE: CI is the SOURCE OF TRUTH for `--features wasm-host` testing — the
+      # local Build Gate (CLAUDE.md) does NOT run it, which is why wasm-host-only
+      # test-isolation failures are invisible locally and only surface here. Run
+      # `cargo test -p maw-cli -p maw-plugin-manifest --features wasm-host`
+      # before assuming green.
       - name: Test with wasm-host feature
         env:
           CARGO_BUILD_JOBS: 2
