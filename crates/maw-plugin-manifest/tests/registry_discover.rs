@@ -39,18 +39,48 @@ fn semver_satisfies_matches_maw_js_registry_helper_shapes() {
     assert!(!satisfies("not-semver", "*"));
 }
 
+/// One lock for every test that mutates process env (fn-local statics would
+/// not lock *across* tests).
+fn scan_env_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+}
+
+const SCAN_ENV_KEYS: [&str; 6] = [
+    "MAW_PLUGINS_DIR",
+    "MAW_HOME",
+    "HOME",
+    "MAW_DATA_DIR",
+    "MAW_XDG",
+    "XDG_DATA_HOME",
+];
+
+/// Capture then clear every env var `scan_dirs()` consults.
+fn capture_and_clear_scan_env() -> Vec<(&'static str, Option<std::ffi::OsString>)> {
+    SCAN_ENV_KEYS
+        .into_iter()
+        .map(|key| {
+            let original = std::env::var_os(key);
+            std::env::remove_var(key);
+            (key, original)
+        })
+        .collect()
+}
+
+fn restore_scan_env(saved: Vec<(&'static str, Option<std::ffi::OsString>)>) {
+    for (key, original) in saved {
+        restore_env(key, original);
+    }
+}
+
 #[test]
 fn scan_dirs_prefers_explicit_plugins_dir_then_maw_home_then_home() {
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _guard = ENV_LOCK
+    let _guard = scan_env_lock()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let original_plugins = std::env::var_os("MAW_PLUGINS_DIR");
-    let original_maw_home = std::env::var_os("MAW_HOME");
-    let original_home = std::env::var_os("HOME");
+    let saved = capture_and_clear_scan_env();
 
     std::env::set_var("MAW_PLUGINS_DIR", "/tmp/maw-explicit-plugins");
-    std::env::remove_var("MAW_HOME");
     std::env::set_var("HOME", "/tmp/maw-home-ignored");
     assert_eq!(
         scan_dirs(),
@@ -68,9 +98,56 @@ fn scan_dirs_prefers_explicit_plugins_dir_then_maw_home_then_home() {
         vec![PathBuf::from("/tmp/real-home/.maw/plugins")]
     );
 
-    restore_env("MAW_PLUGINS_DIR", original_plugins);
-    restore_env("MAW_HOME", original_maw_home);
-    restore_env("HOME", original_home);
+    restore_scan_env(saved);
+}
+
+/// mawx WI-3 — discovery must scan the root `maw plugin install` writes to.
+#[test]
+fn scan_dirs_appends_installer_data_dir_root_when_it_diverges() {
+    let _guard = scan_env_lock()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let saved = capture_and_clear_scan_env();
+
+    // MAW_DATA_DIR diverges from the legacy chain: legacy root stays first
+    // (discovery order preserved), install root is appended.
+    std::env::set_var("HOME", "/tmp/wi3-home");
+    std::env::set_var("MAW_DATA_DIR", "/tmp/wi3-data");
+    assert_eq!(
+        scan_dirs(),
+        vec![
+            PathBuf::from("/tmp/wi3-home/.maw/plugins"),
+            PathBuf::from("/tmp/wi3-data/plugins"),
+        ]
+    );
+
+    // MAW_XDG=1 routes the installer to XDG_DATA_HOME/maw/plugins.
+    std::env::remove_var("MAW_DATA_DIR");
+    std::env::set_var("MAW_XDG", "1");
+    std::env::set_var("XDG_DATA_HOME", "/tmp/wi3-xdg-data");
+    assert_eq!(
+        scan_dirs(),
+        vec![
+            PathBuf::from("/tmp/wi3-home/.maw/plugins"),
+            PathBuf::from("/tmp/wi3-xdg-data/maw/plugins"),
+        ]
+    );
+
+    // No divergence (plain HOME): still exactly one root, no duplicate.
+    std::env::remove_var("MAW_XDG");
+    std::env::remove_var("XDG_DATA_HOME");
+    assert_eq!(
+        scan_dirs(),
+        vec![PathBuf::from("/tmp/wi3-home/.maw/plugins")]
+    );
+
+    // MAW_PLUGINS_DIR stays the exclusive override even with MAW_DATA_DIR set
+    // (hermetic isolation for tests/embedders; the installer honors it too).
+    std::env::set_var("MAW_DATA_DIR", "/tmp/wi3-data");
+    std::env::set_var("MAW_PLUGINS_DIR", "/tmp/wi3-explicit");
+    assert_eq!(scan_dirs(), vec![PathBuf::from("/tmp/wi3-explicit")]);
+
+    restore_scan_env(saved);
 }
 
 #[test]

@@ -572,18 +572,45 @@ fn serve_only_plugin_url(plugin: &LoadedPlugin, ctx: &InvokeContext) -> Option<S
 }
 
 /// Default plugin scan roots.
+///
+/// `MAW_PLUGINS_DIR` is an explicit override and stays the *only* root —
+/// tests and embedders rely on it for hermetic isolation (and the installer
+/// honors it too, so install-root == discovery-root).
+///
+/// Otherwise the legacy `MAW_HOME/plugins` → `~/.maw/plugins` chain keeps
+/// first position (existing discovery order, weight overrides, and the
+/// fleet-plugins path are unchanged), and the installer's default root —
+/// `maw_data_path(["plugins"])`, which honors `MAW_DATA_DIR`/`MAW_XDG` — is
+/// appended when it differs, so a `maw plugin install` is always
+/// discoverable by construction (mawx WI-3).
 #[must_use]
 pub fn scan_dirs() -> Vec<PathBuf> {
-    std::env::var_os("MAW_PLUGINS_DIR").map_or_else(
-        || {
-            let home = std::env::var_os("MAW_HOME")
-                .map(PathBuf::from)
-                .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".maw")))
-                .unwrap_or_else(|| PathBuf::from(".maw"));
-            vec![home.join("plugins")]
-        },
-        |path| vec![PathBuf::from(path)],
-    )
+    if let Some(path) = std::env::var_os("MAW_PLUGINS_DIR") {
+        return vec![PathBuf::from(path)];
+    }
+    let legacy_root = std::env::var_os("MAW_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".maw")))
+        .unwrap_or_else(|| PathBuf::from(".maw"))
+        .join("plugins");
+    let install_root = maw_xdg::maw_data_path(&discovery_xdg_env(), &["plugins"]);
+    let mut dirs = vec![legacy_root];
+    if install_root != dirs[0] {
+        dirs.push(install_root);
+    }
+    dirs
+}
+
+/// Process-env view for [`scan_dirs`]' install-root resolution.
+///
+/// The no-`HOME` fallback is `PathBuf::new()` (not `"."`) so the derived
+/// legacy data dir stays exactly `.maw/plugins`, matching the legacy chain.
+fn discovery_xdg_env() -> maw_xdg::MawXdgEnv {
+    let home = std::env::var_os("HOME").map_or_else(PathBuf::new, PathBuf::from);
+    let vars = ["MAW_HOME", "MAW_DATA_DIR", "MAW_XDG", "XDG_DATA_HOME"]
+        .into_iter()
+        .filter_map(|name| std::env::var(name).ok().map(|value| (name, value)));
+    maw_xdg::MawXdgEnv::with_vars(home, vars)
 }
 
 /// Runtime SDK version presented to registry gates.
