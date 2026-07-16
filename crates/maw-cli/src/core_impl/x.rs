@@ -25,8 +25,8 @@ const DISPATCH_335: &[DispatcherEntry] =
     &[DispatcherEntry { command: "x", handler: Handler::Sync(run_x_command) }];
 
 const X_USAGE: &str = "usage: maw x <spec> [--sha256 <hex>] [-y|--yes] [--offline|--frozen] [--reload]
-             [--from <spec>] [--registry <owner/repo>] [--remote]
-             [--install|--keep] [--dry-run] [--] [plugin-args...]
+             [--from <spec>] [--registry <owner/repo>] [--remote] [--debug]
+             [-q|--quiet] [--install|--keep] [--dry-run] [--] [plugin-args...]
        maw x ls
        maw x gc [--max-age <30d|12h|45m|secs>] [--max-size <2g|500m|8k|bytes>] [--dry-run]
        maw x rm <verb|artifact|sha256-prefix>
@@ -64,6 +64,10 @@ struct XRunArgs {
     remote: bool,
     install: bool,
     dry_run: bool,
+    /// `--debug`: per-stage trace lines on stderr (also `MAW_X_DEBUG=1`).
+    debug: bool,
+    /// `-q`/`--quiet`: suppress the long-invoke heartbeat.
+    quiet: bool,
     plugin_args: Vec<String>,
 }
 
@@ -76,6 +80,14 @@ struct XRunEnv<'a> {
     interactive: bool,
     now: u64,
     now_ms: i64,
+    /// `--debug`/`MAW_X_DEBUG=1` stage tracing is on.
+    debug: bool,
+    /// stderr is an interactive tty — the long-invoke heartbeat's gate.
+    heartbeat_tty: bool,
+    /// Epoch for the `+<ms>` prefix on trace lines.
+    trace_started: std::time::Instant,
+    /// Trace sink edge (real runs: stderr; tests: capture buffer).
+    trace: &'a mut dyn FnMut(&str),
     /// TOFU prompt edge: card text in, answer line out (`None` = EOF/deny).
     prompt: &'a mut dyn FnMut(&str) -> Option<String>,
 }
@@ -85,8 +97,11 @@ fn run_x_command(argv: &[String]) -> CliOutput {
         Ok(command) => command,
         Err(message) => return x_usage_error(&message),
     };
+    let flag_debug = matches!(&command, XCliCommand::Run(run_args) if run_args.debug);
+    let env_debug = std::env::var("MAW_X_DEBUG").ok();
     let (now, now_ms) = x_now_secs_ms();
     let mut prompt = x_tty_prompt;
+    let mut trace = x_stderr_trace_sink;
     let mut run = XRunEnv {
         cache_root: x_cache_root(&real_xdg_env()),
         trust_store: x_trust_store_path(),
@@ -94,9 +109,33 @@ fn run_x_command(argv: &[String]) -> CliOutput {
         interactive: std::io::IsTerminal::is_terminal(&std::io::stdin()),
         now,
         now_ms,
+        debug: x_debug_enabled(flag_debug, env_debug.as_deref()),
+        heartbeat_tty: std::io::IsTerminal::is_terminal(&std::io::stderr()),
+        trace_started: std::time::Instant::now(),
+        trace: &mut trace,
         prompt: &mut prompt,
     };
     run_x_parsed(&command, &mut run)
+}
+
+/// Stage tracing is on via the `--debug` flag or `MAW_X_DEBUG=1` in the env.
+fn x_debug_enabled(flag: bool, env_value: Option<&str>) -> bool {
+    flag || env_value == Some("1")
+}
+
+/// Real trace sink: one line straight to stderr (stdout stays plugin-pure).
+fn x_stderr_trace_sink(line: &str) {
+    eprintln!("{line}");
+}
+
+/// One `--debug` stage mark: `x[debug] +12ms <stage>: <detail>` — terse, one
+/// line per stage, stderr only.
+fn x_trace(run: &mut XRunEnv<'_>, stage: &str, detail: &str) {
+    if !run.debug {
+        return;
+    }
+    let elapsed = run.trace_started.elapsed().as_millis();
+    (run.trace)(&format!("x[debug] +{elapsed}ms {stage}: {detail}"));
 }
 
 fn run_x_parsed(command: &XCliCommand, run: &mut XRunEnv<'_>) -> CliOutput {
@@ -175,6 +214,8 @@ fn parse_x_run(argv: &[String]) -> Result<XCliCommand, String> {
             "--remote" => parsed.remote = true,
             "--install" | "--keep" => parsed.install = true,
             "--dry-run" => parsed.dry_run = true,
+            "--debug" => parsed.debug = true,
+            "-q" | "--quiet" => parsed.quiet = true,
             _ if arg.starts_with("--sha256=") => {
                 parsed.sha256 = Some(arg["--sha256=".len()..].to_owned());
             }
@@ -295,6 +336,7 @@ fn run_x_run(args: &XRunArgs, run: &mut XRunEnv<'_>) -> CliOutput {
         Ok(value) => value,
         Err(message) => return x_usage_error(&message),
     };
+    x_trace(run, "parse", &format!("spec '{}' → {}", args.spec, spec.source.canonical()));
 
     // Native guard + local shadow apply to bare verbs only (spec §2.2 steps
     // 1-2): scheme'd/direct specs skip both.
@@ -306,16 +348,26 @@ fn run_x_run(args: &XRunArgs, run: &mut XRunEnv<'_>) -> CliOutput {
                 "x: '{verb}' is a native maw command — refusing to shadow it; maw x runs plugins only"
             ));
         }
-        if !args.remote {
+        x_trace(run, "native-guard", &format!("'{verb}' is not a native verb"));
+        if args.remote {
+            x_trace(run, "local-shadow", "bypassed (--remote)");
+        } else if args.dry_run {
             // `--dry-run` short-circuits BEFORE the shadow dispatch (#576):
             // report the installed copy that would run, never execute it.
-            if args.dry_run {
-                if let Some(plan) = x_installed_shadow_plan(verb, &args.plugin_args) {
-                    return x_render_plan_json(&plan);
-                }
-            } else if let Some(output) = x_dispatch_installed_shadow(verb, &args.plugin_args) {
+            if let Some(plan) = x_installed_shadow_plan(verb, &args.plugin_args) {
+                return x_render_plan_json(&plan);
+            }
+        } else {
+            x_trace(run, "local-shadow", &format!("checking installed '{verb}'"));
+            let heartbeat =
+                x_heartbeat_start(verb, x_heartbeat_wanted(args.quiet, run.heartbeat_tty));
+            let shadow = x_dispatch_installed_shadow(verb, &args.plugin_args);
+            drop(heartbeat);
+            if let Some(output) = shadow {
+                x_trace(run, "local-shadow", &format!("ran installed '{verb}' exit={}", output.code));
                 return output;
             }
+            x_trace(run, "local-shadow", &format!("no installed '{verb}' — fetching"));
         }
     }
 
@@ -357,10 +409,27 @@ fn run_x_run(args: &XRunArgs, run: &mut XRunEnv<'_>) -> CliOutput {
         timeout_secs: X_FETCH_TIMEOUT_SECS,
         now: run.now,
     };
+    x_trace(
+        run,
+        "resolve",
+        &format!("registry {registry_owner}/{registry_repo} ← {}", fetch_spec.source.canonical()),
+    );
     let resolved = match resolve_x_spec(&fetch_spec, &registry_owner, &registry_repo, &options) {
         Ok(resolved) => resolved,
         Err(message) => return x_resolve_error(&message),
     };
+    if run.debug {
+        let plan = x_resolution_plan(&resolved);
+        x_trace(
+            run,
+            "resolve",
+            &format!(
+                "done source={} sha256={}",
+                plan.source,
+                plan.sha256.as_deref().unwrap_or("unpinned")
+            ),
+        );
+    }
     let registry_pin =
         is_default_registry && matches!(&resolved.plan, XFetchPlan::Raw { registry: Some(_), .. });
     // Raw plans fetch at an immutable commit whose manifest pin is committed
@@ -372,10 +441,20 @@ fn run_x_run(args: &XRunArgs, run: &mut XRunEnv<'_>) -> CliOutput {
         return x_render_plan_json(&x_resolution_plan(&resolved));
     }
 
+    x_trace(run, "fetch", "artifact fetch start");
     let fetched = match execute_x_fetch(&resolved, explicit_sha.as_deref(), &options) {
         Ok(fetched) => fetched,
         Err(message) => return x_error(1, &message),
     };
+    x_trace(
+        run,
+        "fetch",
+        &format!(
+            "done cached={} sha256={}",
+            fetched.cached,
+            fetched.resolution.sha256.as_deref().unwrap_or("none")
+        ),
+    );
     let manifest_info = read_raw_plugin_install_manifest(&fetched.package_dir)
         .ok()
         .flatten()
@@ -422,6 +501,7 @@ fn run_x_run(args: &XRunArgs, run: &mut XRunEnv<'_>) -> CliOutput {
 
     // Verify-on-read + last_used stamp for cached fetches (poison-inert CAS).
     let package_dir = if fetched.cached {
+        x_trace(run, "cache", "get (verify-on-read)");
         let stamped = fetched
             .resolution
             .sha256
@@ -429,14 +509,25 @@ fn run_x_run(args: &XRunArgs, run: &mut XRunEnv<'_>) -> CliOutput {
             .ok_or_else(|| "x: cached package has no pin".to_owned())
             .and_then(|pin| x_cache_get(&run.cache_root, pin, run.now));
         match stamped {
-            Ok(entry) => entry.dir,
+            Ok(entry) => {
+                x_trace(run, "verify", "sha256 ok");
+                entry.dir
+            }
             Err(message) => return x_error(1, &message),
         }
     } else {
+        x_trace(run, "cache", "put (fresh fetch staged in CAS)");
         fetched.package_dir.clone()
     };
 
-    let mut output = x_execute_package(&package_dir, args.plugin_args.clone());
+    let display_verb = requested_verb.clone().unwrap_or_else(|| args.spec.clone());
+    let mut output = x_execute_package_watched(
+        &package_dir,
+        args.plugin_args.clone(),
+        &display_verb,
+        args.quiet,
+        run,
+    );
     if args.install {
         x_apply_install(
             &mut output,
@@ -462,6 +553,7 @@ fn run_x_offline(
         Ok(entries) => entries,
         Err(message) => return x_error(1, &message),
     };
+    x_trace(run, "cache", &format!("offline ls: {} entries", entries.len()));
     let canonical = fetch_spec.source.canonical();
     let chosen = entries
         .into_iter()
@@ -476,10 +568,12 @@ fn run_x_offline(
             ),
         );
     };
+    x_trace(run, "cache", &format!("get {} (verify-on-read)", x_trust_sha12(&chosen.sha256)));
     let entry = match x_cache_get(&run.cache_root, &chosen.sha256, run.now) {
         Ok(entry) => entry,
         Err(message) => return x_error(1, &message),
     };
+    x_trace(run, "verify", "sha256 ok");
     let manifest_info = read_raw_plugin_install_manifest(&entry.dir)
         .ok()
         .flatten()
@@ -514,7 +608,13 @@ fn run_x_offline(
     if let Some(refusal) = x_run_trust_gate(&query, args.yes, &verb_label, &capabilities, run) {
         return refusal;
     }
-    let mut output = x_execute_package(&entry.dir, args.plugin_args.clone());
+    let mut output = x_execute_package_watched(
+        &entry.dir,
+        args.plugin_args.clone(),
+        &verb_label,
+        args.quiet,
+        run,
+    );
     if args.install {
         x_apply_install(&mut output, &entry.dir, explicit_sha, &entry.meta.source, run);
     }
@@ -638,9 +738,11 @@ fn x_run_trust_gate(
     let record_how = match outcome {
         XTrustGateOutcome::Proceed { record_how } => record_how,
         XTrustGateOutcome::Deny { code, message } => {
+            x_trace(run, "trust", &format!("deny exit={code}"));
             return Some(CliOutput { code, stdout: String::new(), stderr: message });
         }
         XTrustGateOutcome::Prompt { reason } => {
+            x_trace(run, "trust", "TOFU prompt");
             let card = render_x_trust_tofu_card(&XTrustTofuCard {
                 verb: verb.to_owned(),
                 source: query.source.clone(),
@@ -653,6 +755,7 @@ fn x_run_trust_gate(
                 XPromptAction::Once => None,
                 XPromptAction::Always => Some(X_TRUST_HOW_PROMPT),
                 XPromptAction::Deny => {
+                    x_trace(run, "trust", "declined at prompt");
                     return Some(x_error(
                         X_EXIT_TRUST,
                         &format!("x: trust declined for {}", query.source),
@@ -661,6 +764,7 @@ fn x_run_trust_gate(
             }
         }
     };
+    x_trace(run, "trust", "proceed");
     if let Some(how) = record_how {
         if let Err(message) = x_trust_record(
             &run.trust_store,
@@ -695,6 +799,104 @@ fn x_execute_package(package_dir: &std::path::Path, plugin_args: Vec<String>) ->
     let ctx = InvokeContext::new(InvokeSource::Cli, plugin_args);
     let mut runtime = ship_tier_wasm_runtime();
     render_cli_plugin_result(invoke_plugin(&plugin, &ctx, &mut runtime))
+}
+
+/// `x_execute_package` wrapped with `--debug` invoke stage marks and the
+/// long-invoke heartbeat around the blocking wasm call.
+fn x_execute_package_watched(
+    package_dir: &std::path::Path,
+    plugin_args: Vec<String>,
+    verb: &str,
+    quiet: bool,
+    run: &mut XRunEnv<'_>,
+) -> CliOutput {
+    x_trace(run, "invoke", &format!("start '{verb}' {}", package_dir.display()));
+    let heartbeat = x_heartbeat_start(verb, x_heartbeat_wanted(quiet, run.heartbeat_tty));
+    let output = x_execute_package(package_dir, plugin_args);
+    drop(heartbeat);
+    x_trace(run, "invoke", &format!("end exit={}", output.code));
+    output
+}
+
+// ─── long-invoke heartbeat ───────────────────────────────────────────────
+
+/// Heartbeat tick interval — also the "invoke looks long" threshold: the
+/// first line appears once the invoke has run this many seconds.
+const X_HEARTBEAT_TICK_SECS: u64 = 5;
+
+/// The heartbeat is wanted only when stderr is an interactive tty and
+/// `--quiet` was not passed — scripts and pipes never see it.
+fn x_heartbeat_wanted(quiet: bool, stderr_is_tty: bool) -> bool {
+    stderr_is_tty && !quiet
+}
+
+/// One heartbeat line (rewritten in place via `\r` on the tty).
+fn x_heartbeat_line(verb: &str, secs: u64) -> String {
+    format!("x: {verb} running… {secs}s")
+}
+
+/// Long-invoke heartbeat guard (the `mawx costs` 130s freeze-feel fix): a
+/// watcher thread prints `x: <verb> running… <N>s` to stderr every
+/// `X_HEARTBEAT_TICK_SECS` while the blocking invoke runs — one `\r`-rewritten
+/// line (it only ever starts on a tty), erased cleanly at invoke end. Dropping
+/// the guard flags the stop bool under the mutex and joins the thread, so
+/// stop-vs-tick is race-free by construction (condvar handshake).
+struct XHeartbeat {
+    stop: std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+fn x_heartbeat_start(verb: &str, wanted: bool) -> Option<XHeartbeat> {
+    if !wanted {
+        return None;
+    }
+    let stop = std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+    let watcher_stop = std::sync::Arc::clone(&stop);
+    let verb = verb.to_owned();
+    let handle = std::thread::Builder::new()
+        .name("maw-x-heartbeat".to_owned())
+        .spawn(move || x_heartbeat_watch(&verb, &watcher_stop))
+        .ok()?;
+    Some(XHeartbeat { stop, handle: Some(handle) })
+}
+
+fn x_heartbeat_watch(verb: &str, stop: &(std::sync::Mutex<bool>, std::sync::Condvar)) {
+    let (lock, condvar) = stop;
+    let mut stopped = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut secs = 0_u64;
+    let mut printed = false;
+    while !*stopped {
+        let (guard, timeout) = condvar
+            .wait_timeout(stopped, std::time::Duration::from_secs(X_HEARTBEAT_TICK_SECS))
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        stopped = guard;
+        if *stopped {
+            break;
+        }
+        if timeout.timed_out() {
+            secs += X_HEARTBEAT_TICK_SECS;
+            eprint!("\r{}", x_heartbeat_line(verb, secs));
+            let _ = std::io::Write::flush(&mut std::io::stderr());
+            printed = true;
+        }
+    }
+    drop(stopped);
+    if printed {
+        // Erase the heartbeat line so the plugin's own stderr starts clean.
+        eprint!("\r\u{1b}[2K");
+        let _ = std::io::Write::flush(&mut std::io::stderr());
+    }
+}
+
+impl Drop for XHeartbeat {
+    fn drop(&mut self) {
+        let (lock, condvar) = &*self.stop;
+        *lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+        condvar.notify_all();
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 /// Local shadow (spec §2.2 step 2): a bare verb already installed dispatches
@@ -1001,6 +1203,8 @@ mod x_wi8_tests {
         cache_root: std::path::PathBuf,
         trust_store: std::path::PathBuf,
         plugin_root: std::path::PathBuf,
+        /// Captured `--debug` trace lines (the stderr sink, test edge).
+        trace_lines: std::cell::RefCell<Vec<String>>,
     }
 
     impl XTestHarness {
@@ -1010,6 +1214,7 @@ mod x_wi8_tests {
                 cache_root: root.join("cache"),
                 trust_store: root.join("x-trust.json"),
                 plugin_root: root.join("plugins"),
+                trace_lines: std::cell::RefCell::new(Vec::new()),
                 root,
             }
         }
@@ -1024,6 +1229,8 @@ mod x_wi8_tests {
                 Ok(command) => command,
                 Err(message) => return x_usage_error(&message),
             };
+            let debug = matches!(&command, XCliCommand::Run(run_args) if run_args.debug);
+            let mut trace = |line: &str| self.trace_lines.borrow_mut().push(line.to_owned());
             let mut run = XRunEnv {
                 cache_root: self.cache_root.clone(),
                 trust_store: self.trust_store.clone(),
@@ -1031,6 +1238,10 @@ mod x_wi8_tests {
                 interactive,
                 now: 10_000,
                 now_ms: 10_000_000,
+                debug,
+                heartbeat_tty: false,
+                trace_started: std::time::Instant::now(),
+                trace: &mut trace,
                 prompt,
             };
             run_x_parsed(&command, &mut run)
@@ -1477,5 +1688,93 @@ mod x_wi8_tests {
     fn x_dispatcher_registers_the_verb() {
         assert_eq!(dispatcher_status("x"), DispatchKind::Native);
         assert_eq!(DISPATCH_335.len(), 1);
+    }
+
+    // ── --debug stage tracing + heartbeat ───────────────────────────────
+
+    #[test]
+    fn x_debug_and_quiet_flags_parse_conflict_free() {
+        let parsed = parse_x_cli(&args(&["costs", "--debug", "--quiet", "--dry-run"]))
+            .expect("parse");
+        let XCliCommand::Run(run) = parsed else { panic!("run form") };
+        assert!(run.debug && run.quiet && run.dry_run);
+        assert!(run.plugin_args.is_empty());
+
+        // `-q` short form.
+        let parsed = parse_x_cli(&args(&["costs", "-q"])).expect("parse");
+        let XCliCommand::Run(run) = parsed else { panic!("run form") };
+        assert!(run.quiet && !run.debug);
+
+        // npx-style: after the first plugin token, `--debug` belongs to the
+        // plugin verbatim, not to maw x.
+        let parsed = parse_x_cli(&args(&["costs", "list", "--debug"])).expect("parse");
+        let XCliCommand::Run(run) = parsed else { panic!("run form") };
+        assert!(!run.debug);
+        assert_eq!(run.plugin_args, args(&["list", "--debug"]));
+    }
+
+    #[test]
+    fn x_debug_enabled_by_flag_or_env() {
+        assert!(x_debug_enabled(true, None));
+        assert!(x_debug_enabled(false, Some("1")));
+        assert!(!x_debug_enabled(false, Some("0")));
+        assert!(!x_debug_enabled(false, Some("")));
+        assert!(!x_debug_enabled(false, None));
+    }
+
+    #[test]
+    fn x_debug_traces_stages_to_stderr_sink_and_not_without_flag() {
+        let harness = XTestHarness::new("debug-trace");
+        let verb = "x-debug-trace-demo";
+        seed_cached_package(&harness, verb, &[]);
+
+        let output = harness.run_plain(&[verb, "--offline", "--remote", "--yes", "--debug"]);
+        let lines = harness.trace_lines.borrow().clone();
+        assert!(!lines.is_empty(), "--debug must emit stage lines");
+        for line in &lines {
+            assert!(line.starts_with("x[debug] +"), "stage line format: {line}");
+            assert!(line.contains("ms "), "elapsed-ms prefix: {line}");
+        }
+        let joined = lines.join("\n");
+        assert!(joined.contains("parse:"), "{joined}");
+        assert!(joined.contains("cache:"), "{joined}");
+        assert!(joined.contains("verify: sha256 ok"), "{joined}");
+        assert!(joined.contains("trust: proceed"), "{joined}");
+        assert!(joined.contains(&format!("invoke: start '{verb}'")), "{joined}");
+        assert!(joined.contains("invoke: end exit="), "{joined}");
+        // Stage lines never leak into stdout — it stays plugin-pure.
+        assert!(!output.stdout.contains("x[debug]"), "{}", output.stdout);
+
+        // Without --debug: zero trace lines.
+        harness.trace_lines.borrow_mut().clear();
+        let _ = harness.run_plain(&[verb, "--offline", "--remote", "--yes"]);
+        assert!(
+            harness.trace_lines.borrow().is_empty(),
+            "no --debug → no trace lines: {:?}",
+            harness.trace_lines.borrow()
+        );
+    }
+
+    #[test]
+    fn x_heartbeat_wanted_decision_matrix() {
+        // ON by default only for an interactive stderr.
+        assert!(x_heartbeat_wanted(false, true));
+        // --quiet suppresses it even on a tty.
+        assert!(!x_heartbeat_wanted(true, true));
+        // Not a tty (scripts, pipes): never.
+        assert!(!x_heartbeat_wanted(false, false));
+        assert!(!x_heartbeat_wanted(true, false));
+    }
+
+    #[test]
+    fn x_heartbeat_line_format_and_guard_lifecycle() {
+        assert_eq!(x_heartbeat_line("costs", 5), "x: costs running… 5s");
+        assert_eq!(x_heartbeat_line("costs", 130), "x: costs running… 130s");
+        // Not wanted → no thread.
+        assert!(x_heartbeat_start("costs", false).is_none());
+        // Wanted → guard starts and drop stops+joins immediately (well before
+        // the first 5s tick, so nothing is printed).
+        let guard = x_heartbeat_start("costs", true).expect("heartbeat guard");
+        drop(guard);
     }
 }
