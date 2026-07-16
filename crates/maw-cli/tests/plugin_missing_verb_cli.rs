@@ -100,7 +100,10 @@ fn fleet_plugins_root() -> PathBuf {
 fn fleet_verb_table_matches_shipped_manifests_and_all_pass_the_sdk_floor() {
     let root = fleet_plugins_root();
     let mut manifest_rows = Vec::new();
-    for entry in std::fs::read_dir(&root).expect("fleet-plugins dir").flatten() {
+    for entry in std::fs::read_dir(&root)
+        .expect("fleet-plugins dir")
+        .flatten()
+    {
         let manifest_path = entry.path().join("plugin.json");
         if !manifest_path.is_file() {
             continue;
@@ -139,7 +142,9 @@ fn fleet_verb_table_matches_shipped_manifests_and_all_pass_the_sdk_floor() {
 
 #[test]
 fn known_fleet_verb_without_installed_plugin_prints_install_hint_not_unknown_command() {
-    let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _guard = env_lock()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let _restore = EnvRestore::capture();
     let root = temp_dir("fleet-hint");
     seed_hermetic_env(&root);
@@ -150,7 +155,9 @@ fn known_fleet_verb_without_installed_plugin_prints_install_hint_not_unknown_com
     assert_eq!(output.code, 2, "stderr: {}", output.stderr);
     assert!(output.stdout.is_empty());
     assert!(
-        output.stderr.contains("verb 'menubar' is provided by plugin 'maw-menubar'"),
+        output
+            .stderr
+            .contains("verb 'menubar' is provided by plugin 'maw-menubar'"),
         "stderr: {}",
         output.stderr
     );
@@ -167,7 +174,9 @@ fn known_fleet_verb_without_installed_plugin_prints_install_hint_not_unknown_com
 
 #[test]
 fn lock_pinned_verb_without_installed_plugin_prints_lock_derived_install_hint() {
-    let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _guard = env_lock()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let _restore = EnvRestore::capture();
     let root = temp_dir("lock-hint");
     seed_hermetic_env(&root);
@@ -191,7 +200,9 @@ fn lock_pinned_verb_without_installed_plugin_prints_lock_derived_install_hint() 
         output.stderr
     );
     assert!(
-        output.stderr.contains(&format!("maw plugin install o/r@v1 --sha256 {sha}")),
+        output
+            .stderr
+            .contains(&format!("maw plugin install o/r@v1 --sha256 {sha}")),
         "stderr: {}",
         output.stderr
     );
@@ -201,7 +212,9 @@ fn lock_pinned_verb_without_installed_plugin_prints_lock_derived_install_hint() 
 
 #[test]
 fn refused_plugin_for_known_verb_surfaces_the_refusal_not_unknown_command() {
-    let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _guard = env_lock()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let _restore = EnvRestore::capture();
     let root = temp_dir("refusal");
     seed_hermetic_env(&root);
@@ -216,7 +229,11 @@ fn refused_plugin_for_known_verb_surfaces_the_refusal_not_unknown_command() {
     // Installed plugin dir whose committed artifact does NOT hash to its pin.
     let plugin_dir = root.join("plugins").join("tampered-demo");
     create_dir_all(&plugin_dir).expect("plugin dir");
-    write(plugin_dir.join("plugin.wasm"), b"\0asm\x01\x00\x00\x00tampered").expect("wasm");
+    write(
+        plugin_dir.join("plugin.wasm"),
+        b"\0asm\x01\x00\x00\x00tampered",
+    )
+    .expect("wasm");
     write(
         plugin_dir.join("plugin.json"),
         format!(
@@ -244,7 +261,9 @@ fn refused_plugin_for_known_verb_surfaces_the_refusal_not_unknown_command() {
 
 #[test]
 fn true_typos_keep_the_unknown_command_path() {
-    let _guard = env_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _guard = env_lock()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let _restore = EnvRestore::capture();
     let root = temp_dir("typo");
     seed_hermetic_env(&root);

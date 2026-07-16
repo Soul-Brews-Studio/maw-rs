@@ -1,10 +1,9 @@
 # maw-rs
 
 [![CI](https://github.com/Soul-Brews-Studio/maw-rs/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Soul-Brews-Studio/maw-rs/actions/workflows/ci.yml)
-![version](https://img.shields.io/badge/version-v0.1.0--alpha.1-blue)
-![coverage](https://img.shields.io/badge/coverage-99.85%25-brightgreen)
+[![release](https://img.shields.io/github/v/release/Soul-Brews-Studio/maw-rs)](https://github.com/Soul-Brews-Studio/maw-rs/releases/latest)
 
-Rust port of the maw-js portable core.
+Distributed terminal multiplexing & fleet management for AI agent oracles — Rust port of maw-js.
 
 ## Install maw-rs
 
@@ -25,27 +24,27 @@ up any existing `maw`, and installs to `~/.local/bin/maw` by default.
 Stable release installer:
 
 ```bash
-curl -fsSL https://github.com/tonkmac/maw-rs/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/Soul-Brews-Studio/maw-rs/releases/latest/download/install.sh | sh
 ```
 
 Bleeding-edge installer from `alpha`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tonkmac/maw-rs/alpha/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Soul-Brews-Studio/maw-rs/alpha/install.sh | sh
 ```
 
-Pin the installer and binary to a specific release:
+Pin the installer and binary to a specific release (day-based CalVer tags, e.g. `v26.7.16`):
 
 ```bash
-curl -fsSL https://github.com/tonkmac/maw-rs/releases/download/v0.1.0-alpha.X/install.sh | MAW_VERSION=v0.1.0-alpha.X sh
+curl -fsSL https://github.com/Soul-Brews-Studio/maw-rs/releases/download/v26.7.16/install.sh | MAW_VERSION=v26.7.16 sh
 ```
 
 Options:
 
 ```bash
-MAW_VERSION=v0.1.0-alpha.X sh install.sh
+MAW_VERSION=v26.7.16 sh install.sh
 INSTALL_DIR="$HOME/bin" sh install.sh
-sh install.sh --version v0.1.0-alpha.X --install-dir "$HOME/bin"
+sh install.sh --version v26.7.16 --install-dir "$HOME/bin"
 ```
 
 Supported prebuilt platforms:

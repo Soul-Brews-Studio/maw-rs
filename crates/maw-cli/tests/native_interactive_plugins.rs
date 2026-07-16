@@ -104,7 +104,11 @@ fn init_force_preserves_unknown_config_keys() {
         &root,
     );
 
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let config: serde_json::Value = serde_json::from_str(
         &fs::read_to_string(root.join("config/maw.config.json")).expect("config body"),
     )
@@ -117,8 +121,14 @@ fn init_force_preserves_unknown_config_keys() {
         .map(|line| serde_json::from_str(line).expect("audit row"))
         .find(|row: &serde_json::Value| row["cmd"] == "config-write")
         .expect("config-write row");
-    assert!(write["path"].as_str().expect("path").ends_with("maw.config.json"));
-    assert!(write["keysDiff"]["changed"].as_array().expect("changed").contains(&serde_json::json!("node")));
+    assert!(write["path"]
+        .as_str()
+        .expect("path")
+        .ends_with("maw.config.json"));
+    assert!(write["keysDiff"]["changed"]
+        .as_array()
+        .expect("changed")
+        .contains(&serde_json::json!("node")));
 }
 
 #[test]

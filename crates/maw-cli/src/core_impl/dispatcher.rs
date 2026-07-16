@@ -132,6 +132,49 @@ fn env_test_lock() -> std::sync::MutexGuard<'static, ()> {
     LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// Redirects HOME/XDG/MAW_* at process-env scope to a throwaway per-test root
+/// so any audit/state write a native (Sync) dispatch performs lands in an
+/// isolated dir instead of a sibling test's file or the real user state dir.
+///
+/// Callers MUST hold `env_test_lock()` first — this mutates process-global env
+/// and only the lock serializes it against other env-touching tests. Returns
+/// the state root plus RAII restores that revert every var on drop. Lifted to
+/// module scope (from `dispatcher_fragment_tests`) so sibling test modules in
+/// other `include!`d fragments (`codex_accounts`, `learn_project`) can reuse it.
+#[cfg(test)]
+fn cli_dispatch_test_env() -> (std::path::PathBuf, Vec<EnvVarRestore>) {
+    let root = std::env::temp_dir().join(format!(
+        "maw-rs-dispatch-audit-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_nanos())
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("state").join("maw")).expect("state dir");
+    let restores = [
+        "HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_STATE_HOME",
+        "MAW_STATE_DIR",
+        "MAW_HOME",
+        "MAW_XDG",
+    ]
+    .into_iter()
+    .map(EnvVarRestore::capture)
+    .collect::<Vec<_>>();
+    let home = root.join("home");
+    let config = root.join("config");
+    let state = root.join("state");
+    std::env::set_var("HOME", &home);
+    std::env::set_var("XDG_CONFIG_HOME", &config);
+    std::env::set_var("XDG_STATE_HOME", &state);
+    std::env::set_var("MAW_XDG", "1");
+    std::env::remove_var("MAW_HOME");
+    std::env::remove_var("MAW_STATE_DIR");
+    (state, restores)
+}
+
 #[cfg(test)]
 struct EnvVarRestore {
     key: &'static str,
@@ -254,13 +297,15 @@ mod async_dispatch_tests {
 
 #[cfg(test)]
 mod dispatcher_fragment_tests {
-    use super::{cli_dispatch_log_command, cli_dispatch_now_iso, current_xdg_env, env_test_lock};
+    use super::{
+        cli_dispatch_log_command, cli_dispatch_now_iso, cli_dispatch_test_env, current_xdg_env,
+        env_test_lock,
+    };
     use super::{
         dispatcher_entries, dispatcher_status, run_cli, DispatchKind, MAW_RS_VERSION_STRING,
     };
     use std::collections::BTreeSet;
     use std::fs;
-    use std::path::PathBuf;
 
     const CORE_COMMANDS: &[&str] = &[
         "hey", "send", "serve", "health", "ls", "wake", "tmux", "init", "reply", "run",
@@ -290,6 +335,13 @@ mod dispatcher_fragment_tests {
 
     #[test]
     fn top_level_version_is_native_and_uses_single_const() {
+        // Each run_cli below dispatches a native (Sync) command that logs an
+        // audit row to XDG_STATE_HOME. Hold the lock + isolate XDG so those
+        // rows land in a throwaway dir and cannot leak into a concurrent
+        // sibling's audit file (was the source of the wasm-host job flake in
+        // concurrent_dispatch_audit_* and audit_default_tail_*).
+        let _guard = env_test_lock();
+        let (_state_root, _restores) = cli_dispatch_test_env();
         for command in ["--version", "-v", "version"] {
             assert_eq!(dispatcher_status(command), DispatchKind::Native, "{command}");
             let output = run_cli(&[command.to_owned()]);
@@ -389,38 +441,6 @@ mod dispatcher_fragment_tests {
         std::env::remove_var("MAW_AUDIT_TEST_NOW_MS");
     }
 
-    fn cli_dispatch_test_env() -> (PathBuf, Vec<super::EnvVarRestore>) {
-        let root = std::env::temp_dir().join(format!(
-            "maw-rs-dispatch-audit-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |duration| duration.as_nanos())
-        ));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(root.join("state").join("maw")).expect("state dir");
-        let restores = [
-            "HOME",
-            "XDG_CONFIG_HOME",
-            "XDG_STATE_HOME",
-            "MAW_STATE_DIR",
-            "MAW_HOME",
-            "MAW_XDG",
-        ]
-        .into_iter()
-        .map(super::EnvVarRestore::capture)
-        .collect::<Vec<_>>();
-        let home = root.join("home");
-        let config = root.join("config");
-        let state = root.join("state");
-        std::env::set_var("HOME", &home);
-        std::env::set_var("XDG_CONFIG_HOME", &config);
-        std::env::set_var("XDG_STATE_HOME", &state);
-        std::env::set_var("MAW_XDG", "1");
-        std::env::remove_var("MAW_HOME");
-        std::env::remove_var("MAW_STATE_DIR");
-        (state, restores)
-    }
 }
 
 #[must_use]

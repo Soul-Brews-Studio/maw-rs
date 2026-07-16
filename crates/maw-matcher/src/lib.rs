@@ -20,8 +20,8 @@ pub use resolver::{
     ResolveResult,
 };
 pub use typed_resolver::{
-    normalized_match_names, resolve_typed_target, ResolveCandidateKind, ResolveMatch, ResolveMatchRank,
-    ResolveTypedCandidate, ResolveTypedResult,
+    normalized_match_names, resolve_typed_target, ResolveCandidateKind, ResolveMatch,
+    ResolveMatchRank, ResolveTypedCandidate, ResolveTypedResult,
 };
 
 #[cfg(test)]
