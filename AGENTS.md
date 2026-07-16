@@ -6,12 +6,22 @@ For how-to detail, see `docs/guides/adding-a-plugin-artifact.md` and
 
 ## Build gate
 
-Every PR must be green on:
+Use the tiered gate runner (`docs/guides/gating.md` is the process doc):
 
 ```bash
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
+scripts/gate.sh quick   # iterating / before opening a PR: fmt + clippy(stable) + affected-crate tests
+scripts/gate.sh full    # before merge/promote: all 4 CI dimensions
 ```
+
+`gate.sh full` runs exactly: `cargo fmt --all -- --check`,
+`cargo test --workspace --locked`,
+`cargo clippy --workspace --all-targets -- -D warnings` (stable + the
+1.97.0 toolchain — CI's current stable), and the wasm-host subset
+(`cargo test -p maw-cli -p maw-plugin-manifest --features wasm-host --locked`
+plus its clippy). It warm-seeds an isolated `CARGO_TARGET_DIR` from the
+golden cache (`scripts/gate-cache-refresh.sh`) and locks the target dir so
+two gates can never share one. Leads amortize full gates over several PRs
+with `scripts/gate.sh batch <branch>...` (merge-train).
 
 Fleet plugin artifacts live in the external
 [Soul-Brews-Studio/maw-plugins](https://github.com/Soul-Brews-Studio/maw-plugins)
