@@ -3,7 +3,7 @@ const DISPATCH_121: &[DispatcherEntry] = &[
     DispatcherEntry { command: "buddy", handler: Handler::Sync(bud_run_command) },
 ];
 
-const BUD_USAGE: &str = "usage: maw bud <name> [--from <oracle>] [--root] [--seed] [--org <org>] [--repo org/repo] [--issue N] [--issue-repo owner/repo] [--note <text>] [--nickname <pretty>] [--engine <name>|-e <name>] [--session <N>-<name>] [--fast] [--split] [--scaffold-only] [--dry-run]\n       Or: maw bud --from-repo <path|url> --stem <stem> [--pr] [--from <parent>] [--seed] [--sync-peers] [--force] [--track-vault] [--dry-run]";
+const BUD_USAGE: &str = "usage: maw bud <name> [--from <oracle>] [--root] [--seed] [--org <org>] [--repo org/repo] [--issue N] [--issue-repo owner/repo] [--note <text>] [--nickname <pretty>] [--engine <name>|-e <name>] [--session <N>-<name>] [--fast] [--split] [--scaffold-only] [--dry-run]\n       Or: maw bud --from-repo <path|url> --stem <stem> [--pr] [--from <parent>] [--seed] [--sync-peers] [--force] [--track-vault] [--dry-run]\n       The repo is created as <name>-oracle (maw bud foo -> repo foo-oracle); <name> must not already end in -oracle.";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)]
