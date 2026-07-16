@@ -307,7 +307,13 @@ fn run_x_run(args: &XRunArgs, run: &mut XRunEnv<'_>) -> CliOutput {
             ));
         }
         if !args.remote {
-            if let Some(output) = x_dispatch_installed_shadow(verb, &args.plugin_args) {
+            // `--dry-run` short-circuits BEFORE the shadow dispatch (#576):
+            // report the installed copy that would run, never execute it.
+            if args.dry_run {
+                if let Some(plan) = x_installed_shadow_plan(verb, &args.plugin_args) {
+                    return x_render_plan_json(&plan);
+                }
+            } else if let Some(output) = x_dispatch_installed_shadow(verb, &args.plugin_args) {
                 return output;
             }
         }
@@ -490,6 +496,7 @@ fn run_x_offline(
             sha256: Some(entry.sha256.clone()),
             capabilities: Some(capabilities),
             sdk: manifest_info.as_ref().and_then(|info| info.sdk.clone()),
+            installed: None,
         };
         return x_render_plan_json(&plan);
     }
@@ -705,6 +712,34 @@ fn x_dispatch_installed_shadow(verb: &str, plugin_args: &[String]) -> Option<Cli
 
 fn x_local_shadow_notice(verb: &str) -> String {
     format!("x: using installed {verb} (--remote to fetch)\n")
+}
+
+/// `--dry-run` view of the local shadow (#576): the plan for the installed
+/// copy that WOULD dispatch — same match as `x_dispatch_installed_shadow`
+/// (`plugin_cli_args` over enabled plugins), zero execution, zero network.
+fn x_installed_shadow_plan(verb: &str, plugin_args: &[String]) -> Option<XResolutionPlan> {
+    let report = discover_packages(&DiscoverPackagesOptions::default());
+    let mut argv = Vec::with_capacity(plugin_args.len() + 1);
+    argv.push(verb.to_owned());
+    argv.extend_from_slice(plugin_args);
+    let plugin = report
+        .plugins
+        .iter()
+        .filter(|plugin| !plugin.disabled)
+        .find(|plugin| plugin_cli_args(plugin, &argv).is_some())?;
+    Some(XResolutionPlan {
+        source: format!("installed:{}@{}", plugin.manifest.name, plugin.manifest.version),
+        commit: None,
+        path: Some(plugin.dir.display().to_string()),
+        sha256: plugin
+            .manifest
+            .artifact
+            .as_ref()
+            .and_then(|artifact| artifact.sha256.clone()),
+        capabilities: plugin.manifest.capabilities.clone(),
+        sdk: Some(plugin.manifest.sdk.clone()),
+        installed: Some(true),
+    })
 }
 
 /// `--install`/`--keep`: promote the exact verified bytes to a permanent
@@ -1183,6 +1218,57 @@ mod x_wi8_tests {
         assert!(!output.stderr.contains("using installed"), "{}", output.stderr);
 
         drop(restore);
+    }
+
+    /// #576: `--dry-run` must short-circuit BEFORE the local shadow — a
+    /// shadowed verb prints the resolution plan (with `installed: true`)
+    /// instead of dispatching the installed plugin.
+    #[test]
+    fn x_dry_run_short_circuits_before_local_shadow() {
+        let _guard = env_test_lock();
+        let harness = XTestHarness::new("dry-run-shadow");
+        let verb = "x-576-dry-shadow-demo";
+
+        // An installed, pin-verified package under MAW_PLUGINS_DIR.
+        let plugins_dir = harness.root.join("installed");
+        let package = plugins_dir.join(verb);
+        std::fs::create_dir_all(&package).expect("package dir");
+        std::fs::write(package.join("plugin.wasm"), b"\0asm\x01\x00\x00\x00x-576-dry-shadow")
+            .expect("wasm");
+        let pin = maw_plugin_manifest::hash_file(&package.join("plugin.wasm")).expect("hash");
+        std::fs::write(
+            package.join("plugin.json"),
+            format!(
+                r#"{{"name":"{verb}","version":"1.0.0","target":"wasm","sdk":"*","entry":{{"kind":"wasm","path":"plugin.wasm","export":"handle"}},"wasm":"./plugin.wasm","artifact":{{"path":"plugin.wasm","sha256":"{pin}"}},"cli":{{"command":"{verb}"}}}}"#
+            ),
+        )
+        .expect("manifest");
+        let restore = EnvVarRestore::capture("MAW_PLUGINS_DIR");
+        std::env::set_var("MAW_PLUGINS_DIR", &plugins_dir);
+
+        let output = harness.run_plain(&[verb, "--dry-run"]);
+        drop(restore);
+
+        assert_eq!(output.code, 0, "{output:?}");
+        assert!(
+            !output.stderr.contains("using installed"),
+            "dry-run must not dispatch the shadow: {}",
+            output.stderr
+        );
+        let plan: serde_json::Value =
+            serde_json::from_str(output.stdout.trim()).expect("plan json");
+        assert_eq!(plan.get("installed").and_then(serde_json::Value::as_bool), Some(true));
+        assert_eq!(
+            plan.get("source").and_then(serde_json::Value::as_str),
+            Some(format!("installed:{verb}@1.0.0").as_str())
+        );
+        assert_eq!(plan.get("sha256").and_then(serde_json::Value::as_str), Some(pin.as_str()));
+        assert!(
+            plan.get("path")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|path| path.ends_with(verb)),
+            "{plan}"
+        );
     }
 
     // ── offline route ───────────────────────────────────────────────────
