@@ -1,8 +1,8 @@
 # maw-rs agent contract
 
 Read this once before taking an issue. Keep changes small, verified, and sourced from repo truth.
-For how-to detail, see `docs/agent-guides/adding-a-plugin-artifact.md` and
-`docs/agent-guides/release-and-calver.md`.
+For how-to detail, see `docs/guides/adding-a-plugin-artifact.md` and
+`docs/guides/release-and-calver.md`.
 
 ## Build gate
 
