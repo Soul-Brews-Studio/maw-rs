@@ -232,7 +232,35 @@ fn peers_list_row(alias: String, peer: PeersPeerNative) -> (String, PeersPeerNat
 }
 
 fn peers_probe_peer(url: &str, timeout_ms: u64, now: &str) -> maw_peer::ProbePeerResult {
-    maw_peer::probe_peer_from_plan(&maw_peer::ProbePeerPlan { url: url.to_owned(), now: now.to_owned(), dns_error: None, info: peers_fetch_info(url, timeout_ms), identity: None })
+    let info = peers_fetch_info(url, timeout_ms);
+    // Best-effort /api/identity fetch so TOFU can pin the pubkey (#545); older peers without the endpoint stay unpinned.
+    let identity = if matches!(info, maw_peer::ProbeInfoOutcome::Body(_)) { peers_fetch_identity(url, timeout_ms) } else { None };
+    maw_peer::probe_peer_from_plan(&maw_peer::ProbePeerPlan { url: url.to_owned(), now: now.to_owned(), dns_error: None, info, identity })
+}
+
+fn peers_fetch_identity(url: &str, timeout_ms: u64) -> Option<maw_peer::ProbeRemoteIdentity> {
+    let identity_url = reqwest::Url::parse(url).and_then(|base| base.join("/api/identity")).map(|url| url.to_string()).ok()?;
+    let handle = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().ok()?;
+        Some(runtime.block_on(peers_fetch_identity_async(&identity_url, std::time::Duration::from_millis(timeout_ms))))
+    });
+    handle.join().ok().flatten()
+}
+
+async fn peers_fetch_identity_async(url: &str, timeout: std::time::Duration) -> maw_peer::ProbeRemoteIdentity {
+    let Ok(client) = reqwest::Client::builder().timeout(timeout).redirect(reqwest::redirect::Policy::none()).build() else { return maw_peer::ProbeRemoteIdentity::FetchError; };
+    let Ok(response) = client.get(url).send().await else { return maw_peer::ProbeRemoteIdentity::FetchError; };
+    let status = response.status();
+    if status == reqwest::StatusCode::NOT_FOUND { return maw_peer::ProbeRemoteIdentity::Missing; }
+    if !status.is_success() { return maw_peer::ProbeRemoteIdentity::HttpError; }
+    match response.json::<serde_json::Value>().await {
+        Ok(value) => peers_probe_identity_body(&value),
+        Err(_) => maw_peer::ProbeRemoteIdentity::MalformedJson,
+    }
+}
+
+fn peers_probe_identity_body(value: &serde_json::Value) -> maw_peer::ProbeRemoteIdentity {
+    maw_peer::ProbeRemoteIdentity::Body { pubkey: peers_json_string(value, "pubkey"), oracle: peers_json_string(value, "oracle"), node: peers_json_string(value, "node") }
 }
 
 fn peers_fetch_info(url: &str, timeout_ms: u64) -> maw_peer::ProbeInfoOutcome {
@@ -460,5 +488,48 @@ mod peers_tests {
         let out = peers_run_command(&peers_args(&["--"]));
         assert_ne!(out.code, 0);
         assert!(out.stderr.contains("separator"));
+    }
+
+    fn peers_probe_plan_with_identity(identity: Option<maw_peer::ProbeRemoteIdentity>) -> maw_peer::ProbePeerResult {
+        maw_peer::probe_peer_from_plan(&maw_peer::ProbePeerPlan {
+            url: "http://peer.test:3456".to_owned(),
+            now: "1700000000000".to_owned(),
+            dns_error: None,
+            info: maw_peer::ProbeInfoOutcome::Body(maw_peer::ProbeInfoBody { maw: maw_peer::ProbeMawHandshake::SchemaObject("1".to_owned()), node: Some("peer-node".to_owned()), name: None, nickname: None }),
+            identity,
+        })
+    }
+
+    #[test]
+    fn peers_probe_with_identity_body_pins_pubkey_on_first_contact() {
+        let probe = peers_probe_plan_with_identity(Some(maw_peer::ProbeRemoteIdentity::Body { pubkey: Some("pub-545".to_owned()), oracle: Some("oracle-x".to_owned()), node: Some("peer-node".to_owned()) }));
+        assert!(probe.error.is_none());
+        assert_eq!(probe.pubkey.as_deref(), Some("pub-545"));
+        let mut peer = PeersPeerNative { url: "http://peer.test:3456".to_owned(), ..PeersPeerNative::default() };
+        peers_apply_probe_result(&mut peer, &probe, "1700000000000").unwrap();
+        assert_eq!(peer.pubkey.as_deref(), Some("pub-545"));
+        assert_eq!(peer.pubkey_first_seen.as_deref(), Some("1700000000000"));
+    }
+
+    #[test]
+    fn peers_probe_identity_failure_degrades_to_unpinned_probe() {
+        for identity in [None, Some(maw_peer::ProbeRemoteIdentity::Missing), Some(maw_peer::ProbeRemoteIdentity::HttpError), Some(maw_peer::ProbeRemoteIdentity::FetchError), Some(maw_peer::ProbeRemoteIdentity::MalformedJson)] {
+            let probe = peers_probe_plan_with_identity(identity);
+            assert!(probe.error.is_none(), "identity failure must not fail the probe");
+            assert_eq!(probe.pubkey, None);
+            assert_eq!(probe.node.as_deref(), Some("peer-node"));
+            let mut peer = PeersPeerNative { url: "http://peer.test:3456".to_owned(), ..PeersPeerNative::default() };
+            peers_apply_probe_result(&mut peer, &probe, "1700000000000").unwrap();
+            assert_eq!(peer.pubkey, None);
+            assert_eq!(peer.pubkey_first_seen, None);
+            assert_eq!(peer.last_seen.as_deref(), Some("1700000000000"));
+        }
+    }
+
+    #[test]
+    fn peers_probe_identity_body_parses_api_identity_payload() {
+        let value = serde_json::json!({ "node": "m5", "oracle": "arra", "pubkey": "78ebf563", "version": "v26.7.16", "uptime": 1 });
+        assert_eq!(peers_probe_identity_body(&value), maw_peer::ProbeRemoteIdentity::Body { pubkey: Some("78ebf563".to_owned()), oracle: Some("arra".to_owned()), node: Some("m5".to_owned()) });
+        assert_eq!(peers_probe_identity_body(&serde_json::json!({})), maw_peer::ProbeRemoteIdentity::Body { pubkey: None, oracle: None, node: None });
     }
 }
