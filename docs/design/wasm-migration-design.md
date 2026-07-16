@@ -408,4 +408,4 @@ The parity test should fail on:
 - `crates/maw-cli/src/core_impl/part28.rs`: native `run` / `send-enter` tmux paths.
 - `crates/maw-cli/src/core_impl/part29.rs`: native `hey` / `send` / peer wake paths.
 - `crates/maw-tmux/src/core_impl/part02_2.rs`: send/capture/tag tmux primitives.
-- `docs/wire-protocol.md`: E1/E3 wire behavior for local tmux and HTTP federation.
+- `docs/reference/wire-protocol.md`: E1/E3 wire behavior for local tmux and HTTP federation.
