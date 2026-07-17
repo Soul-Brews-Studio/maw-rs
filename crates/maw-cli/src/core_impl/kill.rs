@@ -3,7 +3,7 @@ const DISPATCH_78: &[DispatcherEntry] = &[DispatcherEntry {
     handler: Handler::Sync(kill_run_command),
 }];
 
-const KILL_USAGE: &str = "usage: maw kill <target>[:window] [--pane N] [--index N|--all] [--peer <alias>]  (see: maw sleep for graceful stop, maw done for worktrees)";
+const KILL_USAGE: &str = "usage: maw kill <target>[:window] [--pane N] [--index N|--all] [--force] [--peer <alias>]  (see: maw sleep for graceful stop, maw done for worktrees)";
 const KILL_WINDOW_FORMAT: &str =
     "#{session_name}|||#{window_index}|||#{window_name}|||#{window_active}|||#{pane_current_path}";
 const KILL_PEER_API_PATH: &str = "/api/kill";
@@ -16,6 +16,7 @@ struct KillOptions {
     pane: Option<u32>,
     index: Option<u32>,
     all: bool,
+    force: bool,
     peer: Option<String>,
 }
 
@@ -220,6 +221,10 @@ fn kill_parse_arg(
     match arg {
         "--all" => {
             options.all = true;
+            Ok(1)
+        }
+        "--force" => {
+            options.force = true;
             Ok(1)
         }
         "--pane" => kill_parse_value_flag(argv, index, "--pane", |value| {
@@ -728,6 +733,13 @@ fn kill_kill_resolved_windows(
             "window target required".to_owned()
         });
     }
+    let empties_session = kill_would_empty_session(session, indexes);
+    if empties_session && !options.force {
+        return Err(format!(
+            "refusing to close the last window of session '{}' (would destroy it) — pass --force",
+            session.name
+        ));
+    }
     let mut killed = Vec::new();
     for index in indexes {
         let target = format!("{}:{index}", session.name);
@@ -735,7 +747,26 @@ fn kill_kill_resolved_windows(
         tmux.kill_kill_window(&target)?;
         killed.push(target);
     }
+    if empties_session {
+        return Ok(kill_session_destroyed_success(&session.name, &killed));
+    }
     Ok(kill_window_success(&killed))
+}
+
+fn kill_would_empty_session(session: &KillSession, indexes: &[u32]) -> bool {
+    !session.windows.is_empty()
+        && session
+            .windows
+            .iter()
+            .all(|window| indexes.contains(&window.index))
+}
+
+fn kill_session_destroyed_success(session: &str, killed: &[String]) -> String {
+    format!(
+        "  \x1b[32m✓\x1b[0m killed session {session} (closed its last window{}: {})\n",
+        if killed.len() == 1 { "" } else { "s" },
+        killed.join(", ")
+    )
 }
 
 fn kill_window_success(killed: &[String]) -> String {
@@ -1081,7 +1112,9 @@ mod kill_tests {
 
     #[test]
     fn kill_window_index_and_all_are_validated_against_listing() {
-        let mut tmux = kill_fake("07-demo|||0|||work|||1|||/tmp\n07-demo|||2|||work|||0|||/tmp\n");
+        let mut tmux = kill_fake(
+            "07-demo|||0|||work|||1|||/tmp\n07-demo|||1|||other|||0|||/tmp\n07-demo|||2|||work|||0|||/tmp\n",
+        );
         let output = kill_run_fake(&kill_strings(&["07-demo:work", "--all"]), &mut tmux);
         assert_eq!(output.code, 0);
         assert!(output.stdout.contains("killed 2 windows"));
@@ -1092,6 +1125,72 @@ mod kill_tests {
         assert_eq!(
             tmux.calls[2],
             ("kill-window".to_owned(), kill_strings(&["-t", "07-demo:2"]))
+        );
+    }
+
+    #[test]
+    fn kill_refuses_last_window_of_session_without_force_and_does_not_kill() {
+        let mut tmux = kill_fake("07-demo|||0|||main|||1|||/tmp\n");
+        let output = kill_run_fake(&kill_strings(&["07-demo:main"]), &mut tmux);
+        assert_eq!(output.code, 1);
+        assert!(output
+            .stderr
+            .contains("refusing to close the last window of session '07-demo'"));
+        assert!(output.stderr.contains("pass --force"));
+        assert!(!tmux.calls.iter().any(|call| call.0.starts_with("kill-")));
+
+        let mut tmux = kill_fake("07-demo|||0|||main|||1|||/tmp\n");
+        let output = kill_run_fake(&kill_strings(&["07-demo", "--index", "0"]), &mut tmux);
+        assert_eq!(output.code, 1);
+        assert!(output
+            .stderr
+            .contains("refusing to close the last window of session '07-demo'"));
+        assert!(!tmux.calls.iter().any(|call| call.0.starts_with("kill-")));
+    }
+
+    #[test]
+    fn kill_all_covering_every_window_refuses_without_force() {
+        let mut tmux = kill_fake("07-demo|||0|||work|||1|||/tmp\n07-demo|||2|||work|||0|||/tmp\n");
+        let output = kill_run_fake(&kill_strings(&["07-demo:work", "--all"]), &mut tmux);
+        assert_eq!(output.code, 1);
+        assert!(output
+            .stderr
+            .contains("refusing to close the last window of session '07-demo'"));
+        assert!(!tmux.calls.iter().any(|call| call.0.starts_with("kill-")));
+
+        let mut tmux = kill_fake("07-demo|||0|||work|||1|||/tmp\n07-demo|||2|||work|||0|||/tmp\n");
+        let output = kill_run_fake(&kill_strings(&["07-demo:work", "--all", "--force"]), &mut tmux);
+        assert_eq!(output.code, 0);
+        assert_eq!(
+            output.stdout,
+            "  \x1b[32m✓\x1b[0m killed session 07-demo (closed its last windows: 07-demo:0, 07-demo:2)\n"
+        );
+    }
+
+    #[test]
+    fn kill_force_kills_last_window_and_reports_session_destroyed() {
+        let mut tmux = kill_fake("07-demo|||0|||main|||1|||/tmp\n");
+        let output = kill_run_fake(&kill_strings(&["07-demo:main", "--force"]), &mut tmux);
+        assert_eq!(output.code, 0);
+        assert_eq!(
+            output.stdout,
+            "  \x1b[32m✓\x1b[0m killed session 07-demo (closed its last window: 07-demo:0)\n"
+        );
+        assert_eq!(
+            tmux.calls[1],
+            ("kill-window".to_owned(), kill_strings(&["-t", "07-demo:0"]))
+        );
+    }
+
+    #[test]
+    fn kill_one_window_of_multi_window_session_needs_no_force() {
+        let mut tmux = kill_fake("07-demo|||0|||main|||1|||/tmp\n07-demo|||1|||logs|||0|||/tmp\n");
+        let output = kill_run_fake(&kill_strings(&["07-demo:logs"]), &mut tmux);
+        assert_eq!(output.code, 0);
+        assert_eq!(output.stdout, "  \x1b[32m✓\x1b[0m killed window 07-demo:1\n");
+        assert_eq!(
+            tmux.calls[1],
+            ("kill-window".to_owned(), kill_strings(&["-t", "07-demo:1"]))
         );
     }
 
