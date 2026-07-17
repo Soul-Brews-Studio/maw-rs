@@ -131,6 +131,9 @@ impl TokenRunner for TokenFakeRunner {
 }
 
 fn token_run_command(argv: &[String]) -> CliOutput {
+    if wants_help(argv, &["--session", "--squad"]) {
+        return help_output(token_help());
+    }
     let mut runner = token_runner_from_env();
     match token_dispatch(argv, runner.as_mut()) {
         Ok(result) => CliOutput { code: i32::from(!result.ok), stdout: result.stdout, stderr: String::new() },
