@@ -105,6 +105,7 @@ trait WakeTmuxNative {
     }
     fn wake_select_window(&mut self, target: &str) -> Result<(), String>;
     fn wake_pane_current_command(&mut self, target: &str) -> Result<String, String>;
+    fn wake_pane_capture(&mut self, target: &str) -> Result<String, String>;
     fn wake_confirm_poll_sleep(&mut self, delay: std::time::Duration) { std::thread::sleep(delay); }
 }
 
@@ -157,6 +158,21 @@ impl WakeTmuxNative for WakeNativeTmux {
     fn wake_pane_current_command(&mut self, target: &str) -> Result<String, String> {
         wake_validate_tmux_target(target)?;
         TmuxClient::local().display_pane_current_command(target).map_err(|error| error.to_string())
+    }
+
+    fn wake_pane_capture(&mut self, target: &str) -> Result<String, String> {
+        wake_validate_tmux_target(target)?;
+        // Visible screen only — deliberately no `-S` history depth: scrollback
+        // could contain a stale trust prompt from an earlier run in the same
+        // pane and cause a false positive.
+        let output = std::process::Command::new("tmux")
+            .args(["capture-pane", "-p", "-t", target])
+            .output()
+            .map_err(|error| format!("wake: failed to execute tmux capture-pane: {error}"))?;
+        if !output.status.success() {
+            return Err(format!("wake: tmux capture-pane exited with status {}", output.status));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
 
     fn wake_select_window(&mut self, target: &str) -> Result<(), String> {
@@ -1374,6 +1390,58 @@ fn wake_pane_command_is_shell(command: &str) -> bool {
     matches!(name, "" | "sh" | "bash" | "zsh" | "fish" | "dash" | "ash" | "ksh" | "tcsh" | "csh" | "nu" | "pwsh")
 }
 
+/// Engine first-run directory-trust dialog markers (#616).
+///
+/// Case-sensitive substrings of the interactive trust prompts the engines
+/// show on their first run in an untrusted directory (codex-family and
+/// claude-family respectively). Bypass flags like
+/// `--dangerously-bypass-approvals-and-sandbox` skip *approvals*, not this
+/// first-run trust gate, so a headless wake can hang on it forever.
+const WAKE_TRUST_PROMPT_MARKERS: &[&str] = &[
+    "Do you trust the contents of this directory",
+    "Do you trust the files in this folder",
+];
+
+/// Extra trust-prompt captures after the immediate one (#616): the prompt can
+/// render slightly after the engine process appears, so re-capture a couple of
+/// times before declaring the pane healthy.
+const WAKE_TRUST_PROMPT_SETTLE_POLLS: usize = 2;
+
+/// Delay (ms) between trust-prompt settle captures — with
+/// [`WAKE_TRUST_PROMPT_SETTLE_POLLS`] this bounds the latency added to a
+/// healthy wake at ~400ms.
+const WAKE_TRUST_PROMPT_SETTLE_MS: u64 = 200;
+
+/// True when a captured pane screen shows an engine directory-trust dialog.
+fn wake_pane_capture_shows_trust_prompt(screen: &str) -> bool {
+    WAKE_TRUST_PROMPT_MARKERS.iter().any(|marker| screen.contains(marker))
+}
+
+/// Fail fast when the launched engine is stuck at the directory-trust prompt (#616).
+///
+/// Called only after the pane has left the shell (the engine process IS
+/// running). Captures the visible screen, re-capturing over a short settle
+/// window because the prompt can render after the process starts. The pane is
+/// deliberately left untouched — a human can still attach and answer; this
+/// only changes what wake REPORTS. An unreadable capture keeps the legacy
+/// success, mirroring the #580 principle of never failing a healthy wake on a
+/// readback error.
+fn wake_confirm_no_trust_prompt(tmux: &mut impl WakeTmuxNative, target: &str, command: &str) -> Result<(), String> {
+    for attempt in 0..=WAKE_TRUST_PROMPT_SETTLE_POLLS {
+        let Ok(screen) = tmux.wake_pane_capture(target) else { return Ok(()) };
+        if wake_pane_capture_shows_trust_prompt(&screen) {
+            let session = target.split(':').next().unwrap_or(target);
+            return Err(format!(
+                "wake: engine is stuck at the directory-trust prompt in {target} — attach (maw a {session}) and answer once, or pre-seed trust — sent: {command}"
+            ));
+        }
+        if attempt < WAKE_TRUST_PROMPT_SETTLE_POLLS {
+            tmux.wake_confirm_poll_sleep(std::time::Duration::from_millis(WAKE_TRUST_PROMPT_SETTLE_MS));
+        }
+    }
+    Ok(())
+}
+
 /// Confirm the sent launch command actually left the shell (#580).
 ///
 /// Polls `pane_current_command` with a bounded backoff (~2.5s total), exiting
@@ -1381,12 +1449,18 @@ fn wake_pane_command_is_shell(command: &str) -> bool {
 /// runs a shell after the poll budget, the launch is reported as failed. If
 /// pane state was never readable, the legacy fire-and-forget behavior is kept
 /// rather than failing an otherwise healthy wake on a readback error.
+///
+/// Leaving the shell is not enough (#616): an engine stuck at its first-run
+/// directory-trust prompt IS running, so the screen is additionally checked
+/// for trust-prompt markers before reporting success.
 fn wake_confirm_engine_launch(tmux: &mut impl WakeTmuxNative, target: &str, command: &str) -> Result<(), String> {
     let mut observed = None;
     let mut delays = WAKE_LAUNCH_CONFIRM_BACKOFF_MS.iter().copied();
     loop {
         if let Ok(current) = tmux.wake_pane_current_command(target) {
-            if !wake_pane_command_is_shell(&current) { return Ok(()); }
+            if !wake_pane_command_is_shell(&current) {
+                return wake_confirm_no_trust_prompt(tmux, target, command);
+            }
             observed = Some(current);
         }
         let Some(delay_ms) = delays.next() else { break };
@@ -1481,6 +1555,11 @@ mod wake_tests {
         pane_command_script: Vec<String>,
         pane_command_error: bool,
         pane_polls: usize,
+        /// Scripted visible-screen captures; the last entry repeats forever.
+        /// Empty script means an empty (healthy, prompt-free) screen.
+        pane_capture_script: Vec<String>,
+        pane_capture_error: bool,
+        pane_captures: usize,
     }
 
     impl WakeTmuxNative for WakeMockTmux {
@@ -1526,6 +1605,13 @@ mod wake_tests {
             if self.pane_command_script.is_empty() { return Ok("claude".to_owned()); }
             let index = (self.pane_polls - 1).min(self.pane_command_script.len() - 1);
             Ok(self.pane_command_script[index].clone())
+        }
+        fn wake_pane_capture(&mut self, _target: &str) -> Result<String, String> {
+            self.pane_captures += 1;
+            if self.pane_capture_error { return Err("mock pane capture failed".to_owned()); }
+            if self.pane_capture_script.is_empty() { return Ok(String::new()); }
+            let index = (self.pane_captures - 1).min(self.pane_capture_script.len() - 1);
+            Ok(self.pane_capture_script[index].clone())
         }
         fn wake_confirm_poll_sleep(&mut self, _delay: std::time::Duration) {}
     }
@@ -1850,6 +1936,72 @@ mod wake_tests {
             assert_eq!(code, 0);
             assert!(stdout.contains("created session"), "{stdout}");
         });
+    }
+
+    #[test]
+    fn wake_fails_fast_when_engine_is_stuck_at_trust_prompt() {
+        // Engine left the shell but sits at the first-run directory-trust
+        // dialog (#616) — the wake must report failure, not success.
+        for prompt in [
+            "codex\n\nDo you trust the contents of this directory?\n1. Yes, continue\n2. No, quit",
+            "claude\n\nDo you trust the files in this folder?\n\n/opt/repo",
+        ] {
+            let mut tmux = WakeMockTmux { pane_capture_script: vec![prompt.to_owned()], ..WakeMockTmux::default() };
+            let err = wake_confirm_engine_launch(&mut tmux, "neo:main", "codex --yolo")
+                .expect_err("trust-prompt pane must fail");
+            assert!(err.contains("directory-trust prompt in neo:main"), "{err}");
+            assert!(err.contains("maw a neo"), "{err}");
+            assert!(err.contains("sent: codex --yolo"), "{err}");
+            // Marker found on the first capture — no settle re-captures needed.
+            assert_eq!(tmux.pane_captures, 1);
+        }
+    }
+
+    #[test]
+    fn wake_fails_fast_when_trust_prompt_renders_after_a_settle_poll() {
+        // The prompt can render slightly after the engine process appears;
+        // the settle window must catch it on a re-capture.
+        let mut tmux = WakeMockTmux {
+            pane_capture_script: vec![
+                "$ codex --yolo".to_owned(),
+                "Do you trust the contents of this directory?".to_owned(),
+            ],
+            ..WakeMockTmux::default()
+        };
+        let err = wake_confirm_engine_launch(&mut tmux, "neo:main", "codex --yolo")
+            .expect_err("late-rendering trust prompt must fail");
+        assert!(err.contains("directory-trust prompt"), "{err}");
+        assert_eq!(tmux.pane_captures, 2);
+    }
+
+    #[test]
+    fn wake_confirms_launch_when_screen_shows_a_normal_banner() {
+        let mut tmux = WakeMockTmux {
+            pane_capture_script: vec!["✻ Welcome to Claude Code!\n\n> ".to_owned()],
+            ..WakeMockTmux::default()
+        };
+        wake_confirm_engine_launch(&mut tmux, "neo:main", "claude").expect("healthy banner must confirm");
+        // Settle window is bounded: immediate capture + the extra polls.
+        assert_eq!(tmux.pane_captures, WAKE_TRUST_PROMPT_SETTLE_POLLS + 1);
+    }
+
+    #[test]
+    fn wake_keeps_legacy_success_when_pane_capture_is_unreadable() {
+        // Same principle as #580: an unreadable readback never fails an
+        // otherwise healthy wake.
+        let mut tmux = WakeMockTmux { pane_capture_error: true, ..WakeMockTmux::default() };
+        wake_confirm_engine_launch(&mut tmux, "neo:main", "claude").expect("unreadable capture keeps legacy success");
+        assert_eq!(tmux.pane_captures, 1);
+    }
+
+    #[test]
+    fn wake_shell_stuck_pane_error_is_unchanged_and_never_captures() {
+        // Pane never leaves the shell — the existing #580 error stands and the
+        // trust-prompt capture path is never entered.
+        let mut tmux = WakeMockTmux { pane_command_script: vec!["zsh".to_owned()], ..WakeMockTmux::default() };
+        let err = wake_confirm_engine_launch(&mut tmux, "neo:main", "claude").expect_err("shell-stuck pane must fail");
+        assert!(err.contains("wake: engine did not start in"), "{err}");
+        assert_eq!(tmux.pane_captures, 0);
     }
 
     #[test]
