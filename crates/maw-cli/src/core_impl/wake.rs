@@ -1204,6 +1204,18 @@ fn wake_config_defaults(config: &serde_json::Value) -> WakeConfigDefaults {
     }
 }
 
+/// Build the in-pane launch line: `MAW_SESSION_WINDOW=<window> <engine>` —
+/// work-parity (#601), bare engine and NOT `exec`, so the shell survives
+/// engine exit.
+///
+/// The old echoed `cd DIR && { …; printf … }` wrapper is gone: the pane
+/// already starts inside the repo via tmux `-c` at session/window creation
+/// (`wake_apply` verifies the path exists before creating anything, and the
+/// native `wake_new_session`/`wake_new_window` re-validate it), and launch
+/// failure is caught Rust-side by the pane poll
+/// (`wake_confirm_engine_launch`, #580) instead of an in-pane printf.
+/// `cwd` stays a parameter because engine/defaults config is resolved
+/// dir-aware against the resolved repo path (#600).
 fn wake_command(window: &str, cwd: &std::path::Path, options: &WakeOptionsNative) -> String {
     let defaults = wake_config_defaults(&merged_config_value_in_dir(cwd));
     let engine = wake_default_engine(options, cwd);
@@ -1216,12 +1228,7 @@ fn wake_command(window: &str, cwd: &std::path::Path, options: &WakeOptionsNative
     if options.resume || (defaults.resume && !options.fresh) { engine_command.push_str(" resume"); }
     if options.channels || defaults.channels { engine_command.push_str(" --channels plugin:discord@claude-plugins-official"); }
     if let Some(prompt) = options.prompt.as_deref().or(defaults.prompt.as_deref()) { let _ = write!(engine_command, " {}", wake_shell_quote(prompt)); }
-    let cwd_arg = wake_shell_quote(&cwd.display().to_string());
-    let cwd_label = wake_shell_quote(&cwd.display().to_string());
-    let command = format!(
-        "cd {cwd_arg} && {{ {engine_command}; _maw_wake_status=$?; if [ $_maw_wake_status -ne 0 ]; then printf '\\nmaw wake: engine exited with status %s\\n' \"$_maw_wake_status\" >&2; fi; }} || {{ printf '\\nmaw wake: failed to cd %s; engine not started\\n' {cwd_label} >&2; }}"
-    );
-    format!("MAW_SESSION_WINDOW={} {}", wake_shell_quote(window), command)
+    format!("MAW_SESSION_WINDOW={} {engine_command}", wake_shell_quote(window))
 }
 
 fn wake_shell_quote(value: &str) -> String {
@@ -1661,18 +1668,18 @@ mod wake_tests {
             let mut tmux = WakeMockTmux::default();
             let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("fresh");
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
-            assert!(send.contains("{ claude;"), "{send}");
-            assert!(!send.contains("{ codex;"), "{send}");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo claude"), "{send}");
+            assert!(!send.contains("codex"), "{send}");
 
             let mut tmux = WakeMockTmux::default();
             let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach", "-e", "codex"]), &mut tmux).expect("explicit");
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
-            assert!(send.contains("{ codex;"), "{send}");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo codex"), "{send}");
 
             let mut tmux = WakeMockTmux::default();
             let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach", "--resume"]), &mut tmux).expect("resume");
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
-            assert!(send.contains("{ codex resume;"), "{send}");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo codex resume"), "{send}");
         });
     }
 
@@ -1705,7 +1712,7 @@ mod wake_tests {
             let (code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach", "-e", "omx-1"]), &mut tmux).expect("wake");
             assert_eq!(code, 0);
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
-            assert!(send.contains("{ CODEX_HOME=$PWD/.codex omx --direct;"), "{send}");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo CODEX_HOME=$PWD/.codex omx --direct"), "{send}");
         });
     }
 
@@ -1727,7 +1734,7 @@ mod wake_tests {
             assert_eq!(code, 0);
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
             assert!(
-                send.contains("{ OMX_POOL=1 omx --direct --channels plugin:discord@claude-plugins-official 'read AGENTS.md first';"),
+                send.ends_with("MAW_SESSION_WINDOW=neo OMX_POOL=1 omx --direct --channels plugin:discord@claude-plugins-official 'read AGENTS.md first'"),
                 "{send}"
             );
 
@@ -1741,7 +1748,7 @@ mod wake_tests {
             .expect("cli wins");
             assert_eq!(code, 0);
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
-            assert!(send.contains("{ codex --channels plugin:discord@claude-plugins-official hi;"), "{send}");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo codex --channels plugin:discord@claude-plugins-official hi"), "{send}");
         });
     }
 
@@ -1757,20 +1764,20 @@ mod wake_tests {
             let mut tmux = WakeMockTmux::default();
             let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("config resume");
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
-            assert!(send.contains("{ codex resume;"), "{send}");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo codex resume"), "{send}");
 
             // --fresh opts out of the configured resume; wake.engine applies again.
             let mut tmux = WakeMockTmux::default();
             let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach", "--fresh"]), &mut tmux).expect("fresh");
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
-            assert!(send.contains("{ claude;"), "{send}");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo claude"), "{send}");
             assert!(!send.contains(" resume"), "{send}");
 
             // Explicit -e beats the codex pin, identically to `-e … --resume`.
             let mut tmux = WakeMockTmux::default();
             let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach", "-e", "claude"]), &mut tmux).expect("explicit engine");
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
-            assert!(send.contains("{ claude resume;"), "{send}");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo claude resume"), "{send}");
         });
     }
 
@@ -1944,7 +1951,7 @@ mod wake_tests {
     }
 
     #[test]
-    fn wake_relative_repo_path_is_absolute_before_send() {
+    fn wake_relative_repo_path_is_absolute_at_creation_and_send_is_bare_launch() {
         wake_with_fixture(|root| {
             let cwd = root.join("workspace");
             let repo = cwd.join("agents/1-codex-1");
@@ -1967,16 +1974,39 @@ mod wake_tests {
             assert_eq!(code, 0);
             assert!(stdout.contains("created session"));
 
+            // The relative path is absolute by creation time: the pane starts
+            // inside the worktree via tmux `-c`, not via an in-pane `cd`.
             let expected = repo.canonicalize().expect("canonical worktree");
             let new_session = tmux.actions.iter().find(|action| action.starts_with("new-session")).expect("new-session action");
             assert!(new_session.contains(&expected.display().to_string()), "{new_session}");
 
+            // Work-parity launch line (#601): bare engine behind the env
+            // prefix — no cd wrapper, no in-pane printf reporters. Failure
+            // detection is #580's Rust-side pane poll.
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
-            assert!(send.contains(&format!("cd {}", expected.display())), "{send}");
-            assert!(!send.contains("cd agents/1-codex-1"), "{send}");
-            assert!(send.contains("maw wake: failed to cd"), "{send}");
-            assert!(send.contains("engine not started"), "{send}");
-            assert!(send.contains("maw wake: engine exited with status"), "{send}");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=coder-1 codex"), "{send}");
+            assert!(!send.contains("cd "), "{send}");
+            assert!(!send.contains("maw wake:"), "{send}");
+        });
+    }
+
+    #[test]
+    fn wake_missing_repo_path_fails_rust_side_before_any_tmux_action() {
+        // #601 removed the in-pane `cd DIR || printf` guard; a bad repo path
+        // must surface from the Rust side before anything is created, instead
+        // of silently opening a pane in $HOME.
+        wake_with_fixture(|root| {
+            let missing = root.join("workspace/does-not-exist");
+            let missing_arg = missing.display().to_string();
+            let mut tmux = WakeMockTmux::default();
+            let err = wake_run(
+                &wake_strings(&["coder-1", "--repo-path", &missing_arg, "--no-attach"]),
+                &mut tmux,
+            )
+            .expect_err("missing repo path must fail");
+            assert!(err.contains("wake: repo path missing"), "{err}");
+            assert!(err.contains(&missing_arg), "{err}");
+            assert!(tmux.actions.is_empty(), "{:?}", tmux.actions);
         });
     }
 
