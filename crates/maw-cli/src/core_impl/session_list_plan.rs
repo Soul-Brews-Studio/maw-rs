@@ -931,6 +931,9 @@ fn ls_usage_error(message: &str) -> CliOutput {
 }
 
 fn run_bring_plan(argv: &[String]) -> CliOutput {
+    if wants_help(argv, &["--engine", "-e", "--to"]) {
+        return help_output(maw_bring::bring_usage_lines().join("\n"));
+    }
     let plan_json = argv.iter().any(|arg| arg == "--plan-json");
     let filtered: Vec<String> = argv
         .iter()

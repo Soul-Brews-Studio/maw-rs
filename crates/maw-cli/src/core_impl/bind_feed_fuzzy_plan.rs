@@ -3,6 +3,8 @@ const DISPATCH_306: &[DispatcherEntry] = &[
     DispatcherEntry { command: "fuzzy", handler: Handler::Sync(run_fuzzy_plan) },
 ];
 
+const FEED_USAGE: &str = "usage: maw-rs feed parse-line <line> [--plan-json]\n       maw-rs feed describe <event> [--message <message>] [--plan-json]\n       maw-rs feed active --now <ms> --window <ms> [--event <oracle:ts:message>]... [--plan-json]\n       maw-rs feed constants [--plan-json]";
+
 fn run_bind_host_constants_plan(argv: &[String]) -> CliOutput {
     let mut plan_json = false;
     for arg in argv {
@@ -56,6 +58,12 @@ fn bind_host_usage_error(message: &str) -> CliOutput {
 }
 
 fn run_feed_plan(argv: &[String]) -> CliOutput {
+    if wants_help(
+        argv,
+        &["parse-line", "--parse-line", "describe", "--describe", "--message", "--now", "--window", "--event"],
+    ) {
+        return help_output(FEED_USAGE);
+    }
     if matches!(argv.first().map(String::as_str), Some("constants")) {
         return run_feed_constants_plan(&argv[1..]);
     }
@@ -388,9 +396,7 @@ fn feed_usage_error(message: &str) -> CliOutput {
     CliOutput {
         code: 2,
         stdout: String::new(),
-        stderr: format!(
-            "{message}\nusage: maw-rs feed parse-line <line> [--plan-json]\n       maw-rs feed describe <event> [--message <message>] [--plan-json]\n       maw-rs feed active --now <ms> --window <ms> [--event <oracle:ts:message>]... [--plan-json]\n       maw-rs feed constants [--plan-json]\n"
-        ),
+        stderr: format!("{message}\n{FEED_USAGE}\n"),
     }
 }
 

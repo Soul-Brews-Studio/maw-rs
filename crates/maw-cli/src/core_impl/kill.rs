@@ -167,6 +167,9 @@ fn kill_run_command_with(
     peer_key: fn() -> Result<String, String>,
     now: fn() -> i64,
 ) -> CliOutput {
+    if wants_help(argv, &["--pane", "--index", "--peer"]) {
+        return help_output(KILL_USAGE);
+    }
     match kill_run(argv, tmux, peer, config, peer_key, now) {
         Ok(stdout) => CliOutput {
             code: 0,
