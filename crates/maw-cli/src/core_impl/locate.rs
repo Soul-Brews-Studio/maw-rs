@@ -3,12 +3,13 @@ const DISPATCH_41: &[DispatcherEntry] = &[DispatcherEntry {
     handler: Handler::Sync(run_locate_command),
 }];
 
-const LOCATE_USAGE: &str = "usage: maw locate <oracle> [--path | --json]\n  e.g. maw locate mawjs";
+const LOCATE_USAGE: &str = "usage: maw locate <oracle> [--path | --json] [--no-remote]\n  e.g. maw locate mawjs\n  --no-remote  skip the default GitHub org scan (offline/fast mode)";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LocateOptions {
     path: bool,
     json: bool,
+    no_remote: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
@@ -30,6 +31,82 @@ struct LocateResult {
     in_agents_config: bool,
     federation: Vec<LocateFederationHit>,
     manifest_entry: Option<LocateManifestEntry>,
+    layers: LocateLayers,
+}
+
+/// Per-layer truth report (#604): each layer answers "does this oracle exist
+/// here?" independently, so a manifest-only phantom can no longer masquerade
+/// as a located oracle.
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct LocateLayers {
+    manifest: Option<String>,
+    disk: Option<String>,
+    session: Option<String>,
+    registry: Option<String>,
+    github: LocateGithubLayer,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct LocateGithubLayer {
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repo: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    orgs: Vec<String>,
+}
+
+impl LocateGithubLayer {
+    fn skipped(reason: &str) -> Self {
+        Self {
+            status: "skipped".to_owned(),
+            repo: None,
+            url: None,
+            reason: Some(reason.to_owned()),
+            orgs: Vec::new(),
+        }
+    }
+
+    fn found(org: &str, name: &str) -> Self {
+        Self {
+            status: "found".to_owned(),
+            repo: Some(format!("{org}/{name}")),
+            url: Some(format!("https://github.com/{org}/{name}")),
+            reason: None,
+            orgs: Vec::new(),
+        }
+    }
+
+    fn not_found(orgs: Vec<String>) -> Self {
+        Self {
+            status: "not-found".to_owned(),
+            repo: None,
+            url: None,
+            reason: None,
+            orgs,
+        }
+    }
+}
+
+/// Injectable `gh repo list` boundary so tests never touch the network.
+/// `Err(reason)` means the org could not be scanned (gh missing,
+/// unauthenticated, network failure, timeout) — locate degrades to a
+/// `github: (skipped: <reason>)` line and never fails because of it.
+trait LocateGithubRunner {
+    fn locate_gh_repo_names(&mut self, org: &str) -> Result<Vec<String>, String>;
+}
+
+struct LocateSystemGithub;
+
+impl LocateGithubRunner for LocateSystemGithub {
+    fn locate_gh_repo_names(&mut self, org: &str) -> Result<Vec<String>, String> {
+        locate_gh_repo_list_with_timeout(org, locate_github_timeout())
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
@@ -105,13 +182,17 @@ struct LocateOracleCacheEntry {
 
 fn run_locate_command(argv: &[String]) -> CliOutput {
     let mut tmux = TmuxClient::local();
-    run_locate_command_with_sessions(argv, &tmux.list_all())
+    run_locate_command_with_sessions(argv, &tmux.list_all(), &mut LocateSystemGithub)
 }
 
-fn run_locate_command_with_sessions(argv: &[String], sessions: &[TmuxSession]) -> CliOutput {
+fn run_locate_command_with_sessions(
+    argv: &[String],
+    sessions: &[TmuxSession],
+    github: &mut dyn LocateGithubRunner,
+) -> CliOutput {
     match locate_parse_args(argv) {
         Ok((oracle, opts)) => match locate_picker_target(&oracle, &opts, sessions)
-            .and_then(|target| locate_cmd_with_sessions(&target, &opts, sessions).map_err(|message| CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") }))
+            .and_then(|target| locate_cmd_with_sessions(&target, &opts, sessions, github).map_err(|message| CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") }))
         {
             Ok(stdout) => CliOutput {
                 code: 0,
@@ -132,6 +213,7 @@ fn locate_parse_args(argv: &[String]) -> Result<(String, LocateOptions), String>
     let mut opts = LocateOptions {
         path: false,
         json: false,
+        no_remote: false,
     };
     let mut oracle: Option<String> = None;
     for arg in argv {
@@ -139,6 +221,7 @@ fn locate_parse_args(argv: &[String]) -> Result<(String, LocateOptions), String>
             "--help" | "-h" => return Err(LOCATE_USAGE.to_owned()),
             "--path" | "-p" => opts.path = true,
             "--json" => opts.json = true,
+            "--no-remote" => opts.no_remote = true,
             value if value.starts_with('-') => return Err(LOCATE_USAGE.to_owned()),
             value => {
                 if oracle.replace(value.to_owned()).is_some() {
@@ -158,16 +241,27 @@ fn locate_cmd_with_sessions(
     oracle: &str,
     opts: &LocateOptions,
     sessions: &[TmuxSession],
+    github: &mut dyn LocateGithubRunner,
 ) -> Result<String, String> {
-    let info = locate_gather_info(oracle, !opts.path, sessions)?;
+    locate_validate_name(oracle)?;
+    let github_layer = if opts.no_remote || opts.path {
+        LocateGithubLayer::skipped("--no-remote")
+    } else {
+        locate_scan_github(oracle, &locate_remote_orgs(&merged_config_value()), github)
+    };
+    let info = locate_gather_info(oracle, !opts.path, sessions, github_layer)?;
 
     if info.repo_path.is_none()
         && info.session_name.is_none()
         && info.fleet_config_path.is_none()
         && info.federation.is_empty()
         && info.manifest_entry.is_none()
+        && info.layers.github.repo.is_none()
     {
-        return Err(format!("no oracle named '{oracle}' — try: maw oracle ls"));
+        return Err(format!(
+            "no oracle named '{oracle}' — try: maw oracle ls{}",
+            locate_github_error_note(&info.layers.github)
+        ));
     }
 
     if opts.json {
@@ -233,6 +327,7 @@ fn locate_gather_info(
     oracle: &str,
     scan_federation: bool,
     sessions: &[TmuxSession],
+    github_layer: LocateGithubLayer,
 ) -> Result<LocateResult, String> {
     locate_validate_name(oracle)?;
     let aliases = locate_enrichment_names(oracle);
@@ -251,6 +346,7 @@ fn locate_gather_info(
         .iter()
         .find_map(|alias| locate_lookup_manifest_entry(alias));
     let config = locate_load_config();
+    let manifest_layer = locate_agents_map_node(&config, &aliases);
     let in_agents_config = aliases.iter().any(|alias| config.agents.contains_key(alias.as_str()));
     let federation_node = if in_agents_config {
         aliases
@@ -268,6 +364,19 @@ fn locate_gather_info(
         locate_find_federation_hits(oracle)
     } else {
         Vec::new()
+    };
+    let disk_layer = repo_path.clone().or_else(|| {
+        manifest_entry
+            .as_ref()
+            .and_then(|entry| entry.local_path.clone())
+            .filter(|path| std::path::Path::new(path).exists())
+    });
+    let layers = LocateLayers {
+        manifest: manifest_layer,
+        disk: disk_layer,
+        session: session_name.clone(),
+        registry: fleet_config_path.clone(),
+        github: github_layer,
     };
     let result_repo_path = repo_path.or_else(|| manifest_entry.as_ref().and_then(|entry| entry.local_path.clone()));
     let (site, site_source) = locate_resolve_site(manifest_entry.as_ref(), result_repo_path.as_deref());
@@ -300,6 +409,20 @@ fn locate_gather_info(
         in_agents_config,
         federation,
         manifest_entry,
+        layers,
+    })
+}
+
+/// Layer 1 truth: is the name (or its `-oracle` sibling) in the merged
+/// config's `agents` map, and on which node? Broader than `in_agents_config`
+/// (kept as-is for JSON compatibility), which only checks exact aliases.
+fn locate_agents_map_node(config: &LocateConfig, aliases: &[String]) -> Option<String> {
+    aliases.iter().find_map(|alias| {
+        config
+            .agents
+            .get(alias.as_str())
+            .or_else(|| config.agents.get(&format!("{alias}-oracle")))
+            .cloned()
     })
 }
 
@@ -648,6 +771,146 @@ fn locate_find_federation_hits(_oracle: &str) -> Vec<LocateFederationHit> {
     Vec::new()
 }
 
+/// Built-in fallback used ONLY when the merged config has no `locate.orgs`
+/// key; an explicit (even empty) key always wins.
+const LOCATE_DEFAULT_ORGS: &[&str] = &["Soul-Brews-Studio", "laris-co"];
+
+fn locate_remote_orgs(config: &serde_json::Value) -> Vec<String> {
+    match config.get("locate").and_then(|locate| locate.get("orgs")) {
+        Some(value) => value
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        None => LOCATE_DEFAULT_ORGS.iter().map(|org| (*org).to_owned()).collect(),
+    }
+}
+
+fn locate_scan_github(
+    oracle: &str,
+    orgs: &[String],
+    runner: &mut dyn LocateGithubRunner,
+) -> LocateGithubLayer {
+    if orgs.is_empty() {
+        return LocateGithubLayer::skipped("locate.orgs is empty");
+    }
+    let wanted = locate_github_wanted_names(oracle);
+    let mut first_failure: Option<String> = None;
+    let mut scanned = Vec::new();
+    for org in orgs {
+        if !locate_github_pages_segment_ok(org) {
+            first_failure.get_or_insert(format!("invalid org name '{org}'"));
+            continue;
+        }
+        match runner.locate_gh_repo_names(org) {
+            Ok(names) => {
+                scanned.push(org.clone());
+                if let Some(name) = names
+                    .iter()
+                    .find(|name| wanted.iter().any(|want| want.eq_ignore_ascii_case(name)))
+                {
+                    return LocateGithubLayer::found(org, name);
+                }
+            }
+            Err(reason) => {
+                let fatal = reason == "gh not installed";
+                first_failure.get_or_insert(reason);
+                if fatal {
+                    break;
+                }
+            }
+        }
+    }
+    // Any unscannable org means "✗ not on github" would overclaim — degrade
+    // to a skip so the report stays truthful.
+    match first_failure {
+        Some(reason) => LocateGithubLayer::skipped(&reason),
+        None => LocateGithubLayer::not_found(scanned),
+    }
+}
+
+fn locate_github_wanted_names(oracle: &str) -> Vec<String> {
+    let mut wanted = Vec::new();
+    for alias in locate_enrichment_names(oracle) {
+        let suffixed = format!("{alias}-oracle");
+        if !wanted.contains(&alias) {
+            wanted.push(alias);
+        }
+        if !wanted.contains(&suffixed) {
+            wanted.push(suffixed);
+        }
+    }
+    wanted
+}
+
+fn locate_github_error_note(github: &LocateGithubLayer) -> String {
+    match github.status.as_str() {
+        "skipped" => format!(
+            " (github: skipped: {})",
+            github.reason.as_deref().unwrap_or("unknown")
+        ),
+        "not-found" => format!(" (github: not found in {})", github.orgs.join(", ")),
+        _ => String::new(),
+    }
+}
+
+fn locate_github_timeout() -> std::time::Duration {
+    std::env::var("MAW_LOCATE_GH_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|millis| (100..=60_000).contains(millis))
+        .map_or_else(|| std::time::Duration::from_secs(4), std::time::Duration::from_millis)
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct LocateGhRepoName {
+    name: String,
+}
+
+/// Runs `gh repo list <org> --json name` with a hard timeout. The child runs
+/// on a helper thread so a stalled network can never hang locate; on timeout
+/// the thread is abandoned (the CLI exits right after rendering).
+fn locate_gh_repo_list_with_timeout(
+    org: &str,
+    timeout: std::time::Duration,
+) -> Result<Vec<String>, String> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let org_arg = org.to_owned();
+    std::thread::spawn(move || {
+        let _ = sender.send(
+            std::process::Command::new("gh")
+                .args(["repo", "list", &org_arg, "--json", "name", "--limit", "1000"])
+                .stdin(std::process::Stdio::null())
+                .output(),
+        );
+    });
+    let output = match receiver.recv_timeout(timeout) {
+        Ok(Ok(output)) => output,
+        Ok(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err("gh not installed".to_owned());
+        }
+        Ok(Err(error)) => return Err(format!("gh failed to start: {error}")),
+        Err(_) => return Err(format!("gh timed out after {}ms", timeout.as_millis())),
+    };
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let first = stderr.lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or("");
+        return Err(if first.is_empty() {
+            format!("gh exited {}", output.status)
+        } else {
+            first.to_owned()
+        });
+    }
+    serde_json::from_slice::<Vec<LocateGhRepoName>>(&output.stdout)
+        .map(|repos| repos.into_iter().map(|repo| repo.name).collect())
+        .map_err(|error| format!("gh returned unparseable json: {error}"))
+}
+
 fn locate_render_text(oracle: &str, info: &LocateResult) -> String {
     let mut out = format!("\n📍 {oracle}\n");
     if let Some(repo_path) = &info.repo_path {
@@ -692,8 +955,59 @@ fn locate_render_text(oracle: &str, info: &LocateResult) -> String {
             hit.session_name, hit.window_count
         );
     }
+    locate_render_layers(info, &mut out);
     out.push('\n');
     out
+}
+
+fn locate_render_layers(info: &LocateResult, out: &mut String) {
+    let layers = &info.layers;
+    match layers.manifest.as_deref() {
+        Some("") => out.push_str("   manifest:  ✓ (agents map)\n"),
+        Some(node) => {
+            let _ = writeln!(out, "   manifest:  ✓ {node} (agents map)");
+        }
+        None => out.push_str("   manifest:  ✗ not in agents map\n"),
+    }
+    match &layers.disk {
+        Some(path) => {
+            let _ = writeln!(out, "   disk:      ✓ {path}");
+        }
+        None => out.push_str("   disk:      ✗ not cloned (ghq)\n"),
+    }
+    match &layers.session {
+        Some(name) => {
+            let suffix = if info.window_count == 1 { "" } else { "s" };
+            let _ = writeln!(out, "   session:   ✓ {name} ({} window{suffix})", info.window_count);
+        }
+        None => out.push_str("   session:   ✗ none\n"),
+    }
+    match &layers.registry {
+        Some(path) => {
+            let _ = writeln!(out, "   registry:  ✓ {path}");
+        }
+        None => out.push_str("   registry:  ✗ none\n"),
+    }
+    out.push_str(&locate_render_github_layer(layers));
+}
+
+fn locate_render_github_layer(layers: &LocateLayers) -> String {
+    let github = &layers.github;
+    match github.status.as_str() {
+        "found" => {
+            let repo = github.repo.as_deref().unwrap_or("?");
+            let hint = match (&layers.disk, &github.url) {
+                (None, Some(url)) => format!("   → maw work {url}"),
+                _ => String::new(),
+            };
+            format!("   github:    ✓ {repo}{hint}\n")
+        }
+        "not-found" => format!("   github:    ✗ not on github (orgs: {})\n", github.orgs.join(", ")),
+        _ => format!(
+            "   github:    (skipped: {})\n",
+            github.reason.as_deref().unwrap_or("unknown")
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -827,6 +1141,30 @@ mod locate_tests {
         }
     }
 
+    fn locate_github_off() -> LocateGithubLayer {
+        LocateGithubLayer::skipped("--no-remote")
+    }
+
+    #[derive(Default)]
+    struct LocateFakeGithub {
+        calls: Vec<String>,
+        responses: HashMap<String, Result<Vec<String>, String>>,
+    }
+
+    impl LocateFakeGithub {
+        fn with(mut self, org: &str, response: Result<Vec<String>, String>) -> Self {
+            self.responses.insert(org.to_owned(), response);
+            self
+        }
+    }
+
+    impl LocateGithubRunner for LocateFakeGithub {
+        fn locate_gh_repo_names(&mut self, org: &str) -> Result<Vec<String>, String> {
+            self.calls.push(org.to_owned());
+            self.responses.get(org).cloned().unwrap_or_else(|| Ok(Vec::new()))
+        }
+    }
+
     #[test]
     fn locate_json_matches_committed_golden_and_ignores_missing_js_ref() {
         let _guard = env_test_lock();
@@ -863,7 +1201,7 @@ mod locate_tests {
             windows: vec![locate_window(1, "atlas-oracle"), locate_window(2, "logs")],
         }];
 
-        let info = locate_gather_info("atlas", true, &sessions).expect("locate info");
+        let info = locate_gather_info("atlas", true, &sessions, locate_github_off()).expect("locate info");
         let rendered = serde_json::to_string_pretty(&info).expect("json") + "\n";
         let expected = locate_expected_golden(&fleet_config, &repo);
         assert_eq!(rendered, expected);
@@ -884,9 +1222,9 @@ mod locate_tests {
             &env.maw_config_path(&["fleet", "pathfinder.json"]),
             r#"{"name":"pathfinder","windows":[{"name":"pathfinder-oracle","repo":"acme/pathfinder-oracle"}]}"#,
         );
-        let opts = LocateOptions { path: true, json: false };
+        let opts = LocateOptions { path: true, json: false, no_remote: false };
         assert_eq!(
-            locate_cmd_with_sessions("pathfinder", &opts, &[]).expect("path"),
+            locate_cmd_with_sessions("pathfinder", &opts, &[], &mut LocateFakeGithub::default()).expect("path"),
             format!("{}\n", repo.display())
         );
     }
@@ -900,7 +1238,7 @@ mod locate_tests {
             r#"{"name":"kru32","windows":[{"name":"kru32-oracle","repo":"owner/kru32-oracle","site":"https://kru32.example.test/feed"}]}"#,
         );
 
-        let info = locate_gather_info("kru32", true, &[]).expect("locate info");
+        let info = locate_gather_info("kru32", true, &[], locate_github_off()).expect("locate info");
         assert_eq!(info.site.as_deref(), Some("https://kru32.example.test/feed"));
         assert_eq!(info.site_source, None);
         assert_eq!(info.manifest_entry.as_ref().and_then(|entry| entry.site.as_deref()), Some("https://kru32.example.test/feed"));
@@ -915,7 +1253,7 @@ mod locate_tests {
         let env = LocateHermeticEnv::new("no-site");
         locate_write(&env.maw_config_path(&["maw.config.json"]), r#"{"agents":{"ghost":"edge"}}"#);
 
-        let info = locate_gather_info("ghost", true, &[]).expect("locate info");
+        let info = locate_gather_info("ghost", true, &[], locate_github_off()).expect("locate info");
         assert_eq!(info.site, None);
         assert_eq!(info.site_source, None);
         let rendered = serde_json::to_value(&info).expect("json");
@@ -935,13 +1273,13 @@ mod locate_tests {
             &env.maw_config_path(&["fleet", "kind.json"]),
             r#"{"name":"kind","windows":[{"name":"foo","repo":"acme/foo","kind":"oracle"},{"name":"bar-oracle","repo":"acme/bar-oracle","kind":"project"}]}"#,
         );
-        let opts = LocateOptions { path: true, json: false };
+        let opts = LocateOptions { path: true, json: false, no_remote: false };
 
         assert_eq!(
-            locate_cmd_with_sessions("foo", &opts, &[]).expect("foo path"),
+            locate_cmd_with_sessions("foo", &opts, &[], &mut LocateFakeGithub::default()).expect("foo path"),
             format!("{}\n", foo.display())
         );
-        assert!(locate_cmd_with_sessions("bar", &opts, &[]).expect_err("bar project").contains("no oracle"));
+        assert!(locate_cmd_with_sessions("bar", &opts, &[], &mut LocateFakeGithub::default()).expect_err("bar project").contains("no oracle"));
     }
 
     #[test]
@@ -961,13 +1299,13 @@ mod locate_tests {
             &env.maw_config_path(&["fleet", "81-track.json"]),
             r#"{"name":"81-track","windows":[{"name":"track-oracle","repo":"acme/track-oracle"}]}"#,
         );
-        let options = LocateOptions { path: true, json: false };
+        let options = LocateOptions { path: true, json: false, no_remote: false };
         assert_eq!(
-            locate_cmd_with_sessions("81-track", &options, &[]).expect("track path"),
+            locate_cmd_with_sessions("81-track", &options, &[], &mut LocateFakeGithub::default()).expect("track path"),
             format!("{}\n", repo.display())
         );
-        let info = locate_gather_info("81-track", true, &[]).expect("prefixed locate info");
-        let info_plain = locate_gather_info("track", true, &[]).expect("plain locate info");
+        let info = locate_gather_info("81-track", true, &[], locate_github_off()).expect("prefixed locate info");
+        let info_plain = locate_gather_info("track", true, &[], locate_github_off()).expect("plain locate info");
         assert_eq!(info.repo_path, info_plain.repo_path);
         assert_eq!(info.name, info_plain.name);
         assert_eq!(info.session, "81-track");
@@ -983,6 +1321,7 @@ mod locate_tests {
         let output = run_locate_command_with_sessions(
             &["81-track".to_owned(), "--json".to_owned()],
             &sessions,
+            &mut LocateFakeGithub::default(),
         );
         assert_eq!(output.code, 0, "{}", output.stderr);
         let rendered: serde_json::Value = serde_json::from_str(&output.stdout).expect("json");
@@ -1004,7 +1343,7 @@ mod locate_tests {
             &env.maw_config_path(&["fleet", "81-track.json"]),
             r#"{"name":"81-track","windows":[{"name":"track-oracle","repo":"acme/track-oracle"}]}"#,
         );
-        let options = LocateOptions { path: true, json: false };
+        let options = LocateOptions { path: true, json: false, no_remote: false };
         assert_eq!(locate_picker_target("81-track", &options, &[]).expect("exact"), "track");
 
         match typed_picker_plan("trac", &locate_typed_candidates(&[]), locate_kind_priority, locate_picker_row) {
@@ -1015,5 +1354,182 @@ mod locate_tests {
             }
             plan @ TypedPickerPlan::Target(_) => panic!("expected fuzzy picker, got {plan:?}"),
         }
+    }
+
+    #[test]
+    fn locate_parse_accepts_no_remote_and_rejects_unknown_flags() {
+        let (oracle, opts) = locate_parse_args(&["atlas".to_owned(), "--no-remote".to_owned()]).expect("parse");
+        assert_eq!(oracle, "atlas");
+        assert!(opts.no_remote);
+        assert!(!opts.path);
+        assert!(locate_parse_args(&["atlas".to_owned(), "--remote".to_owned()]).is_err());
+    }
+
+    #[test]
+    fn locate_phantom_manifest_reports_every_layer_and_github_work_hint() {
+        let _guard = env_test_lock();
+        let env = LocateHermeticEnv::new("phantom");
+        locate_write(
+            &env.maw_config_path(&["maw.config.json"]),
+            r#"{"agents":{"unconference":"m5"},"locate":{"orgs":["laris-co"]}}"#,
+        );
+        let mut github = LocateFakeGithub::default()
+            .with("laris-co", Ok(vec!["unrelated".to_owned(), "unconference-oracle".to_owned()]));
+
+        let output = run_locate_command_with_sessions(&["unconference".to_owned()], &[], &mut github);
+        assert_eq!(output.code, 0, "{}", output.stderr);
+        assert_eq!(github.calls, vec!["laris-co".to_owned()]);
+        assert!(output.stdout.contains("   manifest:  ✓ m5 (agents map)\n"), "{}", output.stdout);
+        assert!(output.stdout.contains("   disk:      ✗ not cloned (ghq)\n"), "{}", output.stdout);
+        assert!(output.stdout.contains("   session:   ✗ none\n"), "{}", output.stdout);
+        assert!(output.stdout.contains("   registry:  ✗ none\n"), "{}", output.stdout);
+        assert!(
+            output.stdout.contains(
+                "   github:    ✓ laris-co/unconference-oracle   → maw work https://github.com/laris-co/unconference-oracle\n"
+            ),
+            "{}",
+            output.stdout
+        );
+    }
+
+    #[test]
+    fn locate_no_remote_skips_github_scan_entirely() {
+        let _guard = env_test_lock();
+        let env = LocateHermeticEnv::new("no-remote");
+        locate_write(
+            &env.maw_config_path(&["maw.config.json"]),
+            r#"{"agents":{"unconference":"m5"}}"#,
+        );
+        let mut github = LocateFakeGithub::default();
+
+        let output = run_locate_command_with_sessions(
+            &["unconference".to_owned(), "--no-remote".to_owned()],
+            &[],
+            &mut github,
+        );
+        assert_eq!(output.code, 0, "{}", output.stderr);
+        assert!(github.calls.is_empty(), "remote scanned despite --no-remote: {:?}", github.calls);
+        assert!(output.stdout.contains("   github:    (skipped: --no-remote)\n"), "{}", output.stdout);
+    }
+
+    #[test]
+    fn locate_remote_degrades_to_skip_and_never_breaks_local_answers() {
+        let _guard = env_test_lock();
+        let env = LocateHermeticEnv::new("degrade");
+        locate_write(
+            &env.maw_config_path(&["maw.config.json"]),
+            r#"{"agents":{"unconference":"m5"}}"#,
+        );
+        let mut github = LocateFakeGithub::default()
+            .with("Soul-Brews-Studio", Err("gh not installed".to_owned()))
+            .with("laris-co", Ok(vec!["unconference-oracle".to_owned()]));
+
+        let output = run_locate_command_with_sessions(&["unconference".to_owned()], &[], &mut github);
+        assert_eq!(output.code, 0, "{}", output.stderr);
+        assert_eq!(github.calls, vec!["Soul-Brews-Studio".to_owned()], "gh-missing must short-circuit");
+        assert!(output.stdout.contains("   github:    (skipped: gh not installed)\n"), "{}", output.stdout);
+    }
+
+    #[test]
+    fn locate_remote_auth_failure_skips_with_reason_after_trying_all_orgs() {
+        let mut github = LocateFakeGithub::default()
+            .with("acme", Err("To get started with GitHub CLI, please run: gh auth login".to_owned()))
+            .with("beta", Ok(Vec::new()));
+
+        let layer = locate_scan_github("ghost", &["acme".to_owned(), "beta".to_owned()], &mut github);
+        assert_eq!(github.calls, vec!["acme".to_owned(), "beta".to_owned()]);
+        assert_eq!(layer.status, "skipped");
+        assert_eq!(layer.reason.as_deref(), Some("To get started with GitHub CLI, please run: gh auth login"));
+    }
+
+    #[test]
+    fn locate_remote_not_found_keeps_not_found_error_with_github_note() {
+        let _guard = env_test_lock();
+        let env = LocateHermeticEnv::new("remote-miss");
+        locate_write(
+            &env.maw_config_path(&["maw.config.json"]),
+            r#"{"locate":{"orgs":["acme"]}}"#,
+        );
+        let mut github = LocateFakeGithub::default().with("acme", Ok(vec!["other".to_owned()]));
+
+        let output = run_locate_command_with_sessions(&["ghost".to_owned()], &[], &mut github);
+        assert_eq!(output.code, 1, "{}", output.stdout);
+        assert!(output.stderr.contains("no oracle named 'ghost'"), "{}", output.stderr);
+        assert!(output.stderr.contains("(github: not found in acme)"), "{}", output.stderr);
+    }
+
+    #[test]
+    fn locate_default_orgs_apply_only_when_config_key_is_absent() {
+        let absent = serde_json::json!({});
+        assert_eq!(locate_remote_orgs(&absent), vec!["Soul-Brews-Studio".to_owned(), "laris-co".to_owned()]);
+
+        let configured = serde_json::json!({"locate": {"orgs": ["acme", "beta"]}});
+        assert_eq!(locate_remote_orgs(&configured), vec!["acme".to_owned(), "beta".to_owned()]);
+
+        let empty = serde_json::json!({"locate": {"orgs": []}});
+        assert_eq!(locate_remote_orgs(&empty), Vec::<String>::new());
+        let layer = locate_scan_github("ghost", &[], &mut LocateFakeGithub::default());
+        assert_eq!(layer.status, "skipped");
+        assert_eq!(layer.reason.as_deref(), Some("locate.orgs is empty"));
+    }
+
+    #[test]
+    fn locate_scan_refuses_option_injection_org_names() {
+        let mut github = LocateFakeGithub::default();
+        let layer = locate_scan_github("ghost", &["--bad-org".to_owned()], &mut github);
+        assert!(github.calls.is_empty(), "gh invoked with unsafe org: {:?}", github.calls);
+        assert_eq!(layer.status, "skipped");
+        assert_eq!(layer.reason.as_deref(), Some("invalid org name '--bad-org'"));
+    }
+
+    #[test]
+    fn locate_github_hit_on_disk_resolved_name_omits_work_hint() {
+        let _guard = env_test_lock();
+        let env = LocateHermeticEnv::new("local-hit");
+        let repo = env.ghq.join("github.com/acme/atlas-oracle");
+        std::fs::create_dir_all(&repo).expect("repo");
+        locate_write(
+            &env.maw_config_path(&["maw.config.json"]),
+            r#"{"locate":{"orgs":["acme"]}}"#,
+        );
+        locate_write(
+            &env.maw_config_path(&["fleet", "alpha.json"]),
+            r#"{"name":"alpha","windows":[{"name":"atlas-oracle","repo":"acme/atlas-oracle"}]}"#,
+        );
+        let mut github = LocateFakeGithub::default().with("acme", Ok(vec!["atlas-oracle".to_owned()]));
+
+        let output = run_locate_command_with_sessions(&["atlas".to_owned()], &[], &mut github);
+        assert_eq!(output.code, 0, "{}", output.stderr);
+        assert!(output.stdout.contains(&format!("   disk:      ✓ {}\n", repo.display())), "{}", output.stdout);
+        assert!(output.stdout.contains("   registry:  ✓ "), "{}", output.stdout);
+        assert!(output.stdout.contains("   github:    ✓ acme/atlas-oracle\n"), "{}", output.stdout);
+        assert!(!output.stdout.contains("→ maw work"), "hint printed for a cloned repo: {}", output.stdout);
+        assert!(output.stdout.contains("   repo:     "), "legacy fields must remain: {}", output.stdout);
+    }
+
+    #[test]
+    fn locate_json_layers_report_github_and_local_truth() {
+        let _guard = env_test_lock();
+        let env = LocateHermeticEnv::new("json-layers");
+        locate_write(
+            &env.maw_config_path(&["maw.config.json"]),
+            r#"{"agents":{"unconference":"m5"},"locate":{"orgs":["laris-co"]}}"#,
+        );
+        let mut github = LocateFakeGithub::default().with("laris-co", Ok(vec!["unconference-oracle".to_owned()]));
+
+        let output = run_locate_command_with_sessions(
+            &["unconference".to_owned(), "--json".to_owned()],
+            &[],
+            &mut github,
+        );
+        assert_eq!(output.code, 0, "{}", output.stderr);
+        let rendered: serde_json::Value = serde_json::from_str(&output.stdout).expect("json");
+        assert_eq!(rendered["layers"]["manifest"], "m5");
+        assert_eq!(rendered["layers"]["disk"], serde_json::Value::Null);
+        assert_eq!(rendered["layers"]["session"], serde_json::Value::Null);
+        assert_eq!(rendered["layers"]["registry"], serde_json::Value::Null);
+        assert_eq!(rendered["layers"]["github"]["status"], "found");
+        assert_eq!(rendered["layers"]["github"]["repo"], "laris-co/unconference-oracle");
+        assert_eq!(rendered["layers"]["github"]["url"], "https://github.com/laris-co/unconference-oracle");
     }
 }
