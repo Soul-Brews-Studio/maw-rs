@@ -250,6 +250,7 @@ const DISPATCH_01: &[DispatcherEntry] = &[
     DispatcherEntry { command: "--help", handler: Handler::Sync(usage_handler) },
     DispatcherEntry { command: "-h", handler: Handler::Sync(usage_handler) },
     DispatcherEntry { command: "help", handler: Handler::Sync(usage_handler) },
+    DispatcherEntry { command: "commands", handler: Handler::Sync(commands_handler) },
     DispatcherEntry { command: "--version", handler: Handler::Sync(version_handler) },
     DispatcherEntry { command: "-v", handler: Handler::Sync(version_handler) },
     DispatcherEntry { command: "version", handler: Handler::Sync(version_handler) },
@@ -461,8 +462,15 @@ fn dispatcher_target(command: &str) -> DispatchTarget {
         })
 }
 
-fn usage_handler(_: &[String]) -> CliOutput {
+fn usage_handler(args: &[String]) -> CliOutput {
+    if args.iter().any(|arg| arg == "--all" || arg == "all") {
+        return usage_all_ok();
+    }
     usage_ok()
+}
+
+fn commands_handler(_: &[String]) -> CliOutput {
+    usage_all_ok()
 }
 
 fn version_handler(_: &[String]) -> CliOutput {
