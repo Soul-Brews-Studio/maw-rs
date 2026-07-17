@@ -104,6 +104,8 @@ trait WakeTmuxNative {
         Ok(None)
     }
     fn wake_select_window(&mut self, target: &str) -> Result<(), String>;
+    fn wake_pane_current_command(&mut self, target: &str) -> Result<String, String>;
+    fn wake_confirm_poll_sleep(&mut self, delay: std::time::Duration) { std::thread::sleep(delay); }
 }
 
 struct WakeNativeTmux;
@@ -150,6 +152,11 @@ impl WakeTmuxNative for WakeNativeTmux {
             })
             .map(Some)
             .map_err(|error| format!("wake: failed to spawn engine sender: {error}"))
+    }
+
+    fn wake_pane_current_command(&mut self, target: &str) -> Result<String, String> {
+        wake_validate_tmux_target(target)?;
+        TmuxClient::local().display_pane_current_command(target).map_err(|error| error.to_string())
     }
 
     fn wake_select_window(&mut self, target: &str) -> Result<(), String> {
@@ -1285,6 +1292,44 @@ fn wake_run_post_wake_hooks(oracle: &str, session: &str, window: &str, hooks: &[
     }
 }
 
+/// Bounded backoff schedule (ms) between launch-confirmation polls — ~2.5s total.
+const WAKE_LAUNCH_CONFIRM_BACKOFF_MS: &[u64] = &[50, 100, 200, 300, 400, 500, 500, 450];
+
+/// True when a tmux `pane_current_command` still looks like an interactive shell.
+///
+/// Deliberately detects "pane has NOT left the shell" instead of matching
+/// engine process names: a running claude engine can report a bare version
+/// string like `2.1.207` rather than `claude` (#520), so engine-name
+/// predicates silently break.
+fn wake_pane_command_is_shell(command: &str) -> bool {
+    let name = command.trim().trim_start_matches('-');
+    let name = name.rsplit('/').next().unwrap_or(name);
+    matches!(name, "" | "sh" | "bash" | "zsh" | "fish" | "dash" | "ash" | "ksh" | "tcsh" | "csh" | "nu" | "pwsh")
+}
+
+/// Confirm the sent launch command actually left the shell (#580).
+///
+/// Polls `pane_current_command` with a bounded backoff (~2.5s total), exiting
+/// as soon as the pane runs something that is not a shell. If the pane still
+/// runs a shell after the poll budget, the launch is reported as failed. If
+/// pane state was never readable, the legacy fire-and-forget behavior is kept
+/// rather than failing an otherwise healthy wake on a readback error.
+fn wake_confirm_engine_launch(tmux: &mut impl WakeTmuxNative, target: &str, command: &str) -> Result<(), String> {
+    let mut observed = None;
+    let mut delays = WAKE_LAUNCH_CONFIRM_BACKOFF_MS.iter().copied();
+    loop {
+        if let Ok(current) = tmux.wake_pane_current_command(target) {
+            if !wake_pane_command_is_shell(&current) { return Ok(()); }
+            observed = Some(current);
+        }
+        let Some(delay_ms) = delays.next() else { break };
+        tmux.wake_confirm_poll_sleep(std::time::Duration::from_millis(delay_ms));
+    }
+    observed.map_or(Ok(()), |observed| {
+        Err(format!("wake: engine did not start in {target} (pane still running '{observed}') — sent: {command}"))
+    })
+}
+
 fn wake_create_session(options: &WakeOptionsNative, resolved: &WakeResolvedNative, tmux: &mut impl WakeTmuxNative, out: &mut String) -> Result<bool, String> {
     tmux.wake_new_session(&resolved.session, &resolved.window, &resolved.repo_path)?;
     if options.attach {
@@ -1292,6 +1337,7 @@ fn wake_create_session(options: &WakeOptionsNative, resolved: &WakeResolvedNativ
         return Ok(true);
     }
     tmux.wake_send_text(&resolved.target, &resolved.command)?;
+    wake_confirm_engine_launch(tmux, &resolved.target, &resolved.command)?;
     let _ = writeln!(out, "\x1b[32m+\x1b[0m created session '{}' (attach: maw a {})", resolved.session, resolved.session);
     Ok(false)
 }
@@ -1313,6 +1359,7 @@ fn wake_create_or_reuse_window(
         return Ok(true);
     }
     tmux.wake_send_text(&resolved.target, &resolved.command)?;
+    wake_confirm_engine_launch(tmux, &resolved.target, &resolved.command)?;
     let _ = writeln!(out, "\x1b[32m✅\x1b[0m woke '{}' in {} → {}", resolved.window, resolved.session, resolved.repo_path.display());
     Ok(false)
 }
@@ -1362,6 +1409,11 @@ mod wake_tests {
         fail_select: bool,
         detached_delay_ms: u64,
         detached_finished: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        /// Scripted `pane_current_command` replies; the last entry repeats
+        /// forever. Empty script means an instantly-launched engine ("claude").
+        pane_command_script: Vec<String>,
+        pane_command_error: bool,
+        pane_polls: usize,
     }
 
     impl WakeTmuxNative for WakeMockTmux {
@@ -1401,6 +1453,14 @@ mod wake_tests {
             self.actions.push(format!("select {target}"));
             if self.fail_select { Err("mock attach failed".to_owned()) } else { Ok(()) }
         }
+        fn wake_pane_current_command(&mut self, _target: &str) -> Result<String, String> {
+            self.pane_polls += 1;
+            if self.pane_command_error { return Err("mock pane query failed".to_owned()); }
+            if self.pane_command_script.is_empty() { return Ok("claude".to_owned()); }
+            let index = (self.pane_polls - 1).min(self.pane_command_script.len() - 1);
+            Ok(self.pane_command_script[index].clone())
+        }
+        fn wake_confirm_poll_sleep(&mut self, _delay: std::time::Duration) {}
     }
 
     fn wake_strings(values: &[&str]) -> Vec<String> { values.iter().map(|value| (*value).to_owned()).collect() }
@@ -1554,6 +1614,61 @@ mod wake_tests {
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
             assert!(send.contains("{ codex resume;"), "{send}");
         });
+    }
+
+    #[test]
+    fn wake_errors_when_pane_never_leaves_the_shell() {
+        wake_with_fixture(|_| {
+            let mut tmux = WakeMockTmux { pane_command_script: vec!["zsh".to_owned()], ..WakeMockTmux::default() };
+            let err = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect_err("shell-stuck pane must fail");
+            assert!(err.contains("wake: engine did not start in"), "{err}");
+            assert!(err.contains("pane still running 'zsh'"), "{err}");
+            assert!(err.contains("— sent: "), "{err}");
+            // Poll budget is bounded: initial check + one per backoff step.
+            assert_eq!(tmux.pane_polls, WAKE_LAUNCH_CONFIRM_BACKOFF_MS.len() + 1);
+        });
+    }
+
+    #[test]
+    fn wake_confirms_launch_without_exhausting_poll_for_engine_and_version_string() {
+        wake_with_fixture(|_| {
+            // Pane leaves the shell on the second poll — success, poll exits early.
+            let mut tmux = WakeMockTmux {
+                pane_command_script: vec!["zsh".to_owned(), "claude".to_owned()],
+                ..WakeMockTmux::default()
+            };
+            let (code, stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("wake");
+            assert_eq!(code, 0);
+            assert!(stdout.contains("created session"), "{stdout}");
+            assert_eq!(tmux.pane_polls, 2);
+
+            // A running claude engine can report a bare version string (#520);
+            // "left the shell" must treat it as a healthy launch on poll one.
+            let mut tmux = WakeMockTmux { pane_command_script: vec!["2.1.207".to_owned()], ..WakeMockTmux::default() };
+            let (code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("wake version-string");
+            assert_eq!(code, 0);
+            assert_eq!(tmux.pane_polls, 1);
+        });
+    }
+
+    #[test]
+    fn wake_keeps_legacy_success_when_pane_state_is_unreadable() {
+        wake_with_fixture(|_| {
+            let mut tmux = WakeMockTmux { pane_command_error: true, ..WakeMockTmux::default() };
+            let (code, stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("wake");
+            assert_eq!(code, 0);
+            assert!(stdout.contains("created session"), "{stdout}");
+        });
+    }
+
+    #[test]
+    fn wake_pane_command_is_shell_matches_shells_not_engines() {
+        for shell in ["zsh", "-zsh", "bash", "/bin/sh", "fish", ""] {
+            assert!(wake_pane_command_is_shell(shell), "{shell:?} should read as a shell");
+        }
+        for engine in ["claude", "2.1.207", "codex", "node", "bun"] {
+            assert!(!wake_pane_command_is_shell(engine), "{engine:?} should read as left-the-shell");
+        }
     }
 
     #[test]
