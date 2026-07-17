@@ -395,6 +395,11 @@ fn fleet_parse_agents(value: &serde_json::Value) -> BTreeMap<String, String> {
     let mut agents = BTreeMap::new();
     let Some(map) = value.get("agents").and_then(serde_json::Value::as_object) else { return agents; };
     for (name, route) in map {
+        // #605: never surface invalid manifest names (argv junk, dot/backup
+        // names) as fleet agents.
+        if !agent_name_is_valid(name) {
+            continue;
+        }
         if let Some(text) = route.as_str() {
             agents.insert(name.clone(), fleet_agent_node(text));
         } else if let Some(text) = route.get("node").and_then(serde_json::Value::as_str) {
@@ -1762,6 +1767,21 @@ mod fleet_tests {
     use super::*;
 
     fn fleet_strings(values: &[&str]) -> Vec<String> { values.iter().map(|value| (*value).to_owned()).collect() }
+
+    #[test]
+    fn fleet_parse_agents_skips_invalid_manifest_names() {
+        let value = serde_json::json!({"agents": {
+            "--help": "m5",
+            ".bak202605130508discord-oracle": "m5",
+            "a b": "m5",
+            "digger": "m5:window",
+            "nova": {"node": "edge"}
+        }});
+        let agents = fleet_parse_agents(&value);
+        assert_eq!(agents.len(), 2, "{agents:?}");
+        assert_eq!(agents.get("digger"), Some(&"m5".to_owned()));
+        assert_eq!(agents.get("nova"), Some(&"edge".to_owned()));
+    }
 
     #[derive(Default)]
     struct FleetMockTmux {

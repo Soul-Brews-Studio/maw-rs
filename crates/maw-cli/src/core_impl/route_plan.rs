@@ -249,8 +249,11 @@ fn run_route_plan(argv: &[String]) -> CliOutput {
                     return route_usage_error("route: missing --agent value");
                 };
                 match parse_key_value(value, "route: --agent must use <agent=node>") {
+                    // #605: invalid names are skipped, never inserted.
                     Ok((agent, node)) => {
-                        config.agents.insert(agent, node);
+                        if agent_name_is_valid(&agent) {
+                            config.agents.insert(agent, node);
+                        }
                     }
                     Err(message) => return route_usage_error(&message),
                 }
