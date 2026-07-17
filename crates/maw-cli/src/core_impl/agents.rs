@@ -12,7 +12,7 @@ const DISPATCH_70: &[DispatcherEntry] = &[
 const AGENTS_USAGE: &str =
     "usage: maw agents [--json] [--all] [--node <node>] | maw agents gc [--dry-run|--apply]";
 const AGENTS_ORACLE_SUFFIX: &str = "-oracle";
-const AGENTS_GC_USAGE: &str = "usage: maw agents gc [--dry-run|--apply]\n\nlists manifest agent entries that match no disk repo, no live tmux session,\nand no fleet registry entry. checks are LOCAL-ONLY — no peer/remote\nverification in this version. default is a dry-run; --apply rewrites the\nconfig agents map without the phantom entries (entries defined in other\nconfig layers are reported but left untouched).";
+const AGENTS_GC_USAGE: &str = "usage: maw agents gc [--dry-run|--apply]\n\nlists manifest agent entries that match no disk repo, no live tmux session,\nand no fleet registry entry. checks are LOCAL-ONLY — entries routed to other\nnodes are always skipped (local checks cannot verify a remote agent), except\ninvalid names, which are junk on every node. default is a dry-run; --apply\nrewrites the config agents map without the phantom entries (entries defined\nin other config layers are reported but left untouched).";
 
 /// Shared guard for agents-map names (#605): rejects argv junk (`--help`),
 /// dot/backup names, empties, and shell-metacharacter/whitespace names before
@@ -435,6 +435,7 @@ struct AgentsGcPhantom {
 
 trait AgentsGcRuntime {
     fn gc_agents(&self) -> BTreeMap<String, String>;
+    fn gc_local_node(&self) -> String;
     fn gc_live_names(&mut self) -> BTreeSet<String>;
     fn gc_registry_names(&self) -> BTreeSet<String>;
     fn gc_repo_exists(&self, name: &str) -> bool;
@@ -448,6 +449,10 @@ struct AgentsGcSystemRuntime;
 impl AgentsGcRuntime for AgentsGcSystemRuntime {
     fn gc_agents(&self) -> BTreeMap<String, String> {
         load_hey_config().route.agents.into_iter().collect()
+    }
+
+    fn gc_local_node(&self) -> String {
+        agents_load_node().unwrap_or_else(|| "local".to_owned())
     }
 
     fn gc_live_names(&mut self) -> BTreeSet<String> {
@@ -510,22 +515,45 @@ fn agents_gc_run(argv: &[String], runtime: &mut impl AgentsGcRuntime) -> Result<
             other => return Err(format!("agents gc: unknown argument {other}\n{AGENTS_GC_USAGE}")),
         }
     }
-    let (total, phantoms) = agents_gc_find_phantoms(runtime);
+    let scan = agents_gc_find_phantoms(runtime);
     if apply {
-        agents_gc_apply(runtime, &phantoms, total)
+        agents_gc_apply(runtime, &scan)
     } else {
-        Ok(agents_gc_render_dry_run(total, &phantoms))
+        Ok(agents_gc_render_dry_run(&scan))
     }
 }
 
-fn agents_gc_find_phantoms(
-    runtime: &mut impl AgentsGcRuntime,
-) -> (usize, Vec<AgentsGcPhantom>) {
+struct AgentsGcScan {
+    total: usize,
+    phantoms: Vec<AgentsGcPhantom>,
+    remote_skipped: usize,
+}
+
+fn agents_gc_find_phantoms(runtime: &mut impl AgentsGcRuntime) -> AgentsGcScan {
     let agents = runtime.gc_agents();
+    let local_node = runtime.gc_local_node();
     let live = agents_gc_canonical_set(&runtime.gc_live_names());
     let registry = agents_gc_canonical_set(&runtime.gc_registry_names());
     let mut phantoms = Vec::new();
+    let mut remote_skipped = 0_usize;
     for (name, node) in &agents {
+        // Invalid names (argv junk, shell metacharacters) are junk on every
+        // node — they can never be routed to, so gc them regardless of node.
+        if !agent_name_is_valid(name) {
+            phantoms.push(AgentsGcPhantom {
+                name: name.clone(),
+                node: node.clone(),
+                reason: "invalid name",
+            });
+            continue;
+        }
+        // Entries routed to another node are the cross-node routing table:
+        // local checks (tmux, fleet registry, disk repo) cannot see a live
+        // remote agent, so never classify them as phantoms.
+        if !agents_gc_node_is_local(node, &local_node) {
+            remote_skipped += 1;
+            continue;
+        }
         let Some(reason) = agents_gc_phantom_reason(name, &live, &registry, runtime) else {
             continue;
         };
@@ -535,7 +563,15 @@ fn agents_gc_find_phantoms(
             reason,
         });
     }
-    (agents.len(), phantoms)
+    AgentsGcScan {
+        total: agents.len(),
+        phantoms,
+        remote_skipped,
+    }
+}
+
+fn agents_gc_node_is_local(route_node: &str, local_node: &str) -> bool {
+    route_node == local_node || route_node == "local"
 }
 
 fn agents_gc_phantom_reason(
@@ -544,9 +580,6 @@ fn agents_gc_phantom_reason(
     registry: &BTreeSet<String>,
     runtime: &impl AgentsGcRuntime,
 ) -> Option<&'static str> {
-    if !agent_name_is_valid(name) {
-        return Some("invalid name");
-    }
     let canonical = agents_gc_canonical(name);
     if live.contains(&canonical) || registry.contains(&canonical) {
         return None;
@@ -557,11 +590,21 @@ fn agents_gc_phantom_reason(
     Some("no repo, no session, no registry entry")
 }
 
+/// Canonicalizes an agent/session/window name for phantom matching: trims,
+/// strips the fleet's all-digit `NN-` slot prefix (sessions are named e.g.
+/// `33-maw-rs`; same rule as `native_fleet_window_oracle_name`), and strips
+/// the `-oracle` suffix.
 fn agents_gc_canonical(name: &str) -> String {
     let trimmed = name.trim();
-    trimmed
+    let without_slot = trimmed
+        .split_once('-')
+        .filter(|(prefix, suffix)| {
+            !prefix.is_empty() && !suffix.is_empty() && prefix.chars().all(|ch| ch.is_ascii_digit())
+        })
+        .map_or(trimmed, |(_, suffix)| suffix);
+    without_slot
         .strip_suffix(AGENTS_ORACLE_SUFFIX)
-        .unwrap_or(trimmed)
+        .unwrap_or(without_slot)
         .to_owned()
 }
 
@@ -569,18 +612,26 @@ fn agents_gc_canonical_set(names: &BTreeSet<String>) -> BTreeSet<String> {
     names.iter().map(|name| agents_gc_canonical(name)).collect()
 }
 
-fn agents_gc_render_dry_run(total: usize, phantoms: &[AgentsGcPhantom]) -> String {
+fn agents_gc_render_dry_run(scan: &AgentsGcScan) -> String {
+    let total = scan.total;
     let mut out = String::new();
     let _ = writeln!(
         out,
         "agents gc (dry-run; local-only checks: disk repo, tmux session, fleet registry)"
     );
-    if phantoms.is_empty() {
+    if scan.remote_skipped > 0 {
+        let _ = writeln!(
+            out,
+            "skipped {} remote-node entries (local-only checks cannot verify them)",
+            scan.remote_skipped
+        );
+    }
+    if scan.phantoms.is_empty() {
         let _ = writeln!(out, "no phantom entries ({total} checked)");
         return out;
     }
-    let _ = writeln!(out, "phantom entries: {} of {total}", phantoms.len());
-    for phantom in phantoms {
+    let _ = writeln!(out, "phantom entries: {} of {total}", scan.phantoms.len());
+    for phantom in &scan.phantoms {
         let _ = writeln!(
             out,
             "  {} -> {} ({})",
@@ -593,12 +644,13 @@ fn agents_gc_render_dry_run(total: usize, phantoms: &[AgentsGcPhantom]) -> Strin
 
 fn agents_gc_apply(
     runtime: &mut impl AgentsGcRuntime,
-    phantoms: &[AgentsGcPhantom],
-    total: usize,
+    scan: &AgentsGcScan,
 ) -> Result<String, String> {
+    let phantoms = &scan.phantoms;
     if phantoms.is_empty() {
         return Ok(format!(
-            "agents gc: no phantom entries ({total} checked); nothing to remove\n"
+            "agents gc: no phantom entries ({} checked, {} remote-node skipped); nothing to remove\n",
+            scan.total, scan.remote_skipped
         ));
     }
     let mut config = runtime.gc_config_read()?;
@@ -635,6 +687,13 @@ fn agents_gc_apply(
     );
     for name in &removed {
         let _ = writeln!(out, "  {name}");
+    }
+    if scan.remote_skipped > 0 {
+        let _ = writeln!(
+            out,
+            "skipped {} remote-node entries (local-only checks cannot verify them)",
+            scan.remote_skipped
+        );
     }
     if !skipped.is_empty() {
         let _ = writeln!(
@@ -829,6 +888,7 @@ mod agents_tests {
 
     struct AgentsGcFakeRuntime {
         agents: BTreeMap<String, String>,
+        local_node: String,
         live: BTreeSet<String>,
         registry: BTreeSet<String>,
         repos: BTreeSet<String>,
@@ -839,6 +899,10 @@ mod agents_tests {
     impl AgentsGcRuntime for AgentsGcFakeRuntime {
         fn gc_agents(&self) -> BTreeMap<String, String> {
             self.agents.clone()
+        }
+
+        fn gc_local_node(&self) -> String {
+            self.local_node.clone()
         }
 
         fn gc_live_names(&mut self) -> BTreeSet<String> {
@@ -877,6 +941,7 @@ mod agents_tests {
                 ("squad-x".to_owned(), "m5".to_owned()),
                 ("unconference-oracle".to_owned(), "m5".to_owned()),
             ]),
+            local_node: "m5".to_owned(),
             live: BTreeSet::from(["nova".to_owned()]),
             registry: BTreeSet::from(["squad-x".to_owned()]),
             repos: BTreeSet::from(["digger".to_owned()]),
@@ -936,6 +1001,85 @@ mod agents_tests {
         let out = agents_gc_run(&agents_args(&["--apply"]), &mut runtime).expect("gc apply");
         assert!(!runtime.wrote);
         assert!(out.contains("nothing rewritten"), "{out}");
+    }
+
+    #[test]
+    fn agents_gc_remote_node_entries_survive_apply() {
+        let mut runtime = AgentsGcFakeRuntime {
+            agents: BTreeMap::from([
+                ("phaith-oracle".to_owned(), "phaith".to_owned()),
+                ("--junk".to_owned(), "phaith".to_owned()),
+                ("ghost".to_owned(), "m5".to_owned()),
+            ]),
+            local_node: "m5".to_owned(),
+            live: BTreeSet::new(),
+            registry: BTreeSet::new(),
+            repos: BTreeSet::new(),
+            config: serde_json::json!({
+                "node": "m5",
+                "agents": {"phaith-oracle": "phaith", "--junk": "phaith", "ghost": "m5"}
+            }),
+            wrote: false,
+        };
+        let dry = agents_gc_run(&Vec::new(), &mut runtime).expect("gc dry-run");
+        assert!(
+            dry.contains("skipped 1 remote-node entries (local-only checks cannot verify them)"),
+            "{dry}"
+        );
+        assert!(dry.contains("phantom entries: 2 of 3"), "{dry}");
+        assert!(dry.contains("--junk -> phaith (invalid name)"), "{dry}");
+        assert!(dry.contains("ghost -> m5"), "{dry}");
+        assert!(!dry.contains("phaith-oracle ->"), "{dry}");
+        let out = agents_gc_run(&agents_args(&["--apply"]), &mut runtime).expect("gc apply");
+        assert!(runtime.wrote);
+        assert!(out.contains("removed 2 phantom entries"), "{out}");
+        assert!(out.contains("skipped 1 remote-node entries"), "{out}");
+        let agents = runtime
+            .config
+            .get("agents")
+            .and_then(serde_json::Value::as_object)
+            .expect("agents object");
+        assert_eq!(agents.len(), 1);
+        assert!(
+            agents.contains_key("phaith-oracle"),
+            "live remote route must survive --apply: {agents:?}"
+        );
+    }
+
+    #[test]
+    fn agents_gc_slot_prefixed_sessions_protect_manifest_entries() {
+        let mut runtime = AgentsGcFakeRuntime {
+            agents: BTreeMap::from([
+                ("maw-rs".to_owned(), "m5".to_owned()),
+                ("maw-p2p".to_owned(), "m5".to_owned()),
+            ]),
+            local_node: "m5".to_owned(),
+            live: BTreeSet::from(["33-maw-rs".to_owned()]),
+            registry: BTreeSet::from(["19-maw-p2p".to_owned()]),
+            repos: BTreeSet::new(),
+            config: serde_json::json!({
+                "node": "m5",
+                "agents": {"maw-rs": "m5", "maw-p2p": "m5"}
+            }),
+            wrote: false,
+        };
+        let before = runtime.config.clone();
+        let dry = agents_gc_run(&Vec::new(), &mut runtime).expect("gc dry-run");
+        assert!(dry.contains("no phantom entries (2 checked)"), "{dry}");
+        let out = agents_gc_run(&agents_args(&["--apply"]), &mut runtime).expect("gc apply");
+        assert!(!runtime.wrote);
+        assert!(out.contains("nothing to remove"), "{out}");
+        assert_eq!(runtime.config, before);
+    }
+
+    #[test]
+    fn agents_gc_canonical_strips_slot_prefix_and_oracle_suffix() {
+        assert_eq!(agents_gc_canonical("33-maw-rs"), "maw-rs");
+        assert_eq!(agents_gc_canonical("19-maw-p2p"), "maw-p2p");
+        assert_eq!(agents_gc_canonical("12-nova-oracle"), "nova");
+        assert_eq!(agents_gc_canonical("nova-oracle"), "nova");
+        assert_eq!(agents_gc_canonical("3e-infra"), "3e-infra");
+        assert_eq!(agents_gc_canonical(" maw-rs "), "maw-rs");
     }
 
     #[test]
