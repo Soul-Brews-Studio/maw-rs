@@ -173,7 +173,9 @@ fn attach_resolved_target_for_options(opts: &AttachOptions) -> Result<String, Cl
             opts,
         ),
         AttachResolvedTarget::Ambiguous(candidates) => {
-            match attach_unique_raw_live_match(&opts.target, &candidates) {
+            match attach_unique_raw_live_match(&opts.target, &candidates)
+                .or_else(|| attach_single_live_exact_match(&candidates))
+            {
                 Some(session) => Ok(session),
                 None => attach_picker_output(
                     &opts.target,
@@ -282,6 +284,38 @@ fn attach_unique_raw_live_match(
         .map(|matched| matched.candidate.name.clone())
         .collect::<Vec<_>>();
     (matches.len() == 1).then(|| matches[0].clone())
+}
+
+/// Auto-pick the lone live candidate from an all-Exact ambiguity when every
+/// rival is non-live (sleeping registry / oracle / dead-end): `maw a <name>`
+/// wants the live session, not a wake bridge (#602). Live-vs-live ties,
+/// fleet-squad ties, and any non-Exact ambiguity still go to the picker.
+fn attach_single_live_exact_match(candidates: &[maw_matcher::ResolveMatch]) -> Option<String> {
+    if candidates
+        .iter()
+        .any(|matched| matched.rank != maw_matcher::ResolveMatchRank::Exact)
+    {
+        return None;
+    }
+    let mut live = None;
+    for matched in candidates {
+        match matched.candidate.kind {
+            maw_matcher::ResolveCandidateKind::LiveSession
+            | maw_matcher::ResolveCandidateKind::Window => {
+                if live.is_some() {
+                    return None;
+                }
+                live = Some(matched.candidate.name.clone());
+            }
+            maw_matcher::ResolveCandidateKind::SleepingRegistry
+            | maw_matcher::ResolveCandidateKind::Oracle
+            | maw_matcher::ResolveCandidateKind::Repo
+            | maw_matcher::ResolveCandidateKind::Peer => {}
+            // A squad wake is a meaningful alternative action — keep the picker.
+            maw_matcher::ResolveCandidateKind::FleetSquad => return None,
+        }
+    }
+    live
 }
 
 fn attach_picker_output(
@@ -798,16 +832,25 @@ mod attach_tests {
             "MAW_XDG",
             "MAW_STATE_DIR",
             "MAW_CONFIG_DIR",
+            "MAW_CACHE_DIR",
             "XDG_STATE_HOME",
             "XDG_CONFIG_HOME",
+            "XDG_CACHE_HOME",
             "GHQ_ROOT",
         ]
         .map(EnvVarRestore::capture);
         std::env::set_var("HOME", root.join("home"));
         std::env::set_var("MAW_STATE_DIR", root.join("state"));
         std::env::set_var("MAW_CONFIG_DIR", root.join("config"));
+        std::env::set_var("MAW_CACHE_DIR", root.join("cache"));
         std::env::set_var("GHQ_ROOT", root.join("ghq"));
-        for key in ["MAW_HOME", "MAW_XDG", "XDG_STATE_HOME", "XDG_CONFIG_HOME"] {
+        for key in [
+            "MAW_HOME",
+            "MAW_XDG",
+            "XDG_STATE_HOME",
+            "XDG_CONFIG_HOME",
+            "XDG_CACHE_HOME",
+        ] {
             std::env::remove_var(key);
         }
         test();
@@ -886,6 +929,60 @@ mod attach_tests {
             assert_eq!(group.code, 1, "{}{}", group.stdout, group.stderr);
             assert!(group.stdout.contains("maw fleet wake 3e"));
             assert!(group.stdout.contains("2 members"));
+        });
+    }
+
+    #[test]
+    fn attach_auto_picks_single_live_session_over_oracle_registry_tie() {
+        let root = attach_fleet_root("live-over-oracle");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("cache")).expect("cache dir");
+        std::fs::write(
+            root.join("cache/oracles.json"),
+            r#"{"schema":1,"oracles":[{"org":"acme","repo":"oracle-hall","name":"oracle-hall","local_path":"","has_psi":false,"has_fleet_config":false}]}"#,
+        )
+        .expect("oracles cache");
+        attach_with_fleet_env(&root, || {
+            let mut runner = AttachFakeRunner {
+                sessions: "14-oracle-hall\n".to_owned(),
+                ..AttachFakeRunner::default()
+            };
+            let output =
+                attach_run_with_runner(&attach_strings(&["oracle-hall", "--print"]), &mut runner)
+                    .unwrap();
+            assert_eq!(output.code, 0, "{}{}", output.stdout, output.stderr);
+            assert!(
+                output.stdout.contains("Run: tmux attach -t 14-oracle-hall"),
+                "{}",
+                output.stdout
+            );
+        });
+    }
+
+    #[test]
+    fn attach_auto_picks_single_live_session_on_oracle_suffix_target() {
+        let root = attach_fleet_root("live-oracle-suffix");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("cache")).expect("cache dir");
+        std::fs::write(
+            root.join("cache/oracles.json"),
+            r#"{"schema":1,"oracles":[{"org":"acme","repo":"hall","name":"hall","local_path":"","has_psi":false,"has_fleet_config":false}]}"#,
+        )
+        .expect("oracles cache");
+        attach_with_fleet_env(&root, || {
+            let mut runner = AttachFakeRunner {
+                sessions: "14-hall\n".to_owned(),
+                ..AttachFakeRunner::default()
+            };
+            let output =
+                attach_run_with_runner(&attach_strings(&["hall-oracle", "--print"]), &mut runner)
+                    .unwrap();
+            assert_eq!(output.code, 0, "{}{}", output.stdout, output.stderr);
+            assert!(
+                output.stdout.contains("Run: tmux attach -t 14-hall"),
+                "{}",
+                output.stdout
+            );
         });
     }
 
@@ -998,6 +1095,63 @@ mod attach_tests {
         assert_eq!(
             attach_picker_action(&live).as_deref(),
             Some("maw attach 99-live")
+        );
+    }
+
+    #[test]
+    fn attach_single_live_exact_match_keeps_picker_for_ties_and_non_exact() {
+        let matched = |rank, kind, name: &str| maw_matcher::ResolveMatch {
+            rank,
+            candidate: maw_matcher::ResolveTypedCandidate {
+                kind,
+                name: name.to_owned(),
+                aliases: Vec::new(),
+            },
+        };
+        let exact = maw_matcher::ResolveMatchRank::Exact;
+        let live = maw_matcher::ResolveCandidateKind::LiveSession;
+        let oracle = maw_matcher::ResolveCandidateKind::Oracle;
+        let sleeping = maw_matcher::ResolveCandidateKind::SleepingRegistry;
+        assert_eq!(
+            attach_single_live_exact_match(&[
+                matched(exact, live, "14-hall"),
+                matched(exact, oracle, "hall"),
+            ])
+            .as_deref(),
+            Some("14-hall"),
+            "single live among non-live auto-picks"
+        );
+        assert_eq!(
+            attach_single_live_exact_match(&[
+                matched(exact, live, "158-homekeeper"),
+                matched(exact, live, "159-homekeeper"),
+            ]),
+            None,
+            "live-vs-live tie keeps the picker"
+        );
+        assert_eq!(
+            attach_single_live_exact_match(&[
+                matched(exact, sleeping, "hall"),
+                matched(exact, oracle, "hall"),
+            ]),
+            None,
+            "non-live-only ambiguity keeps the picker/bridge"
+        );
+        assert_eq!(
+            attach_single_live_exact_match(&[
+                matched(maw_matcher::ResolveMatchRank::Fuzzy, live, "14-hall"),
+                matched(maw_matcher::ResolveMatchRank::Fuzzy, oracle, "hallway"),
+            ]),
+            None,
+            "non-Exact ambiguity keeps the picker"
+        );
+        assert_eq!(
+            attach_single_live_exact_match(&[
+                matched(exact, live, "14-hall"),
+                matched(exact, maw_matcher::ResolveCandidateKind::FleetSquad, "hall"),
+            ]),
+            None,
+            "fleet-squad tie keeps the picker"
         );
     }
 
