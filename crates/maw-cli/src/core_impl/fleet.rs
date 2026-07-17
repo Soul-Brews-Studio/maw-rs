@@ -1238,7 +1238,10 @@ fn fleet_run_group_action(
 // Window names count because a member can live as a window of a shared session.
 
 fn fleet_run_group_post_wake_hooks(resolved: &[(&str, &FleetSessionSummary)]) {
-    let hooks = wake_config_post_wake_hooks();
+    // A squad has no single repo path, so group hooks keep the process-cwd
+    // (global) config read (`None`); per-member dir-aware resolution is an
+    // explicit follow-up to #600 — do not change fleet semantics here.
+    let hooks = wake_config_post_wake_hooks(None);
     if hooks.is_empty() {
         return;
     }

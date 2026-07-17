@@ -1125,8 +1125,11 @@ fn wake_sanitize_branch(value: &str) -> String {
 /// `workon` + maw-js): custom engines like `omx-1` expand to their full shell
 /// command; real binaries (codex/claude) fall through to the literal name.
 /// Fixes the fleet codex-team recipe (omx-N) that previously ran a bare `omx-1`.
-fn wake_resolve_engine_command(engine: &str) -> String {
-    let config = merged_config_value();
+/// Config is resolved dir-aware against the resolved repo path (like `workon`),
+/// so committed `.maw/maw.config.<NN>.json` layers apply regardless of the
+/// invoking shell's cwd (#600).
+fn wake_resolve_engine_command(engine: &str, cwd: &std::path::Path) -> String {
+    let config = merged_config_value_in_dir(cwd);
     let command = config
         .get("commands")
         .and_then(|commands| {
@@ -1139,14 +1142,25 @@ fn wake_resolve_engine_command(engine: &str) -> String {
     workon_prefix_zai_pool(&config, command)
 }
 
-fn wake_default_engine(options: &WakeOptionsNative) -> String {
+fn wake_default_engine(options: &WakeOptionsNative, cwd: &std::path::Path) -> String {
     if let Some(engine) = &options.engine {
         return engine.clone();
     }
     if options.resume {
         return "codex".to_owned();
     }
-    merged_config_value()
+    let config = merged_config_value_in_dir(cwd);
+    let defaults = wake_config_defaults(&config);
+    // A committed `wake.resume: true` behaves exactly like `--resume`: it pins
+    // the codex engine before `wake.engine`/`commands.default` are consulted.
+    // Explicit `-e` above beats it; `--fresh` opts out.
+    if defaults.resume && !options.fresh {
+        return "codex".to_owned();
+    }
+    if let Some(engine) = defaults.engine {
+        return engine;
+    }
+    config
         .get("commands")
         .and_then(|commands| commands.get("default"))
         .and_then(serde_json::Value::as_str)
@@ -1154,12 +1168,54 @@ fn wake_default_engine(options: &WakeOptionsNative) -> String {
         .map_or_else(|| "codex".to_owned(), |_| "default".to_owned())
 }
 
+/// Committed wake-defaults block — the `wake` object in merged config:
+/// `{ "engine": string, "resume": bool, "channels": bool, "prompt": string }`.
+/// Read through the same dir-aware merge as `commands`, so a repo layer
+/// (`.maw/maw.config.<NN>.json`) overrides user config per the usual weights.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct WakeConfigDefaults {
+    engine: Option<String>,
+    resume: bool,
+    channels: bool,
+    prompt: Option<String>,
+}
+
+fn wake_config_defaults(config: &serde_json::Value) -> WakeConfigDefaults {
+    let block = config.get("wake");
+    let text = |key: &str| {
+        block
+            .and_then(|wake| wake.get(key))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    };
+    let flag = |key: &str| {
+        block
+            .and_then(|wake| wake.get(key))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+    };
+    WakeConfigDefaults {
+        engine: text("engine"),
+        resume: flag("resume"),
+        channels: flag("channels"),
+        prompt: text("prompt"),
+    }
+}
+
 fn wake_command(window: &str, cwd: &std::path::Path, options: &WakeOptionsNative) -> String {
-    let engine = wake_default_engine(options);
-    let mut engine_command = wake_resolve_engine_command(&engine);
-    if options.resume { engine_command.push_str(" resume"); }
-    if options.channels { engine_command.push_str(" --channels plugin:discord@claude-plugins-official"); }
-    if let Some(prompt) = &options.prompt { let _ = write!(engine_command, " {}", wake_shell_quote(prompt)); }
+    let defaults = wake_config_defaults(&merged_config_value_in_dir(cwd));
+    let engine = wake_default_engine(options, cwd);
+    let mut engine_command = wake_resolve_engine_command(&engine, cwd);
+    // Wake-defaults precedence: explicit CLI flag > repo-layer config > user
+    // config > built-in. `resume`/`channels` are presence-false CLI booleans —
+    // `false` means "flag not passed", so a config default fills in only then
+    // (there is no negative flag); `--fresh` is the explicit opt-out for a
+    // configured `wake.resume`. `prompt` tracks presence via `Option`.
+    if options.resume || (defaults.resume && !options.fresh) { engine_command.push_str(" resume"); }
+    if options.channels || defaults.channels { engine_command.push_str(" --channels plugin:discord@claude-plugins-official"); }
+    if let Some(prompt) = options.prompt.as_deref().or(defaults.prompt.as_deref()) { let _ = write!(engine_command, " {}", wake_shell_quote(prompt)); }
     let cwd_arg = wake_shell_quote(&cwd.display().to_string());
     let cwd_label = wake_shell_quote(&cwd.display().to_string());
     let command = format!(
@@ -1251,21 +1307,25 @@ fn wake_apply(
     wake_register_fleet_session(resolved, tmux)?;
     wake_record_phase(resolved, "fleet-upsert", wake_elapsed_ms(started), out, false);
     let started = std::time::Instant::now();
-    let hooks = wake_post_wake_hooks(options);
+    let hooks = wake_post_wake_hooks(options, &resolved.repo_path);
     wake_run_post_wake_hooks(&resolved.oracle, &resolved.session, &resolved.window, &hooks);
     wake_record_phase(resolved, "post-wake-hooks", wake_elapsed_ms(started), out, false);
     Ok(())
 }
 
 
-fn wake_post_wake_hooks(options: &WakeOptionsNative) -> Vec<String> {
-    let mut hooks = wake_config_post_wake_hooks();
+fn wake_post_wake_hooks(options: &WakeOptionsNative, cwd: &std::path::Path) -> Vec<String> {
+    let mut hooks = wake_config_post_wake_hooks(Some(cwd));
     hooks.extend(options.on_ready.iter().cloned());
     hooks
 }
 
-fn wake_config_post_wake_hooks() -> Vec<String> {
-    let config = merged_config_value();
+/// `cwd: Some(path)` resolves `hooks.postWake` dir-aware against the resolved
+/// repo path; `None` keeps the process-cwd (global) read — used by fleet group
+/// hooks, where a squad has no single repo path (per-member resolution is a
+/// follow-up to #600).
+fn wake_config_post_wake_hooks(cwd: Option<&std::path::Path>) -> Vec<String> {
+    let config = cwd.map_or_else(merged_config_value, merged_config_value_in_dir);
     config
         .pointer("/hooks/postWake")
         .and_then(serde_json::Value::as_array)
@@ -1573,7 +1633,7 @@ mod wake_tests {
 
         // custom engines resolve to their full command from merged config `commands`;
         // real binaries not in the map fall through to the literal name.
-        wake_with_fixture(|_| {
+        wake_with_fixture(|root| {
             let dir = active_config_dir();
             std::fs::create_dir_all(&dir).expect("config dir");
             std::fs::write(
@@ -1583,10 +1643,10 @@ mod wake_tests {
             .expect("write config");
             assert!(!dir.join("maw.config.json").exists());
             assert_eq!(
-                wake_resolve_engine_command("omx-1"),
+                wake_resolve_engine_command("omx-1", root),
                 "bun codex-setup.ts 1 && CODEX_HOME=$PWD/.codex omx --direct --madmax"
             );
-            assert_eq!(wake_resolve_engine_command("codex"), "codex");
+            assert_eq!(wake_resolve_engine_command("codex", root), "codex");
         });
     }
 
@@ -1613,6 +1673,130 @@ mod wake_tests {
             let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach", "--resume"]), &mut tmux).expect("resume");
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
             assert!(send.contains("{ codex resume;"), "{send}");
+        });
+    }
+
+    #[test]
+    fn wake_engine_resolution_reads_repo_layer_config_for_the_resolved_repo() {
+        // The test process cwd sits outside the fixture repo, so a passing
+        // repo-layer lookup proves resolution is keyed on the resolved repo
+        // path, not the invoking shell's cwd (#600).
+        wake_with_fixture(|root| {
+            let dir = active_config_dir();
+            std::fs::create_dir_all(&dir).expect("config dir");
+            std::fs::write(dir.join("maw.config.40.json"), r#"{"commands":{"omx-1":"user-omx"}}"#)
+                .expect("user config");
+            let repo = root.join("ghq/github.com/acme/neo-oracle");
+            std::fs::create_dir_all(repo.join(".maw")).expect("repo .maw");
+            std::fs::write(
+                repo.join(".maw/maw.config.40.json"),
+                r#"{"commands":{"omx-1":"CODEX_HOME=$PWD/.codex omx --direct"}}"#,
+            )
+            .expect("repo config");
+
+            // Repo layer beats user config at equal weight (Project scope
+            // outranks User); a dir outside the repo sees only the user layer.
+            assert_eq!(wake_resolve_engine_command("omx-1", &repo), "CODEX_HOME=$PWD/.codex omx --direct");
+            assert_eq!(wake_resolve_engine_command("omx-1", root), "user-omx");
+
+            // End-to-end: waking the repo by name threads its resolved path
+            // into engine resolution.
+            let mut tmux = WakeMockTmux::default();
+            let (code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach", "-e", "omx-1"]), &mut tmux).expect("wake");
+            assert_eq!(code, 0);
+            let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
+            assert!(send.contains("{ CODEX_HOME=$PWD/.codex omx --direct;"), "{send}");
+        });
+    }
+
+    #[test]
+    fn wake_defaults_block_fills_engine_channels_prompt_and_cli_flags_win() {
+        wake_with_fixture(|root| {
+            let repo = root.join("ghq/github.com/acme/neo-oracle");
+            std::fs::create_dir_all(repo.join(".maw")).expect("repo .maw");
+            std::fs::write(
+                repo.join(".maw/maw.config.40.json"),
+                r#"{"commands":{"omx-1":"OMX_POOL=1 omx --direct"},"wake":{"engine":"omx-1","channels":true,"prompt":"read AGENTS.md first"}}"#,
+            )
+            .expect("repo config");
+
+            // No flags: wake.engine resolves through the commands map;
+            // wake.channels and wake.prompt fill in.
+            let mut tmux = WakeMockTmux::default();
+            let (code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("config defaults");
+            assert_eq!(code, 0);
+            let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
+            assert!(
+                send.contains("{ OMX_POOL=1 omx --direct --channels plugin:discord@claude-plugins-official 'read AGENTS.md first';"),
+                "{send}"
+            );
+
+            // Explicit CLI flags beat the config defaults (`--channels` has no
+            // negative flag, so the config value still applies there).
+            let mut tmux = WakeMockTmux::default();
+            let (code, _stdout) = wake_run(
+                &wake_strings(&["neo", "--no-attach", "-e", "codex", "--prompt", "hi"]),
+                &mut tmux,
+            )
+            .expect("cli wins");
+            assert_eq!(code, 0);
+            let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
+            assert!(send.contains("{ codex --channels plugin:discord@claude-plugins-official hi;"), "{send}");
+        });
+    }
+
+    #[test]
+    fn wake_defaults_block_resume_pins_codex_and_fresh_or_engine_beat_it() {
+        wake_with_fixture(|root| {
+            let repo = root.join("ghq/github.com/acme/neo-oracle");
+            std::fs::create_dir_all(repo.join(".maw")).expect("repo .maw");
+            std::fs::write(repo.join(".maw/maw.config.40.json"), r#"{"wake":{"engine":"claude","resume":true}}"#)
+                .expect("repo config");
+
+            // wake.resume behaves exactly like --resume: pins codex over wake.engine.
+            let mut tmux = WakeMockTmux::default();
+            let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("config resume");
+            let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
+            assert!(send.contains("{ codex resume;"), "{send}");
+
+            // --fresh opts out of the configured resume; wake.engine applies again.
+            let mut tmux = WakeMockTmux::default();
+            let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach", "--fresh"]), &mut tmux).expect("fresh");
+            let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
+            assert!(send.contains("{ claude;"), "{send}");
+            assert!(!send.contains(" resume"), "{send}");
+
+            // Explicit -e beats the codex pin, identically to `-e … --resume`.
+            let mut tmux = WakeMockTmux::default();
+            let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach", "-e", "claude"]), &mut tmux).expect("explicit engine");
+            let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
+            assert!(send.contains("{ claude resume;"), "{send}");
+        });
+    }
+
+    #[test]
+    fn wake_post_wake_hooks_read_repo_layer_config() {
+        wake_with_fixture(|root| {
+            let repo = root.join("ghq/github.com/acme/neo-oracle");
+            let marker = root.join("repo-hook.txt");
+            let hook = format!(
+                "printf '%s|%s|%s' \"$MAW_ORACLE\" \"$MAW_SESSION\" \"$MAW_WINDOW\" > {}",
+                wake_shell_quote(&marker.display().to_string())
+            );
+            std::fs::create_dir_all(repo.join(".maw")).expect("repo .maw");
+            std::fs::write(
+                repo.join(".maw/maw.config.40.json"),
+                serde_json::to_string(&serde_json::json!({"hooks":{"postWake":[hook]}})).expect("json"),
+            )
+            .expect("repo config");
+
+            let session = wake_session_name("neo", &[]);
+            let mut tmux = WakeMockTmux::default();
+            let (code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("wake with repo hook");
+            assert_eq!(code, 0);
+            // The process cwd is outside the repo — the hook can only come
+            // from the repo-layer config resolved against repo_path.
+            assert_eq!(std::fs::read_to_string(&marker).expect("repo marker"), format!("neo|{session}|neo"));
         });
     }
 
@@ -1709,6 +1893,22 @@ mod wake_tests {
             assert!(!stdout.contains("github.com/github.com"), "{stdout}");
             assert!(tmux.actions.is_empty());
         });
+    }
+
+    #[test]
+    fn wake_host_colon_target_and_peer_flag_route_to_peer_target() {
+        // Issue #600 done-criterion 3: `host:target` (and `--peer <node>`) keep
+        // routing through `run_wake_async` — the dir-aware local pipeline (and
+        // its repo-layer config reads) never runs for peer wakes.
+        let host_target = wake_parse_args(&wake_strings(&["mba:neo"])).expect("parse host:target");
+        assert!(wake_should_use_peer_target(&host_target));
+
+        let peer_flag = wake_parse_args(&wake_strings(&["neo", "--peer", "mba"])).expect("parse --peer");
+        assert!(wake_should_use_peer_target(&peer_flag));
+
+        // Local escape hatches still beat the colon heuristic.
+        let dry_run = wake_parse_args(&wake_strings(&["mba:neo", "--dry-run"])).expect("parse dry-run");
+        assert!(!wake_should_use_peer_target(&dry_run));
     }
 
     #[test]
