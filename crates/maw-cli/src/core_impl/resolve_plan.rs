@@ -370,7 +370,7 @@ fn usage_text() -> String {
         "  calver --now <time> [--stable|--alpha]        compute the next CalVer release version\n",
         "  version                                       show build version\n",
         "\n",
-        "maw help --all lists every registered verb; maw <verb> --help explains one.\n",
+        "maw help --all lists every registered verb.\n",
     )
     .to_owned();
     text.push_str(&usage_plugins_line());
@@ -382,23 +382,32 @@ const USAGE_PLUGINS_INLINE_MAX: usize = 12;
 
 /// One-line installed-plugins footer for the default menu.
 ///
-/// Uses the same discovery `plugin ls` uses; discovery never errors (unreadable
-/// roots and malformed manifests are skipped), so `-h` cannot fail here. Fleet
-/// machines carry 100+ plugins, so the list elides past a dozen names.
+/// Names-only: scans the same roots `plugin ls` uses and parses each dir's
+/// `plugin.json`, but skips artifact hash verification — the integrity gate
+/// belongs to plugin load/dispatch, not to printing a name in `-h` (full
+/// discovery sha256-hashes every pinned artifact, a per-invocation tax on the
+/// hottest CLI path). Unreadable roots and malformed manifests are skipped,
+/// so `-h` cannot fail here. Fleet machines carry 100+ plugins, so the list
+/// elides past a dozen names, alphabetically.
 fn usage_plugins_line() -> String {
-    let report = discover_packages(&DiscoverPackagesOptions::default());
-    let names = report
-        .plugins
-        .iter()
-        .map(|plugin| plugin.manifest.name.as_str())
-        .collect::<Vec<_>>();
+    let mut names = std::collections::BTreeSet::new();
+    for base_dir in DiscoverPackagesOptions::default().scan_dirs {
+        let Ok(entries) = std::fs::read_dir(&base_dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if let Ok(Some(loaded)) = load_manifest_from_dir(&entry.path()) {
+                names.insert(loaded.manifest.name);
+            }
+        }
+    }
     if names.is_empty() {
         return "installed plugins: none (maw plugin ls -v for detail)\n".to_owned();
     }
     let shown = names
         .iter()
         .take(USAGE_PLUGINS_INLINE_MAX)
-        .copied()
+        .map(String::as_str)
         .collect::<Vec<_>>()
         .join(" ");
     let elided = names.len().saturating_sub(USAGE_PLUGINS_INLINE_MAX);
