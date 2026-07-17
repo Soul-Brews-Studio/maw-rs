@@ -52,6 +52,7 @@ struct WakeResolvedNative {
     repo_fuzzy_match: Option<String>,
     repo_warning: Option<String>,
     command: String,
+    command_warnings: Vec<String>,
     target: String,
 }
 
@@ -633,7 +634,7 @@ fn wake_resolve(options: &WakeOptionsNative, sessions: &[TmuxSession]) -> Result
         .unwrap_or_else(|| wake_session_name(&oracle, sessions));
     let window = wake_window_name(options, &oracle);
     let target = format!("{session}:{window}");
-    let command = wake_command(&window, &repo_path, options);
+    let (command, command_warnings) = wake_command(&window, &repo_path, options);
     Ok(WakeResolvedNative {
         oracle,
         session,
@@ -642,6 +643,7 @@ fn wake_resolve(options: &WakeOptionsNative, sessions: &[TmuxSession]) -> Result
         repo_fuzzy_match: repo.fuzzy_match,
         repo_warning: repo.warning,
         command,
+        command_warnings,
         target,
     })
 }
@@ -1146,17 +1148,13 @@ fn wake_default_engine(options: &WakeOptionsNative, cwd: &std::path::Path) -> St
     if let Some(engine) = &options.engine {
         return engine.clone();
     }
-    if options.resume {
-        return "codex".to_owned();
-    }
     let config = merged_config_value_in_dir(cwd);
     let defaults = wake_config_defaults(&config);
-    // A committed `wake.resume: true` behaves exactly like `--resume`: it pins
-    // the codex engine before `wake.engine`/`commands.default` are consulted.
-    // Explicit `-e` above beats it; `--fresh` opts out.
-    if defaults.resume && !options.fresh {
-        return "codex".to_owned();
-    }
+    // Resume no longer pins codex (#615): `--resume`/`wake.resume` resume the
+    // engine that resolution below picks (wake.engine → commands.default →
+    // built-in codex), so a repo committed to claude resumes claude. A bare
+    // `maw wake X --resume` with no engine config still lands on codex via
+    // the final fallback, preserving the historical behavior where it mattered.
     if let Some(engine) = defaults.engine {
         return engine;
     }
@@ -1216,19 +1214,143 @@ fn wake_config_defaults(config: &serde_json::Value) -> WakeConfigDefaults {
 /// (`wake_confirm_engine_launch`, #580) instead of an in-pane printf.
 /// `cwd` stays a parameter because engine/defaults config is resolved
 /// dir-aware against the resolved repo path (#600).
-fn wake_command(window: &str, cwd: &std::path::Path, options: &WakeOptionsNative) -> String {
-    let defaults = wake_config_defaults(&merged_config_value_in_dir(cwd));
+fn wake_command(window: &str, cwd: &std::path::Path, options: &WakeOptionsNative) -> (String, Vec<String>) {
+    let config = merged_config_value_in_dir(cwd);
+    let defaults = wake_config_defaults(&config);
     let engine = wake_default_engine(options, cwd);
-    let mut engine_command = wake_resolve_engine_command(&engine, cwd);
     // Wake-defaults precedence: explicit CLI flag > repo-layer config > user
     // config > built-in. `resume`/`channels` are presence-false CLI booleans —
     // `false` means "flag not passed", so a config default fills in only then
     // (there is no negative flag); `--fresh` is the explicit opt-out for a
     // configured `wake.resume`. `prompt` tracks presence via `Option`.
-    if options.resume || (defaults.resume && !options.fresh) { engine_command.push_str(" resume"); }
-    if options.channels || defaults.channels { engine_command.push_str(" --channels plugin:discord@claude-plugins-official"); }
+    let resume = options.resume || (defaults.resume && !options.fresh);
+    let channels = options.channels || defaults.channels;
+    let mut warnings = Vec::new();
+    let mut engine_command = wake_engine_launch_command(&engine, cwd, &config, resume, &mut warnings);
+    if channels { wake_apply_channels(&mut engine_command, &engine, &config, resume, &mut warnings); }
     if let Some(prompt) = options.prompt.as_deref().or(defaults.prompt.as_deref()) { let _ = write!(engine_command, " {}", wake_shell_quote(prompt)); }
-    format!("MAW_SESSION_WINDOW={} {engine_command}", wake_shell_quote(window))
+    (format!("MAW_SESSION_WINDOW={} {engine_command}", wake_shell_quote(window)), warnings)
+}
+
+/// Resume-aware launch line (#615). Precedence when resume is in effect:
+/// 1. `commands.<engine>-resume` — the existing fleet convention: a COMPLETE
+///    replacement command line (not a suffix), dir-aware via
+///    `merged_config_value_in_dir` so repos can commit their own form.
+/// 2. Engine-family fallback on the resolved command's binary token:
+///    claude → append ` --continue`; codex/omx → inject the `resume`
+///    subcommand directly after the binary (`codex resume <flags>` is valid).
+/// 3. Unknown binary — keep the historical naive ` resume` append, but warn
+///    so it is no longer silent.
+fn wake_engine_launch_command(
+    engine: &str,
+    cwd: &std::path::Path,
+    config: &serde_json::Value,
+    resume: bool,
+    warnings: &mut Vec<String>,
+) -> String {
+    if resume {
+        if let Some(command) = wake_config_command(config, &format!("{engine}-resume")) {
+            return workon_prefix_zai_pool(config, command);
+        }
+    }
+    let command = wake_resolve_engine_command(engine, cwd);
+    if !resume {
+        return command;
+    }
+    match wake_engine_binary(&command) {
+        Some("claude") => format!("{command} --continue"),
+        Some("codex" | "omx") => wake_inject_resume_subcommand(&command).unwrap_or_else(|| format!("{command} resume")),
+        _ => {
+            warnings.push(format!(
+                "wake: resume requested but engine '{engine}' has no known resume form — appending ' resume' naively; define commands.{engine}-resume with the full resume launch line"
+            ));
+            format!("{command} resume")
+        }
+    }
+}
+
+/// Channels flag is claude-only (#615): honor a `commands.<engine>-channels`
+/// full-replacement entry first (skipped when a resume line is already in
+/// effect — replacing it would drop the resume form), then append the claude
+/// plugin flag only for claude-family binaries, warning otherwise instead of
+/// handing a foreign flag to codex/omx.
+fn wake_apply_channels(
+    engine_command: &mut String,
+    engine: &str,
+    config: &serde_json::Value,
+    resume: bool,
+    warnings: &mut Vec<String>,
+) {
+    if !resume {
+        if let Some(command) = wake_config_command(config, &format!("{engine}-channels")) {
+            *engine_command = workon_prefix_zai_pool(config, command);
+            return;
+        }
+    }
+    if wake_engine_binary(engine_command) == Some("claude") {
+        engine_command.push_str(" --channels plugin:discord@claude-plugins-official");
+    } else {
+        warnings.push(format!(
+            "wake: channels requested but engine '{engine}' is not claude-family — skipping the claude-only --channels flag; define commands.{engine}-channels for an engine-specific line"
+        ));
+    }
+}
+
+/// A non-empty `commands.<name>` entry from merged config, if present.
+fn wake_config_command(config: &serde_json::Value, name: &str) -> Option<String> {
+    config
+        .get("commands")
+        .and_then(|commands| commands.get(name))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+/// Byte span of the engine binary token in a resolved command line: the first
+/// whitespace-delimited word that is neither a `VAR=value` env assignment nor
+/// the shell `command` builtin.
+fn wake_engine_binary_span(command: &str) -> Option<(usize, usize)> {
+    let mut start = 0;
+    while start < command.len() {
+        let rest = &command[start..];
+        start += rest.len() - rest.trim_start().len();
+        if start >= command.len() {
+            return None;
+        }
+        let rest = &command[start..];
+        let end = start + rest.find(char::is_whitespace).unwrap_or(rest.len());
+        let word = &command[start..end];
+        if !wake_is_env_assignment(word) && word != "command" {
+            return Some((start, end));
+        }
+        start = end;
+    }
+    None
+}
+
+fn wake_is_env_assignment(word: &str) -> bool {
+    let Some((name, _)) = word.split_once('=') else { return false };
+    !name.is_empty()
+        && !name.starts_with(|ch: char| ch.is_ascii_digit())
+        && name.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
+/// Basename of the engine binary token — decides the resume/channels family.
+fn wake_engine_binary(command: &str) -> Option<&str> {
+    wake_engine_binary_span(command).map(|(start, end)| {
+        let word = &command[start..end];
+        word.rsplit('/').next().unwrap_or(word)
+    })
+}
+
+/// `codex resume <flags>` — the subcommand goes right after the binary token.
+fn wake_inject_resume_subcommand(command: &str) -> Option<String> {
+    wake_engine_binary_span(command).map(|(_, end)| {
+        let mut out = command.to_owned();
+        out.insert_str(end, " resume");
+        out
+    })
 }
 
 fn wake_shell_quote(value: &str) -> String {
@@ -1239,6 +1361,7 @@ fn wake_shell_quote(value: &str) -> String {
 fn wake_render_dry_run(options: &WakeOptionsNative, resolved: &WakeResolvedNative) -> String {
     let mut out = String::new();
     if let Some(warning) = &resolved.repo_warning { let _ = writeln!(out, "\x1b[33mwarning:\x1b[0m {warning}"); }
+    for warning in &resolved.command_warnings { let _ = writeln!(out, "\x1b[33mwarning:\x1b[0m {warning}"); }
     if let Some(name) = &resolved.repo_fuzzy_match {
         let _ = writeln!(out, "\x1b[36m→\x1b[0m fuzzy match: {name}");
     }
@@ -1286,6 +1409,7 @@ fn wake_apply(
     if !resolved.repo_path.is_dir() { return Err(format!("wake: repo path missing: {}", resolved.repo_path.display())); }
     wake_record_phase(resolved, "repo-check", wake_elapsed_ms(started), out, true);
     if let Some(warning) = &resolved.repo_warning { let _ = writeln!(out, "\x1b[33mwarning:\x1b[0m {warning}"); }
+    for warning in &resolved.command_warnings { let _ = writeln!(out, "\x1b[33mwarning:\x1b[0m {warning}"); }
     if let Some(name) = &resolved.repo_fuzzy_match {
         let _ = writeln!(out, "\x1b[36m→\x1b[0m fuzzy match: {name}");
     }
@@ -1658,7 +1782,7 @@ mod wake_tests {
     }
 
     #[test]
-    fn wake_fresh_default_uses_config_default_but_explicit_and_resume_keep_codex() {
+    fn wake_fresh_default_uses_config_default_and_resume_follows_the_resolved_engine() {
         wake_with_fixture(|_| {
             let dir = active_config_dir();
             std::fs::create_dir_all(&dir).expect("config dir");
@@ -1676,10 +1800,104 @@ mod wake_tests {
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
             assert!(send.ends_with("MAW_SESSION_WINDOW=neo codex"), "{send}");
 
+            // --resume no longer hijacks the engine to codex (#615): the
+            // repo's commands.default engine resumes with its own form.
+            let mut tmux = WakeMockTmux::default();
+            let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach", "--resume"]), &mut tmux).expect("resume");
+            let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo claude --continue"), "{send}");
+        });
+    }
+
+    #[test]
+    fn wake_resume_without_engine_config_still_lands_on_codex_with_subcommand_first() {
+        wake_with_fixture(|_| {
+            // No commands/wake config at all: the final fallback engine stays
+            // codex, and the resume subcommand goes right after the binary.
             let mut tmux = WakeMockTmux::default();
             let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach", "--resume"]), &mut tmux).expect("resume");
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
             assert!(send.ends_with("MAW_SESSION_WINDOW=neo codex resume"), "{send}");
+        });
+    }
+
+    #[test]
+    fn wake_resume_config_entry_beats_engine_command_and_codex_fallback_injects_subcommand() {
+        wake_with_fixture(|root| {
+            let repo = root.join("ghq/github.com/acme/neo-oracle");
+            std::fs::create_dir_all(repo.join(".maw")).expect("repo .maw");
+            std::fs::write(
+                repo.join(".maw/maw.config.40.json"),
+                r#"{"commands":{"omx-1":"OMX_POOL=1 omx --direct","omx-1-resume":"OMX_AUTO_UPDATE=0 omx --direct resume --last"},"wake":{"engine":"omx-1","resume":true}}"#,
+            )
+            .expect("repo config");
+
+            // (a) commands.<engine>-resume is a COMPLETE replacement line and
+            // wins over commands.<engine> + any fallback.
+            let mut tmux = WakeMockTmux::default();
+            let (_code, stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("config resume entry");
+            let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo OMX_AUTO_UPDATE=0 omx --direct resume --last"), "{send}");
+            assert!(!stdout.contains("warning:"), "{stdout}");
+
+            // (c) codex-family fallback (no <engine>-resume entry): `resume`
+            // is injected as the subcommand right after the binary token, not
+            // appended after the flags.
+            std::fs::write(
+                repo.join(".maw/maw.config.40.json"),
+                r#"{"commands":{"codex":"codex --search --dangerously-bypass-approvals-and-sandbox"},"wake":{"resume":true}}"#,
+            )
+            .expect("repo config codex");
+            let mut tmux = WakeMockTmux::default();
+            let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("codex fallback");
+            let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
+            assert!(
+                send.ends_with("MAW_SESSION_WINDOW=neo codex resume --search --dangerously-bypass-approvals-and-sandbox"),
+                "{send}"
+            );
+        });
+    }
+
+    #[test]
+    fn wake_resume_claude_fallback_skips_env_and_command_builtin_then_appends_continue() {
+        wake_with_fixture(|root| {
+            let repo = root.join("ghq/github.com/acme/neo-oracle");
+            std::fs::create_dir_all(repo.join(".maw")).expect("repo .maw");
+            std::fs::write(
+                repo.join(".maw/maw.config.40.json"),
+                r#"{"commands":{"c48":"ANTHROPIC_MODEL=claude-opus-4-8 command claude --dangerously-skip-permissions"},"wake":{"engine":"c48","resume":true}}"#,
+            )
+            .expect("repo config");
+
+            // (b) claude-family fallback: binary detection skips VAR=VAL env
+            // prefixes and the shell `command` builtin, then appends --continue.
+            let mut tmux = WakeMockTmux::default();
+            let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("claude fallback");
+            let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
+            assert!(
+                send.ends_with("MAW_SESSION_WINDOW=neo ANTHROPIC_MODEL=claude-opus-4-8 command claude --dangerously-skip-permissions --continue"),
+                "{send}"
+            );
+        });
+    }
+
+    #[test]
+    fn wake_resume_unknown_binary_keeps_naive_append_but_warns() {
+        wake_with_fixture(|root| {
+            let repo = root.join("ghq/github.com/acme/neo-oracle");
+            std::fs::create_dir_all(repo.join(".maw")).expect("repo .maw");
+            std::fs::write(
+                repo.join(".maw/maw.config.40.json"),
+                r#"{"commands":{"mystery":"mystery-bin --flag"},"wake":{"engine":"mystery","resume":true}}"#,
+            )
+            .expect("repo config");
+
+            let mut tmux = WakeMockTmux::default();
+            let (_code, stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("unknown binary");
+            let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo mystery-bin --flag resume"), "{send}");
+            assert!(stdout.contains("warning:"), "{stdout}");
+            assert!(stdout.contains("commands.mystery-resume"), "{stdout}");
         });
     }
 
@@ -1727,19 +1945,21 @@ mod wake_tests {
             )
             .expect("repo config");
 
-            // No flags: wake.engine resolves through the commands map;
-            // wake.channels and wake.prompt fill in.
+            // No flags: wake.engine resolves through the commands map and
+            // wake.prompt fills in. wake.channels does NOT hand the
+            // claude-only flag to a non-claude engine (#615) — it warns.
             let mut tmux = WakeMockTmux::default();
-            let (code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("config defaults");
+            let (code, stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("config defaults");
             assert_eq!(code, 0);
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
-            assert!(
-                send.ends_with("MAW_SESSION_WINDOW=neo OMX_POOL=1 omx --direct --channels plugin:discord@claude-plugins-official 'read AGENTS.md first'"),
-                "{send}"
-            );
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo OMX_POOL=1 omx --direct 'read AGENTS.md first'"), "{send}");
+            assert!(!send.contains("--channels"), "{send}");
+            assert!(stdout.contains("warning:"), "{stdout}");
+            assert!(stdout.contains("commands.omx-1-channels"), "{stdout}");
 
             // Explicit CLI flags beat the config defaults (`--channels` has no
-            // negative flag, so the config value still applies there).
+            // negative flag, so the config value still applies there) — codex
+            // is not claude-family either, so no claude flag.
             let mut tmux = WakeMockTmux::default();
             let (code, _stdout) = wake_run(
                 &wake_strings(&["neo", "--no-attach", "-e", "codex", "--prompt", "hi"]),
@@ -1748,36 +1968,65 @@ mod wake_tests {
             .expect("cli wins");
             assert_eq!(code, 0);
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
-            assert!(send.ends_with("MAW_SESSION_WINDOW=neo codex --channels plugin:discord@claude-plugins-official hi"), "{send}");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo codex hi"), "{send}");
+            assert!(!send.contains("--channels"), "{send}");
+
+            // claude-family engines still get the channels flag, and a
+            // commands.<engine>-channels entry is honored as a full
+            // replacement line.
+            std::fs::write(
+                repo.join(".maw/maw.config.40.json"),
+                r#"{"wake":{"engine":"claude","channels":true}}"#,
+            )
+            .expect("repo config claude");
+            let mut tmux = WakeMockTmux::default();
+            let (code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("claude channels");
+            assert_eq!(code, 0);
+            let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo claude --channels plugin:discord@claude-plugins-official"), "{send}");
+
+            std::fs::write(
+                repo.join(".maw/maw.config.40.json"),
+                r#"{"commands":{"omx-1":"omx --direct","omx-1-channels":"omx --direct --with-channels"},"wake":{"engine":"omx-1","channels":true}}"#,
+            )
+            .expect("repo config channels entry");
+            let mut tmux = WakeMockTmux::default();
+            let (code, stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("channels entry");
+            assert_eq!(code, 0);
+            let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo omx --direct --with-channels"), "{send}");
+            assert!(!stdout.contains("warning:"), "{stdout}");
         });
     }
 
     #[test]
-    fn wake_defaults_block_resume_pins_codex_and_fresh_or_engine_beat_it() {
+    fn wake_defaults_block_resume_resumes_the_configured_engine_and_fresh_opts_out() {
         wake_with_fixture(|root| {
             let repo = root.join("ghq/github.com/acme/neo-oracle");
             std::fs::create_dir_all(repo.join(".maw")).expect("repo .maw");
             std::fs::write(repo.join(".maw/maw.config.40.json"), r#"{"wake":{"engine":"claude","resume":true}}"#)
                 .expect("repo config");
 
-            // wake.resume behaves exactly like --resume: pins codex over wake.engine.
+            // (e) wake.resume no longer pins codex (#615): the configured
+            // wake.engine resumes with its own family form.
             let mut tmux = WakeMockTmux::default();
             let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("config resume");
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
-            assert!(send.ends_with("MAW_SESSION_WINDOW=neo codex resume"), "{send}");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo claude --continue"), "{send}");
 
-            // --fresh opts out of the configured resume; wake.engine applies again.
+            // (f) --fresh opts out of the configured resume.
             let mut tmux = WakeMockTmux::default();
             let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach", "--fresh"]), &mut tmux).expect("fresh");
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
             assert!(send.ends_with("MAW_SESSION_WINDOW=neo claude"), "{send}");
             assert!(!send.contains(" resume"), "{send}");
+            assert!(!send.contains("--continue"), "{send}");
 
-            // Explicit -e beats the codex pin, identically to `-e … --resume`.
+            // Explicit -e still resumes that engine with its family form.
             let mut tmux = WakeMockTmux::default();
             let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach", "-e", "claude"]), &mut tmux).expect("explicit engine");
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
-            assert!(send.ends_with("MAW_SESSION_WINDOW=neo claude resume"), "{send}");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo claude --continue"), "{send}");
         });
     }
 
