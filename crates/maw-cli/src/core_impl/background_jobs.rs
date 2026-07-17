@@ -570,6 +570,12 @@ fn bg_is_done_sentinel(last_line: &str) -> bool {
         .is_some_and(|code| !code.is_empty() && code.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
+/// Last non-empty line of the pane, looking at the visible screen plus a few
+/// history lines. `-E -1` (previous behavior) ends the capture at the last
+/// *history* line — a short-output job has empty history, so the capture came
+/// back blank and the done sentinel was never seen (#579). Omitting `-E`
+/// captures through the bottom of the visible screen, where the sentinel
+/// actually lives until output scrolls.
 fn bg_last_line_of(slug: &str, tmux: &mut impl BgTmux) -> Result<String, String> {
     bg_validate_ref(slug)?;
     let session = bg_session_name(slug);
@@ -580,13 +586,18 @@ fn bg_last_line_of(slug: &str, tmux: &mut impl BgTmux) -> Result<String, String>
         "-t".to_owned(),
         session,
         "-S".to_owned(),
-        "-1".to_owned(),
-        "-E".to_owned(),
-        "-1".to_owned(),
+        "-10".to_owned(),
     ];
     let result = tmux.bg_run("capture-pane", &args)?;
     if result.status == 0 {
-        Ok(result.stdout.trim_end_matches('\n').trim().to_owned())
+        Ok(result
+            .stdout
+            .lines()
+            .rev()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .unwrap_or_default()
+            .to_owned())
     } else {
         Ok(String::new())
     }
@@ -996,6 +1007,35 @@ mod bg_tests {
         assert!(output.1.contains("build-a1b2  running  1m"));
         assert!(output.1.contains("done-b2c3   done     1h"));
         assert_eq!(tmux.calls[0].subcommand, "list-sessions");
+    }
+
+    #[test]
+    fn bg_last_line_skips_trailing_blank_screen_lines_to_find_the_sentinel() {
+        // Live repro (#579 reopen): the sentinel sits in the visible screen with
+        // blank lines below it; the last NON-empty line must win.
+        let mut tmux = BgFakeTmux::bg_with_responses(vec![
+            bg_ok("maw-bg-quick-c3d4\t1699999940\tbash\n"),
+            bg_ok("$ true\n\n[done — exit 0]\n\n\n\n"),
+        ]);
+        let output = bg_run(&bg_strings(&["ls"]), &mut tmux, bg_now, bg_not_tmux).expect("ls");
+        assert!(output.1.contains("quick-c3d4"), "{}", output.1);
+        assert!(output.1.contains("done"), "{}", output.1);
+        let capture = tmux.calls.last().expect("capture call");
+        assert_eq!(capture.subcommand, "capture-pane");
+        // Must include the visible screen: no -E bound, history window via -S -10.
+        assert!(!capture.args.contains(&"-E".to_owned()), "{:?}", capture.args);
+        assert!(capture.args.contains(&"-10".to_owned()), "{:?}", capture.args);
+    }
+
+    #[test]
+    fn bg_empty_capture_keeps_running_status_for_live_pane() {
+        // A blank capture (no sentinel anywhere) must not mark a live pane done.
+        let mut tmux = BgFakeTmux::bg_with_responses(vec![
+            bg_ok("maw-bg-build-a1b2\t1699999940\tcargo\n"),
+            bg_ok("\n\n\n"),
+        ]);
+        let output = bg_run(&bg_strings(&["ls"]), &mut tmux, bg_now, bg_not_tmux).expect("ls");
+        assert!(output.1.contains("running"), "{}", output.1);
     }
 
     #[test]
