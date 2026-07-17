@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
 use maw_cli::{dispatcher_status, run_cli, DispatchKind};
 use serde_json::json;
 use std::ffi::OsString;

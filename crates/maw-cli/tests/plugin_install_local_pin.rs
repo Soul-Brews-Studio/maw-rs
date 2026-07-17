@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
 //! #522 defense 3 — local-install pin parity + plugins.lock writes.
 //!
 //! `maw plugin install <dir>` must verify a `target=wasm` package exactly like

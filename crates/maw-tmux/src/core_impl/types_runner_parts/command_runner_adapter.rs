@@ -77,6 +77,8 @@ impl CommandTmuxRunner {
         stdin: Option<&[u8]>,
     ) -> Result<String, TmuxError> {
         let command_line = self.argv(subcommand, args);
+        // argv() always prepends the tmux program — split_first cannot fail.
+        #[allow(clippy::expect_used)]
         let (program, rest) = command_line
             .split_first()
             .expect("tmux command line always includes a program");

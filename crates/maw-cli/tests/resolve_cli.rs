@@ -1,5 +1,6 @@
-// Ported from maw-js test/spec/matcher-resolve-target.fixtures.json into the
-// maw-rs side-by-side dry-run CLI resolve surface.
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
+                                                    // Ported from maw-js test/spec/matcher-resolve-target.fixtures.json into the
+                                                    // maw-rs side-by-side dry-run CLI resolve surface.
 
 use maw_cli::{run_cli, CliOutput};
 use serde::Deserialize;

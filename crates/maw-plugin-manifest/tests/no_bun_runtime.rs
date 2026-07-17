@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
 use std::fs::{create_dir_all, read_to_string, write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;

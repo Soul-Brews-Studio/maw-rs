@@ -95,6 +95,8 @@ where
     servecore_mount_ws_registry_with_config(router, &ws_registry(), config)
 }
 
+// Fail-fast at boot: a duplicate core route is a programmer error, not a runtime condition.
+#[allow(clippy::expect_used)]
 fn ws_registry() -> ServecoreWsRegistry {
     let mut registry = ServecoreWsRegistry::default();
     registry

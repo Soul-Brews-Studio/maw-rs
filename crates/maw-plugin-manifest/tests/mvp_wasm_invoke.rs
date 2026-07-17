@@ -1,5 +1,6 @@
-// Ported from maw-js/test/isolated/registry-invoke.test.ts WASM invoke fixtures.
-// These tests lock the same malformed/missing-export/output/import-error cases before general WASM runtime work.
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
+                                                    // Ported from maw-js/test/isolated/registry-invoke.test.ts WASM invoke fixtures.
+                                                    // These tests lock the same malformed/missing-export/output/import-error cases before general WASM runtime work.
 
 use std::fs::{create_dir_all, remove_dir_all, write};
 use std::path::{Path, PathBuf};

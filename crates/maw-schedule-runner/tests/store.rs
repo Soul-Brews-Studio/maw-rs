@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
 use maw_schedule::{ExecMode, RunStatus};
 use maw_schedule_runner::{FinishRequest, FireStore, StartRequest};
 use std::{

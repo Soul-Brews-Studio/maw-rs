@@ -652,6 +652,8 @@ fn iso_from_unix_millis(ms: i64) -> String {
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z")
 }
 
+// Invariant assertion on validated date math — cannot fail for in-range inputs.
+#[allow(clippy::expect_used)]
 fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let days = days + 719_468;
     let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
@@ -696,6 +698,8 @@ fn parse_iso_millis(iso: &str) -> Option<i64> {
     })
 }
 
+// Invariant assertion on validated date math — cannot fail for in-range inputs.
+#[allow(clippy::expect_used)]
 fn parse_second_millis(sec_part: &str) -> Option<(u32, u16)> {
     let (second, fraction) = sec_part.split_once('.').unwrap_or((sec_part, ""));
     let second = second.parse::<u32>().ok()?;
@@ -715,6 +719,8 @@ fn parse_second_millis(sec_part: &str) -> Option<(u32, u16)> {
     Some((second, millis))
 }
 
+// Invariant assertion on validated date math — cannot fail for in-range inputs.
+#[allow(clippy::expect_used)]
 fn timestamp_seconds(
     year: i32,
     month: u32,
@@ -750,6 +756,8 @@ fn timestamp_seconds(
     )
 }
 
+// HMAC-SHA256 accepts keys of any length — new_from_slice cannot return Err.
+#[allow(clippy::expect_used)]
 fn hmac_sha256_hex(secret: &str, payload: &str) -> String {
     let mut mac =
         HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");

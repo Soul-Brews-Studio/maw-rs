@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
 use maw_cli::{dispatcher_status, DispatchKind};
 use maw_discord::{run_discord_command_with, DiscordEnv, DiscordHttpResponse, DiscordRest};
 use serde_json::json;

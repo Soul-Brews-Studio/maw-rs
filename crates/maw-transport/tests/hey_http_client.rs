@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
 use std::collections::BTreeMap;
 
 use maw_auth::{build_from_sign_payload, hash_body, sign, verify_hmac_sig};

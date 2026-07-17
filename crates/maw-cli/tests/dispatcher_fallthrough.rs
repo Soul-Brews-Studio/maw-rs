@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
 use maw_cli::{dispatcher_status, native_dispatch_commands, run_cli, DispatchKind};
 use std::ffi::OsString;
 use std::fs::{create_dir_all, remove_dir_all, write};

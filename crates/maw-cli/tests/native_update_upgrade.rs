@@ -1,11 +1,12 @@
-// Offline integration surface for `maw update` / `maw upgrade`.
-//
-// Every test here must stay network-free: only argv parsing, --help, and
-// error surfaces are exercised (never a code path that reaches the GitHub
-// releases API). The single allowed live-network test is the #[ignore]d
-// `update_live_releases_api_lists_channel_tags` unit test in update.rs,
-// run manually. The fake `maw`/`bun` markers on PATH prove the handler is
-// native — it must never delegate to an external maw or bun.
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
+                                                    // Offline integration surface for `maw update` / `maw upgrade`.
+                                                    //
+                                                    // Every test here must stay network-free: only argv parsing, --help, and
+                                                    // error surfaces are exercised (never a code path that reaches the GitHub
+                                                    // releases API). The single allowed live-network test is the #[ignore]d
+                                                    // `update_live_releases_api_lists_channel_tags` unit test in update.rs,
+                                                    // run manually. The fake `maw`/`bun` markers on PATH prove the handler is
+                                                    // native — it must never delegate to an external maw or bun.
 
 use maw_cli::{dispatcher_status, DispatchKind};
 use std::fs;
