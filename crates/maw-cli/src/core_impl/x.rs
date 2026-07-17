@@ -26,7 +26,7 @@ const DISPATCH_335: &[DispatcherEntry] =
 
 const X_USAGE: &str = "usage: maw x <spec> [--sha256 <hex>] [-y|--yes] [--offline|--frozen] [--reload]
              [--from <spec>] [--registry <owner/repo>] [--remote] [--debug]
-             [-q|--quiet] [--install|--keep] [--dry-run] [--] [plugin-args...]
+             [-q|--quiet] [--install|--keep] [--force] [--dry-run] [--] [plugin-args...]
        maw x ls
        maw x gc [--max-age <30d|12h|45m|secs>] [--max-size <2g|500m|8k|bytes>] [--dry-run]
        maw x rm <verb|artifact|sha256-prefix>
@@ -63,6 +63,9 @@ struct XRunArgs {
     reload: bool,
     remote: bool,
     install: bool,
+    /// `--force`: with `--install`, replace an existing plugins.lock pin
+    /// (and reinstall over an existing plugin dir) instead of refusing.
+    force: bool,
     dry_run: bool,
     /// `--debug`: per-stage trace lines on stderr (also `MAW_X_DEBUG=1`).
     debug: bool,
@@ -213,6 +216,7 @@ fn parse_x_run(argv: &[String]) -> Result<XCliCommand, String> {
             "--reload" => parsed.reload = true,
             "--remote" => parsed.remote = true,
             "--install" | "--keep" => parsed.install = true,
+            "--force" => parsed.force = true,
             "--dry-run" => parsed.dry_run = true,
             "--debug" => parsed.debug = true,
             "-q" | "--quiet" => parsed.quiet = true,
@@ -534,6 +538,7 @@ fn run_x_run(args: &XRunArgs, run: &mut XRunEnv<'_>) -> CliOutput {
             &package_dir,
             explicit_sha.as_deref(),
             &fetched.resolution.source,
+            args.force,
             run,
         );
     }
@@ -616,7 +621,7 @@ fn run_x_offline(
         run,
     );
     if args.install {
-        x_apply_install(&mut output, &entry.dir, explicit_sha, &entry.meta.source, run);
+        x_apply_install(&mut output, &entry.dir, explicit_sha, &entry.meta.source, args.force, run);
     }
     output
 }
@@ -952,13 +957,14 @@ fn x_apply_install(
     package_dir: &std::path::Path,
     explicit_sha: Option<&str>,
     lock_source: &str,
+    force: bool,
     run: &XRunEnv<'_>,
 ) {
     if output.code != 0 {
         let _ = writeln!(output.stderr, "x: --install skipped (plugin exited {})", output.code);
         return;
     }
-    match x_promote_install(package_dir, explicit_sha, &run.plugin_root, lock_source) {
+    match x_promote_install(package_dir, explicit_sha, &run.plugin_root, lock_source, force) {
         Ok(note) => output.stdout.push_str(&note),
         Err(message) => {
             let _ = writeln!(output.stderr, "x: --install failed: {message}");
@@ -972,14 +978,15 @@ fn x_promote_install(
     explicit_sha: Option<&str>,
     plugin_root: &std::path::Path,
     lock_source: &str,
+    force: bool,
 ) -> Result<String, String> {
-    let verification = match verify_package_dir(package_dir, explicit_sha, false, false)? {
+    let verification = match verify_package_dir(package_dir, explicit_sha, false, force)? {
         ResolvedPackage::Wasm(verification) => verification,
         ResolvedPackage::NotWasm => {
             return Err("x: --install supports ship-tier wasm packages only".to_owned());
         }
     };
-    let summary = install_plugin_dir(package_dir, plugin_root, false)?;
+    let summary = install_plugin_dir(package_dir, plugin_root, force)?;
     record_plugin_install_pin(&summary, verification.resolved_sha256.as_deref(), lock_source)?;
     Ok(format!(
         "x: installed {}@{} {}\n",
@@ -1338,6 +1345,31 @@ mod x_wi8_tests {
         assert!(matches!(parse_x_cli(&args(&["--help"])), Ok(XCliCommand::Help)));
     }
 
+    /// #581: `--force` is an x flag — consumed by `maw x`, never forwarded to
+    /// the plugin argv, and off by default.
+    #[test]
+    fn x_cli_parse_force_consumed_not_forwarded() {
+        // Default is off.
+        let parsed = parse_x_cli(&args(&["costs"])).expect("parse");
+        let XCliCommand::Run(run) = parsed else { panic!("run form") };
+        assert!(!run.force);
+
+        // Consumed like --install/--keep, before or after the spec; the
+        // plugin argv stays clean.
+        let parsed =
+            parse_x_cli(&args(&["costs", "--install", "--force", "--", "--json"])).expect("parse");
+        let XCliCommand::Run(run) = parsed else { panic!("run form") };
+        assert!(run.install && run.force);
+        assert_eq!(run.plugin_args, args(&["--json"]));
+
+        // npx-style: once plugin args begin, --force belongs to the plugin
+        // verbatim (same positional semantics as the other x flags).
+        let parsed = parse_x_cli(&args(&["dream", "wake", "--force"])).expect("parse");
+        let XCliCommand::Run(run) = parsed else { panic!("run form") };
+        assert!(!run.force);
+        assert_eq!(run.plugin_args, args(&["wake", "--force"]));
+    }
+
     #[test]
     fn x_cli_parse_housekeeping_routing() {
         assert_eq!(parse_x_cli(&args(&["ls"])).expect("ls"), XCliCommand::CacheLs);
@@ -1480,6 +1512,61 @@ mod x_wi8_tests {
                 .is_some_and(|path| path.ends_with(verb)),
             "{plan}"
         );
+    }
+
+    // ── --install promotion ─────────────────────────────────────────────
+
+    /// #581: `--force` reaches the plugins.lock pin gate — a stale lock entry
+    /// refuses the promote without it and is replaced with it.
+    #[test]
+    fn x_promote_install_force_replaces_stale_lock_pin() {
+        let _guard = env_test_lock();
+        let harness = XTestHarness::new("promote-force");
+        let verb = "x-581-force-demo";
+
+        // A pin-verified wasm package dir (the verified bytes to promote).
+        let package = harness.root.join("package");
+        std::fs::create_dir_all(&package).expect("package dir");
+        std::fs::write(package.join("plugin.wasm"), b"\0asm\x01\x00\x00\x00x-581-force")
+            .expect("wasm");
+        let pin = maw_plugin_manifest::hash_file(&package.join("plugin.wasm")).expect("hash");
+        std::fs::write(
+            package.join("plugin.json"),
+            format!(
+                r#"{{"name":"{verb}","version":"1.0.0","target":"wasm","sdk":"*","entry":{{"kind":"wasm","path":"plugin.wasm","export":"handle"}},"wasm":"./plugin.wasm","artifact":{{"path":"plugin.wasm","sha256":"{pin}"}},"cli":{{"command":"{verb}"}}}}"#
+            ),
+        )
+        .expect("manifest");
+
+        // A plugins.lock already pinning a DIFFERENT sha256 for this verb.
+        let lock_path = harness.root.join("plugins.lock");
+        std::fs::write(
+            &lock_path,
+            format!(
+                r#"{{"schema":1,"plugins":{{"{verb}":{{"version":"1.0.0","sha256":"sha256:{}","source":"github:acme/tools"}}}}}}"#,
+                "b".repeat(64)
+            ),
+        )
+        .expect("lock");
+        let restore = EnvVarRestore::capture("MAW_PLUGINS_LOCK");
+        std::env::set_var("MAW_PLUGINS_LOCK", &lock_path);
+
+        // Without force: the existing pin refuses and names the escape hatch.
+        let error =
+            x_promote_install(&package, None, &harness.plugin_root, "github:acme/tools", false)
+                .expect_err("stale pin must refuse without --force");
+        assert!(error.contains("use --force"), "{error}");
+
+        // With force: the pin is replaced and the install lands.
+        let note =
+            x_promote_install(&package, None, &harness.plugin_root, "github:acme/tools", true)
+                .expect("--force replaces the pin");
+        assert!(note.contains(&format!("installed {verb}@1.0.0")), "{note}");
+        let lock = std::fs::read_to_string(&lock_path).expect("lock");
+        assert!(lock.contains(&pin), "lock must carry the new pin: {lock}");
+        assert!(!lock.contains(&"b".repeat(64)), "stale pin must be gone: {lock}");
+
+        drop(restore);
     }
 
     // ── offline route ───────────────────────────────────────────────────
