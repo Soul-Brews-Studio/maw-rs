@@ -277,8 +277,11 @@ fn run_federation_identity_plan(argv: &[String]) -> CliOutput {
                 };
                 match parse_key_value(value, "federation-identity: --agent must use <oracle=node>")
                 {
+                    // #605: invalid names are skipped, never inserted.
                     Ok((oracle, route_node)) => {
-                        agents.insert(oracle, route_node);
+                        if agent_name_is_valid(&oracle) {
+                            agents.insert(oracle, route_node);
+                        }
                     }
                     Err(message) => return federation_identity_usage_error(&message),
                 }

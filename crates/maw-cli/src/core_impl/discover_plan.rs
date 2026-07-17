@@ -96,8 +96,12 @@ fn run_discover_plan(argv: &[String]) -> CliOutput {
                     return discover_usage_error("discover: missing --agent value");
                 };
                 match parse_key_value(value, "discover: --agent must use <window=node>") {
+                    // #605: invalid names (argv junk, dot/backup names) are
+                    // skipped instead of becoming manifest entries.
                     Ok((window, node)) => {
-                        inventory_input.agents.insert(window, node);
+                        if agent_name_is_valid(&window) {
+                            inventory_input.agents.insert(window, node);
+                        }
                     }
                     Err(message) => return discover_usage_error(&message),
                 }
