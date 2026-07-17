@@ -337,23 +337,171 @@ fn usage_ok() -> CliOutput {
     }
 }
 
+fn usage_all_ok() -> CliOutput {
+    CliOutput {
+        code: 0,
+        stdout: usage_all_text(),
+        stderr: String::new(),
+    }
+}
+
 fn usage_text() -> String {
-    concat!(
+    let mut text = concat!(
         "usage: maw-rs <command> [args]\n",
-        "ported commands:\n",
+        "core commands:\n",
         "  a|attach <target> [--print] [--readonly|-r]   attach to a tmux session\n",
+        "  ls [--compact|-c] [--verbose|-v] [--json] [--watch[=secs]]  list live local sessions\n",
+        "  wake <target|all> [--task <slug>]             wake an oracle: launch its engine pane\n",
+        "  work <repo|.|path|url> [task]                 open a work window for a repo or issue URL\n",
         "  run <target> <cmd...>                         type text and press Enter\n",
         "  send-enter <target> [--N <count>]             send Enter to a tmux target\n",
         "  send-key <target> <key>                       send an allowlisted key to a tmux target\n",
         "  send-escape <target>                          send Escape to a tmux target\n",
-        "  ls [--compact|-c] [--verbose|-v] [--json] [--watch[=secs]]  list live local sessions\n",
-        "  plugin ls [-v|--verbose]                      list installed plugins\n",
+        "  bg \"<cmd>\" [--name X]                         run a long command in a detached tmux session\n",
+        "  hey <target> <message>                        message another oracle over federation\n",
+        "  kill <target>[:window] [--pane N]             kill a session, window, or pane\n",
+        "  bud <name>                                    bud a new oracle workspace from this one\n",
+        "  token <list|use|current|...>                  list and switch engine auth tokens\n",
         "  bring|b <oracle> [--to <session[:window]>]    plan a wake split target\n",
         "  feed active|parse-line|describe                inspect local activity feed data\n",
+        "  x <spec> [--sha256 <hex>]                     run a plugin from a source spec (pin-verified)\n",
+        "  plugin ls [-v|--verbose]                      list installed plugins\n",
+        "  update [--check] [--channel stable|alpha]     update the maw binary\n",
+        "  calver --now <time> [--stable|--alpha]        compute the next CalVer release version\n",
+        "  version                                       show build version\n",
         "\n",
-        "portable parity commands are intentionally hidden from the default menu until their live UX ships.\n",
+        "maw help --all lists every registered verb; maw <verb> --help explains one.\n",
     )
-    .to_owned()
+    .to_owned();
+    text.push_str(&usage_plugins_line());
+    text
+}
+
+/// Most plugin names shown inline in the `-h` footer before eliding to a count.
+const USAGE_PLUGINS_INLINE_MAX: usize = 12;
+
+/// One-line installed-plugins footer for the default menu.
+///
+/// Uses the same discovery `plugin ls` uses; discovery never errors (unreadable
+/// roots and malformed manifests are skipped), so `-h` cannot fail here. Fleet
+/// machines carry 100+ plugins, so the list elides past a dozen names.
+fn usage_plugins_line() -> String {
+    let report = discover_packages(&DiscoverPackagesOptions::default());
+    let names = report
+        .plugins
+        .iter()
+        .map(|plugin| plugin.manifest.name.as_str())
+        .collect::<Vec<_>>();
+    if names.is_empty() {
+        return "installed plugins: none (maw plugin ls -v for detail)\n".to_owned();
+    }
+    let shown = names
+        .iter()
+        .take(USAGE_PLUGINS_INLINE_MAX)
+        .copied()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let elided = names.len().saturating_sub(USAGE_PLUGINS_INLINE_MAX);
+    if elided == 0 {
+        format!("installed plugins: {shown} (maw plugin ls -v for detail)\n")
+    } else {
+        format!("installed plugins: {shown} +{elided} more (maw plugin ls -v for detail)\n")
+    }
+}
+
+/// Full verb listing for `maw help --all` / `maw commands`.
+///
+/// Generated from the dispatcher registry at runtime — the same table
+/// `run_cli` dispatches against — so it cannot go stale by construction.
+/// Flag aliases (`--help`, `-v`, …) and test-only hooks are skipped.
+fn usage_all_text() -> String {
+    let mut names = dispatcher_entries()
+        .map(|entry| entry.command)
+        .filter(|name| !name.starts_with('-') && !name.starts_with("__"))
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+
+    let width = names.iter().map(|name| name.len()).max().unwrap_or(0) + 2;
+    let columns = (100 / width.max(1)).max(1);
+
+    let mut text = format!("registered commands ({}):\n", names.len());
+    for row in names.chunks(columns) {
+        text.push_str("  ");
+        for (index, name) in row.iter().enumerate() {
+            if index + 1 == row.len() {
+                text.push_str(name);
+            } else {
+                let _ = write!(text, "{name:<width$}");
+            }
+        }
+        text.push('\n');
+    }
+    text.push_str("\nrun maw <verb> --help for details\n");
+    text
+}
+
+#[cfg(test)]
+mod usage_menu_tests {
+    use super::{dispatcher_entries, env_test_lock, usage_all_ok, usage_all_text, usage_text};
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn default_menu_lists_curated_core_commands_and_never_errors() {
+        // Plugin discovery reads HOME/XDG env; hold the env lock so sibling
+        // env-mutating tests cannot race the read.
+        let _guard = env_test_lock();
+        let text = usage_text();
+        for fragment in [
+            "usage: maw-rs <command> [args]",
+            "core commands:",
+            "a|attach <target>",
+            "ls [--compact|-c]",
+            "wake <target|all>",
+            "work <repo|.|path|url>",
+            "bg \"<cmd>\"",
+            "hey <target> <message>",
+            "kill <target>[:window]",
+            "bud <name>",
+            "token <list|use|current|...>",
+            "x <spec>",
+            "update [--check]",
+            "calver --now <time>",
+            "version",
+            "maw help --all",
+            "installed plugins:",
+        ] {
+            assert!(text.contains(fragment), "missing {fragment:?} in:\n{text}");
+        }
+        assert!(!text.contains("ported commands:"));
+        assert!(!text.contains("intentionally hidden"));
+    }
+
+    #[test]
+    fn help_all_is_generated_from_dispatcher_registry() {
+        let output = usage_all_ok();
+        assert_eq!(output.code, 0);
+        assert!(output.stderr.is_empty());
+
+        let text = usage_all_text();
+        let names = text
+            .lines()
+            .skip(1)
+            .take_while(|line| !line.is_empty())
+            .flat_map(str::split_whitespace)
+            .collect::<BTreeSet<_>>();
+        assert!(names.len() > 100, "expected >100 verbs, got {}", names.len());
+        for verb in ["wake", "work", "bg", "x", "hey", "ls", "plugin"] {
+            assert!(names.contains(verb), "missing {verb} in help --all:\n{text}");
+        }
+        for entry in dispatcher_entries() {
+            let command = entry.command;
+            if command.starts_with('-') || command.starts_with("__") {
+                continue;
+            }
+            assert!(names.contains(command), "registry verb {command} missing from help --all");
+        }
+        assert!(text.ends_with("run maw <verb> --help for details\n"), "{text}");
+    }
 }
 
 
