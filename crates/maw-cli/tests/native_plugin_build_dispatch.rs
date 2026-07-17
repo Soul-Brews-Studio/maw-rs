@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
 use maw_plugin_manifest::hash_file;
 use serde_json::json;
 use std::{fs, path::Path, process::Command};

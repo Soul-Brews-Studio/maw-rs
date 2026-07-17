@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
 use std::fs::{create_dir_all, remove_dir_all, write};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};

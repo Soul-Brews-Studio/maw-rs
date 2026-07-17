@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
 use maw_xdg::{ensure_maw_core_paths, is_valid_instance_name, MawXdgEnv};
 use std::{
     fs,

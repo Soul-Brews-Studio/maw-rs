@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
 use maw_plugin_manifest::{
     build_js_plugin_dir, infer_plugin_capabilities, init_js_plugin_dir, install_built_plugin_dir,
 };

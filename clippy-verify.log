@@ -1,0 +1,24 @@
+    Checking maw-xdg v0.1.0-alpha.1 (/private/tmp/claude-501/-opt-Code-github-com-Soul-Brews-Studio-maw-rs/a5425642-61b9-4522-87af-ec571e78a1f7/scratchpad/lint-wt2/crates/maw-xdg)
+    Checking maw-matcher v0.1.0-alpha.1 (/private/tmp/claude-501/-opt-Code-github-com-Soul-Brews-Studio-maw-rs/a5425642-61b9-4522-87af-ec571e78a1f7/scratchpad/lint-wt2/crates/maw-matcher)
+    Checking maw-auth v0.1.0-alpha.1 (/private/tmp/claude-501/-opt-Code-github-com-Soul-Brews-Studio-maw-rs/a5425642-61b9-4522-87af-ec571e78a1f7/scratchpad/lint-wt2/crates/maw-auth)
+    Checking maw-schedule v0.1.0-alpha.1 (/private/tmp/claude-501/-opt-Code-github-com-Soul-Brews-Studio-maw-rs/a5425642-61b9-4522-87af-ec571e78a1f7/scratchpad/lint-wt2/crates/maw-schedule)
+   Compiling maw-cli v0.1.0-alpha.1 (/private/tmp/claude-501/-opt-Code-github-com-Soul-Brews-Studio-maw-rs/a5425642-61b9-4522-87af-ec571e78a1f7/scratchpad/lint-wt2/crates/maw-cli)
+    Checking maw-discord v0.1.0-alpha.1 (/private/tmp/claude-501/-opt-Code-github-com-Soul-Brews-Studio-maw-rs/a5425642-61b9-4522-87af-ec571e78a1f7/scratchpad/lint-wt2/crates/maw-discord)
+    Checking maw-peer v0.1.0-alpha.1 (/private/tmp/claude-501/-opt-Code-github-com-Soul-Brews-Studio-maw-rs/a5425642-61b9-4522-87af-ec571e78a1f7/scratchpad/lint-wt2/crates/maw-peer)
+    Checking maw-worktree v0.1.0-alpha.1 (/private/tmp/claude-501/-opt-Code-github-com-Soul-Brews-Studio-maw-rs/a5425642-61b9-4522-87af-ec571e78a1f7/scratchpad/lint-wt2/crates/maw-worktree)
+    Checking maw-schedule-runner v0.1.0-alpha.1 (/private/tmp/claude-501/-opt-Code-github-com-Soul-Brews-Studio-maw-rs/a5425642-61b9-4522-87af-ec571e78a1f7/scratchpad/lint-wt2/crates/maw-schedule-runner)
+    Checking maw-schedule-launchd v0.1.0-alpha.1 (/private/tmp/claude-501/-opt-Code-github-com-Soul-Brews-Studio-maw-rs/a5425642-61b9-4522-87af-ec571e78a1f7/scratchpad/lint-wt2/crates/maw-schedule-launchd)
+error: used `expect()` on a `Result` value
+   --> crates/maw-auth/src/core_impl/request_verify.rs:761:9
+    |
+761 |         HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: if this value is an `Err`, it will panic
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#expect_used
+    = note: `-D clippy::expect-used` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::expect_used)]`
+
+error: could not compile `maw-auth` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `maw-auth` (lib test) due to 1 previous error

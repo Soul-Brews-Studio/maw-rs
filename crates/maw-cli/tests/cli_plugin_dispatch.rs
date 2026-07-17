@@ -1,7 +1,8 @@
-// The wasm-host import-bearing-WASM dispatch tests (#72 blocker 1 proofs)
-// were removed in the repo split — the wasm-dispatch/import-bearing.wasm
-// fixture they include_bytes!-welded now lives in
-// Soul-Brews-Studio/maw-fixtures @aecf20b6; rework/relocate tracked in #546.
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
+                                                    // The wasm-host import-bearing-WASM dispatch tests (#72 blocker 1 proofs)
+                                                    // were removed in the repo split — the wasm-dispatch/import-bearing.wasm
+                                                    // fixture they include_bytes!-welded now lives in
+                                                    // Soul-Brews-Studio/maw-fixtures @aecf20b6; rework/relocate tracked in #546.
 use maw_cli::run_cli;
 use serde_json::json;
 use std::ffi::OsString;

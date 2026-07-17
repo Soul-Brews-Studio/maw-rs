@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
 use maw_schedule_launchd::{
     load_config, remove_job, sync_job, DesiredJob, JobState, LaunchctlOutput, LaunchctlRunner,
     PlistState, SyncMode,

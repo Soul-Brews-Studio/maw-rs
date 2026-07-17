@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)] // build script: fail-fast panics are conventional
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use std::env;

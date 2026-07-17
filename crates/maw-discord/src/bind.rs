@@ -1,5 +1,7 @@
 use super::*;
 
+// `state_dir.expect("checked")` below is guarded by an earlier is_none() bail-out in this fn.
+#[allow(clippy::expect_used)]
 pub(super) fn bind(env: &DiscordEnv, args: &[String], log: &mut Vec<String>) -> bool {
     let Some(bot) = args.first() else {
         log.push(

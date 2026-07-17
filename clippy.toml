@@ -1,0 +1,5 @@
+# unwrap()/expect() stay idiomatic in test code; production code must not
+# panic on Option/Result — propagate with ?, let-else, or unwrap_or_* instead
+# (unwrap-crash-audit 2026-07-17: all 195 unwrap sites were test-only).
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

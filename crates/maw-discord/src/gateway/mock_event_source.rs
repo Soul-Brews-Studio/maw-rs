@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)] // test-support mock: poisoned-lock panic is the correct failure
 use super::GatewayEventSource;
 use std::{
     future::Future,
