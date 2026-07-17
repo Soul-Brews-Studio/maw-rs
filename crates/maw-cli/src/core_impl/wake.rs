@@ -1896,6 +1896,22 @@ mod wake_tests {
     }
 
     #[test]
+    fn wake_host_colon_target_and_peer_flag_route_to_peer_target() {
+        // Issue #600 done-criterion 3: `host:target` (and `--peer <node>`) keep
+        // routing through `run_wake_async` — the dir-aware local pipeline (and
+        // its repo-layer config reads) never runs for peer wakes.
+        let host_target = wake_parse_args(&wake_strings(&["mba:neo"])).expect("parse host:target");
+        assert!(wake_should_use_peer_target(&host_target));
+
+        let peer_flag = wake_parse_args(&wake_strings(&["neo", "--peer", "mba"])).expect("parse --peer");
+        assert!(wake_should_use_peer_target(&peer_flag));
+
+        // Local escape hatches still beat the colon heuristic.
+        let dry_run = wake_parse_args(&wake_strings(&["mba:neo", "--dry-run"])).expect("parse dry-run");
+        assert!(!wake_should_use_peer_target(&dry_run));
+    }
+
+    #[test]
     fn wake_reuses_workon_github_host_slug_resolver_without_double_prefix() {
         wake_with_fixture(|root| {
             let repo = root.join("ghq/github.com/Soul-Brews-Studio/maw-fleetpad");
