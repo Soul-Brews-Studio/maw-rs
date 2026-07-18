@@ -112,6 +112,33 @@ pub trait Transport {
     /// The router classifies that error to decide whether to fail over.
     fn send(&mut self, target: &TransportTarget, message: &str, from: &str)
         -> Result<bool, String>;
+
+    /// Deliver with explicit submission semantics and a sender-visible receipt.
+    ///
+    /// Legacy implementations inherit a conservative adapter: successful sends
+    /// report [`SendReceipt::SubmittedToPane`] because prompt receipt is unknown.
+    /// The `submit` flag is intentionally ignored by that adapter; transports
+    /// should override this method when they can honor explicit submission.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed, actionable refusal or delivery failure.
+    fn send_delivery(
+        &mut self,
+        target: &TransportTarget,
+        message: &str,
+        from: &str,
+        submit: bool,
+    ) -> Result<SendReceipt, DeliveryRefusal> {
+        let _ = submit;
+        match self.send(target, message, from) {
+            Ok(true) => Ok(SendReceipt::SubmittedToPane),
+            Ok(false) => Err(DeliveryRefusal::DeliveryFailed {
+                message: "transport declined delivery".to_owned(),
+            }),
+            Err(message) => Err(DeliveryRefusal::DeliveryFailed { message }),
+        }
+    }
 }
 
 /// Ordered transport router. First successful reachable transport wins.
@@ -192,4 +219,3 @@ pub struct TmuxLocalTransport<Io> {
     presence_handlers: usize,
     feed_handlers: usize,
 }
-

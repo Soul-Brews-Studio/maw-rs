@@ -17,13 +17,13 @@ against maw-fixtures (same relative layout) or maw-rs history @5cbd148e.
 
 ## Summary
 
-- Total rows: **133**
+- Total rows: **135**
 - native ✅: **81**
 - WASM ✅: **29**
 - stub ⚠️: **13**
-- NOT-PORTED ❌: **10**
+- NOT-PORTED ❌: **12**
 
-Counts sum to the total: 81 + 29 + 13 + 10 = 133.
+Counts sum to the total: 81 + 29 + 13 + 12 = 135.
 
 > **wasm-host gate (wave-3):** `WASM ✅` verbs that are ship-tier plugins extracted to the `Soul-Brews-Studio/maw-plugins` monorepo (e.g. `layout`, packages/20-layout) run **only** on a maw binary built with `--features wasm-host`; default builds omit the Extism runtime and the verb errors loudly. In-tree `WASM ✅` rows (covered by a committed parity fixture or CLI integration test) are a separate, test-only mechanism and are not gated on that feature.
 
@@ -70,6 +70,8 @@ Legend: **native ✅** = Rust dispatcher/implementation exists; **WASM ✅** = a
 | `serve-views` | views server API | maw-js source | NOT-PORTED ❌ | No native entry/WASM fixture. |
 | `serve-worktrees` | worktree server API | maw-js source | NOT-PORTED ❌ | No native entry/WASM fixture. |
 | `serve-ws` | websocket server API | maw-js source | NOT-PORTED ❌ | No native entry/WASM fixture. |
+| `POST /api/kanban/tasks`, `PATCH /api/kanban/tasks/:id` | kanban card create/update API | maw-js source + maw-rs#609 | NOT-PORTED ❌ | Phase 2/3 roadmap: durable-truth layer, in the same tier as `/api/send` for PM-style fleets; cutover blocker for PM-style fleets. Not implemented in Phase 1. |
+| `GET /api/dispatch/index`, `GET /api/dispatch/file` | read-only dispatch report catalog | maw-js source + maw-rs#609 | NOT-PORTED ❌ | Phase 2/3 roadmap: read-only report catalog for discovering report filename, oracle, topic, mtime, and preview; cutover blocker for PM-style fleets. Not implemented in Phase 1. |
 | `zenoh-scout` | --advertise --all --force --json --limit --locator --no-advertise --status --timeout --transport | maw-js source | native ✅ | Native DispatcherEntry: `crates/maw-cli/src/core_impl/zenoh_scout.rs:3`. |
 ## Tmux / session / workspace
 

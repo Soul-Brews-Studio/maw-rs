@@ -4,4 +4,5 @@ mod coverage_gap_tests {
     include!("router_failover_tests.rs");
     include!("transport_lifecycle_tests.rs");
     include!("http_feed_warning_tests.rs");
+    include!("delivery_semantics_tests.rs");
 }

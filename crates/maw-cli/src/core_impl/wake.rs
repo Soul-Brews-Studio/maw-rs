@@ -1603,6 +1603,19 @@ fn wake_confirm_engine_launch(tmux: &mut impl WakeTmuxNative, target: &str, comm
     })
 }
 
+fn wake_wait_for_shell_ready(tmux: &mut impl WakeTmuxNative, target: &str) {
+    let mut delays = WAKE_LAUNCH_CONFIRM_BACKOFF_MS.iter().copied();
+    loop {
+        match tmux.wake_pane_current_command(target) {
+            Ok(current) if wake_pane_command_is_shell(&current) => return,
+            Ok(_) => {}
+            Err(_) => return,
+        }
+        let Some(delay_ms) = delays.next() else { return };
+        tmux.wake_confirm_poll_sleep(std::time::Duration::from_millis(delay_ms));
+    }
+}
+
 fn wake_target_is_current_pane(tmux: &mut impl WakeTmuxNative, target: &str) -> bool {
     let Ok(current_pane) = std::env::var("TMUX_PANE") else { return false };
     let current_pane = current_pane.trim();
@@ -1612,6 +1625,7 @@ fn wake_target_is_current_pane(tmux: &mut impl WakeTmuxNative, target: &str) -> 
 
 fn wake_create_session(options: &WakeOptionsNative, resolved: &WakeResolvedNative, tmux: &mut impl WakeTmuxNative, out: &mut String) -> Result<bool, String> {
     tmux.wake_new_session(&resolved.session, &resolved.window, &resolved.repo_path)?;
+    wake_wait_for_shell_ready(tmux, &resolved.target);
     if options.attach {
         let _ = writeln!(out, "\x1b[32m+\x1b[0m created session '{}' (main: {})", resolved.session, resolved.window);
         return Ok(true);
@@ -1643,6 +1657,7 @@ fn wake_create_or_reuse_window(
         }
     } else {
         tmux.wake_new_window(&resolved.session, &resolved.window, &resolved.repo_path)?;
+        wake_wait_for_shell_ready(tmux, &resolved.target);
     }
     if options.attach {
         let _ = writeln!(out, "\x1b[32m✅\x1b[0m woke '{}' in {} → {}", resolved.window, resolved.session, resolved.repo_path.display());
@@ -1695,6 +1710,7 @@ mod wake_tests {
     use super::*;
 
     #[derive(Debug, Default)]
+    #[allow(clippy::struct_excessive_bools)]
     struct WakeMockTmux {
         sessions: Vec<TmuxSession>,
         actions: Vec<String>,
@@ -1704,9 +1720,16 @@ mod wake_tests {
         /// Scripted `pane_current_command` replies; the last entry repeats
         /// forever. Empty script means an instantly-launched engine ("claude").
         pane_command_script: Vec<String>,
+        /// Scripted fresh-pane, pre-send command replies. Empty script means
+        /// shell init is already settled ("zsh").
+        pre_send_pane_command_script: Vec<String>,
         pane_command_error: bool,
         target_pane_id: Option<String>,
         pane_polls: usize,
+        pre_send_polls: usize,
+        post_send_polls: usize,
+        send_pane_polls: Vec<usize>,
+        fresh_pane_unsent: bool,
         /// Scripted visible-screen captures; the last entry repeats forever.
         /// Empty script means an empty (healthy, prompt-free) screen.
         pane_capture_script: Vec<String>,
@@ -1720,6 +1743,7 @@ mod wake_tests {
         fn wake_new_session(&mut self, name: &str, window: &str, cwd: &std::path::Path) -> Result<(), String> {
             self.actions.push(format!("new-session {name} {window} {}", cwd.display()));
             self.sessions.push(TmuxSession { name: name.to_owned(), windows: vec![maw_tmux::TmuxWindow { index: 0, name: window.to_owned(), active: true, cwd: Some(cwd.display().to_string()) }] });
+            self.fresh_pane_unsent = true;
             Ok(())
         }
         fn wake_new_window(&mut self, session: &str, window: &str, cwd: &std::path::Path) -> Result<(), String> {
@@ -1732,13 +1756,18 @@ mod wake_tests {
                     cwd: Some(cwd.display().to_string()),
                 });
             }
+            self.fresh_pane_unsent = true;
             Ok(())
         }
         fn wake_send_text(&mut self, target: &str, text: &str) -> Result<(), String> {
+            self.send_pane_polls.push(self.pane_polls);
+            self.fresh_pane_unsent = false;
             self.actions.push(format!("send {target} {text}"));
             Ok(())
         }
         fn wake_send_text_detached(&mut self, target: String, text: String) -> Result<Option<std::thread::JoinHandle<()>>, String> {
+            self.send_pane_polls.push(self.pane_polls);
+            self.fresh_pane_unsent = false;
             self.actions.push(format!("send-detached {target} {text}"));
             let delay_ms = self.detached_delay_ms;
             let finished = std::sync::Arc::clone(&self.detached_finished);
@@ -1754,8 +1783,15 @@ mod wake_tests {
         fn wake_pane_current_command(&mut self, _target: &str) -> Result<String, String> {
             self.pane_polls += 1;
             if self.pane_command_error { return Err("mock pane query failed".to_owned()); }
+            if self.fresh_pane_unsent {
+                self.pre_send_polls += 1;
+                if self.pre_send_pane_command_script.is_empty() { return Ok("zsh".to_owned()); }
+                let index = (self.pre_send_polls - 1).min(self.pre_send_pane_command_script.len() - 1);
+                return Ok(self.pre_send_pane_command_script[index].clone());
+            }
+            self.post_send_polls += 1;
             if self.pane_command_script.is_empty() { return Ok("claude".to_owned()); }
-            let index = (self.pane_polls - 1).min(self.pane_command_script.len() - 1);
+            let index = (self.post_send_polls - 1).min(self.pane_command_script.len() - 1);
             Ok(self.pane_command_script[index].clone())
         }
         fn wake_target_pane_id(&mut self, _target: &str) -> Result<String, String> {
@@ -2199,7 +2235,8 @@ mod wake_tests {
             assert!(err.contains("pane still running 'zsh'"), "{err}");
             assert!(err.contains("— sent: "), "{err}");
             // Poll budget is bounded: initial check + one per backoff step.
-            assert_eq!(tmux.pane_polls, WAKE_LAUNCH_CONFIRM_BACKOFF_MS.len() + 1);
+            assert_eq!(tmux.pre_send_polls, 1);
+            assert_eq!(tmux.post_send_polls, WAKE_LAUNCH_CONFIRM_BACKOFF_MS.len() + 1);
         });
     }
 
@@ -2214,14 +2251,16 @@ mod wake_tests {
             let (code, stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("wake");
             assert_eq!(code, 0);
             assert!(stdout.contains("created session"), "{stdout}");
-            assert_eq!(tmux.pane_polls, 2);
+            assert_eq!(tmux.pre_send_polls, 1);
+            assert_eq!(tmux.post_send_polls, 2);
 
             // A running claude engine can report a bare version string (#520);
             // "left the shell" must treat it as a healthy launch on poll one.
             let mut tmux = WakeMockTmux { pane_command_script: vec!["2.1.207".to_owned()], ..WakeMockTmux::default() };
             let (code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("wake version-string");
             assert_eq!(code, 0);
-            assert_eq!(tmux.pane_polls, 1);
+            assert_eq!(tmux.pre_send_polls, 1);
+            assert_eq!(tmux.post_send_polls, 1);
         });
     }
 
@@ -2778,6 +2817,45 @@ mod wake_tests {
     }
 
     #[test]
+    fn wake_fresh_session_waits_for_shell_ready_before_send() {
+        wake_with_fixture(|_| {
+            let mut tmux = WakeMockTmux {
+                pre_send_pane_command_script: vec!["direnv".to_owned(), "python3".to_owned(), "zsh".to_owned()],
+                pane_command_script: vec!["claude".to_owned()],
+                ..WakeMockTmux::default()
+            };
+
+            let (code, stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("run");
+
+            assert_eq!(code, 0, "{stdout}");
+            assert!(stdout.contains("created session"), "{stdout}");
+            assert_eq!(tmux.pre_send_polls, 3);
+            assert_eq!(tmux.post_send_polls, 1);
+            assert_eq!(tmux.send_pane_polls, vec![3]);
+        });
+    }
+
+    #[test]
+    fn wake_fresh_session_sends_after_shell_ready_timeout() {
+        wake_with_fixture(|_| {
+            let mut tmux = WakeMockTmux {
+                pre_send_pane_command_script: vec!["direnv".to_owned()],
+                pane_command_script: vec!["claude".to_owned()],
+                ..WakeMockTmux::default()
+            };
+
+            let (code, stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("run");
+
+            let expected = WAKE_LAUNCH_CONFIRM_BACKOFF_MS.len() + 1;
+            assert_eq!(code, 0, "{stdout}");
+            assert!(stdout.contains("created session"), "{stdout}");
+            assert_eq!(tmux.pre_send_polls, expected);
+            assert_eq!(tmux.post_send_polls, 1);
+            assert_eq!(tmux.send_pane_polls, vec![expected]);
+        });
+    }
+
+    #[test]
     fn wake_reused_shell_window_resends_instead_of_already_running() {
         wake_with_fixture(|_| {
             let session = wake_session_name("neo", &[]);
@@ -2791,6 +2869,8 @@ mod wake_tests {
             assert!(stdout.contains("woke 'neo'"), "{stdout}");
             assert!(!tmux.actions.iter().any(|action| action.starts_with("new-window")), "{:?}", tmux.actions);
             assert!(tmux.actions.iter().any(|action| action.starts_with(&format!("send {session}:neo "))), "{:?}", tmux.actions);
+            assert_eq!(tmux.pre_send_polls, 0);
+            assert_eq!(tmux.send_pane_polls, vec![1]);
             assert_eq!(tmux.pane_polls, 2);
         });
     }
@@ -2824,6 +2904,7 @@ mod wake_tests {
 
             assert_eq!(code, 0, "{stdout}");
             assert!(stdout.contains("running in"), "{stdout}");
+            assert_eq!(tmux.pre_send_polls, 0);
             assert!(!tmux.actions.iter().any(|action| action.starts_with("send ")), "{:?}", tmux.actions);
             assert_eq!(tmux.pane_polls, 1);
         });
@@ -2840,6 +2921,7 @@ mod wake_tests {
 
             assert_eq!(code, 0, "{stdout}");
             assert!(stdout.contains("running in"), "{stdout}");
+            assert_eq!(tmux.pre_send_polls, 0);
             assert!(!tmux.actions.iter().any(|action| action.starts_with("send ")), "{:?}", tmux.actions);
             assert_eq!(tmux.pane_polls, 1);
         });
