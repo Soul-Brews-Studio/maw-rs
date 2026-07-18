@@ -3,7 +3,7 @@ const DISPATCH_121: &[DispatcherEntry] = &[
     DispatcherEntry { command: "buddy", handler: Handler::Sync(bud_run_command) },
 ];
 
-const BUD_USAGE: &str = "usage: maw bud <name> [--from <oracle>] [--root] [--seed] [--org <org>] [--repo org/repo] [--issue N] [--issue-repo owner/repo] [--note <text>] [--nickname <pretty>] [--engine <name>|-e <name>] [--session <N>-<name>] [--fast] [--split] [--scaffold-only] [--dry-run]\n       Or: maw bud --from-repo <path|url> --stem <stem> [--pr] [--from <parent>] [--seed] [--sync-peers] [--force] [--track-vault] [--dry-run]\n       The repo is created as <name>-oracle (maw bud foo -> repo foo-oracle); <name> must not already end in -oracle.";
+const BUD_USAGE: &str = "usage: maw bud <name> [--from <oracle>] [--root] [--seed] [--org <org>] [--repo-name <name>|--no-suffix] [--repo org/repo] [--issue N] [--issue-repo owner/repo] [--note <text>] [--nickname <pretty>] [--engine <name>|-e <name>] [--session <N>-<name>] [--fast] [--split] [--scaffold-only] [--dry-run]\n       Or: maw bud --from-repo <path|url> --stem <stem> [--pr] [--from <parent>] [--seed] [--sync-peers] [--force] [--track-vault] [--dry-run]\n       The repo defaults to <name>-oracle; --no-suffix uses <name> exactly, and --repo-name overrides the full repo name.";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)]
@@ -14,6 +14,7 @@ struct BudOptions {
     stem: Option<String>,
     org: Option<String>,
     repo: Option<String>,
+    repo_name: Option<String>,
     issue: Option<u32>,
     issue_repo: Option<String>,
     note: Option<String>,
@@ -31,6 +32,7 @@ struct BudOptions {
     force: bool,
     track_vault: bool,
     sync_peers: bool,
+    no_suffix: bool,
     parent_session_id: Option<String>,
     session_id: Option<String>,
     session: Option<String>,
@@ -217,7 +219,8 @@ fn bud_parse(argv: &[String]) -> Result<BudOptions, String> {
             "--force" => options.force = true,
             "--track-vault" => options.track_vault = true,
             "--sync-peers" => options.sync_peers = true,
-            flag @ ("--from" | "--from-repo" | "--stem" | "--org" | "--repo" | "--issue" | "--issue-repo" | "--note" | "--nickname" | "--engine" | "-e" | "--parent" | "--parent-session-id" | "--session-id" | "--session") => { bud_assign_value(&mut options, flag, &bud_take_value(argv, &mut index, flag)?)?; }
+            "--no-suffix" => options.no_suffix = true,
+            flag @ ("--from" | "--from-repo" | "--stem" | "--org" | "--repo" | "--repo-name" | "--issue" | "--issue-repo" | "--note" | "--nickname" | "--engine" | "-e" | "--parent" | "--parent-session-id" | "--session-id" | "--session") => { bud_assign_value(&mut options, flag, &bud_take_value(argv, &mut index, flag)?)?; }
             value if value.starts_with("--") && value.contains('=') => {
                 let (flag, value) = value.split_once('=').unwrap_or_default();
                 bud_assign_value(&mut options, flag, value)?;
@@ -236,6 +239,7 @@ fn bud_assign_value(options: &mut BudOptions, flag: &str, value: &str) -> Result
         "--from-repo" => options.from_repo = Some(bud_validate_pathish(value, "--from-repo")?),
         "--stem" => options.stem = Some(bud_validate_oracle_stem(value)?),
         "--org" => options.org = Some(bud_validate_org(value)?),
+        "--repo-name" => options.repo_name = Some(bud_validate_explicit_repo_name(value)?),
         "--repo" | "--issue-repo" => bud_assign_slug(options, flag, value)?,
         "--issue" => options.issue = Some(bud_validate_issue(value)?),
         "--note" => options.note = Some(bud_validate_text(value, "--note")?),
@@ -271,6 +275,9 @@ fn bud_set_name(options: &mut BudOptions, value: &str) -> Result<(), String> {
 fn bud_validate_options(options: BudOptions) -> Result<BudOptions, String> {
     if options.from_repo.is_some() {
         if options.stem.is_none() { return Err("--from-repo requires --stem <stem>".to_owned()); }
+        if options.no_suffix || options.repo_name.is_some() {
+            return Err("bud: --no-suffix and --repo-name apply only to fresh-created repos".to_owned());
+        }
         return Ok(options);
     }
     if options.name.is_none() { return Err(BUD_USAGE.to_owned()); }
@@ -295,8 +302,10 @@ fn bud_context(options: &BudOptions, gh: &mut impl BudGhGitRunner) -> Result<Bud
     let stem = options.name.clone().ok_or_else(|| BUD_USAGE.to_owned())?;
     let org = options.org.clone().unwrap_or_else(|| std::env::var("MAW_BUD_OWNER").unwrap_or_else(|_| "Soul-Brews-Studio".to_owned()));
     let org = bud_validate_org(&org)?;
-    let repo_name = format!("{stem}-oracle");
-    bud_validate_repo_name(&repo_name)?;
+    let repo_name = options
+        .repo_name
+        .clone()
+        .unwrap_or_else(|| if options.no_suffix { stem.clone() } else { format!("{stem}-oracle") });
     let slug = format!("{org}/{repo_name}");
     let repo_path = bud_repos_root(gh).join(&org).join(&repo_name);
     Ok(BudContext { stem, org, parent: options.from.clone().filter(|_| !options.root), repo_name, slug, repo_path })
@@ -602,6 +611,25 @@ fn bud_validate_org(value: &str) -> Result<String, String> {
 
 fn bud_validate_repo_name(value: &str) -> Result<(), String> { let stem = value.strip_suffix("-oracle").ok_or_else(|| "bud: repo must end with -oracle".to_owned())?; bud_validate_oracle_stem(stem).map(|_| ()) }
 
+fn bud_validate_explicit_repo_name(value: &str) -> Result<String, String> {
+    if value.is_empty()
+        || value.trim() != value
+        || value.starts_with('-')
+        || value.contains("..")
+        || value.contains('/')
+        || value.contains('\\')
+        || value.contains('\0')
+        || value.chars().any(char::is_control)
+        || !value.bytes().next().is_some_and(|byte| byte.is_ascii_alphabetic())
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        return Err(format!("bud: invalid --repo-name {value:?}"));
+    }
+    Ok(value.to_owned())
+}
+
 fn bud_validate_slug(value: &str, label: &str) -> Result<String, String> {
     let Some((org, repo)) = value.split_once('/') else { return Err(format!("bud: {label} must be owner/repo")); };
     if value.matches('/').count() != 1 { return Err(format!("bud: {label} must be owner/repo")); }
@@ -726,6 +754,50 @@ mod bud_tests {
         assert_eq!(out.stdout, include_str!("../../tests/fixtures/native-bud/bud-dry-run.stdout"));
         assert!(gh.calls.is_empty());
         assert!(wake.calls.is_empty());
+    }
+
+    #[test]
+    fn bud_repo_naming_flags_control_fresh_create_context() {
+        let mut gh = FakeGh::default();
+
+        let default = bud_context(
+            &bud_parse(&bud_args(&["sprout", "--org", "Org"])).expect("default parse"),
+            &mut gh,
+        )
+        .expect("default context");
+        assert_eq!(default.repo_name, "sprout-oracle");
+
+        let suffixless = bud_context(
+            &bud_parse(&bud_args(&["sprout", "--org", "Org", "--no-suffix"]))
+                .expect("no-suffix parse"),
+            &mut gh,
+        )
+        .expect("no-suffix context");
+        assert_eq!(suffixless.repo_name, "sprout");
+        assert!(bud_dry_run(&suffixless, &BudOptions::default()).contains("Org/sprout"));
+
+        let overridden = bud_context(
+            &bud_parse(&bud_args(&[
+                "sprout",
+                "--org",
+                "Org",
+                "--no-suffix",
+                "--repo-name",
+                "custom-repo",
+            ]))
+            .expect("repo-name parse"),
+            &mut gh,
+        )
+        .expect("repo-name context");
+        assert_eq!(overridden.repo_name, "custom-repo");
+        assert!(bud_dry_run(&overridden, &BudOptions::default()).contains("Org/custom-repo"));
+    }
+
+    #[test]
+    fn bud_help_documents_repo_naming_flags() {
+        let error = bud_parse(&bud_args(&["--help"])).expect_err("help sentinel");
+        assert!(error.contains("--no-suffix"));
+        assert!(error.contains("--repo-name <name>"));
     }
 
     #[test]
