@@ -884,24 +884,33 @@ fn fleet_gc_candidates(state: &FleetState, live: &BTreeSet<String>) -> Vec<Fleet
             continue;
         }
         let repos = fleet_session_repo_slugs(&entry.session);
-        if repos.is_empty() {
-            continue;
-        }
         let missing = repos
             .iter()
             .filter(|repo| !fleet_repo_path(&state.repos_root, repo).exists())
             .cloned()
             .collect::<Vec<_>>();
-        if missing.len() == repos.len() {
-            candidates.push(FleetGcCandidate {
-                name: entry.session.name.clone(),
-                path: entry.path.clone(),
-                disabled_path: fleet_disabled_path(&entry.path),
-                missing_repos: missing,
-            });
+        let should_reap = match fleet_entry_auto_registered(entry) {
+            Some(auto_registered) => auto_registered,
+            None => !repos.is_empty() && missing.len() == repos.len(),
+        };
+        if !should_reap {
+            continue;
         }
+        candidates.push(FleetGcCandidate {
+            name: entry.session.name.clone(),
+            path: entry.path.clone(),
+            disabled_path: fleet_disabled_path(&entry.path),
+            missing_repos: missing,
+        });
     }
     candidates
+}
+
+fn fleet_entry_auto_registered(entry: &NativeFleetEntry) -> Option<bool> {
+    std::fs::read_to_string(&entry.path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|value| value.get("auto_registered").and_then(serde_json::Value::as_bool))
 }
 
 fn fleet_session_repo_slugs(session: &NativeFleetSession) -> Vec<String> {
@@ -1498,7 +1507,10 @@ fn fleet_registry_upsert_session_for_env(
             .entry("created_at".to_owned())
             .or_insert_with(|| serde_json::json!(fleet_registry_now_iso()));
         object.insert("created_by".to_owned(), serde_json::json!(created_by));
-        object.insert("auto_registered".to_owned(), serde_json::json!(true));
+        object.insert(
+            "auto_registered".to_owned(),
+            serde_json::json!(created_by != "maw fleet add"),
+        );
         let merged = fleet_registry_merge_windows(object.get("windows"), windows);
         object.insert("windows".to_owned(), serde_json::json!(merged));
     }
@@ -2121,7 +2133,7 @@ mod fleet_tests {
         assert_eq!(json["name"], "188-maw-rs");
         assert_eq!(json["created_at"], "2026-07-03T01:02:03.000Z");
         assert_eq!(json["created_by"], "maw fleet add");
-        assert_eq!(json["auto_registered"], true);
+        assert_eq!(json["auto_registered"], false);
         assert_eq!(json["windows"].as_array().expect("windows").len(), 1);
         assert_eq!(json["windows"][0]["name"], "maw-rs-oracle");
         assert_eq!(json["windows"][0]["repo"], "Soul-Brews-Studio/maw-rs");
@@ -2347,14 +2359,28 @@ mod fleet_tests {
     }
 
     #[test]
-    fn fleet_gc_dry_run_lists_only_nonlive_entries_with_all_repos_missing() {
+    fn fleet_gc_dry_run_composes_auto_legacy_and_manual_entry_rules() {
         fleet_with_fixture(|root| {
-            let ghost = root.join("config/fleet/04-ghost.json");
+            let ghost = root.join("config/fleet/04-auto-ghost.json");
+            std::fs::create_dir_all(root.join("ghq/github.com/acme/live-repo"))
+                .expect("live repo");
             std::fs::write(
                 &ghost,
-                r#"{"name":"04-ghost","windows":[{"name":"ghost","repo":"acme/ghost"}]}"#,
+                r#"{"name":"04-auto-ghost","auto_registered":true,"windows":[{"name":"ghost","repo":"acme/live-repo"}]}"#,
             )
             .expect("ghost");
+            let manual = root.join("config/fleet/05-manual-ghost.json");
+            std::fs::write(
+                &manual,
+                r#"{"name":"05-manual-ghost","auto_registered":false,"windows":[{"name":"manual","repo":"acme/missing"}]}"#,
+            )
+            .expect("manual ghost");
+            let legacy = root.join("config/fleet/06-legacy-ghost.json");
+            std::fs::write(
+                &legacy,
+                r#"{"name":"06-legacy-ghost","windows":[{"name":"legacy","repo":"acme/missing"}]}"#,
+            )
+            .expect("legacy ghost");
             let mut runtime = FleetFakeRuntime::default();
             let state = fleet_load_state_with(&mut runtime).expect("state");
             let options = fleet_parse_args(&fleet_strings(&["gc", "--dry-run"])).expect("parse");
@@ -2363,10 +2389,16 @@ mod fleet_tests {
 
             assert_eq!(code, 0);
             assert!(stdout.contains("[dry-run] would disable"));
-            assert!(stdout.contains("04-ghost.json"));
+            assert!(stdout.contains("04-auto-ghost.json"));
+            assert!(stdout.contains("06-legacy-ghost.json"));
+            assert!(!stdout.contains("05-manual-ghost.json"));
             assert!(!stdout.contains("03-alpha.json"));
             assert!(ghost.exists());
-            assert!(!ghost.with_file_name("04-ghost.json.disabled").exists());
+            assert!(manual.exists());
+            assert!(legacy.exists());
+            assert!(!ghost
+                .with_file_name("04-auto-ghost.json.disabled")
+                .exists());
         });
     }
 
