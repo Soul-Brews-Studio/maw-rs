@@ -1,5 +1,6 @@
 // Exercises MawWasmHost (wasm-host feature): run via
 // `cargo test -p maw-plugin-manifest --features wasm-host` (the wasm-host CI job).
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
 #![cfg(feature = "wasm-host")]
 
 use std::fs::{create_dir_all, write};
