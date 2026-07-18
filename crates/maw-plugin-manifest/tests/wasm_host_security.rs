@@ -1,7 +1,6 @@
 // Exercises MawWasmHost (wasm-host feature): run via
 // `cargo test -p maw-plugin-manifest --features wasm-host` (the wasm-host CI job).
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
-
 #![cfg(feature = "wasm-host")]
 
 include!("wasm_host_security/common.rs");
