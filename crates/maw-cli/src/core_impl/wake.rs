@@ -105,6 +105,7 @@ trait WakeTmuxNative {
         Ok(None)
     }
     fn wake_select_window(&mut self, target: &str) -> Result<(), String>;
+    fn wake_target_pane_id(&mut self, target: &str) -> Result<String, String>;
     fn wake_pane_current_command(&mut self, target: &str) -> Result<String, String>;
     fn wake_pane_capture(&mut self, target: &str) -> Result<String, String>;
     fn wake_confirm_poll_sleep(&mut self, delay: std::time::Duration) { std::thread::sleep(delay); }
@@ -159,6 +160,13 @@ impl WakeTmuxNative for WakeNativeTmux {
     fn wake_pane_current_command(&mut self, target: &str) -> Result<String, String> {
         wake_validate_tmux_target(target)?;
         TmuxClient::local().display_pane_current_command(target).map_err(|error| error.to_string())
+    }
+
+    fn wake_target_pane_id(&mut self, target: &str) -> Result<String, String> {
+        wake_validate_tmux_target(target)?;
+        TmuxClient::local()
+            .first_pane_id(target)
+            .ok_or_else(|| format!("wake: target pane not found: {target}"))
     }
 
     fn wake_pane_capture(&mut self, target: &str) -> Result<String, String> {
@@ -1608,6 +1616,13 @@ fn wake_wait_for_shell_ready(tmux: &mut impl WakeTmuxNative, target: &str) {
     }
 }
 
+fn wake_target_is_current_pane(tmux: &mut impl WakeTmuxNative, target: &str) -> bool {
+    let Ok(current_pane) = std::env::var("TMUX_PANE") else { return false };
+    let current_pane = current_pane.trim();
+    if current_pane.is_empty() { return false; }
+    tmux.wake_target_pane_id(target).is_ok_and(|target_pane| target_pane.trim() == current_pane)
+}
+
 fn wake_create_session(options: &WakeOptionsNative, resolved: &WakeResolvedNative, tmux: &mut impl WakeTmuxNative, out: &mut String) -> Result<bool, String> {
     tmux.wake_new_session(&resolved.session, &resolved.window, &resolved.repo_path)?;
     wake_wait_for_shell_ready(tmux, &resolved.target);
@@ -1628,12 +1643,16 @@ fn wake_create_or_reuse_window(
     out: &mut String,
 ) -> Result<bool, String> {
     let windows = tmux.wake_list().into_iter().find(|session| session.name == resolved.session).map(|session| session.windows).unwrap_or_default();
+    let mut self_pane_launch = false;
     if !options.new_window && windows.iter().any(|window| window.name == resolved.window) {
-        match tmux.wake_pane_current_command(&resolved.target) {
-            Ok(command) if wake_pane_command_is_shell(&command) => {}
-            Ok(_) | Err(_) => {
-                let _ = writeln!(out, "\x1b[32m⚡\x1b[0m '{}' running in {}", resolved.window, resolved.session);
-                return Ok(false);
+        self_pane_launch = wake_target_is_current_pane(tmux, &resolved.target);
+        if !self_pane_launch {
+            match tmux.wake_pane_current_command(&resolved.target) {
+                Ok(command) if wake_pane_command_is_shell(&command) => {}
+                Ok(_) | Err(_) => {
+                    let _ = writeln!(out, "\x1b[32m⚡\x1b[0m '{}' running in {}", resolved.window, resolved.session);
+                    return Ok(false);
+                }
             }
         }
     } else {
@@ -1645,7 +1664,9 @@ fn wake_create_or_reuse_window(
         return Ok(true);
     }
     tmux.wake_send_text(&resolved.target, &resolved.command)?;
-    wake_confirm_engine_launch(tmux, &resolved.target, &resolved.command)?;
+    if !self_pane_launch {
+        wake_confirm_engine_launch(tmux, &resolved.target, &resolved.command)?;
+    }
     let _ = writeln!(out, "\x1b[32m✅\x1b[0m woke '{}' in {} → {}", resolved.window, resolved.session, resolved.repo_path.display());
     Ok(false)
 }
@@ -1703,6 +1724,7 @@ mod wake_tests {
         /// shell init is already settled ("zsh").
         pre_send_pane_command_script: Vec<String>,
         pane_command_error: bool,
+        target_pane_id: Option<String>,
         pane_polls: usize,
         pre_send_polls: usize,
         post_send_polls: usize,
@@ -1772,6 +1794,9 @@ mod wake_tests {
             let index = (self.post_send_polls - 1).min(self.pane_command_script.len() - 1);
             Ok(self.pane_command_script[index].clone())
         }
+        fn wake_target_pane_id(&mut self, _target: &str) -> Result<String, String> {
+            self.target_pane_id.clone().ok_or_else(|| "mock target pane missing".to_owned())
+        }
         fn wake_pane_capture(&mut self, _target: &str) -> Result<String, String> {
             self.pane_captures += 1;
             if self.pane_capture_error { return Err("mock pane capture failed".to_owned()); }
@@ -1823,6 +1848,7 @@ mod wake_tests {
         let _state = EnvVarRestore::capture("MAW_STATE_DIR");
         let _ghq = EnvVarRestore::capture("GHQ_ROOT");
         let _tmux = EnvVarRestore::capture("TMUX");
+        let _tmux_pane = EnvVarRestore::capture("TMUX_PANE");
         let root = wake_temp_root("fixture");
         std::fs::create_dir_all(root.join("ghq/github.com/acme/neo-oracle")).expect("repo");
         std::fs::create_dir_all(root.join("config/fleet")).expect("fleet");
@@ -1833,6 +1859,7 @@ mod wake_tests {
         std::env::set_var("MAW_STATE_DIR", root.join("state"));
         std::env::set_var("GHQ_ROOT", root.join("ghq/github.com"));
         std::env::remove_var("TMUX");
+        std::env::remove_var("TMUX_PANE");
         test(&root);
     }
 
@@ -2845,6 +2872,25 @@ mod wake_tests {
             assert_eq!(tmux.pre_send_polls, 0);
             assert_eq!(tmux.send_pane_polls, vec![1]);
             assert_eq!(tmux.pane_polls, 2);
+        });
+    }
+
+    #[test]
+    fn wake_self_pane_reuse_queues_send_instead_of_already_running() {
+        wake_with_fixture(|_| {
+            let session = wake_session_name("neo", &[]);
+            let mut tmux = wake_mock_tmux_with_existing_window(&session, "neo");
+            tmux.target_pane_id = Some("%42".to_owned());
+            tmux.pane_command_script = vec!["maw".to_owned()];
+            std::env::set_var("TMUX_PANE", "%42");
+
+            let (code, stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("run");
+
+            assert_eq!(code, 0, "{stdout}");
+            assert!(!stdout.contains('⚡'), "{stdout}");
+            assert!(stdout.contains("woke 'neo'"), "{stdout}");
+            assert!(tmux.actions.iter().any(|action| action.starts_with(&format!("send {session}:neo "))), "{:?}", tmux.actions);
+            assert_eq!(tmux.pane_polls, 0, "self-pane launcher must not be mistaken for a launched engine");
         });
     }
 

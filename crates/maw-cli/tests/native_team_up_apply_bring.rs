@@ -80,6 +80,7 @@ fn run_with_panes(
         .env("MAW_RS_TEAM_TMUX_PANES", panes);
     if let Some(log) = log {
         cmd.env("MAW_RS_TEAM_FAKE_TMUX_LOG", log);
+        cmd.env("MAW_RS_TEAM_FAKE_SPAWN_LOG", log);
     }
     cmd.output().expect("run maw-rs")
 }
@@ -129,7 +130,11 @@ fn team_t5b_up_exec_uses_fixed_maw_send_keys_literal_and_resume_sequence() {
         &root,
         fs::read_to_string(&log).expect("tmux log").into_bytes(),
     );
-    assert!(log_text.contains(r#""args":["new-window","-t","alpha:","-n","builder"]"#));
+    assert!(log_text.contains(
+        r#""args":["wake","builder","--no-attach","--session","alpha","-e","codex","--repo-path","#
+    ));
+    assert!(!log_text.contains(r#""args":["new-window","-t","alpha:","-n","builder"]"#));
+    assert!(!log_text.contains(r#""send-keys","-t","alpha:builder""#));
     assert!(log_text.contains(r#""args":["send-keys","-t","%2","C-u"]"#));
     assert!(log_text.contains(r#""send-keys","-t","%2","-l","--","'/fake/maw' 'wake' 'reviewer'"#));
     assert!(log_text.contains(r#""send-keys","-t","%2","Enter"]"#));
@@ -155,9 +160,9 @@ fn team_t5b_up_new_window_targets_exact_session_when_names_prefix_overlap() {
         &root,
         fs::read_to_string(&log).expect("tmux log").into_bytes(),
     );
-    assert!(log_text.contains(r#""args":["new-window","-t","188-maw-rs:","-n","builder"]"#));
-    assert!(!log_text.contains(r#""args":["new-window","-t","188-maw-rs","-n","builder"]"#));
-    assert!(log_text.contains(r#""send-keys","-t","188-maw-rs:builder""#));
+    assert!(log_text.contains(r#""args":["wake","builder","--no-attach","--session","188-maw-rs","-e","codex","--repo-path","#));
+    assert!(!log_text.contains(r#""args":["new-window","-t","188-maw-rs:","-n","builder"]"#));
+    assert!(!log_text.contains(r#""send-keys","-t","188-maw-rs:builder""#));
 }
 
 #[test]
@@ -187,7 +192,7 @@ fn team_t5b_apply_only_mutates_with_apply_and_uses_fake_tmux() {
     );
     assert!(fs::read_to_string(&log)
         .expect("tmux log")
-        .contains("send-keys"));
+        .contains(r#""args":["wake","builder""#));
 }
 
 #[test]
