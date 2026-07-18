@@ -183,6 +183,6 @@ fn team_shutdown_record_fake(kind: &str, value: &str) -> Result<(), String> {
 fn team_shutdown_render(team: &str, actions: &[String]) -> String {
     use std::fmt::Write as _;
     let mut out = format!("team shutdown: {team}\n");
-    for action in actions { writeln!(out, "  {action}").expect("write string"); }
+    for action in actions { let _ = writeln!(out, "  {action}"); }
     out
 }

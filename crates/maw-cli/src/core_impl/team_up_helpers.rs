@@ -188,7 +188,7 @@ fn team_t3_render_bring(team: &str, opts: &TeamT3Options124) -> String {
     let mut out = format!("\x1b[36m⚡\x1b[0m bringing {} oracle(s) into workspace '{session}' (dry-run)\n", members.len());
     for oracle in members {
         let suffix = if team_t3_has(opts, TEAM_T3_SPLIT) && !team_t3_has(opts, TEAM_T3_GATHER) { " --split" } else { "" };
-        writeln!(out, "\x1b[90mwould wake {oracle} --session {session}{suffix}\x1b[0m").expect("write string");
+        let _ = writeln!(out, "\x1b[90mwould wake {oracle} --session {session}{suffix}\x1b[0m");
     }
     out.push_str("No changes made\n");
     out
@@ -269,7 +269,7 @@ fn team_t3_up_action(item: &TeamRosterItem124, opts: &TeamT3Options124) -> Strin
 fn team_t3_render_roster(title: &str, roster: &[TeamRosterItem124]) -> String {
     use std::fmt::Write as _;
     let mut out = format!("{title}\nrole\tidentity\tengine\tstate\taction\n");
-    for item in roster { writeln!(out, "{}\t{}\t{}\t{}\t{}", item.role, item.identity, item.engine, item.state, item.action).expect("write string"); }
+    for item in roster { let _ = writeln!(out, "{}\t{}\t{}\t{}\t{}", item.role, item.identity, item.engine, item.state, item.action); }
     out
 }
 

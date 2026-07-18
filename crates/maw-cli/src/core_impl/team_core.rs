@@ -369,7 +369,7 @@ fn team_push_list_row(out: &mut String, item: &(String, String, usize)) {
     let (name, store, members) = item;
     let status = if store == "vault" { "\x1b[90mprep-only\x1b[0m" } else { "\x1b[90mno live panes\x1b[0m" };
     let zombies = if store == "vault" { "\x1b[90m—\x1b[0m" } else { "0" };
-    writeln!(out, "  {name:<30}{store:<7}{members:<9}{status:<26}{zombies}").expect("write string");
+    let _ = writeln!(out, "  {name:<30}{store:<7}{members:<9}{status:<26}{zombies}");
 }
 
 fn team_team_names() -> Vec<String> {
@@ -378,15 +378,15 @@ fn team_team_names() -> Vec<String> {
 
 fn team_push_status(out: &mut String, name: &str) {
     use std::fmt::Write as _;
-    let Some(config) = team_read_json::<TeamConfig122>(&team_paths(name).tool_config) else { writeln!(out, "\x1b[33m⚠\x1b[0m team not found: {name}").expect("write string"); return; };
+    let Some(config) = team_read_json::<TeamConfig122>(&team_paths(name).tool_config) else { let _ = writeln!(out, "\x1b[33m⚠\x1b[0m team not found: {name}"); return; };
     let members: Vec<_> = config.members.iter().filter(|m| m.agent_type.as_deref() != Some("team-lead")).collect();
-    writeln!(out, "\n\x1b[36;1mTeam: {name}\x1b[0m ({} agents)\n", members.len()).expect("write string");
-    writeln!(out, "  Agent           Status    Task                          Pane").expect("write string");
-    writeln!(out, "  ─────────────── ───────── ───────────────────────────── ────────").expect("write string");
-    for member in &members { writeln!(out, "  {:<15} \x1b[90midle\x1b[0m      {:<29} {}", member.name, "-", member.tmux_pane_id.as_deref().unwrap_or("-" )).expect("write string"); }
+    let _ = writeln!(out, "\n\x1b[36;1mTeam: {name}\x1b[0m ({} agents)\n", members.len());
+    let _ = writeln!(out, "  Agent           Status    Task                          Pane");
+    let _ = writeln!(out, "  ─────────────── ───────── ───────────────────────────── ────────");
+    for member in &members { let _ = writeln!(out, "  {:<15} \x1b[90midle\x1b[0m      {:<29} {}", member.name, "-", member.tmux_pane_id.as_deref().unwrap_or("-" )); }
     let tasks = team_read_tasks(name);
     let done = tasks.iter().filter(|task| task.status == "completed").count();
-    writeln!(out, "\n  \x1b[90mTasks: {done}/{} done | Agents: 0 working, {} idle\x1b[0m", tasks.len(), members.len()).expect("write string");
+    let _ = writeln!(out, "\n  \x1b[90mTasks: {done}/{} done | Agents: 0 working, {} idle\x1b[0m", tasks.len(), members.len());
 }
 
 fn team_read_tasks(team: &str) -> Vec<TeamTask122> {
@@ -411,19 +411,19 @@ fn team_read_oracle_registry(team: &str) -> Option<TeamOracleRegistry122> {
 fn team_push_member_row(out: &mut String, member: &TeamOracleMember122) {
     use std::fmt::Write as _;
     let added = member.added_at.split('T').next().unwrap_or("");
-    writeln!(out, "  \x1b[32m●\x1b[0m {:<30} \x1b[90mrole:\x1b[0m {:<15} \x1b[90madded:\x1b[0m {added}", member.oracle, member.role).expect("write string");
+    let _ = writeln!(out, "  \x1b[32m●\x1b[0m {:<30} \x1b[90mrole:\x1b[0m {:<15} \x1b[90madded:\x1b[0m {added}", member.oracle, member.role);
 }
 
 fn team_render_lives(agent: &str, dir: &std::path::Path) -> String {
     use std::fmt::Write as _;
     let files = team_dir_names(dir);
     let mut out = format!("\n  \x1b[36;1m{agent} — past lives\x1b[0m\n\n");
-    writeln!(out, "  standing orders: {}", if files.iter().any(|f| f == "standing-orders.md") { "\x1b[32myes\x1b[0m" } else { "\x1b[90mno\x1b[0m" }).expect("write string");
+    let _ = writeln!(out, "  standing orders: {}", if files.iter().any(|f| f == "standing-orders.md") { "\x1b[32myes\x1b[0m" } else { "\x1b[90mno\x1b[0m" });
     let findings: Vec<_> = files.iter().filter(|f| f.ends_with("_findings.md")).collect();
-    writeln!(out, "  findings: {}", if findings.is_empty() { "\x1b[90mnone\x1b[0m".to_owned() } else { format!("\x1b[32m{}\x1b[0m", findings.len()) }).expect("write string");
-    for file in findings { writeln!(out, "    \x1b[90m{} ({} lines)\x1b[0m", file, team_line_count(&dir.join(file))).expect("write string"); }
+    let _ = writeln!(out, "  findings: {}", if findings.is_empty() { "\x1b[90mnone\x1b[0m".to_owned() } else { format!("\x1b[32m{}\x1b[0m", findings.len()) });
+    for file in findings { let _ = writeln!(out, "    \x1b[90m{} ({} lines)\x1b[0m", file, team_line_count(&dir.join(file))); }
     let other: Vec<_> = files.into_iter().filter(|f| f != "standing-orders.md" && !f.ends_with("_findings.md")).collect();
-    if !other.is_empty() { writeln!(out, "  other: \x1b[90m{}\x1b[0m", other.join(", ")).expect("write string"); }
+    if !other.is_empty() { let _ = writeln!(out, "  other: \x1b[90m{}\x1b[0m", other.join(", ")); }
     out.push('\n');
     out
 }
@@ -630,14 +630,14 @@ fn team_format_plan(charter: &TeamCharter122) -> String {
 fn team_render_charter_plan(title: &str, charter: &TeamCharter122, artifacts: &[std::path::PathBuf], actions: &[&str]) -> String {
     use std::fmt::Write as _;
     let mut out = format!("{title}: {}\n", charter.name);
-    if !charter.description.is_empty() { writeln!(out, "description: {}", charter.description).expect("write string"); }
-    if !charter.goal.is_empty() { writeln!(out, "goal: {}", charter.goal.lines().next().unwrap_or("")).expect("write string"); }
-    writeln!(out, "\nmembers ({}):", charter.members.len()).expect("write string");
-    for member in &charter.members { writeln!(out, "  - {} ({})", member.role, team_member_bits(member)).expect("write string"); }
-    writeln!(out, "\nwould prepare artifacts:").expect("write string");
-    for artifact in artifacts { writeln!(out, "  - {}", artifact.display()).expect("write string"); }
-    writeln!(out, "\nphase-0 safety:").expect("write string");
-    for action in actions { writeln!(out, "  - {action}").expect("write string"); }
+    if !charter.description.is_empty() { let _ = writeln!(out, "description: {}", charter.description); }
+    if !charter.goal.is_empty() { let _ = writeln!(out, "goal: {}", charter.goal.lines().next().unwrap_or("")); }
+    let _ = writeln!(out, "\nmembers ({}):", charter.members.len());
+    for member in &charter.members { let _ = writeln!(out, "  - {} ({})", member.role, team_member_bits(member)); }
+    let _ = writeln!(out, "\nwould prepare artifacts:");
+    for artifact in artifacts { let _ = writeln!(out, "  - {}", artifact.display()); }
+    let _ = writeln!(out, "\nphase-0 safety:");
+    for action in actions { let _ = writeln!(out, "  - {action}"); }
     out
 }
 
@@ -657,7 +657,7 @@ fn team_format_preflight(charter: &TeamCharter122) -> (String, bool) {
     let checks = team_preflight_checks(charter);
     let errors = checks.iter().any(|(ok, _, _)| !ok);
     let mut out = format!("team charter preflight: {}\nstatus: {}\n\nchecks:\n", charter.name, if errors { "failed" } else { "passed" });
-    for (ok, label, detail) in checks { writeln!(out, "  {} {label}: {detail}", if ok { "✓" } else { "✗" }).expect("write string"); }
+    for (ok, label, detail) in checks { let _ = writeln!(out, "  {} {label}: {detail}", if ok { "✓" } else { "✗" }); }
     out.push_str("\npreflight safety:\n  - read-only preflight only\n  - no files written\n  - no tmux panes changed\n  - no claude processes spawned\n  - no maw bud or fleet writes\n");
     (out, errors)
 }
@@ -696,7 +696,7 @@ fn team_config_member_from_charter(member: &TeamCharterMember122) -> TeamMember1
 fn team_format_load(charter: &TeamCharter122, artifacts: &[std::path::PathBuf]) -> String {
     use std::fmt::Write as _;
     let mut out = format!("team charter loaded: {}\n\nwrote artifacts:\n", charter.name);
-    for artifact in artifacts { writeln!(out, "  - {}", artifact.display()).expect("write string"); }
+    for artifact in artifacts { let _ = writeln!(out, "  - {}", artifact.display()); }
     out.push_str("\nload safety:\n  - --no-spawn respected\n  - no tmux panes changed\n  - no claude processes spawned\n  - no maw bud or fleet writes\n\nnext: maw team list\n");
     out
 }

@@ -136,7 +136,7 @@ fn team_task_list241(team: &str) -> String {
         let subject = task.get("subject").and_then(serde_json::Value::as_str).unwrap_or("");
         let status = task.get("status").and_then(serde_json::Value::as_str).unwrap_or("pending");
         let assignee = task.get("assignee").and_then(serde_json::Value::as_str).filter(|value| !value.is_empty()).map_or_else(String::new, |value| format!(" → {value}"));
-        writeln!(out, "  #{id}  [{}]  {subject}{assignee}", team_task_status_color241(status)).expect("write string");
+        let _ = writeln!(out, "  #{id}  [{}]  {subject}{assignee}", team_task_status_color241(status));
     }
     out
 }
@@ -164,7 +164,7 @@ fn team_task_assign241(team: &str, id: u64, agent: &str) -> Result<String, Strin
 
 fn team_task_set_field241(task: &mut serde_json::Value, key: &str, value: serde_json::Value) {
     if !task.is_object() { *task = serde_json::Value::Object(serde_json::Map::new()); }
-    task.as_object_mut().expect("object").insert(key.to_owned(), value);
+    if let Some(object) = task.as_object_mut() { object.insert(key.to_owned(), value); }
 }
 
 fn team_task_read_all241(team: &str) -> Vec<serde_json::Value> {

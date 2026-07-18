@@ -155,8 +155,8 @@ fn reassign_prompt_from_json(issue: u64, repo: &str, json: &str) -> Result<Strin
     let body = value["body"].as_str().unwrap_or("(no description)");
     let labels = value["labels"].as_array().map_or_else(String::new, |items| items.iter().filter_map(|item| item["name"].as_str()).collect::<Vec<_>>().join(", "));
     let mut raw = format!("Work on issue #{issue}: {title}\n");
-    if !labels.is_empty() { writeln!(raw, "Labels: {labels}").expect("write string"); }
-    write!(raw, "\n{body}").expect("write string");
+    if !labels.is_empty() { let _ = writeln!(raw, "Labels: {labels}"); }
+    let _ = write!(raw, "\n{body}");
     Ok(reassign_wrap_external(&format!("GitHub issue #{issue} ({repo})"), &raw))
 }
 
