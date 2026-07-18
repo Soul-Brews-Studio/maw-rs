@@ -83,12 +83,9 @@ impl TeamT5bTmuxRunner128 {
     }
 }
 
-fn team_t5b_wake_window(runner: &mut TeamT5bTmuxRunner128, item: &TeamRosterItem124, opts: &TeamT3Options124, session: &str) -> Result<(), String> {
+fn team_t5b_wake_window(_runner: &mut TeamT5bTmuxRunner128, item: &TeamRosterItem124, opts: &TeamT3Options124, session: &str) -> Result<(), String> {
     team_t5b_validate_item(item)?;
-    let target = format!("{session}:{}", item.identity);
-    let session_target = format!("{session}:");
-    runner.run(&team_t5b_strings(&["new-window", "-t", &session_target, "-n", &item.identity]))?;
-    team_t5b_send_fixed_maw(runner, &target, &team_t5b_maw_wake_args(item, opts, session)?)
+    team_t5b_run_maw_wake(&team_t5b_maw_wake_args(item, opts, session)?)
 }
 
 fn team_t5b_resume_pane(runner: &mut TeamT5bTmuxRunner128, item: &TeamRosterItem124, opts: &TeamT3Options124, session: &str) -> Result<(), String> {
@@ -104,6 +101,32 @@ fn team_t5b_send_fixed_maw(runner: &mut TeamT5bTmuxRunner128, target: &str, args
     runner.run(&team_t5b_strings(&["send-keys", "-t", target, "-l", "--", &command]))?;
     runner.run(&team_t5b_strings(&["send-keys", "-t", target, "Enter"]))?;
     Ok(())
+}
+
+fn team_t5b_run_maw_wake(args: &[String]) -> Result<(), String> {
+    if let Ok(log) = std::env::var("MAW_RS_TEAM_FAKE_SPAWN_LOG") {
+        let record = serde_json::json!({"program":team_t5b_self_bin()?.display().to_string(),"args":args});
+        let path = std::path::Path::new(&log);
+        let mut body = std::fs::read_to_string(path).unwrap_or_default();
+        body.push_str(&record.to_string());
+        body.push('\n');
+        return team_atomic_write_0600(path, &body);
+    }
+    let output = std::process::Command::new(team_t5b_self_bin()?)
+        .args(args)
+        .output()
+        .map_err(|error| format!("team up: maw wake failed: {error}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = stderr.trim();
+        if stderr.is_empty() {
+            Err(format!("team up: maw wake exited with {}", output.status))
+        } else {
+            Err(format!("team up: maw wake failed: {stderr}"))
+        }
+    }
 }
 
 fn team_t5b_kill_window(runner: &mut TeamT5bTmuxRunner128, item: &TeamRosterItem124, session: &str) -> Result<(), String> {
