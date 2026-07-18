@@ -234,12 +234,13 @@ fn messages_status152(engine: &str, host: &impl MessagesLifecycleHost152) -> Cli
 }
 
 fn messages_stop152(engine: &str, host: &mut impl MessagesLifecycleHost152) -> CliOutput {
-    messages_validate_engine_url152(engine).expect("already validated engine");
+    if let Err(error) = messages_validate_engine_url152(engine) {
+        return messages_lifecycle_error152(2, &error);
+    }
     let pid_path = host.messages_pid_path();
     let pid = host.messages_read_pid(&pid_path);
     let mut lines = Vec::<String>::new();
-    if pid.is_some_and(|pid| host.messages_pid_alive(pid)) {
-        let pid = pid.expect("checked some");
+    if let Some(pid) = pid.filter(|pid| host.messages_pid_alive(*pid)) {
         if let Err(error) = host.messages_stop_pid(pid) { return messages_lifecycle_error152(1, &format!("messages stop: {error}")); }
         lines.push(format!("sent SIGTERM to PID {pid}"));
         if let Err(error) = host.messages_remove_pid(&pid_path) { return messages_lifecycle_error152(1, &format!("messages stop: {error}")); }

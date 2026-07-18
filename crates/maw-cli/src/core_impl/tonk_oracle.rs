@@ -183,12 +183,12 @@ fn tonk_discussion_id<R: TonkGhRunner>(runner: &mut R, owner: &str, name: &str, 
 
 fn tonk_render_discussion(disc: &serde_json::Value) -> Result<String, String> {
     let mut out = String::new();
-    writeln!(out, "📋 {}\n", tonk_json_str(&disc["title"])?).expect("write string");
-    writeln!(out, "{}", disc["body"].as_str().unwrap_or("(no body)")).expect("write string");
+    let _ = writeln!(out, "📋 {}\n", tonk_json_str(&disc["title"])?);
+    let _ = writeln!(out, "{}", disc["body"].as_str().unwrap_or("(no body)"));
     let comments = disc["comments"]["nodes"].as_array().cloned().unwrap_or_default();
-    writeln!(out, "\n── {} comment(s) ──", comments.len()).expect("write string");
+    let _ = writeln!(out, "\n── {} comment(s) ──", comments.len());
     for comment in comments {
-        writeln!(out, "\n👤 {}:\n{}", comment["author"]["login"].as_str().unwrap_or(""), comment["body"].as_str().unwrap_or("")).expect("write string");
+        let _ = writeln!(out, "\n👤 {}:\n{}", comment["author"]["login"].as_str().unwrap_or(""), comment["body"].as_str().unwrap_or(""));
     }
     Ok(out)
 }

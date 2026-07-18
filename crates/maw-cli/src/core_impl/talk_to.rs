@@ -178,9 +178,9 @@ async fn talkto_peer(
     if output.code == 0 {
         output.stdout = format!("✓ thread #{} + sent → {}:{}\n", thread.map_or("?".to_owned(), |item| item.id.to_string()), node.unwrap_or("peer"), target);
         output.stderr.push_str(&talkto_thread_stub_warning(thread));
-    } else if thread.is_some() {
+    } else if let Some(thread) = thread {
         output.code = 0;
-        output.stdout = format!("✓ thread #{} updated\n", thread.expect("checked").id);
+        output.stdout = format!("✓ thread #{} updated\n", thread.id);
         output.stderr.push_str("warn: remote send failed — message saved to thread only\n");
     }
     output

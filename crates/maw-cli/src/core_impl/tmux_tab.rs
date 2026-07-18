@@ -26,18 +26,14 @@ fn tab_with_runner<R: maw_tmux::TmuxRunner>(
 
     let session = tab_current_session(runner)?;
     tab_validate_tmux_target(&session).map_err(|message| (1, message))?;
-    let tab_num = argv.first().and_then(|value| parse_js_i32_prefix(value));
-
-    if tab_num.is_none() {
+    let Some(tab_num) = argv.first().and_then(|value| parse_js_i32_prefix(value)) else {
         let tabs = tab_list_windows(runner, &session)?;
         return Ok(CliOutput {
             code: 0,
             stdout: tab_render_list(&session, &tabs),
             stderr: String::new(),
         });
-    }
-
-    let tab_num = tab_num.expect("checked above");
+    };
     let tabs = tab_list_windows(runner, &session)?;
     let Some(tab) = tabs.iter().find(|tab| tab.0 == tab_num) else {
         return Err((

@@ -12,11 +12,16 @@ fn run_auth_loopback(plan_json: bool, address: &str) -> CliOutput {
 }
 
 fn run_auth_from_address(plan_json: bool, oracle: Option<&str>, node: &str) -> CliOutput {
-    let from = resolve_from_address(&FromAddressConfig {
+    let Some(from) = resolve_from_address(&FromAddressConfig {
         oracle: oracle.map(str::to_owned),
         node: Some(node.to_owned()),
-    })
-    .expect("parser requires node for auth from-address");
+    }) else {
+        return CliOutput {
+            code: 2,
+            stdout: String::new(),
+            stderr: "auth from-address: node is required\n".to_owned(),
+        };
+    };
     CliOutput {
         code: 0,
         stdout: if plan_json {
@@ -216,17 +221,31 @@ fn run_auth_from_sign_payload(
 ) -> CliOutput {
     let method = method.to_uppercase();
     let payload = if legacy {
+        let Some(signed_at) = signed_at else {
+            return CliOutput {
+                code: 2,
+                stdout: String::new(),
+                stderr: "auth from-sign-payload: --signed-at is required with --legacy\n".to_owned(),
+            };
+        };
         build_legacy_from_sign_payload(
             from,
-            signed_at.expect("parser requires --signed-at with --legacy"),
+            signed_at,
             &method,
             path,
             body_hash,
         )
     } else {
+        let Some(timestamp) = timestamp else {
+            return CliOutput {
+                code: 2,
+                stdout: String::new(),
+                stderr: "auth from-sign-payload: --timestamp is required without --legacy\n".to_owned(),
+            };
+        };
         build_from_sign_payload(
             from,
-            timestamp.expect("parser requires --timestamp without --legacy"),
+            timestamp,
             &method,
             path,
             body_hash,
@@ -416,8 +435,14 @@ fn run_auth_sign_v3(
                 path,
                 body.map(str::as_bytes),
                 timestamp,
-            )
-            .expect("sign_request_v3 succeeded with the same inputs");
+            );
+            let Ok(headers) = headers else {
+                return CliOutput {
+                    code: 2,
+                    stdout: String::new(),
+                    stderr: "auth sign-v3: signing headers failed after signature succeeded\n".to_owned(),
+                };
+            };
             CliOutput {
                 code: 0,
                 stdout: if plan_json {

@@ -47,7 +47,10 @@ fn profile_dispatch(argv: &[String]) -> Result<String, ProfileError> {
 
 fn profile_required_name<'a>(argv: &'a [String], positional: &[&'a str], usage: &str) -> Result<&'a str, ProfileError> {
     if let Some(raw) = argv.get(1).filter(|value| value.starts_with('-')) {
-        return Err(profile_error(profile_validate_name(raw).expect_err("invalid name")));
+        return match profile_validate_name(raw) {
+            Ok(()) => Err(profile_error(format!("maw profile: invalid profile name \"{raw}\""))),
+            Err(error) => Err(profile_error(error)),
+        };
     }
     positional.get(1).copied().ok_or_else(|| ProfileError { message: usage.to_owned(), stdout: String::new() })
 }
