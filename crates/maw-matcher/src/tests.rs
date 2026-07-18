@@ -143,3 +143,62 @@ fn matcher_edge_branches_cover_empty_str_alias_and_ambiguous_windows() {
         }
     );
 }
+
+fn window(index: u32, name: &str, current_command: &str) -> WindowInfo {
+    WindowInfo {
+        index,
+        name: name.to_owned(),
+        current_command: current_command.to_owned(),
+    }
+}
+
+#[test]
+fn bare_session_resolves_the_only_non_shell_window() {
+    let windows = vec![window(0, "shell", "zsh"), window(1, "agent", "codex")];
+
+    assert_eq!(
+        resolve_engine_window_target("fleet", &windows),
+        EngineWindowResolution::Engine(ResolvedWindowTarget {
+            target: "fleet:1".to_owned(),
+            window: windows[1].clone(),
+        })
+    );
+}
+
+#[test]
+fn explicit_numeric_window_suffix_always_wins() {
+    let windows = vec![window(0, "shell", "zsh"), window(1, "agent", "codex")];
+
+    assert_eq!(
+        resolve_engine_window_target("fleet:0", &windows),
+        EngineWindowResolution::Explicit(ResolvedWindowTarget {
+            target: "fleet:0".to_owned(),
+            window: windows[0].clone(),
+        })
+    );
+}
+
+#[test]
+fn multiple_non_shell_windows_return_typed_ambiguity() {
+    let candidates = vec![window(1, "claude", "claude"), window(2, "codex", "codex")];
+
+    assert_eq!(
+        resolve_engine_window_target("fleet", &candidates),
+        EngineWindowResolution::Ambiguous {
+            candidates: candidates.clone(),
+        }
+    );
+}
+
+#[test]
+fn all_shell_windows_fall_back_to_window_zero() {
+    let windows = vec![window(0, "shell", "zsh"), window(1, "tools", "bash")];
+
+    assert_eq!(
+        resolve_engine_window_target("fleet", &windows),
+        EngineWindowResolution::Fallback(ResolvedWindowTarget {
+            target: "fleet:0".to_owned(),
+            window: windows[0].clone(),
+        })
+    );
+}
