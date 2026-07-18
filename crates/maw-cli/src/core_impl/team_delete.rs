@@ -170,7 +170,7 @@ fn team_delete_render(team: &str, removed: &[String]) -> String {
         out.push_str("  no team directories found\n");
     } else {
         for item in removed {
-            writeln!(out, "  removed {item}").expect("write string");
+            let _ = writeln!(out, "  removed {item}");
         }
     }
     out
@@ -183,7 +183,7 @@ fn team_prune_render(pruned: &[String]) -> String {
     }
     let mut out = format!("team prune: {} pruned\n", pruned.len());
     for team in pruned {
-        writeln!(out, "  pruned {team}").expect("write string");
+        let _ = writeln!(out, "  pruned {team}");
     }
     out
 }
@@ -192,7 +192,7 @@ fn team_gc_render(candidates: &[TeamGcCandidate251], confirm: bool) -> String {
     use std::fmt::Write as _;
     if candidates.is_empty() { return if confirm { "team gc: no candidates removed\n".to_owned() } else { "team gc dry-run: no candidates\n".to_owned() }; }
     let mut out = if confirm { format!("team gc: {} removed\n", candidates.len()) } else { format!("team gc dry-run: {} candidate(s)\n", candidates.len()) };
-    for candidate in candidates { writeln!(out, "  - {} [{}] members={}", candidate.name, candidate.reason, candidate.members).expect("write string"); }
+    for candidate in candidates { let _ = writeln!(out, "  - {} [{}] members={}", candidate.name, candidate.reason, candidate.members); }
     if !confirm { out.push_str("  rerun with --confirm to remove\n"); }
     out
 }

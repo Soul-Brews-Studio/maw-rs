@@ -117,7 +117,7 @@ fn team_gather_single_local_charter() -> Option<String> {
             if matches!(ext, "yaml" | "json") { if let Some(stem) = path.file_stem().and_then(std::ffi::OsStr::to_str) { names.insert(stem.to_owned()); } }
         }
     }
-    (names.len() == 1).then(|| names.into_iter().next().expect("one name"))
+    if names.len() == 1 { names.into_iter().next() } else { None }
 }
 
 fn team_gather_current_target<R: maw_tmux::TmuxRunner>(runner: &mut R) -> Result<TeamGatherTarget329, String> {

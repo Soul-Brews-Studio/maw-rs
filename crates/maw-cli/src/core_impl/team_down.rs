@@ -156,7 +156,7 @@ fn team_down_execute(team: &str, session: &str, actions: &[TeamDownAction126]) -
         }
     }
     for action in actions.iter().filter(|action| action.target.is_some() && action.role != "session") {
-        let target = action.target.as_deref().expect("target checked");
+        let Some(target) = action.target.as_deref() else { continue };
         team_down_archive_before_done(team, &action.role)?;
         team_down_done(session, target)?;
     }
@@ -227,7 +227,7 @@ fn team_down_render(team: &str, session: &str, _charter: &TeamCharter122, action
     use std::fmt::Write as _;
     let mut out = format!("team down: {team} ({session})\nrole\tstate\taction\n");
     for action in actions {
-        writeln!(out, "{}\t{}\t{}", action.role, action.state, action.action).expect("write string");
+        let _ = writeln!(out, "{}\t{}\t{}", action.role, action.state, action.action);
     }
     if dry_run {
         out.push_str("\nNo changes made\n");

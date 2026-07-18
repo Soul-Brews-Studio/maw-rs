@@ -202,7 +202,7 @@ fn team_enter_run240(opts: &TeamEnterOptions240, members: &[TeamEnterMember240],
     for member in members {
         team_validate_member_pane_belongs240(&opts.team, member, tmux)?;
         if let Some(text) = &opts.text { tmux.team_send_text(&member.pane_id, text)?; } else { tmux.team_send_enter(&member.pane_id)?; }
-        writeln!(out, "\x1b[36m↵\x1b[0m enter sent to {}", member.display).expect("write string");
+        let _ = writeln!(out, "\x1b[36m↵\x1b[0m enter sent to {}", member.display);
     }
     Ok(out)
 }

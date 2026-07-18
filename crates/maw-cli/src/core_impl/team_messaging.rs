@@ -75,7 +75,7 @@ fn team_send_broadcast(team: &str, message: &str) -> Result<String, String> {
     if targets.is_empty() { return Err(format!("no members in team '{team}' — add members before broadcasting")); }
     let mut out = format!("\x1b[36m⚡\x1b[0m broadcast to {} member(s) in team '{team}':\n", targets.len());
     for target in &targets { team_send_single_quiet(team, target, message)?; }
-    writeln!(out, "\x1b[32m✓\x1b[0m broadcast delivered to {} member(s)", targets.len()).expect("write string");
+    let _ = writeln!(out, "\x1b[32m✓\x1b[0m broadcast delivered to {} member(s)", targets.len());
     Ok(out)
 }
 
@@ -130,7 +130,7 @@ fn team_render_inbox(team: &str, agent: &str) -> String {
 fn team_render_live_inbox(team: &str, agent: &str, messages: &[TeamInboxMessage122]) -> String {
     use std::fmt::Write as _;
     let mut out = format!("\x1b[36mℹ\x1b[0m inbox for {agent} in team '{team}' ({}):\n", messages.len());
-    for message in messages { writeln!(out, "  - {}: {}", message.from, message.summary).expect("write string"); }
+    for message in messages { let _ = writeln!(out, "  - {}: {}", message.from, message.summary); }
     out
 }
 
@@ -143,7 +143,7 @@ fn team_render_vault_inbox(team: &str, agent: &str, dir: &std::path::Path) -> St
         }
     }
     let mut out = format!("\x1b[36mℹ\x1b[0m vault inbox for {agent} from team '{team}' ({}):\n", entries.len());
-    for message in entries { writeln!(out, "  - {}: {}", message.from, team_summary(&message.text)).expect("write string"); }
+    for message in entries { let _ = writeln!(out, "  - {}: {}", message.from, team_summary(&message.text)); }
     out
 }
 
