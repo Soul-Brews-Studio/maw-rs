@@ -1615,10 +1615,16 @@ fn wake_create_or_reuse_window(
 ) -> Result<bool, String> {
     let windows = tmux.wake_list().into_iter().find(|session| session.name == resolved.session).map(|session| session.windows).unwrap_or_default();
     if !options.new_window && windows.iter().any(|window| window.name == resolved.window) {
-        let _ = writeln!(out, "\x1b[32m⚡\x1b[0m '{}' running in {}", resolved.window, resolved.session);
-        return Ok(false);
+        match tmux.wake_pane_current_command(&resolved.target) {
+            Ok(command) if wake_pane_command_is_shell(&command) => {}
+            Ok(_) | Err(_) => {
+                let _ = writeln!(out, "\x1b[32m⚡\x1b[0m '{}' running in {}", resolved.window, resolved.session);
+                return Ok(false);
+            }
+        }
+    } else {
+        tmux.wake_new_window(&resolved.session, &resolved.window, &resolved.repo_path)?;
     }
-    tmux.wake_new_window(&resolved.session, &resolved.window, &resolved.repo_path)?;
     if options.attach {
         let _ = writeln!(out, "\x1b[32m✅\x1b[0m woke '{}' in {} → {}", resolved.window, resolved.session, resolved.repo_path.display());
         return Ok(true);
@@ -1792,6 +1798,21 @@ mod wake_tests {
         std::env::set_var("GHQ_ROOT", root.join("ghq/github.com"));
         std::env::remove_var("TMUX");
         test(&root);
+    }
+
+    fn wake_mock_tmux_with_existing_window(session: &str, window: &str) -> WakeMockTmux {
+        WakeMockTmux {
+            sessions: vec![TmuxSession {
+                name: session.to_owned(),
+                windows: vec![maw_tmux::TmuxWindow {
+                    index: 0,
+                    name: window.to_owned(),
+                    active: true,
+                    cwd: None,
+                }],
+            }],
+            ..WakeMockTmux::default()
+        }
     }
 
     #[test]
@@ -2726,6 +2747,55 @@ mod wake_tests {
             assert!(tmux.actions.iter().any(|action| action.starts_with("new-session")));
             assert!(tmux.actions.iter().any(|action| action.contains(&root.join("ghq/github.com/acme/neo-oracle").display().to_string())));
             assert!(!tmux.actions.iter().any(|action| action.starts_with("select")));
+        });
+    }
+
+    #[test]
+    fn wake_reused_shell_window_resends_instead_of_already_running() {
+        wake_with_fixture(|_| {
+            let session = wake_session_name("neo", &[]);
+            let mut tmux = wake_mock_tmux_with_existing_window(&session, "neo");
+            tmux.pane_command_script = vec!["zsh".to_owned(), "claude".to_owned()];
+
+            let (code, stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("run");
+
+            assert_eq!(code, 0, "{stdout}");
+            assert!(!stdout.contains('⚡'), "{stdout}");
+            assert!(stdout.contains("woke 'neo'"), "{stdout}");
+            assert!(!tmux.actions.iter().any(|action| action.starts_with("new-window")), "{:?}", tmux.actions);
+            assert!(tmux.actions.iter().any(|action| action.starts_with(&format!("send {session}:neo "))), "{:?}", tmux.actions);
+            assert_eq!(tmux.pane_polls, 2);
+        });
+    }
+
+    #[test]
+    fn wake_reused_non_shell_window_keeps_already_running_without_send() {
+        wake_with_fixture(|_| {
+            let session = wake_session_name("neo", &[]);
+            let mut tmux = wake_mock_tmux_with_existing_window(&session, "neo");
+
+            let (code, stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("run");
+
+            assert_eq!(code, 0, "{stdout}");
+            assert!(stdout.contains("running in"), "{stdout}");
+            assert!(!tmux.actions.iter().any(|action| action.starts_with("send ")), "{:?}", tmux.actions);
+            assert_eq!(tmux.pane_polls, 1);
+        });
+    }
+
+    #[test]
+    fn wake_reused_unreadable_window_keeps_already_running_without_send() {
+        wake_with_fixture(|_| {
+            let session = wake_session_name("neo", &[]);
+            let mut tmux = wake_mock_tmux_with_existing_window(&session, "neo");
+            tmux.pane_command_error = true;
+
+            let (code, stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("run");
+
+            assert_eq!(code, 0, "{stdout}");
+            assert!(stdout.contains("running in"), "{stdout}");
+            assert!(!tmux.actions.iter().any(|action| action.starts_with("send ")), "{:?}", tmux.actions);
+            assert_eq!(tmux.pane_polls, 1);
         });
     }
 
