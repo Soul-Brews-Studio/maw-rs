@@ -1,7 +1,15 @@
 //! macOS schedule config, plist, and launchctl synchronization boundary.
+//!
+//! Scheduled jobs use `com.maw.schedule.*`. The built-in login controller uses
+//! the reserved [`CONTROLLER_LABEL_PREFIX`], which stale-job cleanup never
+//! removes; cleanup must not be able to delete the agent that invokes cleanup.
 
 use maw_schedule::{parse_schedule, ScheduleFile};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+
+pub const CONTROLLER_LABEL_PREFIX: &str = "com.maw.schedule-controller.";
+pub const BOOT_SYNC_LABEL: &str = "com.maw.schedule-controller.sync";
 
 #[rustfmt::skip]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,6 +69,60 @@ pub fn load_config(path: &Path) -> Result<ScheduleFile, String> {
     let body = std::fs::read_to_string(path)
         .map_err(|error| format!("read {}: {error}", path.display()))?;
     parse_schedule(&body).map_err(|error| format!("parse {}: {error}", path.display()))
+}
+
+/// Build the reserved `RunAtLoad` agent that runs `maw schedule sync`.
+#[must_use]
+pub fn boot_sync_job(
+    plist_root: &Path,
+    maw_executable: &Path,
+    home: &str,
+    log_path: &Path,
+) -> DesiredJob {
+    let arguments = [
+        maw_executable.to_string_lossy().as_ref(),
+        "schedule",
+        "sync",
+    ]
+    .into_iter()
+    .map(|value| format!("      <string>{}</string>", escape_xml(value)))
+    .collect::<Vec<_>>()
+    .join("\n");
+    let log = escape_xml(&log_path.to_string_lossy());
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>{BOOT_SYNC_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+{arguments}
+  </array>
+  <key>StandardOutPath</key>
+  <string>{log}</string>
+  <key>StandardErrorPath</key>
+  <string>{log}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>HOME</key>
+    <string>{}</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+</dict>
+</plist>
+"#,
+        escape_xml(home)
+    );
+    DesiredJob {
+        label: BOOT_SYNC_LABEL.to_owned(),
+        plist_path: plist_root.join(format!("{BOOT_SYNC_LABEL}.plist")),
+        xml,
+    }
 }
 /// Inspect or repair one desired launchd job.
 ///
@@ -136,6 +198,49 @@ pub fn remove_job<R: LaunchctlRunner>(
     }
     Ok(exists || loaded)
 }
+
+/// Check or remove stale managed schedule jobs.
+///
+/// Labels in [`CONTROLLER_LABEL_PREFIX`] are reserved and always skipped, even
+/// when absent from `desired`, so the boot-sync controller cannot self-delete.
+///
+/// # Errors
+/// Returns directory, filesystem, or launchctl failures.
+pub fn cleanup_stale_jobs<R: LaunchctlRunner>(
+    plist_root: &Path,
+    desired: &BTreeSet<String>,
+    domain: &str,
+    mode: SyncMode,
+    runner: &mut R,
+) -> Result<usize, String> {
+    let entries = match std::fs::read_dir(plist_root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(format!("read {}: {error}", plist_root.display())),
+    };
+    let mut stale = 0;
+    for entry in entries {
+        let entry =
+            entry.map_err(|error| format!("read {} entry: {error}", plist_root.display()))?;
+        let name = entry.file_name();
+        let Some(label) = name.to_str().and_then(|name| name.strip_suffix(".plist")) else {
+            continue;
+        };
+        if is_managed_job_label(label)
+            && !label.starts_with(CONTROLLER_LABEL_PREFIX)
+            && !desired.contains(label)
+            && remove_job(label, &entry.path(), domain, mode, runner)?
+        {
+            stale += 1;
+        }
+    }
+    Ok(stale)
+}
+
+#[must_use]
+pub fn is_managed_job_label(label: &str) -> bool {
+    label.starts_with("com.maw.schedule.")
+}
 fn inspect<R: LaunchctlRunner>(
     job: &DesiredJob,
     domain: &str,
@@ -190,4 +295,13 @@ fn validate_target(label: &str, domain: &str) -> Result<(), String> {
     } else {
         Err("invalid launchctl label or domain".to_owned())
     }
+}
+
+fn escape_xml(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
 }
