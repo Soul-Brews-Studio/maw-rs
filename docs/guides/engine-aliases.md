@@ -45,8 +45,7 @@ spelling transfers.
 - **Standing, per-repo**: commit `.maw/maw.config.NN.json` with
   `{"wake": {"engine": "<alias>"}}` or a `commands.default` entry (#600 —
   wake resolves config dir-aware against the resolved repo path, so this
-  works from anywhere). **Pick NN = 60 or higher** — see the weight rule
-  below.
+  works from anywhere). **Pick NN = 80** — see the weight rule below.
 - **Repo-portable resume**: a repo using `commands.default` resolves the
   engine alias `default`, so it can commit its own `default-resume` — the
   repo's resume form with no machine-specific engine name hardcoded.
@@ -59,10 +58,26 @@ primary order across ALL scopes** — scope only breaks ties (project beats
 user at equal NN). This is intended design, pinned by `maw-xdg` tests. A
 repo layer overrides the user layer *only when its NN is higher*.
 
-The user layer is conventionally `50`, so:
+Weight-first-across-scopes was a deliberate decision in the ancestor design
+(maw-js [Soul-Brews-Studio/maw-js#1919](https://github.com/Soul-Brews-Studio/maw-js/issues/1919),
+design doc 2026-05-22) — scope-always-wins was considered and rejected there.
+That design also fixed the **founding weight bands** (the NN itself is
+convention, not code-enforced — `maw-xdg` accepts any number):
 
-- `maw.config.60.json` (or higher) in a repo = **override** semantics — the
-  committed values win over the user layer.
+| band | layer |
+|---|---|
+| `10` | system |
+| `50` | user |
+| `80` / `90` | project, **committed** (`90` = a second project layer) |
+| `100` | project `.local` — uncommitted machine overrides (`maw.config.100.local.json`) |
+
+So for a committed repo layer:
+
+- **`80` is the canonical band** (`90` for a second committed layer; `100`
+  stays reserved for uncommitted `.local` machine overrides). New onboarding
+  should use `80` — the m5 fleet already ships 7–8 repos at `80`. `60` also
+  works (oracle-hall uses it) since anything above the user's `50` overrides,
+  but it is off-band.
 - NN below the user's (e.g. `40`) = **suggestion** semantics — every
   colliding key is *silently* shadowed by the user layer. Live incident:
   oracle-hall committed `40` and its `commands.default` never applied
