@@ -667,8 +667,10 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let year = year + i64::from(month <= 2);
     (
         year,
-        u32::try_from(month).expect("civil month fits u32"),
-        u32::try_from(day).expect("civil day fits u32"),
+        u32::try_from(month)
+            .expect("civil month must fit u32 because civil_from_days yields months 1 through 12"),
+        u32::try_from(day)
+            .expect("civil day must fit u32 because civil_from_days yields positive calendar days"),
     )
 }
 
@@ -706,7 +708,9 @@ fn parse_second_millis(sec_part: &str) -> Option<(u32, u16)> {
     let mut value = 0_u16;
     let mut count = 0_u8;
     for ch in fraction.chars().take(3) {
-        let digit = u16::try_from(ch.to_digit(10)?).expect("decimal digit fits u16");
+        let digit = u16::try_from(ch.to_digit(10)?).expect(
+            "decimal digit must fit u16 because char::to_digit(10) yields values 0 through 9",
+        );
         value = (value * 10) + digit;
         count += 1;
     }
@@ -738,7 +742,9 @@ fn timestamp_seconds(
         28
     };
     let month_lengths = [31, leap_feb, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let max_day = month_lengths[usize::try_from(month - 1).expect("validated month fits usize")];
+    let max_day = month_lengths[usize::try_from(month - 1).expect(
+        "month index must fit usize because month was validated in the inclusive range 1 through 12",
+    )];
     if day == 0 || day > max_day {
         return None;
     }
@@ -759,8 +765,9 @@ fn timestamp_seconds(
 // HMAC-SHA256 accepts keys of any length — new_from_slice cannot return Err.
 #[allow(clippy::expect_used)]
 fn hmac_sha256_hex(secret: &str, payload: &str) -> String {
-    let mut mac =
-        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
+    let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).expect(
+        "HMAC construction must succeed because HMAC-SHA256 accepts keys of any length",
+    );
     mac.update(payload.as_bytes());
     hex_lower(&mac.finalize().into_bytes())
 }
