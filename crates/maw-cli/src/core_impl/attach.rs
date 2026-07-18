@@ -486,7 +486,7 @@ fn attach_registry_aliases(entry: &NativeFleetEntry) -> Vec<String> {
             .next()
             .filter(|repo| !repo.is_empty())
         {
-            aliases.push((*repo).to_owned());
+            aliases.push(format!("repo-{repo}"));
         }
     }
     aliases
@@ -957,6 +957,35 @@ mod attach_tests {
                 output.stdout
             );
         });
+    }
+
+    #[test]
+    fn attach_repo_basename_alias_ranks_below_exact_session_names() {
+        let entry = NativeFleetEntry {
+            file: "77-smoke.json".to_owned(),
+            path: std::path::PathBuf::from("77-smoke.json"),
+            session: NativeFleetSession {
+                name: "77-smoke".to_owned(),
+                windows: vec![NativeFleetWindow {
+                    name: "smoke".to_owned(),
+                    repo: "Soul-Brews-Studio/maw-rs".to_owned(),
+                    kind: None,
+                }],
+                ..NativeFleetSession::default()
+            },
+        };
+        let candidates = vec![maw_matcher::ResolveTypedCandidate {
+            kind: maw_matcher::ResolveCandidateKind::SleepingRegistry,
+            name: entry.session.name.clone(),
+            aliases: attach_registry_aliases(&entry),
+        }];
+
+        let maw_matcher::ResolveTypedResult::Match { matched } =
+            maw_matcher::resolve_typed_target("maw-rs", &candidates)
+        else {
+            panic!("repo basename must remain a fallback registry alias");
+        };
+        assert_eq!(matched.rank, maw_matcher::ResolveMatchRank::Registry);
     }
 
     #[test]
