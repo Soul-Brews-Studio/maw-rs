@@ -221,15 +221,17 @@ fn run_plugin_scaffold_plan(argv: &[String]) -> CliOutput {
             CliOutput {
                 code: 0,
                 stdout: if plan_json {
-                    let error_json = error.map_or("null".to_owned(), |error| json_string(&error));
+                    let error_json = error.as_ref().map_or("null".to_owned(), |error| json_string(error));
                     format!(
                         "{{\"command\":\"plugin-scaffold\",\"kind\":\"validate-name\",\"name\":{},\"valid\":{valid},\"error\":{error_json}}}\n",
                         json_string(&name)
                     )
                 } else if valid {
                     "valid\n".to_owned()
+                } else if let Some(error) = error {
+                    format!("{error}\n")
                 } else {
-                    format!("{}\n", error.expect("invalid name has error"))
+                    "invalid plugin name\n".to_owned()
                 },
                 stderr: String::new(),
             }
@@ -240,8 +242,9 @@ fn run_plugin_scaffold_plan(argv: &[String]) -> CliOutput {
             language,
         } => {
             let manifest_text = build_manifest_json(&name, language);
-            let manifest: serde_json::Value = serde_json::from_str(&manifest_text)
-                .expect("maw-plugin-scaffold emits valid manifest JSON");
+            let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&manifest_text) else {
+                unreachable!("maw-plugin-scaffold manifest text must be valid JSON because build_manifest_json serializes all dynamic fields with json_string");
+            };
             let language_name = match language {
                 ScaffoldLanguage::Rust => "rust",
                 ScaffoldLanguage::AssemblyScript => "assemblyscript",
@@ -404,4 +407,3 @@ fn take_plugin_scaffold_value(argv: &[String], index: usize, name: &str) -> Resu
         .cloned()
         .ok_or_else(|| format!("plugin-scaffold: missing {name} value"))
 }
-

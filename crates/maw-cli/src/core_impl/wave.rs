@@ -81,8 +81,9 @@ fn wave_dispatch(argv: &[String]) -> Result<String, String> {
     team_validate_message(&task)?;
     let state = wave_read_state(team)?;
     let rows = wave_rows(&state);
-    let (member, _, pane) = rows.into_iter().find(|(_, health, pane)| *health == "idle" && pane.is_some()).ok_or_else(|| format!("no idle coder in wave '{team}'"))?;
-    let pane = pane.expect("pane checked");
+    let Some((member, _, Some(pane))) = rows.into_iter().find(|(_, health, pane)| *health == "idle" && pane.is_some()) else {
+        return Err(format!("no idle coder in wave '{team}'"));
+    };
     let mission = std::path::Path::new(&state.mission_dir).join(format!("{}.md", member.role));
     let body = format!("# Mission: {}\n\n{}\n\n## ACK contract\nReply ACK starting, ACK blocked:<reason>, or ACK done with evidence.\n", member.role, task);
     team_atomic_write_0600(&mission, &body)?;

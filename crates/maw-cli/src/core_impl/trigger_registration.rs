@@ -122,9 +122,10 @@ fn on_append_trigger(config: &mut serde_json::Value, options: &OnCommandOptions)
         *config = serde_json::json!({});
     }
     let trigger = on_render_trigger(options);
+    let Some(config) = config.as_object_mut() else {
+        return Err("on: config must be a JSON object after non-object normalization".to_owned());
+    };
     let triggers = config
-        .as_object_mut()
-        .expect("object after normalization")
         .entry("triggers")
         .or_insert_with(|| serde_json::Value::Array(Vec::new()));
     let Some(triggers) = triggers.as_array_mut() else {

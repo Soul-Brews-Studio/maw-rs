@@ -376,7 +376,7 @@ fn zenohscout_render_both(zenoh: &ZenohScoutResultNative, scout: &ZenohScoutDisc
     let zenoh_usable = zenoh.enabled && zenoh.ok;
     let ok = zenoh_usable || scout_ok;
     if json {
-        return zenohscout_ok(&serde_json::to_string_pretty(&json!({"ok": ok, "zenoh": zenoh, "scout": scout})).expect("json"));
+        return zenohscout_json_output(&json!({"ok": ok, "zenoh": zenoh, "scout": scout}));
     }
     zenohscout_ok(&format!("zenoh:\n{}\n\nscout:\n{}", zenohscout_indent(&zenohscout_format_result(zenoh)), zenohscout_indent(&zenohscout_format_discovery_any(scout))))
 }
@@ -535,7 +535,19 @@ fn zenohscout_civil_from_days(days_since_epoch: i64) -> (i64, u32, u32) {
 
 fn zenohscout_indent(value: &str) -> String { value.split('\n').map(|line| format!("  {line}")).collect::<Vec<_>>().join("\n") }
 
-fn zenohscout_json<T: serde::Serialize>(value: &T) -> String { format!("{}\n", serde_json::to_string_pretty(value).expect("json")) }
+fn zenohscout_json<T: serde::Serialize>(value: &T) -> String {
+    match serde_json::to_string_pretty(value) {
+        Ok(json) => format!("{json}\n"),
+        Err(error) => format!("{{\"ok\":false,\"error\":\"json_encode\",\"hint\":{}}}\n", json!(error.to_string())),
+    }
+}
+
+fn zenohscout_json_output<T: serde::Serialize>(value: &T) -> CliOutput {
+    match serde_json::to_string_pretty(value) {
+        Ok(json) => zenohscout_ok(&json),
+        Err(error) => zenohscout_error(&format!("zenoh-scout: render json: {error}")),
+    }
+}
 
 fn zenohscout_ok(text: &str) -> CliOutput { CliOutput { code: 0, stdout: format!("{}{}", text, if text.ends_with('\n') { "" } else { "\n" }), stderr: String::new() } }
 

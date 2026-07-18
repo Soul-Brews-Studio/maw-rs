@@ -226,7 +226,10 @@ fn schedule_fire334(argv: &[String]) -> Result<String, String> {
             return serde_json::to_string(&finished).map(|value| format!("{value}\n")).map_err(|error| format!("encode outcome: {error}"));
         }
         let maw = std::env::current_exe().map_err(|error| format!("resolve maw executable: {error}"))?;
-        let mut runner = maw_tmux::CommandTmuxRunner::with_program(tmux.expect("headless run resolves tmux"));
+        let Some(tmux) = tmux else {
+            return Err("resolve tmux for Claude headless handoff: missing tmux path".to_owned());
+        };
+        let mut runner = maw_tmux::CommandTmuxRunner::with_program(tmux);
         if let Err(error) = schedule_handoff334(&mut runner, &run_id, &repo, &maw, &state) {
             store.finalize(&run_id, maw_schedule_runner::FinishRequest { exited_at: current_epoch_seconds(), exit_code: 1,
                 output_file_written: false, output_bytes: 0, deliverable_written: None, expected_output: None, error: Some(error.clone()) })?;

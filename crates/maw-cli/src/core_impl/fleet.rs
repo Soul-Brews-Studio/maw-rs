@@ -1611,7 +1611,10 @@ fn fleet_registry_object(value: &mut serde_json::Value) -> &mut serde_json::Map<
     if !value.is_object() {
         *value = serde_json::json!({});
     }
-    value.as_object_mut().expect("object assigned above")
+    let serde_json::Value::Object(object) = value else {
+        unreachable!("fleet registry value must be an object because non-object values are replaced immediately above");
+    };
+    object
 }
 
 fn fleet_registry_merge_windows(
@@ -1659,11 +1662,13 @@ fn fleet_registry_merge_windows(
                 existing.kind = update.kind;
             }
         } else if lone_repo_alias {
-            let existing = windows
+            if let Some(existing) = windows
                 .iter_mut()
-                .find(|window| fleet_repo_canonical_key(&window.repo) == repo_key)
-                .expect("single canonical repo counted above");
-            *existing = update;
+                .find(|window| fleet_repo_canonical_key(&window.repo) == repo_key) {
+                *existing = update;
+            } else {
+                windows.push(update);
+            }
         } else {
             windows.push(update);
         }

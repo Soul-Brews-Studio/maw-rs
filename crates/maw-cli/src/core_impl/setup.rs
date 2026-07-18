@@ -92,7 +92,9 @@ fn setup_run(argv: &[String], runner: &mut impl SetupRunner) -> Result<String, S
     {
         return Ok(setup_usage_text());
     }
-    let (subcommand, rest) = argv.split_first().expect("checked non-empty");
+    let Some((subcommand, rest)) = argv.split_first() else {
+        return Ok(setup_usage_text());
+    };
     if subcommand != "auto-wake" {
         return Err(format!(
             "unknown setup subcommand: {subcommand}\n{}",
