@@ -2034,7 +2034,7 @@ fn parse_plugin_manifest_import_symbol_args(
     argv: &[String],
 ) -> Result<PluginManifestAction, String> {
     let (plan_json, options, import) = parse_plugin_manifest_registry_args(argv, true)?;
-    let import = import.expect("import parser requested import args");
+    let import = import.ok_or_else(|| "plugin manifest import-symbol requires import arguments".to_owned())?;
     Ok(PluginManifestAction::ImportSymbol {
         plan_json,
         options,

@@ -1312,15 +1312,29 @@ fn channel_validate_name(label: &str, value: &str) -> Result<String, (i32, Strin
 fn channel_ls_json(target: Option<&str>) -> String {
     if let Some(target) = target {
         let config = channel_redacted_config(channel_load_oracle_config(target).unwrap_or_default());
-        let mut value = serde_json::to_value(config).expect("channel config json");
+        let mut value = match serde_json::to_value(config) {
+            Ok(value) => value,
+            Err(error) => return channel_json_error(&format!("channel: render config json: {error}")),
+        };
         if let serde_json::Value::Object(map) = &mut value { map.insert("oracle".to_owned(), serde_json::json!(target)); }
-        return format!("{}\n", serde_json::to_string_pretty(&value).expect("json"));
+        return channel_json_string(&value);
     }
     let oracles = channel_list_all_configs()
         .into_iter()
         .map(|(oracle, config)| serde_json::json!({ "oracle": oracle, "plugins": channel_redacted_config(config).plugins }))
         .collect::<Vec<_>>();
-    format!("{}\n", serde_json::to_string_pretty(&serde_json::json!({ "oracles": oracles })).expect("json"))
+    channel_json_string(&serde_json::json!({ "oracles": oracles }))
+}
+
+fn channel_json_string(value: &serde_json::Value) -> String {
+    match serde_json::to_string_pretty(value) {
+        Ok(json) => format!("{json}\n"),
+        Err(error) => channel_json_error(&format!("channel: render json: {error}")),
+    }
+}
+
+fn channel_json_error(message: &str) -> String {
+    format!("{}\n", serde_json::json!({ "error": message }))
 }
 
 fn channel_redacted_config(mut config: ChannelConfig) -> ChannelConfig {

@@ -247,14 +247,13 @@ fn parse_consent_store_key(value: &str) -> Result<(String, String, ConsentAction
     let from = parts.next().filter(|part| !part.is_empty());
     let to = parts.next().filter(|part| !part.is_empty());
     let action = parts.next().filter(|part| !part.is_empty());
-    if parts.next().is_some() || from.is_none() || to.is_none() || action.is_none() {
+    let (Some(from), Some(to), Some(action)) = (from, to, action) else {
+        return Err("consent-store: key must use from:to:action".to_owned());
+    };
+    if parts.next().is_some() {
         return Err("consent-store: key must use from:to:action".to_owned());
     }
-    Ok((
-        from.expect("checked").to_owned(),
-        to.expect("checked").to_owned(),
-        parse_consent_store_action(action.expect("checked"))?,
-    ))
+    Ok((from.to_owned(), to.to_owned(), parse_consent_store_action(action)?))
 }
 
 fn parse_consent_store_status_update(value: &str) -> Result<(String, ConsentStatus), String> {
@@ -428,4 +427,3 @@ fn run_consent_expiry_plan(argv: &[String]) -> CliOutput {
         stderr: String::new(),
     }
 }
-
