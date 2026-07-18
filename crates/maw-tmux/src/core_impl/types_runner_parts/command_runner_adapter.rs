@@ -77,11 +77,11 @@ impl CommandTmuxRunner {
         stdin: Option<&[u8]>,
     ) -> Result<String, TmuxError> {
         let command_line = self.argv(subcommand, args);
-        // argv() always prepends the tmux program — split_first cannot fail.
+        // `argv` constructs the vector by inserting the configured tmux program first.
         #[allow(clippy::expect_used)]
         let (program, rest) = command_line
             .split_first()
-            .expect("tmux command line always includes a program");
+            .expect("tmux command line must include a program because argv inserts it first");
         validate_tmux_program(program)?;
         validate_tmux_option_values(rest)?;
         let mut command = Command::new(program);
