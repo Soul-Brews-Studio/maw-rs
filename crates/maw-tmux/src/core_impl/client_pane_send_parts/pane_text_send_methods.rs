@@ -101,6 +101,32 @@ where
             .map(|_| ())
     }
 
+    /// Deliver arbitrary text as data through a short-lived tmux buffer.
+    ///
+    /// The text is written to `load-buffer` over stdin, pasted verbatim, and the
+    /// buffer is deleted by `paste-buffer -d`. When `submit` is true, exactly one
+    /// Enter key is sent after the paste; trailing newlines have no special meaning.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first runner error from loading, pasting, or submitting.
+    pub fn paste_text(
+        &mut self,
+        target: &str,
+        text: &str,
+        submit: bool,
+    ) -> Result<(), TmuxError> {
+        self.load_buffer(text)?;
+        self.runner.run(
+            "paste-buffer",
+            &["-d".to_owned(), "-t".to_owned(), target.to_owned()],
+        )?;
+        if submit {
+            self.send_enter(target)?;
+        }
+        Ok(())
+    }
+
     /// Smart text sending: buffer for multiline/long payloads, literal send otherwise, then submit-confirm.
     ///
     /// # Errors
