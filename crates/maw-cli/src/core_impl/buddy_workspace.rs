@@ -3,7 +3,7 @@ const DISPATCH_121: &[DispatcherEntry] = &[
     DispatcherEntry { command: "buddy", handler: Handler::Sync(bud_run_command) },
 ];
 
-const BUD_USAGE: &str = "usage: maw bud <name> [--from <oracle>] [--root] [--seed] [--org <org>] [--repo-name <name>|--no-suffix] [--repo org/repo] [--issue N] [--issue-repo owner/repo] [--note <text>] [--nickname <pretty>] [--engine <name>|-e <name>] [--session <N>-<name>] [--fast] [--split] [--scaffold-only] [--dry-run]\n       Or: maw bud --from-repo <path|url> --stem <stem> [--pr] [--from <parent>] [--seed] [--sync-peers] [--force] [--track-vault] [--dry-run]\n       The repo defaults to <name>-oracle; --no-suffix uses <name> exactly, and --repo-name overrides the full repo name.";
+const BUD_USAGE: &str = "usage: maw bud <name> [--from <oracle>] [--root] [--seed] [--org <org>] [--repo-name <name>|--no-suffix] [--prefix <subdir>] [--repo org/repo] [--issue N] [--issue-repo owner/repo] [--note <text>] [--nickname <pretty>] [--engine <name>|-e <name>] [--session <N>-<name>] [--fast] [--split] [--scaffold-only] [--dry-run]\n       Or: maw bud --from-repo <path|url> --stem <stem> [--pr] [--from <parent>] [--seed] [--sync-peers] [--force] [--track-vault] [--dry-run]\n       The repo defaults to <name>-oracle; --no-suffix uses <name> exactly, and --repo-name overrides the full repo name. --prefix extracts a tracked subdirectory from the current repo with git subtree split.";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)]
@@ -15,6 +15,7 @@ struct BudOptions {
     org: Option<String>,
     repo: Option<String>,
     repo_name: Option<String>,
+    prefix: Option<String>,
     issue: Option<u32>,
     issue_repo: Option<String>,
     note: Option<String>,
@@ -220,7 +221,7 @@ fn bud_parse(argv: &[String]) -> Result<BudOptions, String> {
             "--track-vault" => options.track_vault = true,
             "--sync-peers" => options.sync_peers = true,
             "--no-suffix" => options.no_suffix = true,
-            flag @ ("--from" | "--from-repo" | "--stem" | "--org" | "--repo" | "--repo-name" | "--issue" | "--issue-repo" | "--note" | "--nickname" | "--engine" | "-e" | "--parent" | "--parent-session-id" | "--session-id" | "--session") => { bud_assign_value(&mut options, flag, &bud_take_value(argv, &mut index, flag)?)?; }
+            flag @ ("--from" | "--from-repo" | "--stem" | "--org" | "--repo" | "--repo-name" | "--prefix" | "--issue" | "--issue-repo" | "--note" | "--nickname" | "--engine" | "-e" | "--parent" | "--parent-session-id" | "--session-id" | "--session") => { bud_assign_value(&mut options, flag, &bud_take_value(argv, &mut index, flag)?)?; }
             value if value.starts_with("--") && value.contains('=') => {
                 let (flag, value) = value.split_once('=').unwrap_or_default();
                 bud_assign_value(&mut options, flag, value)?;
@@ -240,6 +241,7 @@ fn bud_assign_value(options: &mut BudOptions, flag: &str, value: &str) -> Result
         "--stem" => options.stem = Some(bud_validate_oracle_stem(value)?),
         "--org" => options.org = Some(bud_validate_org(value)?),
         "--repo-name" => options.repo_name = Some(bud_validate_explicit_repo_name(value)?),
+        "--prefix" => options.prefix = Some(bud_validate_prefix(value)?),
         "--repo" | "--issue-repo" => bud_assign_slug(options, flag, value)?,
         "--issue" => options.issue = Some(bud_validate_issue(value)?),
         "--note" => options.note = Some(bud_validate_text(value, "--note")?),
@@ -275,8 +277,8 @@ fn bud_set_name(options: &mut BudOptions, value: &str) -> Result<(), String> {
 fn bud_validate_options(options: BudOptions) -> Result<BudOptions, String> {
     if options.from_repo.is_some() {
         if options.stem.is_none() { return Err("--from-repo requires --stem <stem>".to_owned()); }
-        if options.no_suffix || options.repo_name.is_some() {
-            return Err("bud: --no-suffix and --repo-name apply only to fresh-created repos".to_owned());
+        if options.no_suffix || options.repo_name.is_some() || options.prefix.is_some() {
+            return Err("bud: --no-suffix, --repo-name, and --prefix apply only to fresh-created repos".to_owned());
         }
         return Ok(options);
     }
@@ -288,14 +290,20 @@ fn bud_run_options(options: &BudOptions, gh: &mut impl BudGhGitRunner, fs: &mut 
     if options.from_repo.is_some() { return bud_from_repo(options, gh, fs); }
     let ctx = bud_context(options, gh)?;
     if options.dry_run { return Ok(bud_dry_run(&ctx, options)); }
-    bud_create_repo(&ctx, gh, fs)?;
+    let extraction_warning = if let Some(prefix) = &options.prefix {
+        bud_extract_prefix(&ctx, prefix, gh, fs)?
+    } else {
+        bud_create_repo(&ctx, gh, fs)?;
+        None
+    };
     bud_write_skeleton(&ctx, options, fs)?;
     let _ = bud_reload(http);
     if options.scaffold_only {
         let env_ready = bud_prepare_env(&ctx.repo_path, options, gh, fs)?;
-        return Ok(format!("{env_ready}{}", bud_scaffold_summary(&ctx)));
+        return Ok(format!("{}{env_ready}{}", extraction_warning.unwrap_or_default(), bud_scaffold_summary(&ctx)));
     }
     bud_finalize(&ctx, options, gh, fs, wake)
+        .map(|output| format!("{}{output}", extraction_warning.unwrap_or_default()))
 }
 
 fn bud_context(options: &BudOptions, gh: &mut impl BudGhGitRunner) -> Result<BudContext, String> {
@@ -340,6 +348,10 @@ fn bud_dry_run(ctx: &BudContext, options: &BudOptions) -> String {
     let label = ctx.parent.as_deref().map_or_else(|| ctx.stem.clone(), |parent| format!("{parent} → {}", ctx.stem));
     let _ = writeln!(out, "\n  \x1b[36m{}\x1b[0m — {label}\n", if options.root { "🌱 Root Bud" } else { "🧬 Budding" });
     let _ = writeln!(out, "  \x1b[36m⬡\x1b[0m [dry-run] would create repo: {}", ctx.slug);
+    if let Some(prefix) = &options.prefix {
+        let _ = writeln!(out, "  \x1b[36m⬡\x1b[0m [dry-run] would run git subtree split --prefix={prefix}");
+        let _ = writeln!(out, "  \x1b[36m⬡\x1b[0m [dry-run] would push split history as {}/main", ctx.slug);
+    }
     let _ = writeln!(out, "  \x1b[36m⬡\x1b[0m [dry-run] would init ψ/ vault at: {}", ctx.repo_path.display());
     let _ = writeln!(out, "  \x1b[36m⬡\x1b[0m [dry-run] would generate CLAUDE.md");
     let _ = writeln!(out, "  \x1b[36m⬡\x1b[0m [dry-run] would create fleet config");
@@ -364,6 +376,121 @@ fn bud_create_repo(ctx: &BudContext, gh: &mut impl BudGhGitRunner, fs: &impl Bud
     let get = gh.bud_run("ghq", &["get".to_owned(), format!("github.com/{}", ctx.slug)]);
     if !get.ok { return Err(format!("bud: ghq get failed: {}", get.stderr.trim())); }
     Ok(())
+}
+
+fn bud_extract_prefix(
+    ctx: &BudContext,
+    prefix: &str,
+    gh: &mut impl BudGhGitRunner,
+    fs: &impl BudFs,
+) -> Result<Option<String>, String> {
+    let cwd = std::env::current_dir().map_err(|error| format!("bud: current directory: {error}"))?;
+    let root = gh.bud_run(
+        "git",
+        &["-C".to_owned(), path_string(&cwd), "rev-parse".to_owned(), "--show-toplevel".to_owned()],
+    );
+    if !root.ok || root.stdout.trim().is_empty() {
+        return Err("bud: --prefix must run inside the source git repository".to_owned());
+    }
+    let source = std::path::PathBuf::from(root.stdout.trim());
+    if !fs.bud_exists(&source.join(prefix)) {
+        return Err(format!("bud: --prefix subdirectory does not exist: {prefix}"));
+    }
+    let status = gh.bud_run(
+        "git",
+        &["-C".to_owned(), path_string(&source), "status".to_owned(), "--porcelain".to_owned()],
+    );
+    if !status.ok {
+        return Err(format!("bud: cannot inspect source working tree: {}", status.stderr.trim()));
+    }
+    if !status.stdout.trim().is_empty() {
+        return Err("bud: --prefix requires a clean source working tree".to_owned());
+    }
+    let tracked = gh.bud_run(
+        "git",
+        &[
+            "-C".to_owned(),
+            path_string(&source),
+            "ls-files".to_owned(),
+            "--".to_owned(),
+            prefix.to_owned(),
+        ],
+    );
+    if !tracked.ok || tracked.stdout.trim().is_empty() {
+        return Err(format!("bud: --prefix subdirectory has no tracked files: {prefix}"));
+    }
+
+    let branch = format!("maw-bud-{}-split-{}", ctx.stem, bud_epoch_seconds());
+    let split = gh.bud_run(
+        "git",
+        &[
+            "-C".to_owned(),
+            path_string(&source),
+            "subtree".to_owned(),
+            "split".to_owned(),
+            format!("--prefix={prefix}"),
+            "-b".to_owned(),
+            branch.clone(),
+        ],
+    );
+    if !split.ok {
+        return Err(format!("bud: git subtree split failed: {}", split.stderr.trim()));
+    }
+    let create = gh.bud_run(
+        "gh",
+        &["repo".to_owned(), "create".to_owned(), ctx.slug.clone(), "--private".to_owned()],
+    );
+    if !create.ok {
+        return Err(bud_prefix_failure(gh, &source, &branch, format!("bud: gh repo create failed: {}", create.stderr.trim())));
+    }
+    let push = gh.bud_run(
+        "git",
+        &[
+            "-C".to_owned(),
+            path_string(&source),
+            "push".to_owned(),
+            format!("https://github.com/{}.git", ctx.slug),
+            format!("{branch}:main"),
+        ],
+    );
+    if !push.ok {
+        return Err(bud_prefix_failure(gh, &source, &branch, format!("bud: split history push failed: {}", push.stderr.trim())));
+    }
+    let get = gh.bud_run("ghq", &["get".to_owned(), format!("github.com/{}", ctx.slug)]);
+    if !get.ok {
+        return Err(bud_prefix_failure(gh, &source, &branch, format!("bud: ghq get failed: {}", get.stderr.trim())));
+    }
+    Ok(bud_cleanup_prefix_branch(gh, &source, &branch))
+}
+
+fn bud_prefix_failure(
+    gh: &mut impl BudGhGitRunner,
+    source: &std::path::Path,
+    branch: &str,
+    error: String,
+) -> String {
+    match bud_cleanup_prefix_branch(gh, source, branch) {
+        Some(warning) => format!("{error}\n{warning}"),
+        None => error,
+    }
+}
+
+fn bud_cleanup_prefix_branch(
+    gh: &mut impl BudGhGitRunner,
+    source: &std::path::Path,
+    branch: &str,
+) -> Option<String> {
+    let cleanup = gh.bud_run(
+        "git",
+        &[
+            "-C".to_owned(),
+            path_string(source),
+            "branch".to_owned(),
+            "-d".to_owned(),
+            branch.to_owned(),
+        ],
+    );
+    (!cleanup.ok).then(|| format!("  ⚠ split branch left for manual review: {branch}\n"))
 }
 
 fn bud_write_skeleton(ctx: &BudContext, options: &BudOptions, fs: &mut impl BudFs) -> Result<(), String> {
@@ -630,6 +757,25 @@ fn bud_validate_explicit_repo_name(value: &str) -> Result<String, String> {
     Ok(value.to_owned())
 }
 
+fn bud_validate_prefix(value: &str) -> Result<String, String> {
+    let path = std::path::Path::new(value);
+    if value.is_empty()
+        || value.trim() != value
+        || path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir | std::path::Component::CurDir
+            )
+        })
+        || value.contains('\0')
+        || value.chars().any(char::is_control)
+    {
+        return Err(format!("bud: invalid --prefix {value:?}"));
+    }
+    Ok(value.trim_end_matches('/').to_owned())
+}
+
 fn bud_validate_slug(value: &str, label: &str) -> Result<String, String> {
     let Some((org, repo)) = value.split_once('/') else { return Err(format!("bud: {label} must be owner/repo")); };
     if value.matches('/').count() != 1 { return Err(format!("bud: {label} must be owner/repo")); }
@@ -686,10 +832,14 @@ mod bud_tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     #[derive(Default)]
-    struct FakeGh { calls: Vec<(String, Vec<String>)>, fail: BTreeSet<String>, ok_view: bool, ghq_root: Option<String> }
+    struct FakeGh { calls: Vec<(String, Vec<String>)>, fail: BTreeSet<String>, outputs: BTreeMap<String, String>, ok_view: bool, ghq_root: Option<String> }
     impl BudGhGitRunner for FakeGh {
         fn bud_run(&mut self, program: &str, args: &[String]) -> BudCmdOutput {
             self.calls.push((program.to_owned(), args.to_vec()));
+            let full_key = format!("{program} {}", args.join(" "));
+            if let Some(stdout) = self.outputs.get(&full_key) {
+                return BudCmdOutput { ok: true, stdout: stdout.clone(), stderr: String::new() };
+            }
             let key = format!("{program} {}", args.first().cloned().unwrap_or_default());
             if program == "ghq" && args.len() == 1 && args[0] == "root" {
                 let ok = !self.fail.contains(&key);
@@ -798,6 +948,77 @@ mod bud_tests {
         let error = bud_parse(&bud_args(&["--help"])).expect_err("help sentinel");
         assert!(error.contains("--no-suffix"));
         assert!(error.contains("--repo-name <name>"));
+    }
+
+    #[test]
+    fn bud_prefix_parser_and_dry_run_render_history_plan_without_writes() {
+        let _guard = env_test_lock();
+        let _restore_ghq = EnvVarRestore::capture("GHQ_ROOT");
+        std::env::set_var("GHQ_ROOT", "/repos");
+        let options = bud_parse(&bud_args(&["sprout", "--prefix", "packages/ui"]))
+            .expect("prefix parse");
+        assert_eq!(options.prefix.as_deref(), Some("packages/ui"));
+
+        let mut gh = FakeGh::default();
+        let mut fs = FakeFs::default();
+        let mut wake = FakeWake::default();
+        let mut http = FakeHttp::default();
+        let output = bud_run_with(
+            &bud_args(&["sprout", "--prefix", "packages/ui", "--dry-run"]),
+            &mut gh,
+            &mut fs,
+            &mut wake,
+            &mut http,
+        );
+        assert_eq!(output.code, 0, "{}", output.stderr);
+        assert!(output.stdout.contains("git subtree split --prefix=packages/ui"));
+        assert!(output.stdout.contains("Soul-Brews-Studio/sprout-oracle/main"));
+        assert!(gh.calls.is_empty(), "dry-run must not run git or gh: {:?}", gh.calls);
+    }
+
+    #[test]
+    fn bud_prefix_guards_missing_subdir_and_dirty_source_before_split() {
+        let _guard = env_test_lock();
+        let _restore_ghq = EnvVarRestore::capture("GHQ_ROOT");
+        std::env::set_var("GHQ_ROOT", "/repos");
+        let cwd = std::env::current_dir().expect("cwd");
+        let source = std::path::PathBuf::from("/source");
+        let rev_parse = format!("git -C {} rev-parse --show-toplevel", cwd.display());
+
+        let mut missing_gh = FakeGh::default();
+        missing_gh.outputs.insert(rev_parse.clone(), "/source\n".to_owned());
+        let mut missing_fs = FakeFs::default();
+        missing_fs.dirs.insert(source.clone());
+        let mut wake = FakeWake::default();
+        let mut http = FakeHttp::default();
+        let missing = bud_run_with(
+            &bud_args(&["sprout", "--prefix", "packages/ui"]),
+            &mut missing_gh,
+            &mut missing_fs,
+            &mut wake,
+            &mut http,
+        );
+        assert_eq!(missing.code, 1);
+        assert!(missing.stderr.contains("subdirectory does not exist"));
+
+        let mut dirty_gh = FakeGh::default();
+        dirty_gh.outputs.insert(rev_parse, "/source\n".to_owned());
+        dirty_gh.outputs.insert(
+            "git -C /source status --porcelain".to_owned(),
+            " M packages/ui/file.rs\n".to_owned(),
+        );
+        let mut dirty_fs = FakeFs::default();
+        dirty_fs.dirs.insert(source.join("packages/ui"));
+        let dirty = bud_run_with(
+            &bud_args(&["sprout", "--prefix", "packages/ui"]),
+            &mut dirty_gh,
+            &mut dirty_fs,
+            &mut wake,
+            &mut http,
+        );
+        assert_eq!(dirty.code, 1);
+        assert!(dirty.stderr.contains("clean source working tree"));
+        assert!(dirty_gh.calls.iter().all(|(_, args)| !args.contains(&"subtree".to_owned())));
     }
 
     #[test]
