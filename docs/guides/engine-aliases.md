@@ -45,11 +45,31 @@ spelling transfers.
 - **Standing, per-repo**: commit `.maw/maw.config.NN.json` with
   `{"wake": {"engine": "<alias>"}}` or a `commands.default` entry (#600 —
   wake resolves config dir-aware against the resolved repo path, so this
-  works from anywhere).
+  works from anywhere). **Pick NN = 60 or higher** — see the weight rule
+  below.
 - **Repo-portable resume**: a repo using `commands.default` resolves the
   engine alias `default`, so it can commit its own `default-resume` — the
   repo's resume form with no machine-specific engine name hardcoded.
-- Precedence: CLI `-e` > repo layer > user layer > builtin.
+- Precedence: CLI `-e` first, then the merged config, then builtin.
+
+## The layer-weight rule (repo NN must beat the user's)
+
+Within the merged config, **layer weight (the NN in the filename) is the
+primary order across ALL scopes** — scope only breaks ties (project beats
+user at equal NN). This is intended design, pinned by `maw-xdg` tests. A
+repo layer overrides the user layer *only when its NN is higher*.
+
+The user layer is conventionally `50`, so:
+
+- `maw.config.60.json` (or higher) in a repo = **override** semantics — the
+  committed values win over the user layer.
+- NN below the user's (e.g. `40`) = **suggestion** semantics — every
+  colliding key is *silently* shadowed by the user layer. Live incident:
+  oracle-hall committed `40` and its `commands.default` never applied
+  (#623).
+
+`maw config explain <key>` shows the per-layer collision and the FINAL
+winner; use it whenever a committed value doesn't seem to apply.
 
 ## The legacy-layer trap
 
