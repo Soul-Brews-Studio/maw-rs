@@ -1,8 +1,10 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
 use maw_schedule_launchd::{
-    load_config, remove_job, sync_job, DesiredJob, JobState, LaunchctlOutput, LaunchctlRunner,
-    PlistState, SyncMode,
+    boot_sync_job, cleanup_stale_jobs, is_managed_job_label, load_config, remove_job, sync_job,
+    DesiredJob, JobState, LaunchctlOutput, LaunchctlRunner, PlistState, SyncMode, BOOT_SYNC_LABEL,
+    CONTROLLER_LABEL_PREFIX,
 };
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 #[rustfmt::skip]
 #[derive(Default)]
@@ -67,6 +69,62 @@ fn invalid_targets_and_launchctl_failures_are_loud() {
     assert!(sync_job(&job, "user/501", SyncMode::Check, &mut runner).unwrap_err().contains("invalid"));
     runner.fail = true;
     assert!(sync_job(&job, "gui/501", SyncMode::Apply, &mut runner).unwrap_err().contains("bootstrap"));
+}
+#[test]
+fn cleanup_never_deletes_the_boot_sync_controller() {
+    let root = temp("controller-cleanup");
+    let controller = root.join(format!("{BOOT_SYNC_LABEL}.plist"));
+    std::fs::write(&controller, "controller").unwrap();
+    let mut runner = FakeLaunchctl::default();
+
+    assert_eq!(
+        cleanup_stale_jobs(
+            &root,
+            &BTreeSet::new(),
+            "gui/501",
+            SyncMode::Apply,
+            &mut runner
+        )
+        .unwrap(),
+        0
+    );
+    assert!(controller.exists());
+    assert!(runner.calls.is_empty());
+}
+#[test]
+fn boot_sync_agent_install_and_refresh_are_idempotent() {
+    let root = temp("controller-sync");
+    let job = boot_sync_job(
+        &root,
+        PathBuf::from("/opt/bin/maw").as_path(),
+        "/Users/odin",
+        &root.join("sync.log"),
+    );
+    let mut runner = FakeLaunchctl::default();
+
+    let installed = sync_job(&job, "gui/501", SyncMode::Apply, &mut runner).unwrap();
+    assert!(installed.changed && installed.after.is_healthy());
+    assert!(job.xml.contains("<true/>"));
+    assert!(job.xml.contains("<string>sync</string>"));
+    std::fs::write(&job.plist_path, "outdated controller").unwrap();
+    runner.calls.clear();
+    let refreshed = sync_job(&job, "gui/501", SyncMode::Apply, &mut runner).unwrap();
+    assert!(refreshed.changed && refreshed.after.is_healthy());
+    assert_eq!(std::fs::read_to_string(&job.plist_path).unwrap(), job.xml);
+    runner.calls.clear();
+    assert!(
+        !sync_job(&job, "gui/501", SyncMode::Apply, &mut runner)
+            .unwrap()
+            .changed
+    );
+    assert_eq!(commands(&runner), ["print"]);
+}
+#[test]
+fn controller_prefix_does_not_collide_with_managed_job_labels() {
+    assert!(!is_managed_job_label(BOOT_SYNC_LABEL));
+    assert!(BOOT_SYNC_LABEL.starts_with(CONTROLLER_LABEL_PREFIX));
+    assert!(is_managed_job_label("com.maw.schedule.controller.sync"));
+    assert!(!is_managed_job_label("com.maw.schedule-controllerish.sync"));
 }
 fn commands(runner: &FakeLaunchctl) -> Vec<&str> {
     runner.calls.iter().map(|args| args[0].as_str()).collect()
