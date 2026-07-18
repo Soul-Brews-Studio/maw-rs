@@ -132,6 +132,30 @@ pub struct TransportTarget {
     pub tmux_target: Option<String>,
 }
 
+/// Sender-visible outcome of a successful delivery attempt.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SendReceipt {
+    /// The message was submitted to a pane, but receiver consumption is not confirmed.
+    SubmittedToPane,
+    /// The transport confirmed that the message became the receiver's prompt.
+    ReceivedAsPrompt,
+    /// The message was durably queued for later delivery when the target can receive it.
+    Queued,
+}
+
+/// Actionable reason why a transport refused or could not complete delivery.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum DeliveryRefusal {
+    /// Delivery was refused because the target pane is a bare shell.
+    RefusedBareShell { observed_command: String },
+    /// Delivery was refused because the target was not idle.
+    RefusedNotIdle { observed: String },
+    /// The requested target could not be resolved.
+    TargetUnknown,
+    /// A legacy transport attempted delivery and returned an untyped failure.
+    DeliveryFailed { message: String },
+}
+
 /// Window shape used by local tmux target resolution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TmuxTransportWindow {
@@ -217,4 +241,3 @@ pub enum PairHealth {
     Down,
     Unknown,
 }
-
