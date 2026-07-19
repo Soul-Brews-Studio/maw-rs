@@ -125,3 +125,26 @@ fn calver_unknown_argument_still_errors() {
         output.stderr
     );
 }
+
+#[test]
+fn help_all_tiered_output_preserves_registered_count_and_core_descriptions() {
+    let output = run_cli(&args(&["help", "--all"]));
+    assert_eq!(output.code, 0, "stderr: {}", output.stderr);
+    assert!(output.stderr.is_empty(), "stderr: {}", output.stderr);
+    let text = output.stdout;
+    assert!(text.starts_with("registered commands (197):"), "{text}");
+    assert!(text.contains("\ncore (40):\n"), "{text}");
+    assert!(text.contains("\nother (157):\n"), "{text}");
+    assert!(
+        text.contains("  maw wake                      Launch or reuse an oracle engine pane;"),
+        "{text}"
+    );
+    assert!(
+        text.contains("  maw send-enter                Press Enter in a target pane;"),
+        "{text}"
+    );
+    assert!(
+        text.contains("\nother (157):\n  maw about\n"),
+        "about should remain untagged and render as a name-only Other row:\n{text}"
+    );
+}

@@ -424,26 +424,62 @@ fn usage_plugins_line() -> String {
 /// `run_cli` dispatches against — so it cannot go stale by construction.
 /// Flag aliases (`--help`, `-v`, …) and test-only hooks are skipped.
 fn usage_all_text() -> String {
-    let mut names = dispatcher_entries()
+    let rows = dispatcher_entries()
         .map(|entry| entry.command)
         .filter(|name| !name.starts_with('-') && !name.starts_with("__"))
+        .map(|command| {
+            let meta = help_meta_for(command);
+            HelpRow {
+                command,
+                tier: meta.tier,
+                description: meta.description,
+                order: meta.order,
+            }
+        })
         .collect::<Vec<_>>();
-    names.sort_unstable();
+    render_help_rows(rows)
+}
 
-    let width = names.iter().map(|name| name.len()).max().unwrap_or(0) + 2;
-    let columns = (100 / width.max(1)).max(1);
+const HELP_COMMAND_COLUMN_WIDTH: usize = 28;
 
-    let mut text = format!("registered commands ({}):\n", names.len());
-    for row in names.chunks(columns) {
-        text.push_str("  ");
-        for (index, name) in row.iter().enumerate() {
-            if index + 1 == row.len() {
-                text.push_str(name);
+#[derive(Clone, Copy)]
+struct HelpRow {
+    command: &'static str,
+    tier: HelpTier,
+    description: &'static str,
+    order: usize,
+}
+
+fn render_help_rows(mut rows: Vec<HelpRow>) -> String {
+    rows.sort_by(|left, right| {
+        left.tier
+            .cmp(&right.tier)
+            .then_with(|| left.order.cmp(&right.order))
+            .then_with(|| left.command.cmp(right.command))
+    });
+
+    let mut text = format!("registered commands ({}):\n", rows.len());
+    for tier in HELP_TIER_ORDER {
+        let tier_rows = rows
+            .iter()
+            .filter(|row| row.tier == *tier)
+            .collect::<Vec<_>>();
+        if tier_rows.is_empty() {
+            continue;
+        }
+        let _ = writeln!(text, "\n{} ({}):", help_tier_label(*tier), tier_rows.len());
+        for row in tier_rows {
+            let command = format!("maw {}", row.command);
+            if row.description.is_empty() {
+                let _ = writeln!(text, "  {command}");
             } else {
-                let _ = write!(text, "{name:<width$}");
+                let _ = writeln!(
+                    text,
+                    "  {command:<HELP_COMMAND_COLUMN_WIDTH$}  {}",
+                    row.description
+                );
             }
         }
-        text.push('\n');
     }
     text.push_str("\nrun maw <verb> --help for details\n");
     text
@@ -451,7 +487,10 @@ fn usage_all_text() -> String {
 
 #[cfg(test)]
 mod usage_menu_tests {
-    use super::{dispatcher_entries, env_test_lock, usage_all_ok, usage_all_text, usage_text};
+    use super::{
+        dispatcher_entries, env_test_lock, help_meta_for, usage_all_ok, usage_all_text, usage_text,
+        HelpTier, HELP_META,
+    };
     use std::collections::BTreeSet;
 
     #[test]
@@ -492,12 +531,16 @@ mod usage_menu_tests {
         assert!(output.stderr.is_empty());
 
         let text = usage_all_text();
-        let names = text
-            .lines()
-            .skip(1)
-            .take_while(|line| !line.is_empty())
-            .flat_map(str::split_whitespace)
-            .collect::<BTreeSet<_>>();
+        assert_eq!(output.stdout, text);
+        let dispatcher_count = dispatcher_entries()
+            .map(|entry| entry.command)
+            .filter(|name| !name.starts_with('-') && !name.starts_with("__"))
+            .count();
+        assert!(text.starts_with(&format!("registered commands ({dispatcher_count}):")), "{text}");
+        assert!(text.contains("\ncore (40):\n"), "{text}");
+        assert!(text.contains(&format!("\nother ({}):\n", dispatcher_count - 40)), "{text}");
+
+        let names = help_all_names(&text);
         assert!(names.len() > 100, "expected >100 verbs, got {}", names.len());
         for verb in ["wake", "work", "bg", "x", "hey", "ls", "plugin"] {
             assert!(names.contains(verb), "missing {verb} in help --all:\n{text}");
@@ -509,7 +552,40 @@ mod usage_menu_tests {
             }
             assert!(names.contains(command), "registry verb {command} missing from help --all");
         }
+        assert!(text.contains("  maw resolve\n"), "untagged resolve should render name-only under other:\n{text}");
         assert!(text.ends_with("run maw <verb> --help for details\n"), "{text}");
+    }
+
+    #[test]
+    fn core_help_metadata_has_descriptions_and_known_dispatch_commands() {
+        let dispatcher_names = dispatcher_entries()
+            .map(|entry| entry.command)
+            .collect::<BTreeSet<_>>();
+        let mut seen = BTreeSet::new();
+        let mut core_count = 0;
+        for (name, tier, description) in HELP_META {
+            assert!(seen.insert(*name), "duplicate help metadata for {name}");
+            assert!(
+                dispatcher_names.contains(name),
+                "help metadata names non-dispatcher verb {name}"
+            );
+            if *tier == HelpTier::Core {
+                core_count += 1;
+                assert!(
+                    !description.trim().is_empty(),
+                    "core help metadata for {name} needs a teaching description"
+                );
+                assert_eq!(help_meta_for(name).tier, HelpTier::Core);
+            }
+        }
+        assert_eq!(core_count, 40, "proof PR should populate exactly the core tier");
+    }
+
+    fn help_all_names(text: &str) -> BTreeSet<&str> {
+        text.lines()
+            .filter_map(|line| line.strip_prefix("  maw "))
+            .filter_map(|line| line.split_whitespace().next())
+            .collect()
     }
 }
 
