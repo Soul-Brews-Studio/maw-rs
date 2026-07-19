@@ -39,6 +39,13 @@ fn assert_ok_text(args: &[&str], expected: &str) {
     );
 }
 
+fn help_all_names(text: &str) -> std::collections::BTreeSet<&str> {
+    text.lines()
+        .filter_map(|line| line.strip_prefix("  maw "))
+        .filter_map(|line| line.split_whitespace().next())
+        .collect()
+}
+
 #[test]
 fn top_level_help_shows_curated_core_menu() {
     for args in [Vec::<&str>::new(), vec!["help"], vec!["--help"], vec!["-h"]] {
@@ -71,13 +78,7 @@ fn help_all_and_commands_alias_list_registry_verbs() {
         let output = run(&args);
         assert_eq!(output.code, 0, "stderr for {args:?}: {}", output.stderr);
         assert!(output.stderr.is_empty());
-        let names: std::collections::BTreeSet<&str> = output
-            .stdout
-            .lines()
-            .skip(1)
-            .take_while(|line| !line.is_empty())
-            .flat_map(str::split_whitespace)
-            .collect();
+        let names = help_all_names(&output.stdout);
         assert!(
             names.len() > 100,
             "expected >100 verbs, got {}",
