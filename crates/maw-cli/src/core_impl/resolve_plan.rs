@@ -488,8 +488,8 @@ fn render_help_rows(mut rows: Vec<HelpRow>) -> String {
 #[cfg(test)]
 mod usage_menu_tests {
     use super::{
-        dispatcher_entries, env_test_lock, help_meta_for, usage_all_ok, usage_all_text, usage_text,
-        HelpTier, HELP_META,
+        dispatcher_entries, env_test_lock, help_meta_for, help_tier_label, usage_all_ok,
+        usage_all_text, usage_text, HelpTier, HELP_META, HELP_TIER_ORDER,
     };
     use std::collections::BTreeSet;
 
@@ -537,8 +537,17 @@ mod usage_menu_tests {
             .filter(|name| !name.starts_with('-') && !name.starts_with("__"))
             .count();
         assert!(text.starts_with(&format!("registered commands ({dispatcher_count}):")), "{text}");
-        assert!(text.contains("\ncore (40):\n"), "{text}");
-        assert!(text.contains(&format!("\nother ({}):\n", dispatcher_count - 40)), "{text}");
+        for tier in HELP_TIER_ORDER {
+            let tier_count = dispatcher_entries()
+                .map(|entry| entry.command)
+                .filter(|name| !name.starts_with('-') && !name.starts_with("__"))
+                .filter(|name| help_meta_for(name).tier == *tier)
+                .count();
+            assert!(
+                text.contains(&format!("\n{} ({tier_count}):\n", help_tier_label(*tier))),
+                "{text}"
+            );
+        }
 
         let names = help_all_names(&text);
         assert!(names.len() > 100, "expected >100 verbs, got {}", names.len());
