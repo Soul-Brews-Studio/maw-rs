@@ -127,14 +127,21 @@ fn calver_unknown_argument_still_errors() {
 }
 
 #[test]
-fn help_all_tiered_output_preserves_registered_count_and_core_descriptions() {
+fn help_all_tiered_output_preserves_registered_count_and_descriptions() {
     let output = run_cli(&args(&["help", "--all"]));
     assert_eq!(output.code, 0, "stderr: {}", output.stderr);
     assert!(output.stderr.is_empty(), "stderr: {}", output.stderr);
     let text = output.stdout;
     assert!(text.starts_with("registered commands (197):"), "{text}");
     assert!(text.contains("\ncore (40):\n"), "{text}");
-    assert!(text.contains("\nother (157):\n"), "{text}");
+    // Per-tier counts shift as the fan-out describes more verbs; assert tier
+    // presence (count-agnostic) rather than a brittle hardcoded number.
+    for tier in ["standard", "extra", "other"] {
+        assert!(
+            text.contains(&format!("\n{tier} (")),
+            "missing {tier} tier in:\n{text}"
+        );
+    }
     assert!(
         text.contains("  maw wake                      Launch or reuse an oracle engine pane;"),
         "{text}"
@@ -144,7 +151,11 @@ fn help_all_tiered_output_preserves_registered_count_and_core_descriptions() {
         "{text}"
     );
     assert!(
-        text.contains("\nother (157):\n  maw about\n"),
-        "about should remain untagged and render as a name-only Other row:\n{text}"
+        text.contains("  maw about                     Show oracle details"),
+        "about should render as a described Standard row:\n{text}"
+    );
+    assert!(
+        text.contains("  maw consent-constants\n"),
+        "internal consent-constants should remain a name-only Other row:\n{text}"
     );
 }
