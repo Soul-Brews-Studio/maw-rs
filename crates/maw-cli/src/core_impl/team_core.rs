@@ -506,17 +506,33 @@ fn team_parse_yaml_charter(text: &str) -> Result<TeamCharter122, String> {
     let mut charter = TeamCharter122::default();
     let mut current: Option<TeamCharterMember122> = None;
     let mut block = TeamYamlBlock122::None;
+    let mut member_block_scalar: Option<usize> = None;
     for raw in text.lines() {
         let line = raw.split('#').next().unwrap_or("").trim_end();
         if line.trim().is_empty() { continue; }
         let indent = line.chars().take_while(|ch| *ch == ' ').count();
         let trimmed = line.trim();
         if indent == 0 {
+            // A new top-level section ends the current member: flush it so a
+            // trailing block's fields (e.g. `lifecycle:\n  worktree: true`)
+            // cannot leak into and overwrite the last member's worktree (#658).
+            if let Some(member) = current.take() {
+                charter.members.push(member);
+            }
             block = TeamYamlBlock122::from_header(trimmed);
+            member_block_scalar = None;
         } else if team_yaml_block_line(trimmed, block, &mut charter) {
             continue;
         }
-        team_yaml_line(line, &mut charter, &mut current);
+        if let Some(block_indent) = member_block_scalar {
+            if indent > block_indent {
+                continue;
+            }
+            member_block_scalar = None;
+        }
+        if let Some(block_indent) = team_yaml_line(line, &mut charter, &mut current) {
+            member_block_scalar = Some(block_indent);
+        }
     }
     if let Some(member) = current.take() { charter.members.push(member); }
     team_charter_finish(charter)
@@ -565,27 +581,49 @@ fn team_yaml_key_value(trimmed: &str) -> Option<(String, String)> {
     Some((key.to_owned(), team_unquote(value)))
 }
 
-fn team_yaml_line(line: &str, charter: &mut TeamCharter122, current: &mut Option<TeamCharterMember122>) {
-    if let Some(rest) = line.strip_prefix("name:") { charter.name = team_unquote(rest); return; }
-    if let Some(rest) = line.strip_prefix("project:") { charter.project = Some(team_unquote(rest)); return; }
-    if let Some(rest) = line.strip_prefix("description:") { charter.description = team_unquote(rest); return; }
-    if let Some(rest) = line.strip_prefix("goal:") { charter.goal = team_unquote(rest); return; }
-    if let Some(rest) = line.strip_prefix("session:") { charter.session = Some(team_unquote(rest)); return; }
-    if line.trim() == "requires_human_approval: true" { charter.governance_requires_human_approval = true; return; }
-    if let Some(rest) = line.trim_start().strip_prefix("- role:") { if let Some(member) = current.take() { charter.members.push(member); } *current = Some(TeamCharterMember122 { role: team_unquote(rest), ..Default::default() }); return; }
-    if let Some(member) = current.as_mut() { team_yaml_member_line(line, member); }
+fn team_yaml_line(line: &str, charter: &mut TeamCharter122, current: &mut Option<TeamCharterMember122>) -> Option<usize> {
+    if let Some(rest) = line.strip_prefix("name:") { charter.name = team_unquote(rest); return None; }
+    if let Some(rest) = line.strip_prefix("project:") { charter.project = Some(team_unquote(rest)); return None; }
+    if let Some(rest) = line.strip_prefix("description:") { charter.description = team_unquote(rest); return None; }
+    if let Some(rest) = line.strip_prefix("goal:") { charter.goal = team_unquote(rest); return None; }
+    if let Some(rest) = line.strip_prefix("session:") { charter.session = Some(team_unquote(rest)); return None; }
+    if line.trim() == "requires_human_approval: true" { charter.governance_requires_human_approval = true; return None; }
+    if let Some(rest) = line.trim_start().strip_prefix("- role:") {
+        if let Some(member) = current.take() { charter.members.push(member); }
+        *current = Some(TeamCharterMember122 { role: team_unquote(rest), ..Default::default() });
+        return None;
+    }
+    current.as_mut().and_then(|member| team_yaml_member_line(line, member))
 }
 
-fn team_yaml_member_line(line: &str, member: &mut TeamCharterMember122) {
-    if let Some(rest) = line.trim_start().strip_prefix("worktree:") {
+fn team_yaml_member_line(line: &str, member: &mut TeamCharterMember122) -> Option<usize> {
+    let trimmed = line.trim_start();
+    if let Some(rest) = trimmed.strip_prefix("worktree:") {
         let value = team_unquote(rest);
         member.worktree_opt_out = team_worktree_literal_is_opt_out(&value);
         member.worktree = (!member.worktree_opt_out).then_some(value);
-        return;
+        return None;
     }
-    for (key, slot) in [("name:", &mut member.name), ("model:", &mut member.model), ("cwd:", &mut member.cwd), ("engine:", &mut member.engine), ("target:", &mut member.target), ("prompt:", &mut member.prompt), ("worktree:", &mut member.worktree), ("branch:", &mut member.branch)] {
-        if let Some(rest) = line.trim_start().strip_prefix(key) { *slot = Some(team_unquote(rest)); }
+    if let Some(rest) = trimmed.strip_prefix("prompt:") {
+        let value = team_unquote(rest);
+        let block_indent = team_yaml_value_is_block_scalar(&value).then(|| line.chars().take_while(|ch| *ch == ' ').count());
+        member.prompt = Some(value);
+        return block_indent;
     }
+    for (key, slot) in [("name:", &mut member.name), ("model:", &mut member.model), ("cwd:", &mut member.cwd), ("engine:", &mut member.engine), ("target:", &mut member.target), ("branch:", &mut member.branch)] {
+        if let Some(rest) = trimmed.strip_prefix(key) {
+            *slot = Some(team_unquote(rest));
+            return None;
+        }
+    }
+    None
+}
+
+fn team_yaml_value_is_block_scalar(value: &str) -> bool {
+    value
+        .trim()
+        .strip_prefix(['|', '>'])
+        .is_some_and(|rest| rest.chars().all(|ch| ch == '+' || ch == '-' || ch.is_ascii_digit()))
 }
 
 fn team_unquote(raw: &str) -> String {
@@ -756,6 +794,97 @@ members:
         assert_eq!(charter.members[0].worktree.as_deref(), Some("agents/reviewer"));
         assert_eq!(charter.members[1].worktree, None);
         assert!(charter.members[1].worktree_opt_out);
+    }
+
+    #[test]
+    fn team_charter_last_member_prompt_block_does_not_overwrite_worktree() {
+        let charter = team_parse_charter(
+            r"name: alpha
+project: org/repo
+members:
+  - role: first
+    worktree: agents/first
+    branch: agents/first
+  - role: second
+    worktree: agents/second
+    branch: agents/second
+    prompt: |
+      Startup notes may mention legacy fallback fields.
+      worktree: second
+      branch: second
+",
+        )
+        .expect("charter");
+        assert_eq!(charter.members.len(), 2);
+        assert_eq!(charter.members[1].worktree.as_deref(), Some("agents/second"));
+        assert_eq!(charter.members[1].branch.as_deref(), Some("agents/second"));
+    }
+
+    #[test]
+    fn team_charter_trailing_lifecycle_block_does_not_overwrite_last_member_worktree() {
+        // #658: a top-level section after the last member (e.g. `lifecycle:`
+        // with `worktree: true`) must NOT leak into the still-open last member.
+        let charter = team_parse_charter(
+            r"name: alpha
+project: org/repo
+members:
+  - role: first
+    worktree: agents/first
+  - role: last
+    worktree: agents/last
+lifecycle:
+  worktree: true
+  merge_on_shutdown: false
+",
+        )
+        .expect("charter");
+        assert_eq!(charter.members.len(), 2);
+        assert_eq!(charter.members[1].role, "last");
+        assert_eq!(
+            charter.members[1].worktree.as_deref(),
+            Some("agents/last"),
+            "trailing lifecycle worktree:true must not clobber the last member"
+        );
+    }
+
+    #[test]
+    fn team_charter_coder_keeps_agents_worktree_when_first_or_last() {
+        for (label, yaml) in [
+            (
+                "coder-first",
+                r"name: alpha
+project: org/repo
+members:
+  - role: coder
+    worktree: agents/coder
+    branch: agents/coder
+    prompt: |
+      Do not treat prompt body text as member metadata.
+      worktree: coder
+  - role: lead
+    worktree: false
+",
+            ),
+            (
+                "coder-last",
+                r"name: alpha
+project: org/repo
+members:
+  - role: lead
+    worktree: false
+  - role: coder
+    worktree: agents/coder
+    branch: agents/coder
+    prompt: |
+      Do not treat prompt body text as member metadata.
+      worktree: coder
+",
+            ),
+        ] {
+            let charter = team_parse_charter(yaml).expect("charter");
+            let coder = charter.members.iter().find(|member| member.role == "coder").expect("coder member");
+            assert_eq!(coder.worktree.as_deref(), Some("agents/coder"), "{label}");
+        }
     }
 
     #[test]
