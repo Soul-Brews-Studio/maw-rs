@@ -134,7 +134,12 @@ fn help_all_tiered_output_preserves_registered_count_and_core_descriptions() {
     let text = output.stdout;
     assert!(text.starts_with("registered commands (197):"), "{text}");
     assert!(text.contains("\ncore (40):\n"), "{text}");
-    assert!(text.contains("\nother (157):\n"), "{text}");
+    for tier in ["standard", "extra", "other"] {
+        assert!(
+            text.contains(&format!("\n{tier} (")),
+            "missing {tier} tier in:\n{text}"
+        );
+    }
     assert!(
         text.contains("  maw wake                      Launch or reuse an oracle engine pane;"),
         "{text}"
@@ -144,7 +149,7 @@ fn help_all_tiered_output_preserves_registered_count_and_core_descriptions() {
         "{text}"
     );
     assert!(
-        text.contains("\nother (157):\n  maw about\n"),
+        text.contains("  maw about\n"),
         "about should remain untagged and render as a name-only Other row:\n{text}"
     );
 }

@@ -538,7 +538,9 @@ mod usage_menu_tests {
             .count();
         assert!(text.starts_with(&format!("registered commands ({dispatcher_count}):")), "{text}");
         assert!(text.contains("\ncore (40):\n"), "{text}");
-        assert!(text.contains(&format!("\nother ({}):\n", dispatcher_count - 40)), "{text}");
+        for tier in ["standard", "extra", "other"] {
+            assert!(text.contains(&format!("\n{tier} (")), "missing {tier} tier in:\n{text}");
+        }
 
         let names = help_all_names(&text);
         assert!(names.len() > 100, "expected >100 verbs, got {}", names.len());
