@@ -400,6 +400,18 @@ mod team_preflight_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    struct CwdRestore43(std::path::PathBuf);
+
+    impl Drop for CwdRestore43 {
+        fn drop(&mut self) { std::env::set_current_dir(&self.0).expect("restore cwd"); }
+    }
+
+    fn chdir(root: &std::path::Path) -> CwdRestore43 {
+        let previous = std::env::current_dir().expect("current dir");
+        std::env::set_current_dir(root).expect("set current dir");
+        CwdRestore43(previous)
+    }
+
     fn charter(root: &std::path::Path) -> TeamCharter122 {
         TeamCharter122 {
             name: "team".to_owned(),
@@ -541,6 +553,42 @@ members:
             let check = team_preflight_ordering_check(&missing);
             assert!(!check.0);
             assert!(check.2.contains("worktree dirs missing"));
+        });
+    }
+
+    #[test]
+    fn preflight_last_member_worktree_path_preserves_agents_prefix() {
+        let root = temp_root("last-member-worktree");
+        with_env(&root, || {
+            let _cwd = chdir(&root);
+            let charter = team_parse_charter(
+                r"name: alpha
+project: org/repo
+session: team-sess
+members:
+  - role: lead
+    worktree: false
+    branch: agents/lead
+  - role: infra
+    worktree: agents/infra
+    branch: agents/infra
+    prompt: |
+      Legacy notes may mention a bare fallback.
+      worktree: infra
+",
+            )
+            .expect("charter");
+            let last = charter.members.last().expect("last member");
+            let cwd = std::env::current_dir().expect("current dir after chdir");
+            let path = team_preflight_member_worktree_path(last).expect("last member worktree");
+            assert_eq!(path, cwd.join("agents/infra"));
+
+            let check = team_preflight_ordering_check(&charter);
+            let expected = cwd.join("agents/infra").display().to_string();
+            let bare = cwd.join("infra").display().to_string();
+            assert!(!check.0);
+            assert!(check.2.contains(&expected), "{}", check.2);
+            assert!(!check.2.contains(&bare), "{}", check.2);
         });
     }
 
