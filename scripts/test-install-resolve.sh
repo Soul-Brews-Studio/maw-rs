@@ -57,4 +57,44 @@ download_stdout() {
 }
 assert_eq "v26.7.20-alpha.42" "$(resolve_version)" "MAW_VERSION override"
 
+path_root=$(mktemp -d "${TMPDIR:-/tmp}/maw-install-path.XXXXXX")
+trap 'rm -rf "$path_root"' EXIT HUP INT TERM
+HOME="$path_root/no-opt-in"
+INSTALL_DIR="$HOME/.local/bin"
+PATH=/usr/bin:/bin
+MAW_ADD_TO_PATH=0
+mkdir -p "$HOME"
+warning=$(configure_install_path 2>&1)
+[ ! -e "$HOME/.profile" ] || {
+  printf 'FAIL no opt-in must not create profile\n' >&2
+  exit 1
+}
+case "$warning" in
+  *"$INSTALL_DIR is not on PATH"*) ;;
+  *)
+    printf 'FAIL no opt-in warning missing\n' >&2
+    exit 1
+    ;;
+esac
+
+parse_args --add-to-path
+assert_eq 1 "$MAW_ADD_TO_PATH" "--add-to-path parsing"
+configure_install_path >/dev/null
+configure_install_path >/dev/null
+# shellcheck disable=SC2016 # Match the literal $PATH written to the profile.
+export_line=$(printf 'export PATH="%s:$PATH"' "$INSTALL_DIR")
+line_count=$(grep -Fxc "$export_line" "$HOME/.profile")
+assert_eq 1 "$line_count" "idempotent profile export"
+
+HOME="$path_root/already-present"
+INSTALL_DIR="$HOME/.local/bin"
+PATH="$INSTALL_DIR:/usr/bin:/bin"
+mkdir -p "$HOME"
+already_output=$(configure_install_path 2>&1)
+assert_eq "" "$already_output" "already-on-PATH no-op output"
+[ ! -e "$HOME/.profile" ] || {
+  printf 'FAIL already-on-PATH must not create profile\n' >&2
+  exit 1
+}
+
 printf 'install resolve_version tests: ok\n'
