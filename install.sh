@@ -7,6 +7,7 @@ GITHUB_RELEASES="https://github.com/$REPO/releases"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 MAW_VERSION="${MAW_VERSION:-}"
 MAW_CHANNEL="${MAW_CHANNEL:-alpha}"
+MAW_ADD_TO_PATH="${MAW_ADD_TO_PATH:-0}"
 
 say() {
   printf '%s\n' "$*"
@@ -29,10 +30,13 @@ Usage:
   sh install.sh [vX.Y.Z]
   sh install.sh --version vX.Y.Z
   sh install.sh --install-dir /path/to/bin
+  sh install.sh --add-to-path
 
 Environment:
   MAW_VERSION   Release tag to install (overrides channel resolution)
   MAW_CHANNEL   Release channel: alpha or stable (default: alpha)
+  MAW_ADD_TO_PATH
+                Set to 1 to append INSTALL_DIR to ~/.profile (default: 0)
   INSTALL_DIR   Install directory (default: ~/.local/bin)
 USAGE
 }
@@ -53,6 +57,9 @@ parse_args() {
         shift
         [ "$#" -gt 0 ] || die "--install-dir requires a value"
         INSTALL_DIR="$1"
+        ;;
+      --add-to-path)
+        MAW_ADD_TO_PATH=1
         ;;
       -h|--help)
         usage
@@ -249,13 +256,30 @@ path_contains_install_dir() {
   esac
 }
 
+configure_install_path() {
+  path_contains_install_dir && return
+  if [ "$MAW_ADD_TO_PATH" != 1 ]; then
+    warn "$INSTALL_DIR is not on PATH"
+    warn "add this to your shell profile: export PATH=\"$INSTALL_DIR:\$PATH\""
+    return
+  fi
+
+  profile="$HOME/.profile"
+  # shellcheck disable=SC2016 # Persist a literal $PATH for future shells.
+  export_line=$(printf 'export PATH="%s:$PATH"' "$INSTALL_DIR")
+  if [ ! -f "$profile" ] || ! grep -Fqx "$export_line" "$profile"; then
+    printf '%s\n' "$export_line" >>"$profile"
+    say "added PATH export to $profile: $export_line"
+  else
+    say "PATH export already present in $profile"
+  fi
+  say "run: . \"$profile\" (or open a new shell)"
+}
+
 post_install() {
   say "verified sha256: $VERIFIED_HASH"
   say "installed: $INSTALLED_PATH"
-  if ! path_contains_install_dir; then
-    warn "$INSTALL_DIR is not on PATH"
-    warn "add this to your shell profile: export PATH=\"$INSTALL_DIR:\$PATH\""
-  fi
+  configure_install_path
   say "run: maw --version"
   say "hint: if you already run 'maw serve', restart it to use the new binary."
   if [ "$(uname -s 2>/dev/null || printf unknown)" = "Darwin" ]; then
