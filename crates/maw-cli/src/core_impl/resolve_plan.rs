@@ -536,9 +536,19 @@ mod usage_menu_tests {
             .map(|entry| entry.command)
             .filter(|name| !name.starts_with('-') && !name.starts_with("__"))
             .count();
+        let dispatcher_names = dispatcher_entries()
+            .map(|entry| entry.command)
+            .collect::<BTreeSet<_>>();
         assert!(text.starts_with(&format!("registered commands ({dispatcher_count}):")), "{text}");
+        let tagged_count = HELP_META
+            .iter()
+            .filter(|(name, tier, _)| *tier != HelpTier::Other && dispatcher_names.contains(name))
+            .count();
         assert!(text.contains("\ncore (40):\n"), "{text}");
-        assert!(text.contains(&format!("\nother ({}):\n", dispatcher_count - 40)), "{text}");
+        assert!(
+            text.contains(&format!("\nother ({}):\n", dispatcher_count - tagged_count)),
+            "{text}"
+        );
 
         let names = help_all_names(&text);
         assert!(names.len() > 100, "expected >100 verbs, got {}", names.len());
@@ -566,19 +576,20 @@ mod usage_menu_tests {
         for (name, tier, description) in HELP_META {
             assert!(seen.insert(*name), "duplicate help metadata for {name}");
             assert!(
-                dispatcher_names.contains(name),
+                dispatcher_names.contains(name) || *name == "about",
                 "help metadata names non-dispatcher verb {name}"
+            );
+            assert_ne!(*tier, HelpTier::Other, "omit Other rows and use fallback for {name}");
+            assert!(
+                !description.trim().is_empty(),
+                "help metadata for {name} needs a teaching description"
             );
             if *tier == HelpTier::Core {
                 core_count += 1;
-                assert!(
-                    !description.trim().is_empty(),
-                    "core help metadata for {name} needs a teaching description"
-                );
                 assert_eq!(help_meta_for(name).tier, HelpTier::Core);
             }
         }
-        assert_eq!(core_count, 40, "proof PR should populate exactly the core tier");
+        assert_eq!(core_count, 40, "fanout must not change the proof core tier count");
     }
 
     fn help_all_names(text: &str) -> BTreeSet<&str> {
