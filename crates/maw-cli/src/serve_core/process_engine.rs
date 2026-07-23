@@ -24,6 +24,7 @@ const SERVEENGINE_CHILD_TIMEOUT_ENV: &str = "MAW_RS_SERVE_CHILD_TIMEOUT_SECS";
 const SERVEENGINE_FAKE_TMUX_LOG_ENV: &str = "MAW_RS_SERVECORE_FAKE_TMUX_LOG";
 const SERVEENGINE_FAKE_CAPTURE_ENV: &str = "MAW_RS_SERVECORE_FAKE_CAPTURE";
 const SERVEENGINE_PTY_PROGRAM_ENV: &str = "MAW_RS_SERVECORE_PTY_PROGRAM";
+const SERVEENGINE_PTY_TERM: &str = "screen-256color";
 
 #[derive(Debug)]
 pub struct ServecoreNativeEngine;
@@ -463,7 +464,7 @@ fn serveengine_pty_attach(
         .map_err(|error| format!("pty_open_failed: {error}"))?;
     let mut child = pair
         .slave
-        .spawn_command(CommandBuilder::from_argv(serveengine_pty_argv(&target)))
+        .spawn_command(serveengine_pty_command(&target))
         .map_err(|error| format!("pty_spawn_failed: {error}"))?;
     drop(pair.slave);
     let killer = child.clone_killer();
@@ -551,6 +552,14 @@ fn serveengine_pty_argv(target: &str) -> Vec<OsString> {
         .collect()
 }
 
+fn serveengine_pty_command(target: &str) -> CommandBuilder {
+    let mut command = CommandBuilder::from_argv(serveengine_pty_argv(target));
+    // tmux uses screen-256color inside sessions, and it is widely available
+    // across macOS and Linux terminfo databases used by cross-node portals.
+    command.env("TERM", SERVEENGINE_PTY_TERM);
+    command
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -628,6 +637,16 @@ mod tests {
                 Duration::from_secs(SERVEENGINE_CHILD_TIMEOUT_SECS)
             );
         }
+    }
+
+    #[test]
+    fn serveengine_pty_command_sets_portable_tmux_term() {
+        let command = serveengine_pty_command("demo:1.0");
+
+        assert_eq!(
+            command.get_env("TERM"),
+            Some(std::ffi::OsStr::new("screen-256color"))
+        );
     }
 
     #[test]
