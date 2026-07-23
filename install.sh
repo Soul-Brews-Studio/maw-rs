@@ -2,10 +2,11 @@
 set -eu
 
 REPO="Soul-Brews-Studio/maw-rs"
-GITHUB_API="https://api.github.com/repos/$REPO/releases/latest"
+GITHUB_API="https://api.github.com/repos/$REPO/releases?per_page=100"
 GITHUB_RELEASES="https://github.com/$REPO/releases"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 MAW_VERSION="${MAW_VERSION:-}"
+MAW_CHANNEL="${MAW_CHANNEL:-alpha}"
 
 say() {
   printf '%s\n' "$*"
@@ -30,7 +31,8 @@ Usage:
   sh install.sh --install-dir /path/to/bin
 
 Environment:
-  MAW_VERSION   Release tag to install (default: latest release)
+  MAW_VERSION   Release tag to install (overrides channel resolution)
+  MAW_CHANNEL   Release channel: alpha or stable (default: alpha)
   INSTALL_DIR   Install directory (default: ~/.local/bin)
 USAGE
 }
@@ -99,14 +101,59 @@ resolve_version() {
     return
   fi
 
-  latest_json=$(download_stdout "$GITHUB_API")
-  if have jq; then
-    tag=$(printf '%s\n' "$latest_json" | jq -r '.tag_name // empty')
-  else
-    tag=$(printf '%s\n' "$latest_json" | sed -n 's/^[[:space:]]*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' | sed -n '1p')
-  fi
+  case "$MAW_CHANNEL" in
+    alpha|stable) ;;
+    *) die "MAW_CHANNEL must be alpha or stable" ;;
+  esac
 
-  [ -n "$tag" ] || die "failed to resolve latest maw-rs release tag"
+  releases_json=$(download_stdout "$GITHUB_API")
+  if have jq; then
+    tags=$(printf '%s\n' "$releases_json" | jq -r '.[] | .tag_name // empty')
+  else
+    tags=$(printf '%s\n' "$releases_json" | tr '{' '\n' | sed -n 's/^[[:space:]]*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p')
+  fi
+  tag=$(printf '%s\n' "$tags" | awk -v channel="$MAW_CHANNEL" '
+    function numeric(value) {
+      return value != "" && value ~ /^[0-9]+$/ && length(value) <= 6
+    }
+    function newer(year, month, day, alpha) {
+      return !found || year > best_year ||
+        (year == best_year && month > best_month) ||
+        (year == best_year && month == best_month && day > best_day) ||
+        (year == best_year && month == best_month && day == best_day && alpha > best_alpha)
+    }
+    {
+      tag = $0
+      rest = substr(tag, 2)
+      alpha = 0
+      if (channel == "alpha") {
+        count = split(rest, parts, "-alpha.")
+        if (count != 2 || !numeric(parts[2])) next
+        base = parts[1]
+        alpha = parts[2] + 0
+      } else {
+        if (rest ~ /-/) next
+        base = rest
+      }
+      count = split(base, date, ".")
+      if (substr(tag, 1, 1) != "v" || count != 3 ||
+          !numeric(date[1]) || !numeric(date[2]) || !numeric(date[3])) next
+      year = date[1] + 0
+      month = date[2] + 0
+      day = date[3] + 0
+      if (newer(year, month, day, alpha)) {
+        found = 1
+        best_year = year
+        best_month = month
+        best_day = day
+        best_alpha = alpha
+        best_tag = tag
+      }
+    }
+    END { if (found) print best_tag }
+  ')
+
+  [ -n "$tag" ] || die "failed to resolve latest maw-rs $MAW_CHANNEL release tag"
   case "$tag" in
     v*) printf '%s\n' "$tag" ;;
     *) die "latest release tag is not a v* tag: $tag" ;;
@@ -231,4 +278,6 @@ main() {
   post_install
 }
 
-main "$@"
+if [ "${MAW_INSTALL_TESTING:-0}" != 1 ]; then
+  main "$@"
+fi
