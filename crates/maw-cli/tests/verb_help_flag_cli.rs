@@ -134,7 +134,9 @@ fn help_all_tiered_output_preserves_registered_count_and_core_descriptions() {
     let text = output.stdout;
     assert!(text.starts_with("registered commands (197):"), "{text}");
     assert!(text.contains("\ncore (40):\n"), "{text}");
-    assert!(text.contains("\nother (157):\n"), "{text}");
+    assert!(text.contains("\nstandard ("), "{text}");
+    assert!(text.contains("\nextra ("), "{text}");
+    assert!(text.contains("\nother ("), "{text}");
     assert!(
         text.contains("  maw wake                      Launch or reuse an oracle engine pane;"),
         "{text}"
@@ -144,7 +146,7 @@ fn help_all_tiered_output_preserves_registered_count_and_core_descriptions() {
         "{text}"
     );
     assert!(
-        text.contains("\nother (157):\n  maw about\n"),
-        "about should remain untagged and render as a name-only Other row:\n{text}"
+        text.contains("  maw pair-code\n"),
+        "internal verbs should remain name-only Other rows:\n{text}"
     );
 }
