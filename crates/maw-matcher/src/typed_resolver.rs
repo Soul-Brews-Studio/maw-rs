@@ -107,9 +107,24 @@ pub fn resolve_typed_target(
         (Some(first), Some(second)) => {
             let mut candidates = vec![first, second];
             candidates.extend(iter);
+            if let Some(winner) = literal_name_tiebreak(&raw, &candidates) {
+                return ResolveTypedResult::Match { matched: winner };
+            }
             ResolveTypedResult::Ambiguous { candidates }
         }
     }
+}
+
+/// When a tie leaves more than one candidate at the best rank, prefer the
+/// single candidate whose raw (un-stripped) lowercased name equals the raw
+/// target literally -- disambiguates cases like `-oracle`-suffix stripping
+/// making both "maw-rs" and "maw-rs-oracle" normalize to "maw-rs".
+fn literal_name_tiebreak(raw: &str, candidates: &[ResolveMatch]) -> Option<ResolveMatch> {
+    let mut literal = candidates
+        .iter()
+        .filter(|m| m.candidate.name.trim().to_lowercase() == raw);
+    let winner = literal.next()?;
+    literal.next().is_none().then(|| winner.clone())
 }
 
 fn candidate_names(candidate: &ResolveTypedCandidate) -> Vec<String> {
@@ -200,4 +215,46 @@ fn dedup<T: Ord>(mut values: Vec<T>) -> Vec<T> {
     values.sort_unstable();
     values.dedup();
     values
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        resolve_typed_target, ResolveCandidateKind, ResolveMatchRank, ResolveTypedCandidate,
+        ResolveTypedResult,
+    };
+
+    fn repo(name: &str) -> ResolveTypedCandidate {
+        ResolveTypedCandidate {
+            kind: ResolveCandidateKind::Repo,
+            name: name.to_owned(),
+            aliases: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn oracle_suffix_stripping_does_not_shadow_literal_base_name() {
+        let candidates = vec![repo("maw-rs"), repo("maw-rs-oracle")];
+        let result = resolve_typed_target("maw-rs", &candidates);
+        match result {
+            ResolveTypedResult::Match { matched } => {
+                assert_eq!(matched.candidate.name, "maw-rs");
+                assert_eq!(matched.rank, ResolveMatchRank::Exact);
+            }
+            other => panic!("expected Match, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn oracle_suffix_stripping_does_not_shadow_literal_oracle_name() {
+        let candidates = vec![repo("maw-rs"), repo("maw-rs-oracle")];
+        let result = resolve_typed_target("maw-rs-oracle", &candidates);
+        match result {
+            ResolveTypedResult::Match { matched } => {
+                assert_eq!(matched.candidate.name, "maw-rs-oracle");
+                assert_eq!(matched.rank, ResolveMatchRank::Exact);
+            }
+            other => panic!("expected Match, got {other:?}"),
+        }
+    }
 }
