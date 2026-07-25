@@ -1,12 +1,16 @@
 use super::ServecoreModuleRegistration;
 use crate::serve_core::ServecoreLifecycleModule;
 use axum::{
-    extract::Query, http::StatusCode, response::IntoResponse, routing::get, Extension, Json, Router,
+    extract::{ConnectInfo, Query},
+    http::StatusCode,
+    response::IntoResponse,
+    routing::get,
+    Extension, Json, Router,
 };
 use maw_transport::FederationStatus;
 use serde::Serialize;
 use serde_json::json;
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, net::SocketAddr, sync::Arc};
 
 const FEDERATION_DEFAULT_LIMIT: usize = 50;
 
@@ -44,7 +48,36 @@ where
         .route("/api/federation/status", get(federation_status_get))
         .route("/api/peers/discoveries", get(federation_discoveries_get))
         .route("/api/peers/discovered", get(federation_discoveries_get))
+        // `/fed.json` is served OUTSIDE the `/api/` gate (the token gate only
+        // guards `/api/*`), so a browser on another machine can fetch it once a
+        // token exists — which means it MUST redact off-loopback (#9).
+        .route("/fed.json", get(federation_fed_json_get))
         .layer(Extension(Arc::new(state)))
+}
+
+async fn federation_fed_json_get(ConnectInfo(peer): ConnectInfo<SocketAddr>) -> impl IntoResponse {
+    let mut payload = federation_live_payload();
+    if !peer.ip().is_loopback() {
+        federation_redact_payload(&mut payload);
+    }
+    Json(payload).into_response()
+}
+
+/// Strip topology detail that a remote (non-loopback) viewer should not see:
+/// the full URL collapses to its host, and the resolved IP is dropped. Node,
+/// oracle, reachability and the `node_unique` flag stay — they are the map.
+fn federation_redact_payload(payload: &mut FederationStatusPayload) {
+    for peer in &mut payload.peers {
+        peer.url = federation_host_only(&peer.url);
+        peer.resolved_ip = None;
+    }
+}
+
+fn federation_host_only(url: &str) -> String {
+    reqwest::Url::parse(url)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(str::to_owned))
+        .unwrap_or_else(|| url.to_owned())
 }
 
 async fn federation_status_get(
@@ -567,6 +600,32 @@ mod tests {
             .peers
             .iter()
             .any(|peer| peer.node.as_deref() == Some("dup") && !peer.reachable));
+    }
+
+    #[test]
+    fn federation_redact_payload_hides_url_and_ip_but_keeps_the_map() {
+        let mut payload = FederationStatusPayload {
+            local_url: "http://local:3456".to_owned(),
+            peers: vec![FederationStatusPeer {
+                url: "http://192.168.1.118:3456".to_owned(),
+                node: Some("m5".to_owned()),
+                reachable: true,
+                latency: None,
+                agents: Vec::new(),
+                clock_warning: false,
+                oracle: Some("atlas".to_owned()),
+                resolved_ip: Some("192.168.1.118".to_owned()),
+                node_unique: true,
+            }],
+        };
+        federation_redact_payload(&mut payload);
+        // Topology detail hidden off-loopback…
+        assert_eq!(payload.peers[0].url, "192.168.1.118");
+        assert_eq!(payload.peers[0].resolved_ip, None);
+        // …but the map itself (node, oracle, reachability, uniqueness) stays.
+        assert_eq!(payload.peers[0].node.as_deref(), Some("m5"));
+        assert_eq!(payload.peers[0].oracle.as_deref(), Some("atlas"));
+        assert!(payload.peers[0].reachable && payload.peers[0].node_unique);
     }
 
     #[test]
