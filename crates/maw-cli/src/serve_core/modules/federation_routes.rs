@@ -348,7 +348,7 @@ async fn federation_fetch_peer_sessions(client: &reqwest::Client, url: &str) -> 
     let target = endpoint.to_string();
     let response = match client.get(endpoint).send().await {
         Ok(response) => response,
-        Err(error) => return (Vec::new(), Some(format!("GET {target}: {error}"))),
+        Err(error) => return (Vec::new(), Some(federation_send_error(&target, &error))),
     };
     let status = response.status();
     if !status.is_success() {
@@ -369,6 +369,32 @@ async fn federation_fetch_peer_sessions(client: &reqwest::Client, url: &str) -> 
         })
         .unwrap_or_default();
     (names, None)
+}
+
+/// Full reason a `/api/sessions` GET failed, not just reqwest's outer Display.
+/// Classifies the failure (connect / timeout / request) and walks the
+/// `Error::source()` chain so the OS-level cause surfaces — otherwise the string
+/// stops at "error sending request" one layer short of the real reason (e.g.
+/// macOS "Operation not permitted" when a daemon lacks Local Network access, or
+/// "No route to host"). The diagnostic must reach the actual cause, not near it.
+fn federation_send_error(target: &str, error: &reqwest::Error) -> String {
+    let kind = if error.is_connect() {
+        "connect"
+    } else if error.is_timeout() {
+        "timeout"
+    } else if error.is_request() {
+        "request"
+    } else {
+        "send"
+    };
+    let mut detail = format!("GET {target} [{kind}]: {error}");
+    let mut source = std::error::Error::source(error);
+    while let Some(inner) = source {
+        detail.push_str(" | ");
+        detail.push_str(&inner.to_string());
+        source = inner.source();
+    }
+    detail
 }
 
 /// Pure mapping from a peer store (+ aggregated fleet sessions) to the status
