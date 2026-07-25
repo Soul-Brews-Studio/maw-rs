@@ -167,3 +167,17 @@ an auth-path result, the map will show **green while broken**:
   (React UMD + htm in the mock; ship as preact + htm)
 
 All three are generated from the live `peers.json` + a real `probe-all` sweep.
+
+---
+
+## Progress log (execution on nat@black.local)
+
+**Done + committed + pushed** (branch `agents/federation-map`):
+- ✅ **Truth #2 + #3** (`b71fec70`): `/info` returns real node hostname (not const `"local"`) + `oracle` field. Added `agents_oracle` to `ServecoreSharedState` (mirrors `agents_node`), wired from `load_hey_config().oracle` (`serve.rs:~441`). `info_payload` in `serve_core/modules/info_routes.rs` now takes `(node, oracle)`, falls back to `$HOSTNAME`, emits `oracle` when set. Tests + clippy green.
+- ✅ **Truth #5** (`129e4e1c`): `stale_age_ms` parses epoch-ms too (was ISO-only → epoch-ms peers "permanently stale"). New `parse_timestamp_ms` (all-digit→epoch-ms else ISO) in `peer_staleness_timestamps.rs`. Test in `peer_store_mutation_tests.rs`.
+
+**In progress — #17** (surface decision code): started, NOT yet edited. Plan: add `decision: Option<String>` to `PeerSendWireResponse` (`peer_http_transport_io.rs:42`) + to `PeerSendResponse` (`reqwest_peer_http_client.rs:37`); set `parsed.decision = wire.decision`; in the `status >= 400` branch (`reqwest_peer_http_client.rs:~131`) include decision + a hint. Decision codes: refuse-missing-peer-key / refuse-mismatch / refuse-unsigned / refuse-ambiguous-peer-key / refuse-skew / cache-no-sig.
+
+**Remaining**: Truth #4 (probe resolved_ip/auth_ok/loopback — `peers.rs:234-240`, bigger), Wiring #16 (peer_pubkeys hot-reload — `serve.rs:277/:2765`), #6/#7/#8 (peers_probe_rows extract + unstub `federation_default_state` + prod-mount test), View #9/#10/#11/#15 (/fed page + /fed.json + `maw peers map` + fix door).
+
+**Env surprises on black** (for next session): `rtk` NOT installed here; `rg` output is MANGLED (identifiers→`n`) — use `grep`/Read tool instead. `fd` absent — use `git ls-files | grep`. Cargo at `~/.cargo/bin` (export PATH). black is the ONLY machine with #665 built (`v26.7.23-alpha.1711-4-g3979e884`); m5 + GitHub release still buggy → cut a fresh alpha after fed-map merges (use `maw calver`, NOT skill `/calver`). Binary is named `maw-rs` not `maw` (`cp target/release/maw-rs ~/.local/bin/maw`).
