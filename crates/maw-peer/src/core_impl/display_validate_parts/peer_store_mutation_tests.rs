@@ -164,3 +164,23 @@
         assert_eq!(days_in_month(2026, 13), 0);
         assert_eq!(parse_iso_timestamp_ms("2026-13-01T00:00:00Z"), None);
     }
+
+    #[test]
+    fn stale_age_parses_both_iso_and_epoch_ms() {
+        // epoch-ms string parses (peers.json stores this form) — not None.
+        assert_eq!(parse_timestamp_ms("1784953978566"), Some(1_784_953_978_566));
+        // ISO-8601 still parses, identical to the dedicated parser.
+        assert_eq!(
+            parse_timestamp_ms("2026-06-02T13:54:44.148Z"),
+            parse_iso_timestamp_ms("2026-06-02T13:54:44.148Z")
+        );
+        assert_eq!(parse_timestamp_ms("not-a-time"), None);
+        assert_eq!(parse_timestamp_ms(""), None);
+
+        // stale_age_ms: an epoch-ms last_seen yields a real age, not "stale forever".
+        let mut peer = peer_record("http://x:3456");
+        peer.last_seen = Some("1000".to_owned());
+        assert_eq!(stale_age_ms(&peer, 5000), Some(4000));
+        peer.last_seen = Some("2026-06-02T13:54:44.148Z".to_owned());
+        assert!(stale_age_ms(&peer, u64::MAX).is_some());
+    }
