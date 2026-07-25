@@ -313,14 +313,13 @@ async fn federation_fleet_sessions(urls: &[String]) -> BTreeMap<String, Vec<Stri
 /// Fetch one peer's `/api/sessions` and keep just the session names (the map
 /// shows which sessions live on each node, not their internals).
 async fn federation_fetch_peer_sessions(client: &reqwest::Client, url: &str) -> Vec<String> {
-    // Resolve a routable address so a zone-less link-local IPv6 (which
-    // getaddrinfo may return first) never silently sinks the fetch.
-    let pin = reqwest::Url::parse(url).ok().and_then(|parsed| {
-        let host = parsed.host_str()?.to_owned();
-        let port = parsed.port_or_known_default().unwrap_or(3456);
-        federation_first_routable_addr(&host, port).map(|addr| addr.ip())
-    });
-    let Some(endpoint) = federation_sessions_endpoint(url, pin) else {
+    // The routable resolver is passed INTO the endpoint builder (not applied
+    // here) so the pin decision lives inside the tested unit — a zone-less
+    // link-local IPv6 (which getaddrinfo may return first) can't silently sink
+    // the fetch, and a test with a fake resolver guards that it stays wired.
+    let Some(endpoint) = federation_sessions_endpoint(url, |host, port| {
+        federation_first_routable_addr(host, port).map(|addr| addr.ip())
+    }) else {
         return Vec::new();
     };
     let Ok(response) = client.get(endpoint).send().await else {
@@ -405,15 +404,27 @@ fn federation_load_real_peer_store() -> maw_peer::PeerStoreFile {
     maw_peer::load_peer_store(&env)
 }
 
-/// Build the `/api/sessions` endpoint for a peer URL: optionally pin the host to
-/// a resolved routable IP (so a zone-less link-local address can't sink the
-/// fetch), and **append** `/api/sessions` to any existing base path rather than
+/// Build the `/api/sessions` endpoint for a peer URL: pin the host to a routable
+/// IP from `resolve` (so a zone-less link-local address can't sink the fetch),
+/// and **append** `/api/sessions` to any existing base path rather than
 /// replacing it — a peer behind a reverse proxy prefix (`…/maw`) keeps it.
-/// Split out as a pure function so a test guards the wiring: revert the pin or
-/// the path-append and it goes red (a predicate test alone would stay green).
-fn federation_sessions_endpoint(url: &str, pin: Option<std::net::IpAddr>) -> Option<reqwest::Url> {
+///
+/// `resolve` is taken as a parameter (not computed at the call site) so a single
+/// test with a fake resolver guards the *whole* decision — reverting the pin,
+/// the resolver call, or the path-append all turn a test red. Guarding only the
+/// pure predicates would leave the "do we even resolve+pin?" wiring unwatched.
+fn federation_sessions_endpoint(
+    url: &str,
+    resolve: impl Fn(&str, u16) -> Option<std::net::IpAddr>,
+) -> Option<reqwest::Url> {
     let mut endpoint = reqwest::Url::parse(url).ok()?;
-    if let Some(ip) = pin {
+    let host = endpoint.host_str()?.to_owned();
+    let port = endpoint.port_or_known_default().unwrap_or(3456);
+    if let Some(ip) = resolve(&host, port) {
+        // Fail closed: `set_ip_host` only errors for a non-IP host, which our
+        // resolver never yields — so `?` here means "give up the fetch" not
+        // "fall back to the hostname". Skipping the peer for one cycle beats
+        // silently connecting to the link-local address we were avoiding.
         endpoint.set_ip_host(ip).ok()?;
     }
     let base = endpoint.path().trim_end_matches('/').to_owned();
@@ -814,22 +825,36 @@ mod tests {
     }
 
     #[test]
-    fn federation_sessions_endpoint_pins_routable_ip_and_keeps_base_path() {
+    fn federation_sessions_endpoint_resolves_pins_and_keeps_base_path() {
         use std::net::{IpAddr, Ipv4Addr};
-        // R2: pinning rewrites the host to the routable IP — revert `set_ip_host`
-        // in the fetch and this goes red (the predicate tests alone would not).
-        let pinned = federation_sessions_endpoint(
-            "http://black.local:3456",
-            Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 184))),
-        )
-        .unwrap();
-        assert_eq!(pinned.as_str(), "http://192.168.1.184:3456/api/sessions");
+        // Fake resolver = what first_routable_addr must do: skip the link-local
+        // address getaddrinfo returns first and hand back the routable one.
+        // Because the resolver is a parameter, reverting the resolve+pin (or the
+        // path-append) inside the fn — OR the call site no longer passing a real
+        // resolver — turns this red. That's the whole decision guarded, not just
+        // a predicate.
+        let routable = |_h: &str, _p: u16| Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 184)));
+        let unresolved = |_h: &str, _p: u16| None;
+        assert_eq!(
+            federation_sessions_endpoint("http://black.local:3456", routable)
+                .unwrap()
+                .as_str(),
+            "http://192.168.1.184:3456/api/sessions"
+        );
         // R3: a reverse-proxy base path is preserved, not discarded.
-        let based = federation_sessions_endpoint("http://host:3456/maw", None).unwrap();
-        assert_eq!(based.as_str(), "http://host:3456/maw/api/sessions");
-        // No base path → clean /api/sessions.
-        let bare = federation_sessions_endpoint("http://host:3456", None).unwrap();
-        assert_eq!(bare.as_str(), "http://host:3456/api/sessions");
+        assert_eq!(
+            federation_sessions_endpoint("http://host:3456/maw", unresolved)
+                .unwrap()
+                .as_str(),
+            "http://host:3456/maw/api/sessions"
+        );
+        // No pin + no base path → clean /api/sessions.
+        assert_eq!(
+            federation_sessions_endpoint("http://host:3456", unresolved)
+                .unwrap()
+                .as_str(),
+            "http://host:3456/api/sessions"
+        );
     }
 
     #[test]
