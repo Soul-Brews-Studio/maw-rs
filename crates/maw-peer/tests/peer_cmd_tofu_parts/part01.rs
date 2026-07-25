@@ -30,7 +30,8 @@ fn ok_probe(node: &str, pubkey: Option<&str>) -> ProbePeerResult {
             node: node.to_owned(),
         }),
         error: None,
-    }
+            ..Default::default()
+        }
 }
 
 #[test]
@@ -109,6 +110,7 @@ fn cmd_peer_add_refuses_cached_pubkey_rotation_even_without_auth_probe_disagreem
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // +1 line from probe reachability fields (Truth #4)
 fn cmd_peer_add_bootstraps_pubkey_identity_probe_error_and_preserves_cached_pin_on_readd() {
     let probe_error = ProbeLastError {
         code: ProbeErrorCode::Timeout,
@@ -134,6 +136,7 @@ fn cmd_peer_add_bootstraps_pubkey_identity_probe_error_and_preserves_cached_pin_
             pubkey: None,
             identity: None,
             error: Some(probe_error.clone()),
+            ..Default::default()
         },
     })
     .unwrap();
@@ -191,6 +194,7 @@ fn cmd_peer_add_bootstraps_pubkey_identity_probe_error_and_preserves_cached_pin_
             pubkey: Some("cached-key".to_owned()),
             identity: None,
             error: None,
+            ..Default::default()
         },
     })
     .unwrap();

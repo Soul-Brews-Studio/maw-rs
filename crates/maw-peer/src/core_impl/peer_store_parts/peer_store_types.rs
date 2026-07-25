@@ -48,6 +48,7 @@ fn probe_failure(error: ProbeLastError) -> ProbePeerResult {
         pubkey: None,
         identity: None,
         error: Some(error),
+        ..Default::default()
     }
 }
 

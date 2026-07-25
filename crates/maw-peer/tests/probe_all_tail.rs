@@ -37,6 +37,7 @@ fn probe_all_failed_existing_peer_records_last_error() {
                 pubkey: None,
                 identity: None,
                 error: Some(err.clone()),
+                ..Default::default()
             },
             5000,
         )],

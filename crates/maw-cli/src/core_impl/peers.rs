@@ -235,7 +235,30 @@ fn peers_probe_peer(url: &str, timeout_ms: u64, now: &str) -> maw_peer::ProbePee
     let info = peers_fetch_info(url, timeout_ms);
     // Best-effort /api/identity fetch so TOFU can pin the pubkey (#545); older peers without the endpoint stay unpinned.
     let identity = if matches!(info, maw_peer::ProbeInfoOutcome::Body(_)) { peers_fetch_identity(url, timeout_ms) } else { None };
-    maw_peer::probe_peer_from_plan(&maw_peer::ProbePeerPlan { url: url.to_owned(), now: now.to_owned(), dns_error: None, info, identity })
+    // Resolve the URL host to an IP so the map can flag the `m5.local → 127.0.0.1`
+    // trap (loopback = the probe hit our OWN serve, not the remote peer).
+    let resolved_ip = peers_resolve_ip(url);
+    // TODO(#7): populate `auth_ok` with a **read-only** signed GET /api/trust
+    // (in the protected allowlist per request_verify.rs:536-543) — 2xx → Some(true),
+    // 401/403 → Some(false). Left None here to avoid a blind-signing false-negative
+    // that would paint every peer red; wired + verified live where FederationStatusPeer
+    // gains `auth_ok`.
+    maw_peer::probe_peer_from_plan(&maw_peer::ProbePeerPlan { url: url.to_owned(), now: now.to_owned(), dns_error: None, info, identity, resolved_ip, auth_ok: None })
+}
+
+/// Resolve the host in a peer URL to its first IP, so a probe can tell a real
+/// remote from our own serve (`m5.local` may resolve to `127.0.0.1`). Best
+/// effort: `None` when the URL has no host or DNS fails — the probe still runs.
+fn peers_resolve_ip(url: &str) -> Option<String> {
+    use std::net::ToSocketAddrs;
+    let parsed = reqwest::Url::parse(url).ok()?;
+    let host = parsed.host_str()?;
+    let port = parsed.port_or_known_default().unwrap_or(3456);
+    (host, port)
+        .to_socket_addrs()
+        .ok()?
+        .next()
+        .map(|addr| addr.ip().to_string())
 }
 
 fn peers_fetch_identity(url: &str, timeout_ms: u64) -> Option<maw_peer::ProbeRemoteIdentity> {
@@ -497,6 +520,8 @@ mod peers_tests {
             dns_error: None,
             info: maw_peer::ProbeInfoOutcome::Body(maw_peer::ProbeInfoBody { maw: maw_peer::ProbeMawHandshake::SchemaObject("1".to_owned()), node: Some("peer-node".to_owned()), name: None, nickname: None }),
             identity,
+            resolved_ip: None,
+            auth_ok: None,
         })
     }
 

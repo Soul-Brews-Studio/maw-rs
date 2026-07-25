@@ -174,7 +174,9 @@ mod tests {
         // node never empty (real hostname or "local"), never the constant leak;
         // oracle absent rather than a fake default like "mawjs".
         let payload = info_payload(None, None);
-        assert!(payload["node"].as_str().is_some_and(|node| !node.is_empty()));
+        assert!(payload["node"]
+            .as_str()
+            .is_some_and(|node| !node.is_empty()));
         assert!(payload.get("oracle").is_none());
         // blank inputs are treated as unset, not echoed back
         let blank = info_payload(Some("  "), Some(""));

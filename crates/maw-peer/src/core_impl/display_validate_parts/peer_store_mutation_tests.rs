@@ -32,6 +32,7 @@
             pubkey: pubkey.map(str::to_owned),
             identity: None,
             error: None,
+            ..Default::default()
         }
     }
 

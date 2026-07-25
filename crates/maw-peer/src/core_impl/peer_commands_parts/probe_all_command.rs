@@ -80,6 +80,7 @@ fn probe_failure_without_error() -> ProbePeerResult {
         pubkey: None,
         identity: None,
         error: None,
+        ..Default::default()
     }
 }
 
@@ -119,6 +120,7 @@ mod part03_coverage_tests {
             pubkey: pubkey.map(str::to_owned),
             identity: None,
             error: None,
+            ..Default::default()
         }
     }
 

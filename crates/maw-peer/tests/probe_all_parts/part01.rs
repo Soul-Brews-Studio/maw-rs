@@ -41,7 +41,8 @@ fn ok(node: &str) -> ProbePeerResult {
         pubkey: None,
         identity: None,
         error: None,
-    }
+            ..Default::default()
+        }
 }
 
 fn failed(err: ProbeLastError) -> ProbePeerResult {
@@ -51,7 +52,8 @@ fn failed(err: ProbeLastError) -> ProbePeerResult {
         pubkey: None,
         identity: None,
         error: Some(err),
-    }
+            ..Default::default()
+        }
 }
 
 #[test]
