@@ -164,6 +164,10 @@ struct FederationStatusPayload {
     peers: Vec<FederationStatusPeer>,
 }
 
+// A wire/display row: each bool is a distinct flag the /fed page and consumers
+// read by name (reachable / node_unique / loopback_self / clock_warning), so
+// grouping them would break the JSON contract, not clarify it.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 struct FederationStatusPeer {
     url: String,
@@ -190,6 +194,11 @@ struct FederationStatusPeer {
     /// meaning four things at once. `None` = the fetch succeeded.
     #[serde(skip_serializing_if = "Option::is_none")]
     fetch_error: Option<String>,
+    /// `true` when `resolved_ip` is one of THIS machine's own interface addresses
+    /// — the probe looped back to our own serve, so those `agents` are ours, not
+    /// the peer's ("green while broken"). Catches self-reference through a real
+    /// interface (e.g. `10.20.0.18`), not just `127.0.0.1` (twin-found).
+    loopback_self: bool,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -238,6 +247,7 @@ fn federation_status_payload(status: &FederationStatus) -> FederationStatusPaylo
                 node_unique: federation_node_unique(&node_counts, peer.node.as_deref()),
                 auth_ok: None,
                 fetch_error: None,
+                loopback_self: false,
             })
             .collect(),
     }
@@ -520,6 +530,9 @@ fn federation_payload_from_store(
                 node_unique: federation_node_unique(&node_counts, record.node.as_deref()),
                 auth_ok: record.auth_ok,
                 fetch_error: outcome.and_then(|outcome| outcome.error.clone()),
+                loopback_self: resolved
+                    .get(&record.url)
+                    .is_some_and(|ip| federation_is_local_ip(*ip)),
             }
         })
         .collect();
@@ -580,6 +593,14 @@ fn federation_sessions_endpoint(url: &str, pin: Option<std::net::IpAddr>) -> Opt
     let base = endpoint.path().trim_end_matches('/').to_owned();
     endpoint.set_path(&format!("{base}/api/sessions"));
     Some(endpoint)
+}
+
+/// Is `ip` one of THIS machine's own interface addresses? Binding an ephemeral
+/// socket to it succeeds only for a local address (the OS rejects binding a
+/// non-local IP with `EADDRNOTAVAIL`), so this catches self-reference through any
+/// real interface — loopback AND e.g. `10.20.0.18` — with no crate and no unsafe.
+fn federation_is_local_ip(ip: std::net::IpAddr) -> bool {
+    std::net::TcpListener::bind((ip, 0)).is_ok()
 }
 
 fn federation_host_is_loopback(host: &str) -> bool {
@@ -908,6 +929,7 @@ mod tests {
                 node_unique: true,
                 auth_ok: None,
                 fetch_error: Some("GET http://192.168.1.118:3456/api/sessions: boom".to_owned()),
+                loopback_self: false,
             }],
         };
         federation_redact_payload(&mut payload);
@@ -947,6 +969,19 @@ mod tests {
         assert!(federation_host_is_loopback("localhost"));
         assert!(federation_host_is_loopback("127.0.0.1"));
         assert!(!federation_host_is_loopback("black.local"));
+    }
+
+    #[test]
+    fn federation_is_local_ip_flags_own_interface_not_a_remote() {
+        use std::net::{IpAddr, Ipv4Addr};
+        // Loopback is always a local interface → self-reference.
+        assert!(federation_is_local_ip(IpAddr::V4(Ipv4Addr::LOCALHOST)));
+        // TEST-NET-3 (203.0.113.0/24, RFC 5737) is never assigned to an
+        // interface → a real remote. This is the flag the CLI/page rely on to
+        // catch "the probe reached our own serve" even via a non-loopback IP.
+        assert!(!federation_is_local_ip(IpAddr::V4(Ipv4Addr::new(
+            203, 0, 113, 7
+        ))));
     }
 
     #[test]
