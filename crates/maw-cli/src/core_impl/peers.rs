@@ -37,6 +37,8 @@ struct PeersPeerNative {
     ssh: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     ssh_user: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    auth_ok: Option<bool>,
 }
 
 fn peers_version_one() -> u8 { 1 }
@@ -239,12 +241,15 @@ fn peers_probe_peer(url: &str, timeout_ms: u64, now: &str) -> maw_peer::ProbePee
     // Resolve the URL host to an IP so the map can flag the `m5.local → 127.0.0.1`
     // trap (loopback = the probe hit our OWN serve, not the remote peer).
     let resolved_ip = peers_resolve_ip(url);
-    // TODO(#7): populate `auth_ok` with a **read-only** signed GET /api/trust
-    // (in the protected allowlist per request_verify.rs:536-543) — 2xx → Some(true),
-    // 401/403 → Some(false). Left None here to avoid a blind-signing false-negative
-    // that would paint every peer red; wired + verified live where FederationStatusPeer
-    // gains `auth_ok`.
-    maw_peer::probe_peer_from_plan(&maw_peer::ProbePeerPlan { url: url.to_owned(), now: now.to_owned(), dns_error: None, info, identity, resolved_ip, auth_ok: None })
+    // Read-only signed auth probe (POST /api/probe verifies the v3 from-signature
+    // and has no side effect) — only when /info succeeded, so we do not sign
+    // requests to an unreachable host. None when we cannot sign (no key/token).
+    let auth_ok = if matches!(info, maw_peer::ProbeInfoOutcome::Body(_)) {
+        federation_probe_auth(url, timeout_ms)
+    } else {
+        None
+    };
+    maw_peer::probe_peer_from_plan(&maw_peer::ProbePeerPlan { url: url.to_owned(), now: now.to_owned(), dns_error: None, info, identity, resolved_ip, auth_ok })
 }
 
 /// Resolve the host in a peer URL to its first IP, so a probe can tell a real
@@ -384,6 +389,7 @@ fn peers_apply_probe_result(peer: &mut PeersPeerNative, probe: &maw_peer::ProbeP
         peer.pubkey = Some(pubkey.clone());
     }
     if let Some(identity) = &probe.identity { peer.identity = Some(serde_json::to_value(identity).map_err(|error| format!("peers: render identity: {error}"))?); }
+    peer.auth_ok = probe.auth_ok;
     Ok(())
 }
 
@@ -431,6 +437,7 @@ struct PeersMapRow {
     resolved_ip: Option<String>,
     loopback_self: bool,
     node_unique: bool,
+    auth_ok: Option<bool>,
 }
 
 /// Deterministic core of `maw peers map`: map the peer store to rows, with the
@@ -466,6 +473,7 @@ fn peers_map_rows(
                 node_unique: node_counts.get(&node).copied().unwrap_or(0) <= 1 && !node.is_empty(),
                 node: if node.is_empty() { "-".to_owned() } else { node },
                 resolved_ip,
+                auth_ok: peer.auth_ok,
             }
         })
         .collect()
@@ -487,6 +495,9 @@ fn peers_format_map(rows: &[PeersMapRow]) -> String {
             }
             if !row.node_unique {
                 flags.push("dup-node");
+            }
+            if row.auth_ok == Some(false) {
+                flags.push("auth-fail");
             }
             let flags = if flags.is_empty() {
                 "-".to_owned()

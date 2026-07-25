@@ -166,6 +166,10 @@ struct FederationStatusPeer {
     /// `true` when no other peer shares this `node` name. A duplicate node makes
     /// `matches_local_peer` match someone else's row as "us" → fake Healthy.
     node_unique: bool,
+    /// Whether our signed requests authenticate to this peer (`POST /api/probe`).
+    /// `None` = not checked / unreachable; `Some(false)` = reachable but auth
+    /// refused — the `/info`-OK-but-`/api/send`-401 gap the map must show.
+    auth_ok: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -212,6 +216,7 @@ fn federation_status_payload(status: &FederationStatus) -> FederationStatusPaylo
                 oracle: None,
                 resolved_ip: None,
                 node_unique: federation_node_unique(&node_counts, peer.node.as_deref()),
+                auth_ok: None,
             })
             .collect(),
     }
@@ -264,6 +269,7 @@ fn federation_payload_from_store(store: &maw_peer::PeerStoreFile) -> FederationS
                 .filter(|oracle| !oracle.is_empty()),
             resolved_ip: federation_resolve_ip(&record.url),
             node_unique: federation_node_unique(&node_counts, record.node.as_deref()),
+            auth_ok: record.auth_ok,
         })
         .collect();
     FederationStatusPayload {
@@ -560,6 +566,7 @@ mod tests {
             }),
             one_way: None,
             last_symmetric_check: None,
+            auth_ok: None,
         }
     }
 
@@ -616,6 +623,7 @@ mod tests {
                 oracle: Some("atlas".to_owned()),
                 resolved_ip: Some("192.168.1.118".to_owned()),
                 node_unique: true,
+                auth_ok: None,
             }],
         };
         federation_redact_payload(&mut payload);

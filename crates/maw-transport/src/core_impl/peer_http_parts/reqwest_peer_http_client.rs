@@ -227,6 +227,39 @@ impl ReqwestHttpTransportIo {
         Ok(parsed)
     }
 
+    /// Read-only auth probe: POST a signed `/api/probe` (which verifies the
+    /// v3 from-signature and returns `{ok:true, sessions:[]}` with NO side
+    /// effect) so a probe can tell whether OUR signed requests are trusted by
+    /// this peer without delivering a real message. `Some(true)` on 2xx,
+    /// `Some(false)` on 401/403 (auth refused), `None` on any other outcome.
+    ///
+    /// # Errors
+    ///
+    /// Returns a transport error string on network failure.
+    pub async fn probe_peer_auth(
+        &self,
+        request: &PeerWakeRequest,
+    ) -> Result<Option<bool>, String> {
+        let (status, _text) = self
+            .post_signed_json(
+                &request.peer_url,
+                "/api/probe",
+                "{}",
+                PeerAuth {
+                    from: &request.from,
+                    federation_token: &request.federation_token,
+                    peer_key: &request.peer_key,
+                    timestamp: request.timestamp,
+                },
+            )
+            .await?;
+        Ok(match status {
+            200..=299 => Some(true),
+            401 | 403 => Some(false),
+            _ => None,
+        })
+    }
+
     async fn post_signed_json(
         &self,
         peer_url: &str,

@@ -174,7 +174,8 @@ fn peer_add_new_record(plan: &PeerAddPlan) -> PeerRecord {
             .or_else(|| plan.authenticated_identity.clone()),
         one_way: None,
         last_symmetric_check: None,
-    }
+            auth_ok: None,
+        }
 }
 
 fn peer_add_apply_existing(

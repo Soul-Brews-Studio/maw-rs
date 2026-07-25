@@ -179,6 +179,7 @@ mod servepeerstartupwarnings_tests {
             identity: Some(maw_peer::PeerIdentity { oracle: oracle.to_owned(), node: node.to_owned() }),
             one_way: None,
             last_symmetric_check: None,
+            auth_ok: None,
         }
     }
 

@@ -15,6 +15,7 @@ fn peer_record(url: &str) -> PeerRecord {
         identity: None,
         one_way: None,
         last_symmetric_check: None,
+        auth_ok: None,
     }
 }
 

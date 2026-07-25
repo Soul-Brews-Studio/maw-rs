@@ -31,7 +31,8 @@ fn peer(
         identity: None,
         one_way: None,
         last_symmetric_check: None,
-    }
+            auth_ok: None,
+        }
 }
 
 fn ok(node: &str) -> ProbePeerResult {

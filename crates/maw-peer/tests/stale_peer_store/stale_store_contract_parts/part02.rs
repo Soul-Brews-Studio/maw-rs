@@ -37,7 +37,8 @@ fn state_path_is_primary_while_legacy_home_peers_are_migrated_on_mutation() {
                 identity: None,
                 one_way: None,
                 last_symmetric_check: None,
-            },
+            auth_ok: None,
+        },
         );
     })
     .unwrap();
@@ -103,7 +104,8 @@ fn mutate_peer_store_reads_inside_lock_and_tolerates_malformed_existing_contents
                 identity: None,
                 one_way: None,
                 last_symmetric_check: None,
-            },
+            auth_ok: None,
+        },
         );
     })
     .unwrap();
@@ -132,7 +134,8 @@ fn mutate_peer_store_reads_inside_lock_and_tolerates_malformed_existing_contents
                 identity: None,
                 one_way: None,
                 last_symmetric_check: None,
-            },
+            auth_ok: None,
+        },
         );
     })
     .unwrap();
@@ -175,7 +178,8 @@ fn read_errors_and_unlocked_parse_errors_recover_as_empty_stores() {
                 identity: None,
                 one_way: None,
                 last_symmetric_check: None,
-            },
+            auth_ok: None,
+        },
         );
     })
     .unwrap();
