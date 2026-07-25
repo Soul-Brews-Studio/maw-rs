@@ -181,3 +181,21 @@ All three are generated from the live `peers.json` + a real `probe-all` sweep.
 **Remaining**: Truth #4 (probe resolved_ip/auth_ok/loopback — `peers.rs:234-240`, bigger), Wiring #16 (peer_pubkeys hot-reload — `serve.rs:277/:2765`), #6/#7/#8 (peers_probe_rows extract + unstub `federation_default_state` + prod-mount test), View #9/#10/#11/#15 (/fed page + /fed.json + `maw peers map` + fix door).
 
 **Env surprises on black** (for next session): `rtk` NOT installed here; `rg` output is MANGLED (identifiers→`n`) — use `grep`/Read tool instead. `fd` absent — use `git ls-files | grep`. Cargo at `~/.cargo/bin` (export PATH). black is the ONLY machine with #665 built (`v26.7.23-alpha.1711-4-g3979e884`); m5 + GitHub release still buggy → cut a fresh alpha after fed-map merges (use `maw calver`, NOT skill `/calver`). Binary is named `maw-rs` not `maw` (`cp target/release/maw-rs ~/.local/bin/maw`).
+
+## Follow-up finding (#665 sibling — registry resolver) — 2026-07-25
+
+After #665 shipped (v26.7.25-alpha.1308), `maw wake maw-rs` on a node with
+MANY registry entries fails with a DIFFERENT error from a DIFFERENT resolver:
+
+- repo resolver `wake_resolve_repo_target` (`wake.rs:811-814`) → `ambiguous fuzzy repo` — **fixed by #665** ✅
+- registry resolver `wake_resolve_registry_target` (`wake.rs:787-790`) → `ambiguous registry target for maw-rs: 33-maw-rs:maw-rs, 33-maw-rs:maw-rs-oracle, 33-maw-rs:mawrs-codex-cli, …, inverted-pendulum-oracle:maw-rs` — **still broken**
+
+Why `literal_name_tiebreak` (#665) doesn't help: registry `candidate.name` is the
+full `session:window` (e.g. `33-maw-rs:maw-rs`), never bare `maw-rs`, so
+`name.to_lowercase() == raw` matches none → still `Ambiguous`.
+
+**Proposed fix (same crate as #665, maw-matcher)**: extend the tiebreak so the
+**window part** (strip `session:` before comparing) is what's matched literally,
+or make an exact window-name beat prefix/fuzzy. m5 repro'd it with 7 entries
+(incl. `mawrs-codex-*` zombie-team leftovers). Workaround: `maw wake maw-rs --repo <org/repo>`.
+→ NEW TASK #18, sibling of #665/#13.
