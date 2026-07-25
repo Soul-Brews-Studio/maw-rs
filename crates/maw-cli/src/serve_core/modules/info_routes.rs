@@ -42,9 +42,15 @@ async fn info_get(Extension(state): Extension<Arc<ServecoreSharedState>>) -> Jso
 /// (matches `config_init`'s `$HOSTNAME` default) instead of the constant
 /// `"local"`, so a federation map can tell one node from another.
 fn info_node_fallback() -> String {
+    // `$HOSTNAME` is unset for a detached serve (nohup), so fall through to
+    // `/etc/hostname` before the literal `"local"` — otherwise every peer that
+    // probes this node pins it as "local", which collides `node_unique` the
+    // moment a second node also answers "local" (twin-found on black).
     std::env::var("HOSTNAME")
         .ok()
-        .filter(|value| !value.trim().is_empty())
+        .or_else(|| std::fs::read_to_string("/etc/hostname").ok())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "local".to_owned())
 }
 
