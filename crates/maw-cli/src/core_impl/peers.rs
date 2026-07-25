@@ -3,7 +3,7 @@ const DISPATCH_104: &[DispatcherEntry] = &[
     DispatcherEntry { command: "peer", handler: Handler::Sync(peers_run_command) },
 ];
 
-const PEERS_HELP: &str = "usage: maw peers <add|list|info|probe|probe-all|accept|remove|forget> [...]\n  add       <alias> <url> [--node <name>] [--ssh <target>] [--user <name>] [--allow-unreachable]\n            — register alias (auto-probes /info). Exits non-zero on handshake failure:\n              2=UNKNOWN/BAD_BODY/TLS  3=DNS  4=REFUSED  5=TIMEOUT  6=HTTP_4XX/5XX\n            --ssh sets the SSH config alias/target for cross-node attach; --user overrides SSH user.\n            --allow-unreachable keeps exit 0 even when the probe fails (CI/bootstrap).\n  list      [--discovered] [--all] [--json] [--limit N]\n            — tabular list of all peers. --discovered: LAN candidates from Scout (#1237).\n              --all: include already-paired (default hides). --limit: cap rows (default 50).\n  info      <alias>                         — JSON details for one peer (includes lastError if set)\n  probe     <alias>                         — re-run /info handshake; updates lastSeen / lastError (#565)\n  probe-all [--timeout <ms>] [--allow-unreachable]\n            — probe every peer in parallel; prints liveness table. Exit = worst PROBE_EXIT_CODE (#669).\n  accept    <node|zid-prefix> [--alias X] | --all (#1237)\n            — pair with a Scout-discovered peer. Shortest unambiguous prefix wins.\n              Refuses if pubkey already pins under a different alias (impersonation guard).\n  remove    <alias>                         — remove (idempotent)\n  forget    <alias>                         — clear cached pubkey so next contact re-TOFUs (#804 Step 2)\n\nstorage: maw state peers.json (v1; reads legacy ~/.maw/peers.json during migration)";
+const PEERS_HELP: &str = "usage: maw peers <add|list|info|probe|probe-all|map|accept|remove|forget> [...]\n  add       <alias> <url> [--node <name>] [--ssh <target>] [--user <name>] [--allow-unreachable]\n            — register alias (auto-probes /info). Exits non-zero on handshake failure:\n              2=UNKNOWN/BAD_BODY/TLS  3=DNS  4=REFUSED  5=TIMEOUT  6=HTTP_4XX/5XX\n            --ssh sets the SSH config alias/target for cross-node attach; --user overrides SSH user.\n            --allow-unreachable keeps exit 0 even when the probe fails (CI/bootstrap).\n  list      [--discovered] [--all] [--json] [--limit N]\n            — tabular list of all peers. --discovered: LAN candidates from Scout (#1237).\n              --all: include already-paired (default hides). --limit: cap rows (default 50).\n  info      <alias>                         — JSON details for one peer (includes lastError if set)\n  probe     <alias>                         — re-run /info handshake; updates lastSeen / lastError (#565)\n  probe-all [--timeout <ms>] [--allow-unreachable]\n            — probe every peer in parallel; prints liveness table. Exit = worst PROBE_EXIT_CODE (#669).\n  accept    <node|zid-prefix> [--alias X] | --all (#1237)\n            — pair with a Scout-discovered peer. Shortest unambiguous prefix wins.\n              Refuses if pubkey already pins under a different alias (impersonation guard).\n  map       — federation map: node, oracle, up/down, resolved IP, and flags\n              (loopback-self = probe hit our own serve; dup-node = shared node name).\n  remove    <alias>                         — remove (idempotent)\n  forget    <alias>                         — clear cached pubkey so next contact re-TOFUs (#804 Step 2)\n\nstorage: maw state peers.json (v1; reads legacy ~/.maw/peers.json during migration)";
 const PEERS_DEFAULT_STALE_TTL_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 const PEERS_DEFAULT_PROBE_TIMEOUT_MS: u64 = 2_000;
 const PEERS_FAKE_NOW_ENV: &str = "MAW_RS_PEERS_FAKE_NOW";
@@ -61,6 +61,7 @@ fn peers_dispatch(argv: &[String]) -> Result<CliOutput, String> {
         "forget" => peers_cmd_forget(&positional),
         "probe" => peers_cmd_probe(&positional),
         "probe-all" => peers_cmd_probe_all(argv),
+        "map" => Ok(peers_cmd_map()),
         "accept" => peers_cmd_accept(argv, &positional),
         _ => Ok(CliOutput { code: 1, stdout: format!("{PEERS_HELP}\n"), stderr: format!("maw peers: unknown subcommand \"{sub}\" (expected add|list|info|probe|probe-all|accept|remove|forget)\n") }),
     }
@@ -417,6 +418,121 @@ fn peers_format_list(rows: &[(String, PeersPeerNative, bool, Option<u64>)]) -> S
     lines.join("\n")
 }
 
+/// One terminal-map row for `maw peers map` — the federation as this node sees
+/// it: node + oracle identity, whether the last handshake succeeded, the IP the
+/// URL resolves to (loopback = we reached our own serve), and whether the node
+/// name is unique (a duplicate makes "us vs them" ambiguous).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PeersMapRow {
+    alias: String,
+    node: String,
+    oracle: String,
+    reachable: bool,
+    resolved_ip: Option<String>,
+    loopback_self: bool,
+    node_unique: bool,
+}
+
+/// Deterministic core of `maw peers map`: map the peer store to rows, with the
+/// IP resolver injected so it is testable without DNS.
+fn peers_map_rows(
+    store: &PeersStoreNative,
+    resolve: impl Fn(&str) -> Option<String>,
+) -> Vec<PeersMapRow> {
+    let mut node_counts = std::collections::BTreeMap::<String, usize>::new();
+    for peer in store.peers.values() {
+        if let Some(node) = peer.node.as_deref().filter(|node| !node.is_empty()) {
+            *node_counts.entry(node.to_owned()).or_insert(0) += 1;
+        }
+    }
+    store
+        .peers
+        .iter()
+        .map(|(alias, peer)| {
+            let node = peer.node.clone().unwrap_or_default();
+            let resolved_ip = resolve(&peer.url);
+            PeersMapRow {
+                alias: alias.clone(),
+                oracle: peer
+                    .identity
+                    .as_ref()
+                    .and_then(|identity| identity.get("oracle"))
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|oracle| !oracle.is_empty())
+                    .unwrap_or("-")
+                    .to_owned(),
+                reachable: peer.last_error.is_none(),
+                loopback_self: maw_peer::is_loopback_ip(resolved_ip.as_deref()),
+                node_unique: node_counts.get(&node).copied().unwrap_or(0) <= 1 && !node.is_empty(),
+                node: if node.is_empty() { "-".to_owned() } else { node },
+                resolved_ip,
+            }
+        })
+        .collect()
+}
+
+fn peers_format_map(rows: &[PeersMapRow]) -> String {
+    if rows.is_empty() {
+        return "no peers — the federation is empty (maw peers add <alias> <url>)".to_owned();
+    }
+    let header = ["alias", "node", "oracle", "reach", "ip", "flags"];
+    let data = rows
+        .iter()
+        .map(|row| {
+            let reach = if row.reachable { "up" } else { "down" };
+            let ip = row.resolved_ip.clone().unwrap_or_else(|| "-".to_owned());
+            let mut flags = Vec::new();
+            if row.loopback_self {
+                flags.push("loopback-self");
+            }
+            if !row.node_unique {
+                flags.push("dup-node");
+            }
+            let flags = if flags.is_empty() {
+                "-".to_owned()
+            } else {
+                flags.join(",")
+            };
+            [
+                row.alias.clone(),
+                row.node.clone(),
+                row.oracle.clone(),
+                reach.to_owned(),
+                ip,
+                flags,
+            ]
+        })
+        .collect::<Vec<_>>();
+    let widths = (0..header.len())
+        .map(|idx| {
+            data.iter()
+                .map(|cols| cols[idx].len())
+                .chain([header[idx].len()])
+                .max()
+                .unwrap_or(0)
+        })
+        .collect::<Vec<_>>();
+    let format_row = |cols: &[String]| {
+        cols.iter()
+            .enumerate()
+            .map(|(idx, col)| format!("{col:<width$}", width = widths[idx]))
+            .collect::<Vec<_>>()
+            .join("  ")
+    };
+    let mut lines = vec![
+        format_row(&header.map(str::to_owned)),
+        format_row(&widths.iter().map(|width| "-".repeat(*width)).collect::<Vec<_>>()),
+    ];
+    lines.extend(data.iter().map(|cols| format_row(cols)));
+    lines.join("\n")
+}
+
+fn peers_cmd_map() -> CliOutput {
+    let store = peers_load_store();
+    let rows = peers_map_rows(&store, peers_resolve_ip);
+    peers_ok(&format!("{}\n", peers_format_map(&rows)))
+}
+
 fn peers_load_store() -> PeersStoreNative {
     let path = peers_path();
     let tmp = path.with_extension("json.tmp");
@@ -499,6 +615,58 @@ mod peers_tests {
     use super::*;
 
     fn peers_args(values: &[&str]) -> Vec<String> { values.iter().map(|value| (*value).to_owned()).collect() }
+
+    #[test]
+    fn peers_map_rows_flag_loopback_self_duplicate_nodes_and_reachability() {
+        let record = |url: &str, node: &str, oracle: Option<&str>, errored: bool| PeersPeerNative {
+            url: url.to_owned(),
+            node: Some(node.to_owned()),
+            last_error: errored.then(|| serde_json::json!({"code": "DNS"})),
+            identity: oracle.map(|oracle| serde_json::json!({ "oracle": oracle })),
+            ..PeersPeerNative::default()
+        };
+        let mut store = PeersStoreNative {
+            version: 1,
+            peers: std::collections::BTreeMap::new(),
+        };
+        store.peers.insert(
+            "m5".to_owned(),
+            record("http://m5.local:3456", "m5", Some("atlas"), false),
+        );
+        store
+            .peers
+            .insert("d1".to_owned(), record("http://a:3456", "dup", None, true));
+        store
+            .peers
+            .insert("d2".to_owned(), record("http://b:3456", "dup", None, false));
+
+        // Stub resolver: m5.local resolves to loopback (the trap), others to LAN.
+        let rows = peers_map_rows(&store, |url| {
+            Some(if url.contains("m5.local") {
+                "127.0.0.1".to_owned()
+            } else {
+                "192.168.1.9".to_owned()
+            })
+        });
+        let row = |alias: &str| {
+            rows.iter()
+                .find(|row| row.alias == alias)
+                .cloned()
+                .expect("row present")
+        };
+        assert!(row("m5").loopback_self, "m5.local → 127.0.0.1 is loopback-self");
+        assert_eq!(row("m5").oracle, "atlas");
+        assert!(row("m5").node_unique);
+        assert!(!row("d1").node_unique, "two peers share node 'dup'");
+        assert!(!row("d1").reachable, "lastError set → down");
+        assert!(row("d2").reachable);
+        assert!(!row("d2").loopback_self);
+    }
+
+    #[test]
+    fn peers_map_dispatch_is_native() {
+        assert!(peers_format_map(&[]).contains("federation is empty"));
+    }
 
     #[test]
     fn peers_dispatch_registers_aliases_and_guards() {
