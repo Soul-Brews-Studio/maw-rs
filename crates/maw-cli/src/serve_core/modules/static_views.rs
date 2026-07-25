@@ -62,6 +62,7 @@ async function load(){
       '<div class="kv"><span>oracle</span><b>'+esc(p.oracle||'—')+'</b></div>'+
       '<div class="kv"><span>host</span><b>'+esc(host(p.url))+'</b></div>'+
       (p.resolved_ip?'<div class="kv"><span>ip</span><b>'+esc(p.resolved_ip)+'</b></div>':'')+
+      (p.latency!=null?'<div class="kv"><span>latency</span><b>'+p.latency+'ms</b></div>':'')+
       (p.agents&&p.agents.length?'<div class="kv"><span>sessions</span><b>'+p.agents.length+'</b></div><div class="sessions">'+p.agents.map(a=>'<span class="sess">'+esc(a)+'</span>').join('')+'</div>':'')+
       (flags.length?'<div class="flags">'+flags.map(f=>'<span class="flag">'+f+'</span>').join('')+'</div>':'')+
       (p.fetch_error?'<div class="ferr">⚠ '+esc(p.fetch_error)+'</div>':'')+

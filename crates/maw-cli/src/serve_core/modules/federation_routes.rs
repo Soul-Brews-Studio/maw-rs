@@ -273,11 +273,45 @@ async fn federation_live_payload() -> FederationStatusPayload {
     federation_payload_from_store(&store, &outcomes)
 }
 
-/// `(session-names, fetch-error)` for one peer. The error is kept so an empty
-/// `agents` list can say WHY — unreachable vs refused vs genuinely no sessions
-/// vs a URL we could not even build — instead of one silent `[]` that means four
-/// different things (twin: a harness that reports results without causes lies).
-type FleetOutcome = (Vec<String>, Option<String>);
+/// One peer's live fetch result. `error` is kept so an empty `sessions` says WHY
+/// (unreachable vs refused vs genuinely none vs unbuildable URL). `connected`
+/// records whether we got ANY response — it drives `reachable`, so the map can
+/// stop showing a green card next to empty data (twin: reachable came from a
+/// different path than the fetch, so both could be true and vacant at once).
+#[derive(Clone, Debug, Default)]
+struct FleetOutcome {
+    sessions: Vec<String>,
+    error: Option<String>,
+    connected: bool,
+    /// Round-trip time of the sweep's GET, `None` when we never connected. Now
+    /// that the fetch is live, measuring it is nearly free — and a field that is
+    /// null forever is its own quiet lie (twin).
+    latency_ms: Option<u64>,
+}
+
+impl FleetOutcome {
+    /// A fetch that never got a response (`connected: false`) or could not even
+    /// build a URL — no latency.
+    fn failed(error: String, connected: bool) -> Self {
+        Self {
+            sessions: Vec::new(),
+            error: Some(error),
+            connected,
+            latency_ms: None,
+        }
+    }
+
+    /// Connected (we got a round-trip) but the response was not usable — non-2xx
+    /// or bad JSON. Reachable, with a measured latency, but no sessions.
+    fn reached(error: String, latency_ms: Option<u64>) -> Self {
+        Self {
+            sessions: Vec::new(),
+            error: Some(error),
+            connected: true,
+            latency_ms,
+        }
+    }
+}
 
 /// `(fetched_at_ms, outcome-by-peer-url)` guarded for the TTL fleet cache.
 type FleetSessionsCache = Mutex<(u64, BTreeMap<String, FleetOutcome>)>;
@@ -307,7 +341,7 @@ async fn federation_fleet_sessions(urls: &[String]) -> BTreeMap<String, FleetOut
             let error = format!("http client build failed: {error}");
             return urls
                 .iter()
-                .map(|url| (url.clone(), (Vec::new(), Some(error.clone()))))
+                .map(|url| (url.clone(), FleetOutcome::failed(error.clone(), false)))
                 .collect();
         }
     };
@@ -340,23 +374,27 @@ async fn federation_fetch_peer_sessions(client: &reqwest::Client, url: &str) -> 
     let Some(endpoint) = federation_sessions_endpoint(url, |host, port| {
         federation_first_routable_addr(host, port).map(|addr| addr.ip())
     }) else {
-        return (
-            Vec::new(),
-            Some(format!("could not build endpoint from {url}")),
-        );
+        return FleetOutcome::failed(format!("could not build endpoint from {url}"), false);
     };
     let target = endpoint.to_string();
+    let started = std::time::Instant::now();
     let response = match client.get(endpoint).send().await {
         Ok(response) => response,
-        Err(error) => return (Vec::new(), Some(format!("GET {target}: {error}"))),
+        // Never got a response → not connected → not reachable, no latency.
+        Err(error) => return FleetOutcome::failed(federation_send_error(&target, &error), false),
     };
+    // We have a response: the peer is connected with a round-trip, even if the
+    // status is not 2xx — a 404/401 means "reached, refused", not "unreachable".
+    let latency_ms = u64::try_from(started.elapsed().as_millis()).ok();
     let status = response.status();
     if !status.is_success() {
-        return (Vec::new(), Some(format!("GET {target} -> HTTP {status}")));
+        return FleetOutcome::reached(format!("GET {target} -> HTTP {status}"), latency_ms);
     }
     let value = match response.json::<serde_json::Value>().await {
         Ok(value) => value,
-        Err(error) => return (Vec::new(), Some(format!("bad JSON from {target}: {error}"))),
+        Err(error) => {
+            return FleetOutcome::reached(format!("bad JSON from {target}: {error}"), latency_ms)
+        }
     };
     let names = value
         .as_array()
@@ -368,7 +406,38 @@ async fn federation_fetch_peer_sessions(client: &reqwest::Client, url: &str) -> 
                 .collect()
         })
         .unwrap_or_default();
-    (names, None)
+    FleetOutcome {
+        sessions: names,
+        error: None,
+        connected: true,
+        latency_ms,
+    }
+}
+
+/// Full reason a `/api/sessions` GET failed, not just reqwest's outer Display.
+/// Classifies the failure (connect / timeout / request) and walks the
+/// `Error::source()` chain so the OS-level cause surfaces — otherwise the string
+/// stops at "error sending request" one layer short of the real reason (e.g.
+/// macOS "Operation not permitted" when a daemon lacks Local Network access, or
+/// "No route to host"). The diagnostic must reach the actual cause, not near it.
+fn federation_send_error(target: &str, error: &reqwest::Error) -> String {
+    let kind = if error.is_connect() {
+        "connect"
+    } else if error.is_timeout() {
+        "timeout"
+    } else if error.is_request() {
+        "request"
+    } else {
+        "send"
+    };
+    let mut detail = format!("GET {target} [{kind}]: {error}");
+    let mut source = std::error::Error::source(error);
+    while let Some(inner) = source {
+        detail.push_str(" | ");
+        detail.push_str(&inner.to_string());
+        source = inner.source();
+    }
+    detail
 }
 
 /// Pure mapping from a peer store (+ aggregated fleet sessions) to the status
@@ -388,11 +457,15 @@ fn federation_payload_from_store(
             FederationStatusPeer {
                 url: record.url.clone(),
                 node: record.node.clone(),
-                // A peer whose last probe left no error is reachable; a recorded
-                // `lastError` means the last handshake failed.
-                reachable: record.last_error.is_none(),
-                latency: None,
-                agents: outcome.map(|outcome| outcome.0.clone()).unwrap_or_default(),
+                // Reachable = we actually connected on THIS sweep, so a green card
+                // can't sit next to empty data (twin: reachable used to come from a
+                // separate stale probe). Falls back to the stored probe only when a
+                // peer somehow was not swept.
+                reachable: outcome.map_or(record.last_error.is_none(), |outcome| outcome.connected),
+                latency: outcome.and_then(|outcome| outcome.latency_ms),
+                agents: outcome
+                    .map(|outcome| outcome.sessions.clone())
+                    .unwrap_or_default(),
                 clock_warning: false,
                 oracle: record
                     .identity
@@ -402,7 +475,7 @@ fn federation_payload_from_store(
                 resolved_ip: federation_resolve_ip(&record.url),
                 node_unique: federation_node_unique(&node_counts, record.node.as_deref()),
                 auth_ok: record.auth_ok,
-                fetch_error: outcome.and_then(|outcome| outcome.1.clone()),
+                fetch_error: outcome.and_then(|outcome| outcome.error.clone()),
             }
         })
         .collect();
@@ -903,17 +976,36 @@ mod tests {
             "b".to_owned(),
             federation_store_record("http://b.test:3456", "nb", None, false),
         );
+        store.peers.insert(
+            "c".to_owned(),
+            federation_store_record("http://c.test:3456", "nc", None, false),
+        );
         let mut outcomes = BTreeMap::new();
         outcomes.insert(
             "http://a.test:3456".to_owned(),
-            (vec!["06-fb".to_owned(), "08-gpu".to_owned()], None),
+            FleetOutcome {
+                sessions: vec!["06-fb".to_owned(), "08-gpu".to_owned()],
+                error: None,
+                connected: true,
+                latency_ms: Some(7),
+            },
         );
-        // A failed fetch carries WHY, so `agents: []` is never ambiguous.
+        // A failed fetch carries WHY, so `agents: []` is never ambiguous — and a
+        // failure to connect drops `reachable`, so the card can't be green + empty.
         outcomes.insert(
             "http://b.test:3456".to_owned(),
-            (
-                Vec::new(),
-                Some("GET http://b.test:3456/api/sessions: timed out".to_owned()),
+            FleetOutcome::failed(
+                "GET http://b.test:3456/api/sessions: timed out".to_owned(),
+                false,
+            ),
+        );
+        // The dividing line of this fix: a non-2xx peer CONNECTED (reached,
+        // refused) — reachable stays true with a latency, only agents is empty.
+        outcomes.insert(
+            "http://c.test:3456".to_owned(),
+            FleetOutcome::reached(
+                "GET http://c.test:3456/api/sessions -> HTTP 404".to_owned(),
+                Some(9),
             ),
         );
         let mut payload = federation_payload_from_store(&store, &outcomes);
@@ -927,11 +1019,26 @@ mod tests {
         };
         assert_eq!(by_url("http://a.test:3456").agents, vec!["06-fb", "08-gpu"]);
         assert_eq!(by_url("http://a.test:3456").fetch_error, None);
+        assert!(by_url("http://a.test:3456").reachable);
+        assert_eq!(by_url("http://a.test:3456").latency, Some(7));
         assert!(by_url("http://b.test:3456").agents.is_empty());
+        assert!(
+            !by_url("http://b.test:3456").reachable,
+            "a fetch that never connected must not read reachable"
+        );
         assert!(by_url("http://b.test:3456")
             .fetch_error
             .unwrap()
             .contains("timed out"));
+        // non-2xx: reached but refused → reachable TRUE, latency present, no agents.
+        let c = by_url("http://c.test:3456");
+        assert!(
+            c.reachable,
+            "a peer that answered 404 was reached, not down"
+        );
+        assert_eq!(c.latency, Some(9));
+        assert!(c.agents.is_empty());
+        assert!(c.fetch_error.unwrap().contains("HTTP 404"));
         federation_redact_payload(&mut payload);
         assert!(
             payload.peers.iter().all(|p| p.agents.is_empty()),
