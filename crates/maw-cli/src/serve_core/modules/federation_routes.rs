@@ -83,6 +83,8 @@ fn federation_redact_payload(payload: &mut FederationStatusPayload) {
         // Session names reveal what each node is running — off-loopback keep only
         // the count is still too much detail, so drop them entirely.
         peer.agents = Vec::new();
+        // The fetch error embeds the resolved IP/URL — drop it off-loopback too.
+        peer.fetch_error = None;
     }
 }
 
@@ -183,6 +185,11 @@ struct FederationStatusPeer {
     /// `None` = not checked / unreachable; `Some(false)` = reachable but auth
     /// refused — the `/info`-OK-but-`/api/send`-401 gap the map must show.
     auth_ok: Option<bool>,
+    /// Why the `/api/sessions` aggregation returned no sessions for this peer, if
+    /// it failed — so an empty `agents` is diagnosable at a glance instead of
+    /// meaning four things at once. `None` = the fetch succeeded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fetch_error: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -230,6 +237,7 @@ fn federation_status_payload(status: &FederationStatus) -> FederationStatusPaylo
                 resolved_ip: None,
                 node_unique: federation_node_unique(&node_counts, peer.node.as_deref()),
                 auth_ok: None,
+                fetch_error: None,
             })
             .collect(),
     }
@@ -261,47 +269,59 @@ async fn federation_live_payload() -> FederationStatusPayload {
         .values()
         .map(|record| record.url.clone())
         .collect::<Vec<_>>();
-    let sessions = federation_fleet_sessions(&urls).await;
-    federation_payload_from_store(&store, &sessions)
+    let outcomes = federation_fleet_sessions(&urls).await;
+    federation_payload_from_store(&store, &outcomes)
 }
 
-/// `(fetched_at_ms, sessions-by-peer-url)` guarded for the TTL fleet cache.
-type FleetSessionsCache = Mutex<(u64, BTreeMap<String, Vec<String>>)>;
+/// `(session-names, fetch-error)` for one peer. The error is kept so an empty
+/// `agents` list can say WHY — unreachable vs refused vs genuinely no sessions
+/// vs a URL we could not even build — instead of one silent `[]` that means four
+/// different things (twin: a harness that reports results without causes lies).
+type FleetOutcome = (Vec<String>, Option<String>);
+
+/// `(fetched_at_ms, outcome-by-peer-url)` guarded for the TTL fleet cache.
+type FleetSessionsCache = Mutex<(u64, BTreeMap<String, FleetOutcome>)>;
 
 fn fleet_sessions_cache() -> &'static FleetSessionsCache {
     static CACHE: OnceLock<FleetSessionsCache> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new((0, BTreeMap::new())))
 }
 
-/// Session names per peer URL, aggregated **server-side** on a TTL cycle — the
-/// browser never fans out to peers (CORS + auth + N connections). The lock is
-/// never held across the `.await`, so concurrent requests at most double a
+/// Session outcomes per peer URL, aggregated **server-side** on a TTL cycle —
+/// the browser never fans out to peers (CORS + auth + N connections). The lock
+/// is never held across the `.await`, so concurrent requests at most double a
 /// sweep (idempotent) rather than deadlock (#15).
-async fn federation_fleet_sessions(urls: &[String]) -> BTreeMap<String, Vec<String>> {
+async fn federation_fleet_sessions(urls: &[String]) -> BTreeMap<String, FleetOutcome> {
     let now = federation_now_millis();
     if let Ok(guard) = fleet_sessions_cache().lock() {
         if !guard.1.is_empty() && now.saturating_sub(guard.0) < FLEET_SESSIONS_TTL_MS {
             return guard.1.clone();
         }
     }
-    let Ok(client) = reqwest::Client::builder()
+    let client = match reqwest::Client::builder()
         .timeout(Duration::from_millis(2500))
         .build()
-    else {
-        return BTreeMap::new();
+    {
+        Ok(client) => client,
+        Err(error) => {
+            let error = format!("http client build failed: {error}");
+            return urls
+                .iter()
+                .map(|url| (url.clone(), (Vec::new(), Some(error.clone()))))
+                .collect();
+        }
     };
     let fetches = urls.iter().cloned().map(|url| {
         let client = client.clone();
         async move {
-            let sessions = federation_fetch_peer_sessions(&client, &url).await;
-            (url, sessions)
+            let outcome = federation_fetch_peer_sessions(&client, &url).await;
+            (url, outcome)
         }
     });
     let map = futures_util::future::join_all(fetches)
         .await
         .into_iter()
-        .filter(|(_, sessions)| !sessions.is_empty())
-        .collect::<BTreeMap<String, Vec<String>>>();
+        .collect::<BTreeMap<String, FleetOutcome>>();
     if let Ok(mut guard) = fleet_sessions_cache().lock() {
         if !map.is_empty() {
             *guard = (now, map.clone());
@@ -310,9 +330,9 @@ async fn federation_fleet_sessions(urls: &[String]) -> BTreeMap<String, Vec<Stri
     map
 }
 
-/// Fetch one peer's `/api/sessions` and keep just the session names (the map
-/// shows which sessions live on each node, not their internals).
-async fn federation_fetch_peer_sessions(client: &reqwest::Client, url: &str) -> Vec<String> {
+/// Fetch one peer's `/api/sessions` and keep just the session names, plus the
+/// error string when it did not succeed — so `agents: []` is never ambiguous.
+async fn federation_fetch_peer_sessions(client: &reqwest::Client, url: &str) -> FleetOutcome {
     // The routable resolver is passed INTO the endpoint builder (not applied
     // here) so the pin decision lives inside the tested unit — a zone-less
     // link-local IPv6 (which getaddrinfo may return first) can't silently sink
@@ -320,18 +340,25 @@ async fn federation_fetch_peer_sessions(client: &reqwest::Client, url: &str) -> 
     let Some(endpoint) = federation_sessions_endpoint(url, |host, port| {
         federation_first_routable_addr(host, port).map(|addr| addr.ip())
     }) else {
-        return Vec::new();
+        return (
+            Vec::new(),
+            Some(format!("could not build endpoint from {url}")),
+        );
     };
-    let Ok(response) = client.get(endpoint).send().await else {
-        return Vec::new();
+    let target = endpoint.to_string();
+    let response = match client.get(endpoint).send().await {
+        Ok(response) => response,
+        Err(error) => return (Vec::new(), Some(format!("GET {target}: {error}"))),
     };
-    if !response.status().is_success() {
-        return Vec::new();
+    let status = response.status();
+    if !status.is_success() {
+        return (Vec::new(), Some(format!("GET {target} -> HTTP {status}")));
     }
-    let Ok(value) = response.json::<serde_json::Value>().await else {
-        return Vec::new();
+    let value = match response.json::<serde_json::Value>().await {
+        Ok(value) => value,
+        Err(error) => return (Vec::new(), Some(format!("bad JSON from {target}: {error}"))),
     };
-    value
+    let names = value
         .as_array()
         .map(|sessions| {
             sessions
@@ -340,7 +367,8 @@ async fn federation_fetch_peer_sessions(client: &reqwest::Client, url: &str) -> 
                 .map(str::to_owned)
                 .collect()
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+    (names, None)
 }
 
 /// Pure mapping from a peer store (+ aggregated fleet sessions) to the status
@@ -348,30 +376,34 @@ async fn federation_fetch_peer_sessions(client: &reqwest::Client, url: &str) -> 
 /// it is testable without disk/env/network.
 fn federation_payload_from_store(
     store: &maw_peer::PeerStoreFile,
-    sessions: &BTreeMap<String, Vec<String>>,
+    outcomes: &BTreeMap<String, FleetOutcome>,
 ) -> FederationStatusPayload {
     let node_counts =
         federation_node_counts(store.peers.values().map(|record| record.node.as_deref()));
     let peers = store
         .peers
         .values()
-        .map(|record| FederationStatusPeer {
-            url: record.url.clone(),
-            node: record.node.clone(),
-            // A peer whose last probe left no error is reachable; a recorded
-            // `lastError` means the last handshake failed.
-            reachable: record.last_error.is_none(),
-            latency: None,
-            agents: sessions.get(&record.url).cloned().unwrap_or_default(),
-            clock_warning: false,
-            oracle: record
-                .identity
-                .as_ref()
-                .map(|identity| identity.oracle.clone())
-                .filter(|oracle| !oracle.is_empty()),
-            resolved_ip: federation_resolve_ip(&record.url),
-            node_unique: federation_node_unique(&node_counts, record.node.as_deref()),
-            auth_ok: record.auth_ok,
+        .map(|record| {
+            let outcome = outcomes.get(&record.url);
+            FederationStatusPeer {
+                url: record.url.clone(),
+                node: record.node.clone(),
+                // A peer whose last probe left no error is reachable; a recorded
+                // `lastError` means the last handshake failed.
+                reachable: record.last_error.is_none(),
+                latency: None,
+                agents: outcome.map(|outcome| outcome.0.clone()).unwrap_or_default(),
+                clock_warning: false,
+                oracle: record
+                    .identity
+                    .as_ref()
+                    .map(|identity| identity.oracle.clone())
+                    .filter(|oracle| !oracle.is_empty()),
+                resolved_ip: federation_resolve_ip(&record.url),
+                node_unique: federation_node_unique(&node_counts, record.node.as_deref()),
+                auth_ok: record.auth_ok,
+                fetch_error: outcome.and_then(|outcome| outcome.1.clone()),
+            }
         })
         .collect();
     FederationStatusPayload {
@@ -421,11 +453,11 @@ fn federation_sessions_endpoint(
     let host = endpoint.host_str()?.to_owned();
     let port = endpoint.port_or_known_default().unwrap_or(3456);
     if let Some(ip) = resolve(&host, port) {
-        // Fail closed: `set_ip_host` only errors for a non-IP host, which our
-        // resolver never yields — so `?` here means "give up the fetch" not
-        // "fall back to the hostname". Skipping the peer for one cycle beats
-        // silently connecting to the link-local address we were avoiding.
-        endpoint.set_ip_host(ip).ok()?;
+        // Fail OPEN: if pinning ever fails, keep the hostname and let the client
+        // resolve rather than abandoning the fetch — the previous `?` here turned
+        // a pin hiccup into a silent empty result (twin nit 1). `set_ip_host`
+        // only errors for a cannot-be-a-base URL, which http never is.
+        let _ = endpoint.set_ip_host(ip);
     }
     let base = endpoint.path().trim_end_matches('/').to_owned();
     endpoint.set_path(&format!("{base}/api/sessions"));
@@ -785,12 +817,15 @@ mod tests {
                 resolved_ip: Some("192.168.1.118".to_owned()),
                 node_unique: true,
                 auth_ok: None,
+                fetch_error: Some("GET http://192.168.1.118:3456/api/sessions: boom".to_owned()),
             }],
         };
         federation_redact_payload(&mut payload);
         // Topology detail hidden off-loopback…
         assert_eq!(payload.peers[0].url, "192.168.1.118");
         assert_eq!(payload.peers[0].resolved_ip, None);
+        // …the fetch error embeds the IP/URL, so it drops too…
+        assert_eq!(payload.peers[0].fetch_error, None);
         // …but the map itself (node, oracle, reachability, uniqueness) stays.
         assert_eq!(payload.peers[0].node.as_deref(), Some("m5"));
         assert_eq!(payload.peers[0].oracle.as_deref(), Some("atlas"));
@@ -864,16 +899,42 @@ mod tests {
             "a".to_owned(),
             federation_store_record("http://a.test:3456", "na", None, false),
         );
-        let mut sessions = BTreeMap::new();
-        sessions.insert(
-            "http://a.test:3456".to_owned(),
-            vec!["06-fb".to_owned(), "08-gpu".to_owned()],
+        store.peers.insert(
+            "b".to_owned(),
+            federation_store_record("http://b.test:3456", "nb", None, false),
         );
-        let mut payload = federation_payload_from_store(&store, &sessions);
-        assert_eq!(payload.peers[0].agents, vec!["06-fb", "08-gpu"]);
+        let mut outcomes = BTreeMap::new();
+        outcomes.insert(
+            "http://a.test:3456".to_owned(),
+            (vec!["06-fb".to_owned(), "08-gpu".to_owned()], None),
+        );
+        // A failed fetch carries WHY, so `agents: []` is never ambiguous.
+        outcomes.insert(
+            "http://b.test:3456".to_owned(),
+            (
+                Vec::new(),
+                Some("GET http://b.test:3456/api/sessions: timed out".to_owned()),
+            ),
+        );
+        let mut payload = federation_payload_from_store(&store, &outcomes);
+        let by_url = |u: &str| {
+            payload
+                .peers
+                .iter()
+                .find(|p| p.url == u)
+                .cloned()
+                .expect("peer")
+        };
+        assert_eq!(by_url("http://a.test:3456").agents, vec!["06-fb", "08-gpu"]);
+        assert_eq!(by_url("http://a.test:3456").fetch_error, None);
+        assert!(by_url("http://b.test:3456").agents.is_empty());
+        assert!(by_url("http://b.test:3456")
+            .fetch_error
+            .unwrap()
+            .contains("timed out"));
         federation_redact_payload(&mut payload);
         assert!(
-            payload.peers[0].agents.is_empty(),
+            payload.peers.iter().all(|p| p.agents.is_empty()),
             "off-loopback redaction drops session names"
         );
     }
