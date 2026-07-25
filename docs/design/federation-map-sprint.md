@@ -184,7 +184,32 @@ All three are generated from the live `peers.json` + a real `probe-all` sweep.
 
 **Messaging gap found**: `maw hey m5:33-maw-rs` / `maw hey m5` from black → `node 'm5' not in namedPeers or peers` even though `maw peers list` shows alias `m5` (node m5, 192.168.1.118). Cross-node hey resolves node from a `namedPeers` config that peers.json doesn't populate — a real federation-addressing gap, same family as #13 alias-shadowing. black→m5 pings currently fail (m5→black works); relaying via commit messages instead. Candidate follow-up.
 
-**Remaining**: #6/#7/#8 (peers_probe_rows extract + unstub `federation_default_state` reusing `HotReload` + prod-mount guard test), View #9/#10/#11/#15 (/fed page + /fed.json + `maw peers map` + fix door).
+- ✅ **#6/#7/#8** (`1bc6c0b9`): `/api/federation/status` returns real peers, live per request. `FederationState.status` → `status_override: Option` (None in prod → `federation_status_get` reads the peer store fresh; tests inject Some). Pure `federation_payload_from_store` extends the payload with `oracle` (real identity), `resolved_ip` (DNS, loopback trap), `node_unique` (dup-node → fake Healthy). `federation_load_real_peer_store` reads the same peers.json as `maw peers`. #8 guard tests (deterministic): maps 3 peers, flags dup nodes/reachability + asserts default-state stays live. **#6** folded in — mapping centralized in `federation_payload_from_store` rather than a separate maw-peer extraction; `maw peers map` reuses the peers.json→row path. **Verified live**: old binary → `{"local_url":"","peers":[]}`; new → the real m5 peer with `oracle`/`resolved_ip`/`node_unique`.
+- ✅ **#10** (`f785db0c`): `maw peers map` — terminal federation map (node, oracle, up/down, resolved IP, `loopback-self`/`dup-node` flags). Pure `peers_map_rows` with the resolver injected (testable without DNS). **Dogfooded live** on black.
+- ✅ **#9 + #11** (`7c233181`): `/fed.json` (federation payload OUTSIDE the `/api/` gate, redacted off-loopback: url→host, resolved_ip dropped, map kept) + `/fed` + `/` = one self-contained inline page (no CDN, CSP-safe, theme-aware) that fetches `/fed.json` and renders a card per node with loopback-self/dup-node/auth-fail warning chips. The door stops advertising `maw ui build`. `federation_redact_payload` tested.
+
+**Deferred (documented) — #15** (fleet aggregation): pull each peer's `/api/sessions` during the probe cycle into the payload's `agents` field (already present, empty). Heaviest piece (cross-peer HTTP + caching in the probe cycle); the map ships without it — cards show node/oracle/reachability/flags today, sessions-per-node is the next increment. Also **auth_ok** (Truth #4 slot) still unpopulated: wire a read-only signed GET `/api/trust` in the probe and surface it in `FederationStatusPeer.auth_ok` + a card chip.
+
+## Retro / scorecard (nat@black.local, 2026-07-25)
+
+| task | shipped | verified |
+|---|---|---|
+| Truth #2/#3 | `/info` real node + oracle | tests |
+| Truth #4 | probe resolved_ip + loopback_self (+ auth_ok slot) | 4 tests + live DNS |
+| Truth #5 | stale_age_ms ISO+epoch | test |
+| #17 | decision code + hint on 401 | 3 tests, m5 verified 49 |
+| #18 | registry session:window tiebreak | m5 verified live (7 candidates) |
+| #16 | peer_pubkeys hot-reload (HotReload<T>) | 2 tests |
+| #6/#7/#8 | `/api/federation/status` live + guard | 3 tests + **live curl** |
+| #10 | `maw peers map` | test + **dogfooded** |
+| #9/#11 | `/fed.json` + `/fed` + honest door | test + live |
+
+**8 commits**, all gated (test + clippy -D warnings + fmt) + pushed to `agents/federation-map`.
+Expected-vs-actual surprises: (1) `maw peers map` came out cleaner than a maw-peer
+extraction (#6 folded); (2) the `federation_default_state` freeze was the SAME pattern
+as `peer_pubkeys` (#16) and `#524` — one `HotReload`/read-at-use mental model covered
+all three; (3) two pre-existing non-hermetic tests + a black→m5 `maw hey` addressing gap
+surfaced as free findings (candidates below). Remaining: #15 + auth_ok wiring.
 
 **Env surprises on black** (for next session): `rtk` NOT installed here; `rg` output is MANGLED (identifiers→`n`) — use `grep`/Read tool instead. `fd` absent — use `git ls-files | grep`. Cargo at `~/.cargo/bin` (export PATH). black is the ONLY machine with #665 built (`v26.7.23-alpha.1711-4-g3979e884`); m5 + GitHub release still buggy → cut a fresh alpha after fed-map merges (use `maw calver`, NOT skill `/calver`). Binary is named `maw-rs` not `maw` (`cp target/release/maw-rs ~/.local/bin/maw`).
 
