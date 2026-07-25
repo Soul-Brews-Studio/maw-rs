@@ -188,7 +188,8 @@ All three are generated from the live `peers.json` + a real `probe-all` sweep.
 - ✅ **#10** (`f785db0c`): `maw peers map` — terminal federation map (node, oracle, up/down, resolved IP, `loopback-self`/`dup-node` flags). Pure `peers_map_rows` with the resolver injected (testable without DNS). **Dogfooded live** on black.
 - ✅ **#9 + #11** (`7c233181`): `/fed.json` (federation payload OUTSIDE the `/api/` gate, redacted off-loopback: url→host, resolved_ip dropped, map kept) + `/fed` + `/` = one self-contained inline page (no CDN, CSP-safe, theme-aware) that fetches `/fed.json` and renders a card per node with loopback-self/dup-node/auth-fail warning chips. The door stops advertising `maw ui build`. `federation_redact_payload` tested.
 
-**Deferred (documented) — #15** (fleet aggregation): pull each peer's `/api/sessions` during the probe cycle into the payload's `agents` field (already present, empty). Heaviest piece (cross-peer HTTP + caching in the probe cycle); the map ships without it — cards show node/oracle/reachability/flags today, sessions-per-node is the next increment. Also **auth_ok** (Truth #4 slot) still unpopulated: wire a read-only signed GET `/api/trust` in the probe and surface it in `FederationStatusPeer.auth_ok` + a card chip.
+- ✅ **auth_ok** (Truth #4 slot completed): the probe learns whether OUR signed requests are trusted by a peer via a **read-only** signed `POST /api/probe` (verifies the v3 from-signature, returns `{ok:true,sessions:[]}` — no side effect). `ReqwestHttpTransportIo::probe_peer_auth` + `federation_probe_auth` reuse the exact send-path assembly (`resolve_hey_wire_from` + peer key + federation token), so a green result means a real `maw hey` would also authenticate. Persisted to `peers.json` (`authOk`) + surfaced in `maw peers map` (`auth-fail`), `FederationStatusPeer.auth_ok`, and the `/fed` card. **Finding**: the sprint suggested a read-only GET `/api/trust`, but `api_trust_list/add/revoke` call **no** `verify_protected_request` (only the token gate) — a signature never changes their 200; the trust routes' missing from-verification is a separate gap. Of the from-verified routes only `POST /api/probe` is side-effect-free. **Live on black**: `/api/probe` verifies correctly (unsigned → 401, loopback → 200); `auth_ok` reads `None` because black's CLI can't assemble a signable identity (`config.node` is null and the federation token is a serve-side secret) — the **safe** fallback (never a false red), needing `config.node` + a CLI-visible token to emit true/false.
+- ✅ **#15** (fleet aggregation): serve fetches every peer's `/api/sessions` server-side on a 15s TTL cycle (`federation_fleet_sessions`, concurrent via `join_all`, lock never held across await) → the payload's `agents` field carries each node's session names; `/fed` cards show a session count + name chips; `maw peers map` unaffected. Off-loopback redaction drops `agents` too. Never fans out from the browser.
 
 ## Retro / scorecard (nat@black.local, 2026-07-25)
 
@@ -202,9 +203,12 @@ All three are generated from the live `peers.json` + a real `probe-all` sweep.
 | #16 | peer_pubkeys hot-reload (HotReload<T>) | 2 tests |
 | #6/#7/#8 | `/api/federation/status` live + guard | 3 tests + **live curl** |
 | #10 | `maw peers map` | test + **dogfooded** |
-| #9/#11 | `/fed.json` + `/fed` + honest door | test + live |
+| #9/#11 | `/fed.json` + `/fed` + honest door | test + **live loopback+LAN redaction** |
+| auth_ok | signed `POST /api/probe` → persisted + surfaced | tests + **endpoint verified live** (safe `None` on black) |
+| #15 | fleet `/api/sessions` → `agents` (TTL, server-side) | tests + live |
 
-**8 commits**, all gated (test + clippy -D warnings + fmt) + pushed to `agents/federation-map`.
+**12 commits**, all gated (test + clippy -D warnings + fmt) + pushed to `agents/federation-map`.
+Every backlog item that wasn't explicitly "filed separately" (#12 security / #13 alias-shadow / #14 retro) is now shipped.
 Expected-vs-actual surprises: (1) `maw peers map` came out cleaner than a maw-peer
 extraction (#6 folded); (2) the `federation_default_state` freeze was the SAME pattern
 as `peer_pubkeys` (#16) and `#524` — one `HotReload`/read-at-use mental model covered
