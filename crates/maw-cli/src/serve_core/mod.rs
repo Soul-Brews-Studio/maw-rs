@@ -100,6 +100,7 @@ pub struct ServecoreSharedState {
     pub lifecycle: ServecoreLifecycle,
     pub hub_workspaces: Arc<Vec<WorkspaceConfig>>,
     pub agents_node: Option<String>,
+    pub agents_oracle: Option<String>,
     pub agents_snapshot: Option<Arc<Vec<ServecoreAgentPane>>>,
     pub tmux_sessions_snapshot: Option<Arc<Vec<TmuxSession>>>,
     pub auth_workspace_key: Option<String>,
@@ -118,6 +119,7 @@ impl Default for ServecoreSharedState {
             lifecycle: ServecoreLifecycle::default(),
             hub_workspaces: Arc::new(Vec::new()),
             agents_node: None,
+            agents_oracle: None,
             agents_snapshot: None,
             tmux_sessions_snapshot: None,
             auth_workspace_key: None,
@@ -138,6 +140,12 @@ impl ServecoreSharedState {
     #[must_use]
     pub fn servecore_with_agents_node(mut self, node: Option<String>) -> Self {
         self.agents_node = node;
+        self
+    }
+
+    #[must_use]
+    pub fn servecore_with_agents_oracle(mut self, oracle: Option<String>) -> Self {
+        self.agents_oracle = oracle;
         self
     }
 
