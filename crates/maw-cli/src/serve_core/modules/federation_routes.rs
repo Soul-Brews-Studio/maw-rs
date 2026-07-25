@@ -313,8 +313,19 @@ async fn federation_fleet_sessions(urls: &[String]) -> BTreeMap<String, Vec<Stri
 /// Fetch one peer's `/api/sessions` and keep just the session names (the map
 /// shows which sessions live on each node, not their internals).
 async fn federation_fetch_peer_sessions(client: &reqwest::Client, url: &str) -> Vec<String> {
-    let endpoint = format!("{}/api/sessions", url.trim_end_matches('/'));
-    let Ok(response) = client.get(&endpoint).send().await else {
+    let Ok(mut endpoint) = reqwest::Url::parse(url) else {
+        return Vec::new();
+    };
+    // Pin the connection to a routable address so a zone-less link-local IPv6
+    // (which getaddrinfo may return first) never silently sinks the fetch.
+    if let Some(host) = endpoint.host_str().map(str::to_owned) {
+        let port = endpoint.port_or_known_default().unwrap_or(3456);
+        if let Some(addr) = federation_first_routable_addr(&host, port) {
+            let _ = endpoint.set_ip_host(addr.ip());
+        }
+    }
+    endpoint.set_path("/api/sessions");
+    let Ok(response) = client.get(endpoint).send().await else {
         return Vec::new();
     };
     if !response.status().is_success() {
@@ -396,18 +407,49 @@ fn federation_load_real_peer_store() -> maw_peer::PeerStoreFile {
     maw_peer::load_peer_store(&env)
 }
 
-/// Resolve a peer URL's host to its first IP (best effort) so the map can catch
-/// the loopback-to-self trap. `None` when the URL has no host or DNS fails.
+/// Resolve a peer URL's host to a **routable** IP so the map can catch the
+/// loopback-to-self trap. `None` when the URL has no host or DNS fails.
 fn federation_resolve_ip(url: &str) -> Option<String> {
-    use std::net::ToSocketAddrs;
     let parsed = reqwest::Url::parse(url).ok()?;
     let host = parsed.host_str()?;
     let port = parsed.port_or_known_default().unwrap_or(3456);
-    (host, port)
+    federation_first_routable_addr(host, port).map(|addr| addr.ip().to_string())
+}
+
+/// First routable address for `host:port`, preferring IPv4. For a non-loopback
+/// host, link-local (`fe80::/10`, `169.254/16`) and loopback addresses are
+/// skipped — `getaddrinfo` often returns a link-local IPv6 first, and picking it
+/// makes every connection to that peer fail silently (twin-found: black
+/// resolved to `fe80::…`, so m5's session aggregation saw `agents=[]`). A
+/// loopback host keeps loopback so the `m5.local → 127.0.0.1` self-trap still flags.
+fn federation_first_routable_addr(host: &str, port: u16) -> Option<std::net::SocketAddr> {
+    use std::net::ToSocketAddrs;
+    let host_is_loopback = federation_host_is_loopback(host);
+    let mut addrs = (host, port)
         .to_socket_addrs()
         .ok()?
-        .next()
-        .map(|addr| addr.ip().to_string())
+        .filter(|addr| host_is_loopback || federation_addr_is_routable(&addr.ip()))
+        .collect::<Vec<_>>();
+    // Prefer IPv4 — LAN peers answer on it and it dodges zone-less IPv6.
+    addrs.sort_by_key(|addr| u8::from(addr.is_ipv6()));
+    addrs.into_iter().next()
+}
+
+fn federation_host_is_loopback(host: &str) -> bool {
+    host == "localhost"
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
+fn federation_addr_is_routable(ip: &std::net::IpAddr) -> bool {
+    if ip.is_loopback() {
+        return false;
+    }
+    match ip {
+        std::net::IpAddr::V4(v4) => !v4.is_link_local(),
+        std::net::IpAddr::V6(v6) => (v6.segments()[0] & 0xffc0) != 0xfe80,
+    }
 }
 
 fn federation_parse_query(query: &BTreeMap<String, String>) -> Result<FederationQuery, String> {
@@ -728,6 +770,33 @@ mod tests {
         assert_eq!(payload.peers[0].node.as_deref(), Some("m5"));
         assert_eq!(payload.peers[0].oracle.as_deref(), Some("atlas"));
         assert!(payload.peers[0].reachable && payload.peers[0].node_unique);
+    }
+
+    #[test]
+    fn federation_addr_routable_skips_loopback_and_link_local() {
+        use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+        assert!(federation_addr_is_routable(&IpAddr::V4(Ipv4Addr::new(
+            192, 168, 1, 184
+        ))));
+        assert!(!federation_addr_is_routable(&IpAddr::V4(
+            Ipv4Addr::LOCALHOST
+        )));
+        assert!(!federation_addr_is_routable(&IpAddr::V4(Ipv4Addr::new(
+            169, 254, 1, 1
+        ))));
+        assert!(!federation_addr_is_routable(&IpAddr::V6(
+            "fe80::da5e:d3ff:fe0d:c99f".parse().unwrap()
+        )));
+        assert!(federation_addr_is_routable(&IpAddr::V6(
+            "2001:db8::1".parse().unwrap()
+        )));
+        assert!(!federation_addr_is_routable(&IpAddr::V6(
+            Ipv6Addr::LOCALHOST
+        )));
+        // A loopback host keeps loopback (the m5.local→127.0.0.1 self-trap).
+        assert!(federation_host_is_loopback("localhost"));
+        assert!(federation_host_is_loopback("127.0.0.1"));
+        assert!(!federation_host_is_loopback("black.local"));
     }
 
     #[test]
