@@ -42,16 +42,36 @@ async fn info_get(Extension(state): Extension<Arc<ServecoreSharedState>>) -> Jso
 /// (matches `config_init`'s `$HOSTNAME` default) instead of the constant
 /// `"local"`, so a federation map can tell one node from another.
 fn info_node_fallback() -> String {
-    // `$HOSTNAME` is unset for a detached serve (nohup), so fall through to
-    // `/etc/hostname` before the literal `"local"` — otherwise every peer that
-    // probes this node pins it as "local", which collides `node_unique` the
-    // moment a second node also answers "local" (twin-found on black).
-    std::env::var("HOSTNAME")
+    // `$HOSTNAME` is unset for a detached serve (nohup), and `/etc/hostname`
+    // does not exist on macOS — so a darwin node without a config `node` used to
+    // fall straight to the literal `"local"`, and every peer probing it pinned
+    // it as "local" (collides `node_unique` the moment a second node also
+    // answers "local"; twin-found across the darwin+linux fleet). `hostname -s`
+    // is the cross-platform source. Resolved once per process — `/info` is hot.
+    static NODE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    NODE.get_or_init(|| {
+        std::env::var("HOSTNAME")
+            .ok()
+            .or_else(info_hostname_short)
+            .or_else(|| std::fs::read_to_string("/etc/hostname").ok())
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "local".to_owned())
+    })
+    .clone()
+}
+
+/// `hostname -s` — the short hostname, works on macOS and Linux where
+/// `$HOSTNAME`/`/etc/hostname` may be absent. `None` on any failure.
+fn info_hostname_short() -> Option<String> {
+    std::process::Command::new("hostname")
+        .arg("-s")
+        .output()
         .ok()
-        .or_else(|| std::fs::read_to_string("/etc/hostname").ok())
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "local".to_owned())
 }
 
 fn info_payload(node: Option<&str>, oracle: Option<&str>) -> Value {
