@@ -24,7 +24,8 @@ fn peer(added_at: &str, last_seen: Option<&str>) -> PeerRecord {
         identity: None,
         one_way: None,
         last_symmetric_check: None,
-    }
+            auth_ok: None,
+        }
 }
 
 #[test]
@@ -147,6 +148,7 @@ fn peer_store_path_empty_stale_tmp_save_and_load_round_trip_match_maw_js() {
             identity: None,
             one_way: None,
             last_symmetric_check: None,
+            auth_ok: None,
         },
     );
     save_peer_store(&env, &PeerStoreFile { version: 1, peers }).unwrap();

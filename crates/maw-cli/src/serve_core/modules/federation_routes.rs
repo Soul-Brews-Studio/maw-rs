@@ -1,12 +1,26 @@
 use super::ServecoreModuleRegistration;
 use crate::serve_core::ServecoreLifecycleModule;
 use axum::{
-    extract::Query, http::StatusCode, response::IntoResponse, routing::get, Extension, Json, Router,
+    extract::{ConnectInfo, Query},
+    http::StatusCode,
+    response::IntoResponse,
+    routing::get,
+    Extension, Json, Router,
 };
 use maw_transport::FederationStatus;
 use serde::Serialize;
 use serde_json::json;
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    net::SocketAddr,
+    sync::{Arc, Mutex, OnceLock},
+    time::Duration,
+};
+
+/// How long serve trusts its aggregated fleet-session snapshot before a request
+/// triggers a fresh sweep — small enough to feel live, large enough that a burst
+/// of page loads causes at most one fan-out per window (#15).
+const FLEET_SESSIONS_TTL_MS: u64 = 15_000;
 
 const FEDERATION_DEFAULT_LIMIT: usize = 50;
 
@@ -44,13 +58,49 @@ where
         .route("/api/federation/status", get(federation_status_get))
         .route("/api/peers/discoveries", get(federation_discoveries_get))
         .route("/api/peers/discovered", get(federation_discoveries_get))
+        // `/fed.json` is served OUTSIDE the `/api/` gate (the token gate only
+        // guards `/api/*`), so a browser on another machine can fetch it once a
+        // token exists — which means it MUST redact off-loopback (#9).
+        .route("/fed.json", get(federation_fed_json_get))
         .layer(Extension(Arc::new(state)))
+}
+
+async fn federation_fed_json_get(ConnectInfo(peer): ConnectInfo<SocketAddr>) -> impl IntoResponse {
+    let mut payload = federation_live_payload().await;
+    if !peer.ip().is_loopback() {
+        federation_redact_payload(&mut payload);
+    }
+    Json(payload).into_response()
+}
+
+/// Strip topology detail that a remote (non-loopback) viewer should not see:
+/// the full URL collapses to its host, and the resolved IP is dropped. Node,
+/// oracle, reachability and the `node_unique` flag stay — they are the map.
+fn federation_redact_payload(payload: &mut FederationStatusPayload) {
+    for peer in &mut payload.peers {
+        peer.url = federation_host_only(&peer.url);
+        peer.resolved_ip = None;
+        // Session names reveal what each node is running — off-loopback keep only
+        // the count is still too much detail, so drop them entirely.
+        peer.agents = Vec::new();
+    }
+}
+
+fn federation_host_only(url: &str) -> String {
+    reqwest::Url::parse(url)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(str::to_owned))
+        .unwrap_or_else(|| url.to_owned())
 }
 
 async fn federation_status_get(
     Extension(state): Extension<Arc<FederationState>>,
 ) -> impl IntoResponse {
-    Json(federation_status_payload(&state.status)).into_response()
+    let payload = match &state.status_override {
+        Some(status) => federation_status_payload(status),
+        None => federation_live_payload().await,
+    };
+    Json(payload).into_response()
 }
 
 async fn federation_discoveries_get(
@@ -73,16 +123,16 @@ async fn federation_discoveries_get(
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct FederationState {
-    status: FederationStatus,
+    /// Test-only injected status. In production this is `None`, so the handler
+    /// reads the real peer store **per request** (fixing the freeze where the
+    /// status was baked empty at mount time — #7, same class as #524).
+    status_override: Option<FederationStatus>,
     discoveries: Vec<FederationDiscoveredPeer>,
 }
 
 fn federation_default_state() -> FederationState {
     FederationState {
-        status: FederationStatus {
-            local_url: String::new(),
-            peers: Vec::new(),
-        },
+        status_override: None,
         discoveries: Vec::new(),
     }
 }
@@ -120,6 +170,19 @@ struct FederationStatusPeer {
     latency: Option<u64>,
     agents: Vec<String>,
     clock_warning: bool,
+    /// Real oracle name from the peer's pinned identity — no longer the fake
+    /// fleet-wide `"mawjs"` default now that `/info` returns `oracle` (Truth #3).
+    oracle: Option<String>,
+    /// IP the peer URL resolves to, so the map can flag the
+    /// `m5.local → 127.0.0.1` loopback-to-self trap (Truth #4).
+    resolved_ip: Option<String>,
+    /// `true` when no other peer shares this `node` name. A duplicate node makes
+    /// `matches_local_peer` match someone else's row as "us" → fake Healthy.
+    node_unique: bool,
+    /// Whether our signed requests authenticate to this peer (`POST /api/probe`).
+    /// `None` = not checked / unreachable; `Some(false)` = reachable but auth
+    /// refused — the `/info`-OK-but-`/api/send`-401 gap the map must show.
+    auth_ok: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -150,6 +213,7 @@ struct FederationDiscoveryRow {
 }
 
 fn federation_status_payload(status: &FederationStatus) -> FederationStatusPayload {
+    let node_counts = federation_node_counts(status.peers.iter().map(|peer| peer.node.as_deref()));
     FederationStatusPayload {
         local_url: status.local_url.clone(),
         peers: status
@@ -162,9 +226,188 @@ fn federation_status_payload(status: &FederationStatus) -> FederationStatusPaylo
                 latency: peer.latency,
                 agents: peer.agents.clone(),
                 clock_warning: peer.clock_warning,
+                oracle: None,
+                resolved_ip: None,
+                node_unique: federation_node_unique(&node_counts, peer.node.as_deref()),
+                auth_ok: None,
             })
             .collect(),
     }
+}
+
+/// Count how many peers carry each `node` name, so a row can flag itself unique.
+fn federation_node_counts<'a>(
+    nodes: impl Iterator<Item = Option<&'a str>>,
+) -> BTreeMap<String, usize> {
+    let mut counts = BTreeMap::new();
+    for node in nodes.flatten().filter(|node| !node.is_empty()) {
+        *counts.entry(node.to_owned()).or_insert(0) += 1;
+    }
+    counts
+}
+
+fn federation_node_unique(counts: &BTreeMap<String, usize>, node: Option<&str>) -> bool {
+    node.is_some_and(|node| counts.get(node).copied().unwrap_or(0) <= 1)
+}
+
+/// Build the federation status payload from the real peer store (`peers.json`),
+/// read fresh on each request so an added/removed/re-probed peer shows up
+/// without restarting serve. This is the production replacement for the old
+/// empty `federation_default_state` stub (#7).
+async fn federation_live_payload() -> FederationStatusPayload {
+    let store = federation_load_real_peer_store();
+    let urls = store
+        .peers
+        .values()
+        .map(|record| record.url.clone())
+        .collect::<Vec<_>>();
+    let sessions = federation_fleet_sessions(&urls).await;
+    federation_payload_from_store(&store, &sessions)
+}
+
+/// `(fetched_at_ms, sessions-by-peer-url)` guarded for the TTL fleet cache.
+type FleetSessionsCache = Mutex<(u64, BTreeMap<String, Vec<String>>)>;
+
+fn fleet_sessions_cache() -> &'static FleetSessionsCache {
+    static CACHE: OnceLock<FleetSessionsCache> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new((0, BTreeMap::new())))
+}
+
+/// Session names per peer URL, aggregated **server-side** on a TTL cycle — the
+/// browser never fans out to peers (CORS + auth + N connections). The lock is
+/// never held across the `.await`, so concurrent requests at most double a
+/// sweep (idempotent) rather than deadlock (#15).
+async fn federation_fleet_sessions(urls: &[String]) -> BTreeMap<String, Vec<String>> {
+    let now = federation_now_millis();
+    if let Ok(guard) = fleet_sessions_cache().lock() {
+        if !guard.1.is_empty() && now.saturating_sub(guard.0) < FLEET_SESSIONS_TTL_MS {
+            return guard.1.clone();
+        }
+    }
+    let Ok(client) = reqwest::Client::builder()
+        .timeout(Duration::from_millis(2500))
+        .build()
+    else {
+        return BTreeMap::new();
+    };
+    let fetches = urls.iter().cloned().map(|url| {
+        let client = client.clone();
+        async move {
+            let sessions = federation_fetch_peer_sessions(&client, &url).await;
+            (url, sessions)
+        }
+    });
+    let map = futures_util::future::join_all(fetches)
+        .await
+        .into_iter()
+        .filter(|(_, sessions)| !sessions.is_empty())
+        .collect::<BTreeMap<String, Vec<String>>>();
+    if let Ok(mut guard) = fleet_sessions_cache().lock() {
+        if !map.is_empty() {
+            *guard = (now, map.clone());
+        }
+    }
+    map
+}
+
+/// Fetch one peer's `/api/sessions` and keep just the session names (the map
+/// shows which sessions live on each node, not their internals).
+async fn federation_fetch_peer_sessions(client: &reqwest::Client, url: &str) -> Vec<String> {
+    let endpoint = format!("{}/api/sessions", url.trim_end_matches('/'));
+    let Ok(response) = client.get(&endpoint).send().await else {
+        return Vec::new();
+    };
+    if !response.status().is_success() {
+        return Vec::new();
+    }
+    let Ok(value) = response.json::<serde_json::Value>().await else {
+        return Vec::new();
+    };
+    value
+        .as_array()
+        .map(|sessions| {
+            sessions
+                .iter()
+                .filter_map(|session| session.get("name").and_then(serde_json::Value::as_str))
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Pure mapping from a peer store (+ aggregated fleet sessions) to the status
+/// payload — the deterministic core of `federation_live_payload`, split out so
+/// it is testable without disk/env/network.
+fn federation_payload_from_store(
+    store: &maw_peer::PeerStoreFile,
+    sessions: &BTreeMap<String, Vec<String>>,
+) -> FederationStatusPayload {
+    let node_counts =
+        federation_node_counts(store.peers.values().map(|record| record.node.as_deref()));
+    let peers = store
+        .peers
+        .values()
+        .map(|record| FederationStatusPeer {
+            url: record.url.clone(),
+            node: record.node.clone(),
+            // A peer whose last probe left no error is reachable; a recorded
+            // `lastError` means the last handshake failed.
+            reachable: record.last_error.is_none(),
+            latency: None,
+            agents: sessions.get(&record.url).cloned().unwrap_or_default(),
+            clock_warning: false,
+            oracle: record
+                .identity
+                .as_ref()
+                .map(|identity| identity.oracle.clone())
+                .filter(|oracle| !oracle.is_empty()),
+            resolved_ip: federation_resolve_ip(&record.url),
+            node_unique: federation_node_unique(&node_counts, record.node.as_deref()),
+            auth_ok: record.auth_ok,
+        })
+        .collect();
+    FederationStatusPayload {
+        local_url: String::new(),
+        peers,
+    }
+}
+
+/// Read the real `peers.json` the same way serve's startup warnings do, honoring
+/// `PEERS_FILE`/`MAW_HOME`/XDG overrides so serve and `maw peers` agree.
+fn federation_load_real_peer_store() -> maw_peer::PeerStoreFile {
+    let home = std::env::var_os("HOME")
+        .map_or_else(|| std::path::PathBuf::from("."), std::path::PathBuf::from);
+    let vars = [
+        "PEERS_FILE",
+        "MAW_HOME",
+        "MAW_STATE_DIR",
+        "MAW_XDG",
+        "XDG_STATE_HOME",
+        "MAW_CONFIG_DIR",
+        "XDG_CONFIG_HOME",
+        "MAW_DATA_DIR",
+        "XDG_DATA_HOME",
+        "MAW_CACHE_DIR",
+        "XDG_CACHE_HOME",
+    ]
+    .into_iter()
+    .filter_map(|key| std::env::var(key).ok().map(|value| (key, value)));
+    let env = maw_peer::PeerStoreEnv::with_vars(home, vars);
+    maw_peer::load_peer_store(&env)
+}
+
+/// Resolve a peer URL's host to its first IP (best effort) so the map can catch
+/// the loopback-to-self trap. `None` when the URL has no host or DNS fails.
+fn federation_resolve_ip(url: &str) -> Option<String> {
+    use std::net::ToSocketAddrs;
+    let parsed = reqwest::Url::parse(url).ok()?;
+    let host = parsed.host_str()?;
+    let port = parsed.port_or_known_default().unwrap_or(3456);
+    (host, port)
+        .to_socket_addrs()
+        .ok()?
+        .next()
+        .map(|addr| addr.ip().to_string())
 }
 
 fn federation_parse_query(query: &BTreeMap<String, String>) -> Result<FederationQuery, String> {
@@ -392,10 +635,134 @@ mod tests {
         assert_eq!(response.peers[1].node, "older");
     }
 
+    fn federation_store_record(
+        url: &str,
+        node: &str,
+        oracle: Option<&str>,
+        errored: bool,
+    ) -> maw_peer::PeerRecord {
+        maw_peer::PeerRecord {
+            url: url.to_owned(),
+            node: Some(node.to_owned()),
+            added_at: "2026-07-25T00:00:00Z".to_owned(),
+            last_seen: Some("2026-07-25T00:00:00Z".to_owned()),
+            last_error: errored.then(|| maw_peer::ProbeLastError {
+                code: maw_peer::ProbeErrorCode::Dns,
+                message: "getaddrinfo ENOTFOUND".to_owned(),
+                at: "2026-07-25T00:00:00Z".to_owned(),
+            }),
+            nickname: None,
+            pubkey: None,
+            pubkey_first_seen: None,
+            identity: oracle.map(|oracle| maw_peer::PeerIdentity {
+                oracle: oracle.to_owned(),
+                node: node.to_owned(),
+            }),
+            one_way: None,
+            last_symmetric_check: None,
+            auth_ok: None,
+        }
+    }
+
+    #[test]
+    fn federation_payload_from_store_maps_peers_flags_duplicate_nodes_and_reachability() {
+        let mut store = maw_peer::PeerStoreFile::default();
+        store.peers.insert(
+            "a".to_owned(),
+            federation_store_record("http://a.test:3456", "dup", Some("atlas"), false),
+        );
+        store.peers.insert(
+            "b".to_owned(),
+            federation_store_record("http://b.test:3456", "dup", None, true),
+        );
+        store.peers.insert(
+            "c".to_owned(),
+            federation_store_record("http://c.test:3456", "solo", Some("nova"), false),
+        );
+
+        let payload = federation_payload_from_store(&store, &BTreeMap::new());
+        assert_eq!(payload.peers.len(), 3, "real peers, not the empty stub");
+
+        let by_node = |node: &str| {
+            payload
+                .peers
+                .iter()
+                .find(|peer| peer.node.as_deref() == Some(node))
+                .cloned()
+                .expect("peer present")
+        };
+        // Two peers share "dup" → neither is unique; "solo" is.
+        assert!(!by_node("dup").node_unique);
+        assert!(by_node("solo").node_unique);
+        // Real oracle from identity, no longer the fake fleet-wide "mawjs".
+        assert_eq!(by_node("solo").oracle.as_deref(), Some("nova"));
+        // last_error present → not reachable.
+        assert!(payload
+            .peers
+            .iter()
+            .any(|peer| peer.node.as_deref() == Some("dup") && !peer.reachable));
+    }
+
+    #[test]
+    fn federation_redact_payload_hides_url_and_ip_but_keeps_the_map() {
+        let mut payload = FederationStatusPayload {
+            local_url: "http://local:3456".to_owned(),
+            peers: vec![FederationStatusPeer {
+                url: "http://192.168.1.118:3456".to_owned(),
+                node: Some("m5".to_owned()),
+                reachable: true,
+                latency: None,
+                agents: Vec::new(),
+                clock_warning: false,
+                oracle: Some("atlas".to_owned()),
+                resolved_ip: Some("192.168.1.118".to_owned()),
+                node_unique: true,
+                auth_ok: None,
+            }],
+        };
+        federation_redact_payload(&mut payload);
+        // Topology detail hidden off-loopback…
+        assert_eq!(payload.peers[0].url, "192.168.1.118");
+        assert_eq!(payload.peers[0].resolved_ip, None);
+        // …but the map itself (node, oracle, reachability, uniqueness) stays.
+        assert_eq!(payload.peers[0].node.as_deref(), Some("m5"));
+        assert_eq!(payload.peers[0].oracle.as_deref(), Some("atlas"));
+        assert!(payload.peers[0].reachable && payload.peers[0].node_unique);
+    }
+
+    #[test]
+    fn federation_payload_maps_fleet_sessions_and_redaction_clears_them() {
+        let mut store = maw_peer::PeerStoreFile::default();
+        store.peers.insert(
+            "a".to_owned(),
+            federation_store_record("http://a.test:3456", "na", None, false),
+        );
+        let mut sessions = BTreeMap::new();
+        sessions.insert(
+            "http://a.test:3456".to_owned(),
+            vec!["06-fb".to_owned(), "08-gpu".to_owned()],
+        );
+        let mut payload = federation_payload_from_store(&store, &sessions);
+        assert_eq!(payload.peers[0].agents, vec!["06-fb", "08-gpu"]);
+        federation_redact_payload(&mut payload);
+        assert!(
+            payload.peers[0].agents.is_empty(),
+            "off-loopback redaction drops session names"
+        );
+    }
+
+    #[test]
+    fn federation_default_state_reads_live_never_a_baked_status() {
+        // The production mount must leave `status_override` empty so the handler
+        // reads the peer store live. Baking a status here (the old #524-class
+        // stub) would make the map lie — this guard flips if that regresses.
+        assert!(federation_default_state().status_override.is_none());
+    }
+
     #[tokio::test]
     async fn federation_real_wire_is_public_under_default_deny() {
         let state = FederationState {
-            status: FederationStatus {
+            status_override: Some(FederationStatus {
                 local_url: "http://local.test:3456".to_owned(),
                 peers: vec![FederationPeerStatus {
                     url: "http://paired.test:3456".to_owned(),
@@ -405,7 +772,7 @@ mod tests {
                     agents: vec!["paired:claude".to_owned()],
                     clock_warning: false,
                 }],
-            },
+            }),
             discoveries: vec![
                 federation_peer("paired", 1_700_000_000_000, true),
                 federation_peer("fresh", 1_700_000_005_000, false),

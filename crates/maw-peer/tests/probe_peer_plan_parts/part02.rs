@@ -12,7 +12,8 @@ fn probe_peer_plan_returns_structured_failures_like_maw_js_probe_peer() {
             nickname: None,
         }),
         identity: None,
-    });
+            resolved_ip: None, auth_ok: None,
+        });
     assert_eq!(dns.node, None);
     assert_eq!(
         dns.error.as_ref().map(|err| err.code),
@@ -32,7 +33,8 @@ fn probe_peer_plan_returns_structured_failures_like_maw_js_probe_peer() {
             ok: false,
         },
         identity: None,
-    });
+            resolved_ip: None, auth_ok: None,
+        });
     assert_eq!(
         http.error.as_ref().map(|err| err.code),
         Some(ProbeErrorCode::Http5xx)
@@ -48,7 +50,8 @@ fn probe_peer_plan_returns_structured_failures_like_maw_js_probe_peer() {
         dns_error: None,
         info: ProbeInfoOutcome::InvalidJson,
         identity: None,
-    });
+            resolved_ip: None, auth_ok: None,
+        });
     assert_eq!(
         invalid_json.error.as_ref().map(|err| err.code),
         Some(ProbeErrorCode::BadBody)
@@ -69,7 +72,8 @@ fn probe_peer_plan_returns_structured_failures_like_maw_js_probe_peer() {
             nickname: None,
         }),
         identity: None,
-    });
+            resolved_ip: None, auth_ok: None,
+        });
     assert_eq!(
         missing_maw.error.as_ref().map(|err| err.code),
         Some(ProbeErrorCode::BadBody)
@@ -90,7 +94,8 @@ fn probe_peer_plan_returns_structured_failures_like_maw_js_probe_peer() {
             nickname: Some("nameless".to_owned()),
         }),
         identity: None,
-    });
+            resolved_ip: None, auth_ok: None,
+        });
     assert_eq!(
         nameless.error.as_ref().map(|err| err.code),
         Some(ProbeErrorCode::BadBody)
@@ -112,7 +117,8 @@ fn probe_peer_plan_classifies_fetch_failures_with_context() {
             message: "connect ECONNREFUSED".to_owned(),
         },
         identity: None,
-    });
+            resolved_ip: None, auth_ok: None,
+        });
     assert_eq!(
         refused.error.as_ref().map(|err| err.code),
         Some(ProbeErrorCode::Refused)
@@ -130,7 +136,8 @@ fn probe_peer_plan_classifies_fetch_failures_with_context() {
             code: "UNABLE_TO_VERIFY_LEAF_SIGNATURE".to_owned(),
         },
         identity: None,
-    });
+            resolved_ip: None, auth_ok: None,
+        });
     assert_eq!(
         tls_non_error_throw.error.as_ref().map(|err| err.code),
         Some(ProbeErrorCode::Tls)
@@ -152,7 +159,8 @@ fn probe_peer_plan_classifies_fetch_failures_with_context() {
             message: "operation timed out".to_owned(),
         },
         identity: None,
-    });
+            resolved_ip: None, auth_ok: None,
+        });
     assert_eq!(
         timeout_name.error.as_ref().map(|err| err.code),
         Some(ProbeErrorCode::Timeout)

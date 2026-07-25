@@ -1639,6 +1639,47 @@ fn load_federation_token() -> Result<String, String> {
         .ok_or_else(|| "federationToken is required for peer federation auth".to_owned())
 }
 
+/// Read-only auth probe used by `maw peers` to learn whether OUR signed
+/// requests are trusted by a peer, without delivering anything: sign a
+/// `POST /api/probe` (the peer verifies the v3 from-signature and returns
+/// `{ok:true, sessions:[]}` — no side effect). Reuses the exact send-path
+/// credential assembly (`from`, peer key, federation token, signing), so a
+/// green result here means a real `maw hey` to this peer would also
+/// authenticate. `Some(true)` trusted, `Some(false)` refused (401/403),
+/// `None` when we cannot even sign (no key/token/identity) or on error.
+pub(crate) fn federation_probe_auth(peer_url: &str, timeout_ms: u64) -> Option<bool> {
+    let config = load_hey_config();
+    let sender_oracle = resolve_hey_sender_oracle_for_from(&config, None);
+    let from = resolve_hey_wire_from(None, &config, &sender_oracle).ok()?;
+    let peer_key = load_peer_key().ok()?;
+    let federation_token = load_federation_token().ok()?;
+    let request = PeerWakeRequest {
+        peer_url: peer_url.to_owned(),
+        target: String::new(),
+        task: None,
+        from,
+        federation_token,
+        peer_key,
+        timestamp: i64::try_from(current_epoch_seconds()).unwrap_or(i64::MAX),
+    };
+    // Own tokio runtime on a scratch thread so this stays callable from the
+    // synchronous probe path (mirrors peers_fetch_info).
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .ok()?;
+        let client = ReqwestHttpTransportIo::new(timeout_ms).ok()?;
+        runtime
+            .block_on(client.probe_peer_auth(&request))
+            .ok()
+            .flatten()
+    })
+    .join()
+    .ok()
+    .flatten()
+}
+
 fn generate_peer_key() -> Result<String, String> {
     let mut file = std::fs::File::open("/dev/urandom")
         .map_err(|error| format!("failed to open random peer key source: {error}"))?;

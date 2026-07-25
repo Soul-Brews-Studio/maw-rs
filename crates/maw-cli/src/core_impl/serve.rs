@@ -26,6 +26,10 @@ const DEFAULT_SERVE_BIND: &str = "0.0.0.0";
 const SERVE_FEED_MAX: usize = 200;
 const SERVE_LOG_TEXT_MAX: usize = 2_000;
 const SERVE_LOG_ERROR_MAX: usize = 1_000;
+/// How long serve trusts its cached `peers.json`/config pubkeys before a
+/// protected request triggers a reload — small so an added peer works within
+/// seconds, large enough to avoid re-reading the file on every request (#16).
+const PEER_PUBKEY_RELOAD_TTL_SECS: u64 = 3;
 const DELIVERY_IDEMPOTENCY_TTL_SECONDS: i64 = 24 * 60 * 60;
 #[cfg(test)]
 const NON_LOOPBACK_TEST_PEER: SocketAddr =
@@ -33,7 +37,7 @@ const NON_LOOPBACK_TEST_PEER: SocketAddr =
 
 struct ServeState {
     cached_pubkey: Option<String>,
-    peer_pubkeys: Vec<ServePeerPubkey>,
+    peer_pubkeys: HotReload<Vec<ServePeerPubkey>>,
     workspace_key: Option<String>,
     workspaces: Mutex<WorkspaceStore>,
     requests: Mutex<RequestReplyStore>,
@@ -274,7 +278,7 @@ async fn run_serve_async_impl(raw_args: &[String]) -> CliOutput {
     let api_token_auth = load_serve_api_token_auth();
     let app = serve_router(ServeState {
         cached_pubkey: args.cached_pubkey,
-        peer_pubkeys: load_inbound_peer_pubkeys(),
+        peer_pubkeys: HotReload::live(load_inbound_peer_pubkeys, PEER_PUBKEY_RELOAD_TTL_SECS),
         workspace_key: load_serve_workspace_key(),
         workspaces: Mutex::new(WorkspaceStore::default()),
         requests: Mutex::new(RequestReplyStore::default()),
@@ -439,6 +443,7 @@ fn serve_core_state(state: &ServeState) -> crate::serve_core::ServecoreSharedSta
     let core = crate::serve_core::ServecoreSharedState::default()
         .servecore_with_engine(Arc::new(crate::serve_core::ServecoreNativeEngine))
         .servecore_with_agents_node(load_hey_config().node)
+        .servecore_with_agents_oracle(load_hey_config().oracle)
         .servecore_with_auth(state.workspace_key.clone(), None);
     #[cfg(not(test))]
     let core = core.servecore_with_process_auth_pins();
@@ -2504,7 +2509,11 @@ fn verify_protected_request_outcome(
     }
     let now = verify_now(state);
     let auth_headers = extract_auth_headers(headers);
-    let cached_pubkey = match resolve_request_cached_pubkey(state, &auth_headers) {
+    let cached_pubkey = match resolve_request_cached_pubkey(
+        state,
+        &auth_headers,
+        u64::try_from(now).unwrap_or(0),
+    ) {
         Ok(pubkey) => pubkey,
         Err(decision) => {
             return ProtectedRequestOutcome::Reject {
@@ -2762,6 +2771,111 @@ fn load_serve_workspace_key() -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+/// Panicking loader for a [`HotReload::frozen`] value — it is never called
+/// because a frozen cache reports itself fresh forever.
+#[cfg(test)]
+fn hot_reload_frozen_loader<T>() -> T {
+    unreachable!("frozen HotReload never reloads")
+}
+
+/// A value loaded from disk once, then refreshed at most every `ttl_secs` so
+/// config / peer-store edits take effect **without restarting serve** — this is
+/// the fix for the freeze where `peer_pubkeys` was baked at startup, so a peer
+/// added after boot got `refuse-missing-peer-key` until a restart (#16).
+/// `frozen` builds a fixed value that never reloads (tests inject keys through
+/// it). Reusable by the federation status snapshot (#7), same freeze pattern.
+struct HotReload<T> {
+    cache: std::sync::RwLock<Option<(T, u64)>>,
+    loader: fn() -> T,
+    ttl_secs: u64,
+    hot: bool,
+}
+
+impl<T: Clone> HotReload<T> {
+    /// Live cache: (re)loads from `loader` when the value is missing or older
+    /// than `ttl_secs`.
+    fn live(loader: fn() -> T, ttl_secs: u64) -> Self {
+        Self {
+            cache: std::sync::RwLock::new(None),
+            loader,
+            ttl_secs,
+            hot: true,
+        }
+    }
+
+    /// Fixed value that never reloads — for tests that inject state directly.
+    #[cfg(test)]
+    fn frozen(value: T) -> Self {
+        Self {
+            cache: std::sync::RwLock::new(Some((value, 0))),
+            loader: hot_reload_frozen_loader::<T>,
+            ttl_secs: 0,
+            hot: false,
+        }
+    }
+
+    /// Current value, reloading first if hot and stale. Returns a clone so the
+    /// caller never holds the lock across its own work. A rare double reload
+    /// under concurrent staleness is harmless — the loads are idempotent.
+    fn get(&self, now_secs: u64) -> T {
+        if self.hot {
+            let stale = self
+                .cache
+                .read()
+                .ok()
+                .and_then(|guard| {
+                    guard
+                        .as_ref()
+                        .map(|(_, at)| now_secs.saturating_sub(*at) >= self.ttl_secs)
+                })
+                .unwrap_or(true);
+            if stale {
+                let value = (self.loader)();
+                if let Ok(mut guard) = self.cache.write() {
+                    *guard = Some((value.clone(), now_secs));
+                }
+                return value;
+            }
+        }
+        self.cache
+            .read()
+            .ok()
+            .and_then(|guard| guard.as_ref().map(|(value, _)| value.clone()))
+            .unwrap_or_else(|| (self.loader)())
+    }
+}
+
+#[cfg(test)]
+mod hot_reload_tests {
+    use super::HotReload;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static HOT_RELOAD_TEST_CALLS: AtomicU64 = AtomicU64::new(0);
+
+    fn counting_loader() -> u64 {
+        HOT_RELOAD_TEST_CALLS.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    #[test]
+    fn live_reloads_after_ttl_but_caches_within_the_window() {
+        HOT_RELOAD_TEST_CALLS.store(0, Ordering::SeqCst);
+        let cache = HotReload::live(counting_loader, 3);
+        assert_eq!(cache.get(100), 1); // first access loads
+        assert_eq!(cache.get(101), 1); // 1s later, within TTL → cached
+        assert_eq!(cache.get(102), 1); // 2s < 3s → still cached
+        assert_eq!(cache.get(103), 2); // 3s >= TTL → reloads (a peer added now is seen)
+        assert_eq!(cache.get(103), 2); // fresh again
+        assert_eq!(HOT_RELOAD_TEST_CALLS.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn frozen_never_reloads_even_far_in_the_future() {
+        let cache = HotReload::frozen(vec!["a".to_owned()]);
+        assert_eq!(cache.get(0), vec!["a".to_owned()]);
+        assert_eq!(cache.get(u64::MAX), vec!["a".to_owned()]);
+    }
+}
+
 fn load_inbound_peer_pubkeys() -> Vec<ServePeerPubkey> {
     let env = real_xdg_env();
     let mut entries = Vec::new();
@@ -2779,6 +2893,7 @@ fn load_inbound_peer_pubkeys() -> Vec<ServePeerPubkey> {
 fn resolve_request_cached_pubkey(
     state: &ServeState,
     headers: &Headers,
+    now_secs: u64,
 ) -> Result<Option<String>, &'static str> {
     if let Some(pubkey) = state
         .cached_pubkey
@@ -2791,14 +2906,16 @@ fn resolve_request_cached_pubkey(
     let Some(from) = request_from_sign_sender(headers) else {
         return Ok(None);
     };
-    if let Some(entry) = state.peer_pubkeys.iter().find(|entry| entry.from == from) {
+    // Reload (subject to TTL) so a peer added after serve booted is trusted
+    // without a restart (#16).
+    let peer_pubkeys = state.peer_pubkeys.get(now_secs);
+    if let Some(entry) = peer_pubkeys.iter().find(|entry| entry.from == from) {
         return Ok(Some(entry.pubkey.clone()));
     }
     let Some(node) = node_from_identity(&from) else {
         return Err("refuse-missing-peer-key");
     };
-    let mut node_matches = state
-        .peer_pubkeys
+    let mut node_matches = peer_pubkeys
         .iter()
         .filter(|entry| entry.node == node)
         .filter(|entry| !entry.pubkey.trim().is_empty());
@@ -3368,7 +3485,7 @@ mod serve_tests {
     fn serve_test_app(trust_store_path: std::path::PathBuf) -> Router {
         serve_router(ServeState {
             cached_pubkey: Some(KEY.to_owned()),
-            peer_pubkeys: Vec::new(),
+            peer_pubkeys: HotReload::frozen(Vec::new()),
             workspace_key: Some(KEY.to_owned()),
             workspaces: Mutex::new(WorkspaceStore::default()),
             requests: Mutex::new(RequestReplyStore::default()),
@@ -3393,7 +3510,7 @@ mod serve_tests {
     ) -> Router {
         serve_router(ServeState {
             cached_pubkey: Some(KEY.to_owned()),
-            peer_pubkeys: Vec::new(),
+            peer_pubkeys: HotReload::frozen(Vec::new()),
             workspace_key: Some(KEY.to_owned()),
             workspaces: Mutex::new(WorkspaceStore::default()),
             requests: Mutex::new(RequestReplyStore::default()),
@@ -3415,7 +3532,7 @@ mod serve_tests {
     fn serve_test_app_with_plugin_routes(plugin_serve_routes: Vec<ServePluginRoute>) -> Router {
         serve_router(ServeState {
             cached_pubkey: Some(KEY.to_owned()),
-            peer_pubkeys: Vec::new(),
+            peer_pubkeys: HotReload::frozen(Vec::new()),
             workspace_key: Some(KEY.to_owned()),
             workspaces: Mutex::new(WorkspaceStore::default()),
             requests: Mutex::new(RequestReplyStore::default()),
@@ -3437,7 +3554,7 @@ mod serve_tests {
     fn serve_test_app_with_api_auth(api_token_auth: ServeApiTokenAuth) -> Router {
         serve_router(ServeState {
             cached_pubkey: Some(KEY.to_owned()),
-            peer_pubkeys: Vec::new(),
+            peer_pubkeys: HotReload::frozen(Vec::new()),
             workspace_key: Some(KEY.to_owned()),
             workspaces: Mutex::new(WorkspaceStore::default()),
             requests: Mutex::new(RequestReplyStore::default()),
@@ -3553,7 +3670,7 @@ mod serve_tests {
     ) -> Router {
         serve_router(ServeState {
             cached_pubkey: None,
-            peer_pubkeys: keys,
+            peer_pubkeys: HotReload::frozen(keys),
             workspace_key: Some("capture-test-token-393av2".to_owned()),
             workspaces: Mutex::new(WorkspaceStore::default()),
             requests: Mutex::new(RequestReplyStore::default()),
@@ -4760,7 +4877,7 @@ mod serve_tests {
         let addr = listener.local_addr().expect("local addr");
         let app = serve_router(ServeState {
             cached_pubkey: Some(KEY.to_owned()),
-            peer_pubkeys: Vec::new(),
+            peer_pubkeys: HotReload::frozen(Vec::new()),
             workspace_key: Some(KEY.to_owned()),
             workspaces: Mutex::new(WorkspaceStore::default()),
             requests: Mutex::new(RequestReplyStore::default()),
@@ -4989,7 +5106,7 @@ mod serve_tests {
         assert_ne!(non_default_port, DEFAULT_SERVE_PORT);
         let app = serve_router(ServeState {
             cached_pubkey: Some(KEY.to_owned()),
-            peer_pubkeys: Vec::new(),
+            peer_pubkeys: HotReload::frozen(Vec::new()),
             workspace_key: Some(KEY.to_owned()),
             workspaces: Mutex::new(WorkspaceStore::default()),
             requests: Mutex::new(RequestReplyStore::default()),
@@ -5322,7 +5439,7 @@ mod serve_tests {
             }]);
         let app = serve_router(ServeState {
             cached_pubkey: Some(KEY.to_owned()),
-            peer_pubkeys: Vec::new(),
+            peer_pubkeys: HotReload::frozen(Vec::new()),
             workspace_key: Some(KEY.to_owned()),
             workspaces: Mutex::new(WorkspaceStore::default()),
             requests: Mutex::new(RequestReplyStore::default()),

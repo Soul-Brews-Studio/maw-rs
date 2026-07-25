@@ -105,6 +105,7 @@ fn cmd_peer_probe_mismatch_skips_mutation_and_success_refreshes_identity() {
                 node: "fresh-node".to_owned(),
             }),
             error: None,
+            ..Default::default()
         },
         remove_before_mutate: false,
     })
@@ -155,6 +156,7 @@ fn cmd_peer_probe_reports_missing_alias_and_records_probe_errors() {
             pubkey: None,
             identity: None,
             error: Some(probe_error.clone()),
+            ..Default::default()
         },
         remove_before_mutate: false,
     })

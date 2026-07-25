@@ -116,15 +116,43 @@ pub fn resolve_typed_target(
 }
 
 /// When a tie leaves more than one candidate at the best rank, prefer the
-/// single candidate whose raw (un-stripped) lowercased name equals the raw
-/// target literally -- disambiguates cases like `-oracle`-suffix stripping
-/// making both "maw-rs" and "maw-rs-oracle" normalize to "maw-rs".
+/// single candidate that matches the raw target most *literally*. Scores
+/// each candidate (see [`literal_match_score`]) and wins only when the top
+/// score is held by exactly one candidate — otherwise it stays genuinely
+/// ambiguous. Disambiguates two families:
+/// - repo `-oracle` stripping making both "maw-rs" and "maw-rs-oracle" rank
+///   Exact (the whole-name literal wins).
+/// - registry `session:window` names where every window in a repo aliases the
+///   repo name (`33-maw-rs:maw-rs` vs `…:mawrs-codex-cli` vs
+///   `inverted-pendulum-oracle:maw-rs`): the window part + session stem win.
 fn literal_name_tiebreak(raw: &str, candidates: &[ResolveMatch]) -> Option<ResolveMatch> {
-    let mut literal = candidates
+    let best = candidates
         .iter()
-        .filter(|m| m.candidate.name.trim().to_lowercase() == raw);
-    let winner = literal.next()?;
-    literal.next().is_none().then(|| winner.clone())
+        .max_by_key(|m| literal_match_score(&m.candidate.name, raw))?;
+    let best_score = literal_match_score(&best.candidate.name, raw);
+    if best_score == 0 {
+        return None;
+    }
+    let ties = candidates
+        .iter()
+        .filter(|m| literal_match_score(&m.candidate.name, raw) == best_score)
+        .count();
+    (ties == 1).then(|| best.clone())
+}
+
+/// How literally a candidate name matches the raw target:
+/// - `3` — whole name equals the target (the repo/exact case).
+/// - `+2` — the `session:window` window part equals the target.
+/// - `+1` — the session stem (numeric prefix stripped) equals the target.
+fn literal_match_score(name: &str, raw: &str) -> u32 {
+    let name = name.trim().to_lowercase();
+    if name == raw {
+        return 3;
+    }
+    let window = name.rsplit(':').next().unwrap_or(name.as_str());
+    let session = name.split(':').next().unwrap_or("");
+    let session_stem = strip_numeric_prefix(session).unwrap_or(session);
+    u32::from(window == raw) * 2 + u32::from(session_stem == raw)
 }
 
 fn candidate_names(candidate: &ResolveTypedCandidate) -> Vec<String> {
@@ -232,6 +260,16 @@ mod tests {
         }
     }
 
+    // A sleeping-registry `session:window` entry. Every window in a repo aliases
+    // the repo name (`wake_registry_aliases`), so they all rank equally.
+    fn registry(name: &str) -> ResolveTypedCandidate {
+        ResolveTypedCandidate {
+            kind: ResolveCandidateKind::SleepingRegistry,
+            name: name.to_owned(),
+            aliases: vec!["maw-rs".to_owned()],
+        }
+    }
+
     #[test]
     fn oracle_suffix_stripping_does_not_shadow_literal_base_name() {
         let candidates = vec![repo("maw-rs"), repo("maw-rs-oracle")];
@@ -255,6 +293,35 @@ mod tests {
                 assert_eq!(matched.rank, ResolveMatchRank::Exact);
             }
             other => panic!("expected Match, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn registry_window_and_session_stem_beat_repo_alias_ambiguity() {
+        // Every window aliases the repo "maw-rs" so all rank equally; the
+        // window part (+2) plus session stem (+1) single out the real oracle.
+        let candidates = vec![
+            registry("33-maw-rs:maw-rs"),
+            registry("33-maw-rs:maw-rs-oracle"),
+            registry("33-maw-rs:mawrs-codex-cli"),
+            registry("inverted-pendulum-oracle:maw-rs"),
+        ];
+        match resolve_typed_target("maw-rs", &candidates) {
+            ResolveTypedResult::Match { matched } => {
+                assert_eq!(matched.candidate.name, "33-maw-rs:maw-rs");
+            }
+            other => panic!("expected Match(33-maw-rs:maw-rs), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn registry_stays_ambiguous_when_stem_cannot_separate() {
+        // Two windows named "maw-rs" whose session stems don't match the
+        // target both score 2 — genuinely ambiguous, must not mis-pick.
+        let candidates = vec![registry("aa:maw-rs"), registry("bb:maw-rs")];
+        match resolve_typed_target("maw-rs", &candidates) {
+            ResolveTypedResult::Ambiguous { .. } => {}
+            other => panic!("expected Ambiguous, got {other:?}"),
         }
     }
 }

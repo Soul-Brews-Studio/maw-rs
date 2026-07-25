@@ -15,6 +15,7 @@ fn peer_record(url: &str) -> PeerRecord {
         identity: None,
         one_way: None,
         last_symmetric_check: None,
+        auth_ok: None,
     }
 }
 
@@ -37,6 +38,7 @@ fn probe_all_failed_existing_peer_records_last_error() {
                 pubkey: None,
                 identity: None,
                 error: Some(err.clone()),
+                ..Default::default()
             },
             5000,
         )],

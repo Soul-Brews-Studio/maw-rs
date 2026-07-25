@@ -15,7 +15,59 @@ use std::{
 use tower::ServiceExt;
 use tower_http::services::ServeDir;
 
-const VIEWS_INLINE_DOOR_HTML: &str = r#"<!DOCTYPE html><html><head><meta charset="UTF-8"><title>maw</title></head><body style="font-family:monospace;background:#0d0d0d;color:#ccc;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0"><div style="text-align:center"><h1 style="color:#fff">maw</h1><p>maw-ui not installed. Run <code style="color:#7dd3fc">maw ui build</code> or install maw-ui.</p></div></body></html>"#;
+// The default page IS the federation map — self-contained (no CDN, CSP-safe),
+// theme-aware, fetches `/fed.json`. Replaces the old "maw-ui not installed / run
+// maw ui build" dead end (`maw ui build` never wrote anything reachable) (#11).
+const VIEWS_INLINE_FED_HTML: &str = r#"<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>maw · federation</title><style>
+:root{--bg:#0d0d0d;--fg:#d0d0d0;--dim:#7a7a7a;--card:#161616;--line:#2a2a2a;--up:#4ade80;--down:#f87171;--warn:#fbbf24;--accent:#7dd3fc}
+@media(prefers-color-scheme:light){:root{--bg:#f6f6f6;--fg:#1a1a1a;--dim:#666;--card:#fff;--line:#ddd;--up:#16a34a;--down:#dc2626;--warn:#b45309;--accent:#0369a1}}
+*{box-sizing:border-box}body{margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--bg);color:var(--fg);padding:24px;line-height:1.5}
+h1{font-size:18px;margin:0 0 2px}.sub{color:var(--dim);font-size:12px;margin-bottom:20px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px 16px}
+.node{font-size:15px;font-weight:700;display:flex;align-items:center;gap:8px;justify-content:space-between}
+.badge{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid currentColor}
+.up{color:var(--up)}.down{color:var(--down)}
+.kv{color:var(--dim);font-size:12px;margin-top:8px;display:flex;justify-content:space-between;gap:12px}
+.kv b{color:var(--fg);font-weight:400;text-align:right;word-break:break-all}
+.flags{margin-top:10px;display:flex;flex-wrap:wrap;gap:6px}
+.flag{font-size:10px;padding:2px 7px;border-radius:4px;color:var(--warn);border:1px solid var(--warn)}
+.sessions{margin-top:10px;display:flex;flex-wrap:wrap;gap:5px}
+.sess{font-size:10px;padding:2px 7px;border-radius:4px;color:var(--accent);border:1px solid var(--line);background:color-mix(in srgb,var(--accent) 8%,transparent)}
+.banner{background:color-mix(in srgb,var(--warn) 12%,transparent);border:1px solid var(--warn);color:var(--warn);padding:10px 14px;border-radius:8px;margin-bottom:16px;font-size:12px;display:none}
+.empty,.err{color:var(--dim);padding:40px;text-align:center}.err{color:var(--down)}
+</style></head><body>
+<h1>maw · federation map</h1>
+<div class="sub" id="sub">loading…</div>
+<div class="banner" id="banner"></div>
+<div class="grid" id="grid"></div>
+<script>
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function host(u){try{return new URL(u).host}catch{return u||'-'}}
+async function load(){
+  let d;try{const r=await fetch('/fed.json');d=await r.json()}catch(e){document.getElementById('grid').innerHTML='<div class="err">/fed.json unreachable — is maw serve running?</div>';document.getElementById('sub').textContent='';return}
+  const peers=d.peers||[];
+  document.getElementById('sub').textContent=(d.local_url?d.local_url+' · ':'')+peers.length+' peer'+(peers.length===1?'':'s');
+  const trouble=peers.filter(p=>p.loopback_self||p.node_unique===false);
+  if(trouble.length){const b=document.getElementById('banner');b.style.display='block';b.textContent='⚠ '+trouble.length+' peer(s) flagged: loopback-self = the probe reached our own serve (green while broken); dup-node = a shared node name makes "us vs them" ambiguous.';}
+  const g=document.getElementById('grid');
+  if(!peers.length){g.innerHTML='<div class="empty">no peers — maw peers add &lt;alias&gt; &lt;url&gt;</div>';return}
+  g.innerHTML=peers.map(p=>{
+    const up=p.reachable;const flags=[];
+    if(p.loopback_self)flags.push('loopback-self');
+    if(p.node_unique===false)flags.push('dup-node');
+    if(p.auth_ok===false)flags.push('auth-fail');
+    return '<div class="card"><div class="node"><span>'+esc(p.node||'?')+'</span><span class="badge '+(up?'up':'down')+'">'+(up?'up':'down')+'</span></div>'+
+      '<div class="kv"><span>oracle</span><b>'+esc(p.oracle||'—')+'</b></div>'+
+      '<div class="kv"><span>host</span><b>'+esc(host(p.url))+'</b></div>'+
+      (p.resolved_ip?'<div class="kv"><span>ip</span><b>'+esc(p.resolved_ip)+'</b></div>':'')+
+      (p.agents&&p.agents.length?'<div class="kv"><span>sessions</span><b>'+p.agents.length+'</b></div><div class="sessions">'+p.agents.map(a=>'<span class="sess">'+esc(a)+'</span>').join('')+'</div>':'')+
+      (flags.length?'<div class="flags">'+flags.map(f=>'<span class="flag">'+f+'</span>').join('')+'</div>':'')+
+      '</div>';
+  }).join('');
+}
+load();
+</script></body></html>"#;
 
 #[derive(Clone, Debug)]
 pub struct ViewsConfig {
@@ -106,9 +158,14 @@ where
 {
     router
         .route("/topology", get(views_topology))
+        .route("/fed", get(views_fed))
         .route("/", get(views_door))
         .fallback(views_static_fallback)
         .layer(Extension(Arc::new(config)))
+}
+
+pub async fn views_fed() -> Response {
+    views_html_response(VIEWS_INLINE_FED_HTML)
 }
 
 pub async fn views_topology(Extension(config): Extension<Arc<ViewsConfig>>) -> Response {
@@ -146,7 +203,7 @@ async fn views_read_html_or_text(path: &Path, missing: &'static str) -> Response
 async fn views_door_response(path: &Path) -> Response {
     match tokio::fs::read_to_string(path).await {
         Ok(html) => views_html_response(html),
-        Err(_) => views_html_response(VIEWS_INLINE_DOOR_HTML),
+        Err(_) => views_html_response(VIEWS_INLINE_FED_HTML),
     }
 }
 

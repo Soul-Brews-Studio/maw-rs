@@ -41,7 +41,8 @@ fn store_from<const N: usize>(peers: [(&str, &str, String, Option<String>); N]) 
                     identity: None,
                     one_way: None,
                     last_symmetric_check: None,
-                },
+            auth_ok: None,
+        },
             )
         })
         .collect();

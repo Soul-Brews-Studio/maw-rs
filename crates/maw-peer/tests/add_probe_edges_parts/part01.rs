@@ -18,7 +18,8 @@ fn peer(url: &str) -> PeerRecord {
         identity: None,
         one_way: None,
         last_symmetric_check: None,
-    }
+            auth_ok: None,
+        }
 }
 
 fn now() -> String {
@@ -32,7 +33,8 @@ fn ok_probe(node: Option<&str>, pubkey: Option<&str>) -> ProbePeerResult {
         pubkey: pubkey.map(str::to_owned),
         identity: None,
         error: None,
-    }
+            ..Default::default()
+        }
 }
 
 fn err_probe(code: ProbeErrorCode, message: &str) -> ProbePeerResult {
@@ -46,7 +48,8 @@ fn err_probe(code: ProbeErrorCode, message: &str) -> ProbePeerResult {
             message: message.to_owned(),
             at: now(),
         }),
-    }
+            ..Default::default()
+        }
 }
 
 #[test]

@@ -48,6 +48,7 @@ fn probe_failure(error: ProbeLastError) -> ProbePeerResult {
         pubkey: None,
         identity: None,
         error: Some(error),
+        ..Default::default()
     }
 }
 
@@ -75,6 +76,10 @@ pub struct PeerRecord {
     pub one_way: Option<bool>,
     #[serde(default, rename = "lastSymmetricCheck")]
     pub last_symmetric_check: Option<String>,
+    /// Last read-only auth probe: whether OUR signed requests are trusted by this
+    /// peer (`POST /api/probe`). `None` = not checked / unreachable.
+    #[serde(default, rename = "authOk")]
+    pub auth_ok: Option<bool>,
 }
 
 /// Peer store file shape, ported from maw-js peers `store.ts` schema v1.

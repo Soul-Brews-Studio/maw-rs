@@ -41,6 +41,7 @@ pub struct PeerSendResponse {
     pub target: Option<String>,
     pub last_line: Option<String>,
     pub error: Option<String>,
+    pub decision: Option<String>,
 }
 
 /// Parsed `/api/wake` response outcome.
@@ -50,6 +51,42 @@ pub struct PeerWakeResponse {
     pub status: u16,
     pub target: Option<String>,
     pub error: Option<String>,
+}
+
+fn peer_send_error_message(status: u16, parsed: &PeerSendResponse) -> String {
+    let mut msg = format!(
+        "remote /api/send returned HTTP {status}: {}",
+        parsed.error.as_deref().unwrap_or("request failed")
+    );
+    if let Some(decision) = parsed
+        .decision
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        msg.push_str(" [decision=");
+        msg.push_str(decision);
+        msg.push(']');
+        if let Some(hint) = decision_hint(decision) {
+            msg.push_str(" — ");
+            msg.push_str(hint);
+        }
+    }
+    msg
+}
+
+/// Human hint for a federation `decision` refusal code, so a bare 401 stops
+/// masquerading as a permissions problem when it is really a stale key cache
+/// or a missing signature.
+fn decision_hint(decision: &str) -> Option<&'static str> {
+    Some(match decision {
+        "refuse-missing-peer-key" => "sender's pubkey is not in the receiver's peers.json — or the receiver's serve loaded pubkeys at startup and needs a restart after the peer was added",
+        "refuse-mismatch" => "signature mismatch: the sender's ~/.maw/peer-key differs from the receiver's pinned pubkey (key rotated, or MAW_HOME/MAW_PEER_KEY set differently in a worktree?)",
+        "refuse-unsigned" => "the request carried no X-Maw-Signature",
+        "refuse-ambiguous-peer-key" => "the receiver has multiple pubkeys pinned for this sender",
+        "refuse-skew" => "timestamp skew too large — check both machines' clocks",
+        "cache-no-sig" => "no signature was cached for verification",
+        _ => return None,
+    })
 }
 
 struct PeerAuth<'a> {
@@ -126,12 +163,10 @@ impl ReqwestHttpTransportIo {
             target: wire.target,
             last_line: wire.last_line,
             error: wire.error,
+            decision: wire.decision,
         };
         if status >= 400 {
-            return Err(format!(
-                "remote /api/send returned HTTP {status}: {}",
-                parsed.error.as_deref().unwrap_or("request failed")
-            ));
+            return Err(peer_send_error_message(status, &parsed));
         }
         if !parsed.delivered_or_queued() {
             return Err(format!(
@@ -192,6 +227,39 @@ impl ReqwestHttpTransportIo {
         Ok(parsed)
     }
 
+    /// Read-only auth probe: POST a signed `/api/probe` (which verifies the
+    /// v3 from-signature and returns `{ok:true, sessions:[]}` with NO side
+    /// effect) so a probe can tell whether OUR signed requests are trusted by
+    /// this peer without delivering a real message. `Some(true)` on 2xx,
+    /// `Some(false)` on 401/403 (auth refused), `None` on any other outcome.
+    ///
+    /// # Errors
+    ///
+    /// Returns a transport error string on network failure.
+    pub async fn probe_peer_auth(
+        &self,
+        request: &PeerWakeRequest,
+    ) -> Result<Option<bool>, String> {
+        let (status, _text) = self
+            .post_signed_json(
+                &request.peer_url,
+                "/api/probe",
+                "{}",
+                PeerAuth {
+                    from: &request.from,
+                    federation_token: &request.federation_token,
+                    peer_key: &request.peer_key,
+                    timestamp: request.timestamp,
+                },
+            )
+            .await?;
+        Ok(match status {
+            200..=299 => Some(true),
+            401 | 403 => Some(false),
+            _ => None,
+        })
+    }
+
     async fn post_signed_json(
         &self,
         peer_url: &str,
@@ -228,5 +296,47 @@ impl ReqwestHttpTransportIo {
             .await
             .map_err(|error| format!("network error reading {url}: {error}"))?;
         Ok((status, text))
+    }
+}
+
+#[cfg(test)]
+mod decision_tests {
+    use super::{decision_hint, peer_send_error_message, PeerSendResponse};
+
+    fn resp(error: Option<&str>, decision: Option<&str>) -> PeerSendResponse {
+        PeerSendResponse {
+            ok: false,
+            status: 401,
+            state: None,
+            target: None,
+            last_line: None,
+            error: error.map(str::to_owned),
+            decision: decision.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn error_message_surfaces_decision_and_hint() {
+        let msg = peer_send_error_message(
+            401,
+            &resp(Some("unauthorized"), Some("refuse-missing-peer-key")),
+        );
+        assert!(msg.contains("HTTP 401"));
+        assert!(msg.contains("[decision=refuse-missing-peer-key]"));
+        assert!(msg.contains("restart"));
+    }
+
+    #[test]
+    fn error_message_without_decision_is_unchanged() {
+        let msg = peer_send_error_message(500, &resp(Some("boom"), None));
+        assert_eq!(msg, "remote /api/send returned HTTP 500: boom");
+    }
+
+    #[test]
+    fn unknown_decision_shows_code_but_no_hint() {
+        assert!(decision_hint("refuse-skew").is_some());
+        assert!(decision_hint("something-new").is_none());
+        let msg = peer_send_error_message(401, &resp(None, Some("something-new")));
+        assert!(msg.contains("[decision=something-new]"));
     }
 }

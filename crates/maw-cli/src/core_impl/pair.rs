@@ -368,6 +368,7 @@ fn pair_write_peer_to_env(env: &maw_peer::PeerStoreEnv, node: &str, url: &str, c
             identity: Some(maw_peer::PeerIdentity { oracle, node: node.to_owned() }),
             one_way: Some(false),
             last_symmetric_check: Some(now.clone()),
+            auth_ok: None,
         });
     }).map_err(|error| format!("pair peers.json write failed: {error}"))?;
     Ok(())

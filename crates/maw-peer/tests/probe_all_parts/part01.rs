@@ -31,7 +31,8 @@ fn peer(
         identity: None,
         one_way: None,
         last_symmetric_check: None,
-    }
+            auth_ok: None,
+        }
 }
 
 fn ok(node: &str) -> ProbePeerResult {
@@ -41,7 +42,8 @@ fn ok(node: &str) -> ProbePeerResult {
         pubkey: None,
         identity: None,
         error: None,
-    }
+            ..Default::default()
+        }
 }
 
 fn failed(err: ProbeLastError) -> ProbePeerResult {
@@ -51,7 +53,8 @@ fn failed(err: ProbeLastError) -> ProbePeerResult {
         pubkey: None,
         identity: None,
         error: Some(err),
-    }
+            ..Default::default()
+        }
 }
 
 #[test]
