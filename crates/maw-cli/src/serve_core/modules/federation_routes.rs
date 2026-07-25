@@ -313,18 +313,16 @@ async fn federation_fleet_sessions(urls: &[String]) -> BTreeMap<String, Vec<Stri
 /// Fetch one peer's `/api/sessions` and keep just the session names (the map
 /// shows which sessions live on each node, not their internals).
 async fn federation_fetch_peer_sessions(client: &reqwest::Client, url: &str) -> Vec<String> {
-    let Ok(mut endpoint) = reqwest::Url::parse(url) else {
+    // Resolve a routable address so a zone-less link-local IPv6 (which
+    // getaddrinfo may return first) never silently sinks the fetch.
+    let pin = reqwest::Url::parse(url).ok().and_then(|parsed| {
+        let host = parsed.host_str()?.to_owned();
+        let port = parsed.port_or_known_default().unwrap_or(3456);
+        federation_first_routable_addr(&host, port).map(|addr| addr.ip())
+    });
+    let Some(endpoint) = federation_sessions_endpoint(url, pin) else {
         return Vec::new();
     };
-    // Pin the connection to a routable address so a zone-less link-local IPv6
-    // (which getaddrinfo may return first) never silently sinks the fetch.
-    if let Some(host) = endpoint.host_str().map(str::to_owned) {
-        let port = endpoint.port_or_known_default().unwrap_or(3456);
-        if let Some(addr) = federation_first_routable_addr(&host, port) {
-            let _ = endpoint.set_ip_host(addr.ip());
-        }
-    }
-    endpoint.set_path("/api/sessions");
     let Ok(response) = client.get(endpoint).send().await else {
         return Vec::new();
     };
@@ -405,6 +403,22 @@ fn federation_load_real_peer_store() -> maw_peer::PeerStoreFile {
     .filter_map(|key| std::env::var(key).ok().map(|value| (key, value)));
     let env = maw_peer::PeerStoreEnv::with_vars(home, vars);
     maw_peer::load_peer_store(&env)
+}
+
+/// Build the `/api/sessions` endpoint for a peer URL: optionally pin the host to
+/// a resolved routable IP (so a zone-less link-local address can't sink the
+/// fetch), and **append** `/api/sessions` to any existing base path rather than
+/// replacing it — a peer behind a reverse proxy prefix (`…/maw`) keeps it.
+/// Split out as a pure function so a test guards the wiring: revert the pin or
+/// the path-append and it goes red (a predicate test alone would stay green).
+fn federation_sessions_endpoint(url: &str, pin: Option<std::net::IpAddr>) -> Option<reqwest::Url> {
+    let mut endpoint = reqwest::Url::parse(url).ok()?;
+    if let Some(ip) = pin {
+        endpoint.set_ip_host(ip).ok()?;
+    }
+    let base = endpoint.path().trim_end_matches('/').to_owned();
+    endpoint.set_path(&format!("{base}/api/sessions"));
+    Some(endpoint)
 }
 
 /// Resolve a peer URL's host to a **routable** IP so the map can catch the
@@ -797,6 +811,25 @@ mod tests {
         assert!(federation_host_is_loopback("localhost"));
         assert!(federation_host_is_loopback("127.0.0.1"));
         assert!(!federation_host_is_loopback("black.local"));
+    }
+
+    #[test]
+    fn federation_sessions_endpoint_pins_routable_ip_and_keeps_base_path() {
+        use std::net::{IpAddr, Ipv4Addr};
+        // R2: pinning rewrites the host to the routable IP — revert `set_ip_host`
+        // in the fetch and this goes red (the predicate tests alone would not).
+        let pinned = federation_sessions_endpoint(
+            "http://black.local:3456",
+            Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 184))),
+        )
+        .unwrap();
+        assert_eq!(pinned.as_str(), "http://192.168.1.184:3456/api/sessions");
+        // R3: a reverse-proxy base path is preserved, not discarded.
+        let based = federation_sessions_endpoint("http://host:3456/maw", None).unwrap();
+        assert_eq!(based.as_str(), "http://host:3456/maw/api/sessions");
+        // No base path → clean /api/sessions.
+        let bare = federation_sessions_endpoint("http://host:3456", None).unwrap();
+        assert_eq!(bare.as_str(), "http://host:3456/api/sessions");
     }
 
     #[test]
