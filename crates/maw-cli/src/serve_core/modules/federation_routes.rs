@@ -10,7 +10,17 @@ use axum::{
 use maw_transport::FederationStatus;
 use serde::Serialize;
 use serde_json::json;
-use std::{collections::BTreeMap, net::SocketAddr, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    net::SocketAddr,
+    sync::{Arc, Mutex, OnceLock},
+    time::Duration,
+};
+
+/// How long serve trusts its aggregated fleet-session snapshot before a request
+/// triggers a fresh sweep — small enough to feel live, large enough that a burst
+/// of page loads causes at most one fan-out per window (#15).
+const FLEET_SESSIONS_TTL_MS: u64 = 15_000;
 
 const FEDERATION_DEFAULT_LIMIT: usize = 50;
 
@@ -56,7 +66,7 @@ where
 }
 
 async fn federation_fed_json_get(ConnectInfo(peer): ConnectInfo<SocketAddr>) -> impl IntoResponse {
-    let mut payload = federation_live_payload();
+    let mut payload = federation_live_payload().await;
     if !peer.ip().is_loopback() {
         federation_redact_payload(&mut payload);
     }
@@ -70,6 +80,9 @@ fn federation_redact_payload(payload: &mut FederationStatusPayload) {
     for peer in &mut payload.peers {
         peer.url = federation_host_only(&peer.url);
         peer.resolved_ip = None;
+        // Session names reveal what each node is running — off-loopback keep only
+        // the count is still too much detail, so drop them entirely.
+        peer.agents = Vec::new();
     }
 }
 
@@ -85,7 +98,7 @@ async fn federation_status_get(
 ) -> impl IntoResponse {
     let payload = match &state.status_override {
         Some(status) => federation_status_payload(status),
-        None => federation_live_payload(),
+        None => federation_live_payload().await,
     };
     Json(payload).into_response()
 }
@@ -241,13 +254,94 @@ fn federation_node_unique(counts: &BTreeMap<String, usize>, node: Option<&str>) 
 /// read fresh on each request so an added/removed/re-probed peer shows up
 /// without restarting serve. This is the production replacement for the old
 /// empty `federation_default_state` stub (#7).
-fn federation_live_payload() -> FederationStatusPayload {
-    federation_payload_from_store(&federation_load_real_peer_store())
+async fn federation_live_payload() -> FederationStatusPayload {
+    let store = federation_load_real_peer_store();
+    let urls = store
+        .peers
+        .values()
+        .map(|record| record.url.clone())
+        .collect::<Vec<_>>();
+    let sessions = federation_fleet_sessions(&urls).await;
+    federation_payload_from_store(&store, &sessions)
 }
 
-/// Pure mapping from a peer store to the status payload — the deterministic core
-/// of `federation_live_payload`, split out so it is testable without disk/env.
-fn federation_payload_from_store(store: &maw_peer::PeerStoreFile) -> FederationStatusPayload {
+/// `(fetched_at_ms, sessions-by-peer-url)` guarded for the TTL fleet cache.
+type FleetSessionsCache = Mutex<(u64, BTreeMap<String, Vec<String>>)>;
+
+fn fleet_sessions_cache() -> &'static FleetSessionsCache {
+    static CACHE: OnceLock<FleetSessionsCache> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new((0, BTreeMap::new())))
+}
+
+/// Session names per peer URL, aggregated **server-side** on a TTL cycle — the
+/// browser never fans out to peers (CORS + auth + N connections). The lock is
+/// never held across the `.await`, so concurrent requests at most double a
+/// sweep (idempotent) rather than deadlock (#15).
+async fn federation_fleet_sessions(urls: &[String]) -> BTreeMap<String, Vec<String>> {
+    let now = federation_now_millis();
+    if let Ok(guard) = fleet_sessions_cache().lock() {
+        if !guard.1.is_empty() && now.saturating_sub(guard.0) < FLEET_SESSIONS_TTL_MS {
+            return guard.1.clone();
+        }
+    }
+    let Ok(client) = reqwest::Client::builder()
+        .timeout(Duration::from_millis(2500))
+        .build()
+    else {
+        return BTreeMap::new();
+    };
+    let fetches = urls.iter().cloned().map(|url| {
+        let client = client.clone();
+        async move {
+            let sessions = federation_fetch_peer_sessions(&client, &url).await;
+            (url, sessions)
+        }
+    });
+    let map = futures_util::future::join_all(fetches)
+        .await
+        .into_iter()
+        .filter(|(_, sessions)| !sessions.is_empty())
+        .collect::<BTreeMap<String, Vec<String>>>();
+    if let Ok(mut guard) = fleet_sessions_cache().lock() {
+        if !map.is_empty() {
+            *guard = (now, map.clone());
+        }
+    }
+    map
+}
+
+/// Fetch one peer's `/api/sessions` and keep just the session names (the map
+/// shows which sessions live on each node, not their internals).
+async fn federation_fetch_peer_sessions(client: &reqwest::Client, url: &str) -> Vec<String> {
+    let endpoint = format!("{}/api/sessions", url.trim_end_matches('/'));
+    let Ok(response) = client.get(&endpoint).send().await else {
+        return Vec::new();
+    };
+    if !response.status().is_success() {
+        return Vec::new();
+    }
+    let Ok(value) = response.json::<serde_json::Value>().await else {
+        return Vec::new();
+    };
+    value
+        .as_array()
+        .map(|sessions| {
+            sessions
+                .iter()
+                .filter_map(|session| session.get("name").and_then(serde_json::Value::as_str))
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Pure mapping from a peer store (+ aggregated fleet sessions) to the status
+/// payload — the deterministic core of `federation_live_payload`, split out so
+/// it is testable without disk/env/network.
+fn federation_payload_from_store(
+    store: &maw_peer::PeerStoreFile,
+    sessions: &BTreeMap<String, Vec<String>>,
+) -> FederationStatusPayload {
     let node_counts =
         federation_node_counts(store.peers.values().map(|record| record.node.as_deref()));
     let peers = store
@@ -260,7 +354,7 @@ fn federation_payload_from_store(store: &maw_peer::PeerStoreFile) -> FederationS
             // `lastError` means the last handshake failed.
             reachable: record.last_error.is_none(),
             latency: None,
-            agents: Vec::new(),
+            agents: sessions.get(&record.url).cloned().unwrap_or_default(),
             clock_warning: false,
             oracle: record
                 .identity
@@ -586,7 +680,7 @@ mod tests {
             federation_store_record("http://c.test:3456", "solo", Some("nova"), false),
         );
 
-        let payload = federation_payload_from_store(&store);
+        let payload = federation_payload_from_store(&store, &BTreeMap::new());
         assert_eq!(payload.peers.len(), 3, "real peers, not the empty stub");
 
         let by_node = |node: &str| {
@@ -634,6 +728,27 @@ mod tests {
         assert_eq!(payload.peers[0].node.as_deref(), Some("m5"));
         assert_eq!(payload.peers[0].oracle.as_deref(), Some("atlas"));
         assert!(payload.peers[0].reachable && payload.peers[0].node_unique);
+    }
+
+    #[test]
+    fn federation_payload_maps_fleet_sessions_and_redaction_clears_them() {
+        let mut store = maw_peer::PeerStoreFile::default();
+        store.peers.insert(
+            "a".to_owned(),
+            federation_store_record("http://a.test:3456", "na", None, false),
+        );
+        let mut sessions = BTreeMap::new();
+        sessions.insert(
+            "http://a.test:3456".to_owned(),
+            vec!["06-fb".to_owned(), "08-gpu".to_owned()],
+        );
+        let mut payload = federation_payload_from_store(&store, &sessions);
+        assert_eq!(payload.peers[0].agents, vec!["06-fb", "08-gpu"]);
+        federation_redact_payload(&mut payload);
+        assert!(
+            payload.peers[0].agents.is_empty(),
+            "off-loopback redaction drops session names"
+        );
     }
 
     #[test]

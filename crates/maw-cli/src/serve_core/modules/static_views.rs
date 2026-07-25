@@ -32,6 +32,8 @@ h1{font-size:18px;margin:0 0 2px}.sub{color:var(--dim);font-size:12px;margin-bot
 .kv b{color:var(--fg);font-weight:400;text-align:right;word-break:break-all}
 .flags{margin-top:10px;display:flex;flex-wrap:wrap;gap:6px}
 .flag{font-size:10px;padding:2px 7px;border-radius:4px;color:var(--warn);border:1px solid var(--warn)}
+.sessions{margin-top:10px;display:flex;flex-wrap:wrap;gap:5px}
+.sess{font-size:10px;padding:2px 7px;border-radius:4px;color:var(--accent);border:1px solid var(--line);background:color-mix(in srgb,var(--accent) 8%,transparent)}
 .banner{background:color-mix(in srgb,var(--warn) 12%,transparent);border:1px solid var(--warn);color:var(--warn);padding:10px 14px;border-radius:8px;margin-bottom:16px;font-size:12px;display:none}
 .empty,.err{color:var(--dim);padding:40px;text-align:center}.err{color:var(--down)}
 </style></head><body>
@@ -59,6 +61,7 @@ async function load(){
       '<div class="kv"><span>oracle</span><b>'+esc(p.oracle||'—')+'</b></div>'+
       '<div class="kv"><span>host</span><b>'+esc(host(p.url))+'</b></div>'+
       (p.resolved_ip?'<div class="kv"><span>ip</span><b>'+esc(p.resolved_ip)+'</b></div>':'')+
+      (p.agents&&p.agents.length?'<div class="kv"><span>sessions</span><b>'+p.agents.length+'</b></div><div class="sessions">'+p.agents.map(a=>'<span class="sess">'+esc(a)+'</span>').join('')+'</div>':'')+
       (flags.length?'<div class="flags">'+flags.map(f=>'<span class="flag">'+f+'</span>').join('')+'</div>':'')+
       '</div>';
   }).join('');
