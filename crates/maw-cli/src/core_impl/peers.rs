@@ -252,19 +252,35 @@ fn peers_probe_peer(url: &str, timeout_ms: u64, now: &str) -> maw_peer::ProbePee
     maw_peer::probe_peer_from_plan(&maw_peer::ProbePeerPlan { url: url.to_owned(), now: now.to_owned(), dns_error: None, info, identity, resolved_ip, auth_ok })
 }
 
-/// Resolve the host in a peer URL to its first IP, so a probe can tell a real
-/// remote from our own serve (`m5.local` may resolve to `127.0.0.1`). Best
-/// effort: `None` when the URL has no host or DNS fails — the probe still runs.
+/// Resolve the host in a peer URL to a **routable** IP, so a probe can tell a
+/// real remote from our own serve (`m5.local` may resolve to `127.0.0.1`). For a
+/// non-loopback host, link-local (`fe80::/10`, `169.254/16`) and loopback
+/// addresses are skipped and IPv4 is preferred — otherwise `getaddrinfo` can
+/// hand back a zone-less link-local IPv6 first that nothing can connect to.
+/// Best effort: `None` when the URL has no host or DNS fails.
 fn peers_resolve_ip(url: &str) -> Option<String> {
-    use std::net::ToSocketAddrs;
+    use std::net::{IpAddr, ToSocketAddrs};
     let parsed = reqwest::Url::parse(url).ok()?;
     let host = parsed.host_str()?;
     let port = parsed.port_or_known_default().unwrap_or(3456);
-    (host, port)
+    let host_is_loopback =
+        host == "localhost" || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback());
+    let routable = |ip: &IpAddr| -> bool {
+        if ip.is_loopback() {
+            return false;
+        }
+        match ip {
+            IpAddr::V4(v4) => !v4.is_link_local(),
+            IpAddr::V6(v6) => (v6.segments()[0] & 0xffc0) != 0xfe80,
+        }
+    };
+    let mut addrs = (host, port)
         .to_socket_addrs()
         .ok()?
-        .next()
-        .map(|addr| addr.ip().to_string())
+        .filter(|addr| host_is_loopback || routable(&addr.ip()))
+        .collect::<Vec<_>>();
+    addrs.sort_by_key(|addr| u8::from(addr.is_ipv6()));
+    addrs.into_iter().next().map(|addr| addr.ip().to_string())
 }
 
 fn peers_fetch_identity(url: &str, timeout_ms: u64) -> Option<maw_peer::ProbeRemoteIdentity> {
