@@ -139,7 +139,7 @@ fn ls_flags_parse_and_render_federation_golden() {
     assert_eq!(String::from_utf8(output.stderr).expect("stderr"), "");
     assert_eq!(
         fs::read_to_string(root.join("curl.log")).expect("curl log"),
-        "-fsS --max-time 2 -- http://127.0.0.1:9999/api/ls\n"
+        "-fsS --max-time 2 -- http://127.0.0.1:9999/api/sessions\n"
     );
     fs::remove_dir_all(root).expect("cleanup");
 }
@@ -173,7 +173,7 @@ fn ls_federation_peer_drilldown_fetches_peer_sessions() {
     assert_eq!(String::from_utf8(output.stderr).expect("stderr"), "");
     assert_eq!(
         fs::read_to_string(root.join("curl.log")).expect("curl log"),
-        "-fsS --max-time 2 -- http://127.0.0.1:9999/api/ls\n"
+        "-fsS --max-time 2 -- http://127.0.0.1:9999/api/sessions\n"
     );
     fs::remove_dir_all(root).expect("cleanup");
 }

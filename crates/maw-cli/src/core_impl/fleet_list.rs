@@ -292,7 +292,12 @@ fn ls_node_json(node: &LsFetchedNode151) -> String {
 
 fn ls_fetch_peer_sessions(peer_url: &str) -> Result<Vec<serde_json::Value>, String> {
     ls_validate_peer_url(peer_url)?;
-    let url = format!("{}/api/ls", peer_url.trim_end_matches('/'));
+    // GET /api/sessions — the endpoint every serve actually mounts and the one the
+    // federation map already fetches. The old `/api/ls` path is implemented by NO
+    // serve (not even localhost), so it returned 404 and made `ls --federation` blame
+    // healthy peers (#676). /api/sessions returns a bare session array whose
+    // {name, windows:[…]} shape this renderer already reads.
+    let url = format!("{}/api/sessions", peer_url.trim_end_matches('/'));
     let output = std::process::Command::new("curl")
         .args(["-fsS", "--max-time", "2", "--"])
         .arg(&url)
