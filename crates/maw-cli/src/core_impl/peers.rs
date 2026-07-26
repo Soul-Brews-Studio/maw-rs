@@ -199,24 +199,45 @@ fn peers_cmd_probe(positional: &[&str]) -> Result<CliOutput, String> {
     Ok(CliOutput { code, stdout, stderr: peers_probe_stderr(alias, &url, &probe) })
 }
 
-fn peers_cmd_probe_all(argv: &[String]) -> Result<CliOutput, String> {
-    let timeout = if let Some(raw) = peers_flag_value(argv, "--timeout") { peers_parse_positive_u64(&raw, "usage: maw peers probe-all [--timeout <ms>]")? } else { PEERS_DEFAULT_PROBE_TIMEOUT_MS };
+/// One probe-all row: `(alias, url, status_code_string)`.
+type PeersProbeRow = (String, String, String);
+
+/// Probe every stored peer and persist the refreshed identity / lastSeen back to
+/// `peers.json` through the single peer-store writer (`peers_apply_probe_result` +
+/// `peers_save_store`). Shared by `maw peers probe-all` and the serve background
+/// refresh so probe results have exactly ONE write path — never the read-only
+/// federation-map render (#677/#684). Returns the per-peer rows and the worst probe
+/// exit code (`0` when the store is empty).
+fn peers_probe_all_and_persist(timeout_ms: u64) -> Result<(Vec<PeersProbeRow>, i32), String> {
     let mut store = peers_load_store();
-    if store.peers.is_empty() { return Ok(peers_ok("alias  url  status\n-----  ---  ------\n")); }
-    let mut stdout = String::from("alias  url  status\n-----  ---  ------\n");
+    if store.peers.is_empty() {
+        return Ok((Vec::new(), 0));
+    }
     let aliases = store.peers.keys().cloned().collect::<Vec<_>>();
+    let mut rows = Vec::new();
     let mut worst = 0;
     for alias in aliases {
         let url = store.peers.get(&alias).map(|peer| peer.url.clone()).unwrap_or_default();
         let now = peers_now_iso();
-        let probe = peers_probe_peer(&url, timeout, &now);
-        if let Some(peer) = store.peers.get_mut(&alias) { peers_apply_probe_result(peer, &probe, &now)?; }
-        let code = peers_probe_exit_code(&probe);
-        worst = worst.max(code);
+        let probe = peers_probe_peer(&url, timeout_ms, &now);
+        if let Some(peer) = store.peers.get_mut(&alias) {
+            peers_apply_probe_result(peer, &probe, &now)?;
+        }
+        worst = worst.max(peers_probe_exit_code(&probe));
         let status = probe.error.as_ref().map_or("OK", |error| error.code.as_str());
-        let _ = writeln!(stdout, "{alias}  {url}  {status}");
+        rows.push((alias, url, status.to_owned()));
     }
     peers_save_store(&store)?;
+    Ok((rows, worst))
+}
+
+fn peers_cmd_probe_all(argv: &[String]) -> Result<CliOutput, String> {
+    let timeout = if let Some(raw) = peers_flag_value(argv, "--timeout") { peers_parse_positive_u64(&raw, "usage: maw peers probe-all [--timeout <ms>]")? } else { PEERS_DEFAULT_PROBE_TIMEOUT_MS };
+    let (rows, worst) = peers_probe_all_and_persist(timeout)?;
+    let mut stdout = String::from("alias  url  status\n-----  ---  ------\n");
+    for (alias, url, status) in &rows {
+        let _ = writeln!(stdout, "{alias}  {url}  {status}");
+    }
     let allow = argv.iter().any(|arg| arg == "--allow-unreachable");
     Ok(CliOutput { code: if allow { 0 } else { worst }, stdout, stderr: String::new() })
 }
