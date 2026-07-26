@@ -5,8 +5,6 @@ const DISPATCH_95: &[DispatcherEntry] = &[DispatcherEntry {
 
 const SERVEIDENTITY_USAGE: &str = "usage: maw serve-identity";
 #[allow(dead_code)]
-const SERVEIDENTITY_DEFAULT_ORACLE: &str = "mawjs"; // node identity fallback; not per-message sender identity
-#[allow(dead_code)]
 const SERVEIDENTITY_DEFAULT_HOST: &str = "local";
 #[allow(dead_code)]
 const SERVEIDENTITY_DEFAULT_PORT: u16 = 3456;
@@ -123,8 +121,6 @@ fn serveidentity_identity_payload(config: &ServeidentityConfig, deps: &Serveiden
     let mut payload = serde_json::json!({
         "node": resolved.node,
         "host": resolved.host,
-        // GET /api/identity publishes this node identity, so it stays config/default based.
-        "oracle": config.oracle.as_deref().unwrap_or(SERVEIDENTITY_DEFAULT_ORACLE),
         "version": deps.version,
         "agents": agents,
         "uptime": deps.uptime_seconds,
@@ -132,6 +128,12 @@ fn serveidentity_identity_payload(config: &ServeidentityConfig, deps: &Serveiden
         "endpoints": SERVEIDENTITY_ENDPOINTS,
         "pubkey": deps.peer_key,
     });
+    // GET /api/identity publishes this node identity. Emit `oracle` only when it is actually
+    // configured — a missing oracle stays missing, never a fabricated "mawjs" default that a
+    // peer would store and render as if it had been probed (#677).
+    if let Some(oracle) = serveidentity_clean(config.oracle.as_deref()) {
+        payload["oracle"] = serde_json::Value::String(oracle.to_owned());
+    }
     serveidentity_insert_optional_fields(&mut payload, resolved.user.as_deref(), resolved.port);
     payload
 }
@@ -333,6 +335,23 @@ mod serveidentity_tests {
         assert_eq!(payload["pubkey"], "pub");
         assert_eq!(payload["endpoints"].as_array().expect("endpoints").len(), 8);
         assert_eq!(payload["agents"], serde_json::json!(["nova", "wish"]));
+    }
+
+    #[test]
+    fn serveidentity_omits_oracle_when_unconfigured_never_fabricates_mawjs() {
+        // #677: a node with no configured oracle must not publish a fake "mawjs" — the field
+        // is simply absent, so a peer stores nothing rather than a value that looks probed.
+        // Reverting to `.unwrap_or("mawjs")` MUST turn this test red.
+        let mut config = serveidentity_config();
+        config.oracle = None;
+        let payload = serveidentity_identity_payload(&config, &serveidentity_deps());
+        assert!(payload.get("oracle").is_none(), "oracle must be omitted, got {:?}", payload.get("oracle"));
+    }
+
+    #[test]
+    fn serveidentity_publishes_configured_oracle_verbatim() {
+        let payload = serveidentity_identity_payload(&serveidentity_config(), &serveidentity_deps());
+        assert_eq!(payload["oracle"], "gm-bo");
     }
 
     #[test]
