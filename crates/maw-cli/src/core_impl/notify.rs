@@ -92,10 +92,34 @@ fn notify_local(
     config: &HeyConfig,
     sender_oracle: &str,
 ) -> CliOutput {
-    let env = inbox_real_env();
+    notify_local_with(args, resolved_target, config, sender_oracle, &locate_find_oracle_repo_path)
+}
+
+/// See [`notify_local`]. The `resolve_repo` seam (receiver oracle name → its repo
+/// path) is split out so a test can drive the destination deterministically.
+///
+/// Delivery must land in the RECEIVER's `ψ/inbox`, resolved from the registry — not
+/// the sender's own `inbox_dir`. The old code wrote to `inbox_real_env().inbox_dir`
+/// (the sender), so a message addressed to `to` was filed with the sender and reached
+/// nobody while reporting success (#672 defect 1). This mirrors the cross-node receive
+/// path in `serve.rs` (`repo_path.join("ψ").join("inbox")`).
+fn notify_local_with(
+    args: &NotifyArgs,
+    resolved_target: &str,
+    config: &HeyConfig,
+    sender_oracle: &str,
+    resolve_repo: &dyn Fn(&str) -> Option<String>,
+) -> CliOutput {
     let from = notify_display_from(args.from.as_deref(), config, sender_oracle);
     let to = notify_inbox_to(&args.target, resolved_target);
-    match inbox_write_file(&env.inbox_dir, &from, &to, &args.text, inbox_now_ms()) {
+    let Some(repo_path) = resolve_repo(&to) else {
+        return notify_route_error(
+            &format!("cannot resolve a local inbox for '{to}'"),
+            Some("not a known local oracle — check `maw locate <name> --path`"),
+        );
+    };
+    let inbox_dir = std::path::Path::new(&repo_path).join("ψ").join("inbox");
+    match inbox_write_file(&inbox_dir, &from, &to, &args.text, inbox_now_ms()) {
         Ok(filename) => CliOutput { code: 0, stdout: notify_success(&to, &filename, args.force), stderr: String::new() },
         Err(message) => CliOutput { code: 1, stdout: String::new(), stderr: format!("notify: {message}\n") },
     }
@@ -184,5 +208,65 @@ mod notify_tests {
         assert!(notify_parse_args(&notify_strings(&["-target", "msg"])).unwrap_err().contains("unknown argument"));
         assert!(notify_parse_args(&notify_strings(&["local:nova"])).unwrap_err().contains("missing message"));
         assert!(notify_parse_args(&notify_strings(&["--from", "--bad", "local:nova", "msg"])).unwrap_err().contains("missing value"));
+    }
+
+    fn notify_args(target: &str, text: &str) -> NotifyArgs {
+        NotifyArgs {
+            target: target.to_owned(),
+            text: text.to_owned(),
+            from: Some("m5:ui".to_owned()),
+            approve: false,
+            trust: false,
+            force: false,
+        }
+    }
+
+    #[test]
+    fn notify_local_writes_to_the_receiver_inbox_not_the_sender() {
+        // #672 defect 1: a message addressed to `to` must land in the RECEIVER's
+        // ψ/inbox (resolved from the registry), not the sender's. The fake resolver
+        // stands in for `locate_find_oracle_repo_path`; reverting the fix to write to
+        // `inbox_real_env().inbox_dir` leaves this receiver dir empty → RED.
+        let receiver = std::env::temp_dir().join(format!("maw-rs-notify-recv-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&receiver);
+        std::fs::create_dir_all(&receiver).expect("receiver repo");
+        let receiver_str = receiver.to_string_lossy().into_owned();
+        let resolve = |oracle: &str| {
+            assert_eq!(oracle, "arra-oracle-v3", "resolver is asked for the receiver, not the sender");
+            Some(receiver_str.clone())
+        };
+
+        let out = notify_local_with(
+            &notify_args("local:arra-oracle-v3", "the nudge"),
+            "arra-oracle-v3",
+            &HeyConfig::default(),
+            "ui",
+            &resolve,
+        );
+        assert_eq!(out.code, 0, "stderr={}", out.stderr);
+
+        let inbox = receiver.join("ψ").join("inbox");
+        let files: Vec<_> = std::fs::read_dir(&inbox).expect("receiver inbox exists").filter_map(Result::ok).collect();
+        assert_eq!(files.len(), 1, "exactly one message filed in the RECEIVER inbox");
+        let body = std::fs::read_to_string(files[0].path()).expect("read msg");
+        assert!(body.contains("to: arra-oracle-v3"), "addressed to receiver");
+        assert!(body.contains("from: m5:ui"));
+        assert!(body.contains("the nudge"));
+        std::fs::remove_dir_all(&receiver).ok();
+    }
+
+    #[test]
+    fn notify_local_errors_clearly_when_receiver_is_unknown() {
+        // An unresolvable receiver must fail loudly (route error), never silently
+        // succeed by writing somewhere the receiver will not read (#672).
+        let out = notify_local_with(
+            &notify_args("local:ghost-oracle", "hi"),
+            "ghost-oracle",
+            &HeyConfig::default(),
+            "ui",
+            &|_oracle: &str| None,
+        );
+        assert_eq!(out.code, 2);
+        assert!(out.stderr.contains("cannot resolve a local inbox for 'ghost-oracle'"), "stderr={}", out.stderr);
     }
 }
