@@ -19,6 +19,35 @@ us in four distinct shapes in a single day, and every one cost real time:
 The last one is the most expensive: **silence makes you do nothing; a wrong accusation
 makes you do work in the place where nothing is broken.**
 
+## A fifth shape: a partial check wearing the face of a complete one
+
+`maw hey --dry-run` resolved cleanly (`-> peer m5 33-maw-rs:maw-rs via
+http://192.168.1.118:3456`) and the real send failed the same second with
+`federationToken is required`. Cross-node hey needs three layers — peer reachable,
+route resolvable, token matching — and the dry-run only exercises two while
+*presenting* itself as a go/no-go. (#681)
+
+This is not "a result without its cause"; it is **a partial check wearing the face of
+a complete one**. Same family, different shape — and it is the one that made the twin
+look silent for a whole day. The fix is the same discipline as everywhere else in this
+doc, aimed at a different target: a dry-run's result must carry which layers it
+actually walked, not just whether the layers it walked came back clean.
+
+## The axis problem: a correct detector can still watch the wrong thing
+
+This recurred three times:
+
+- `reachable` watched a probe, while the thing that failed was the fetch
+- `loopback-self` watched `127.0.0.1`, while the self-reference arrived over a real
+  interface IP
+- (fleet, another repo) a model-identity guard watched *which model*, while the
+  divergence was *which store* — same model name, two providers, two different
+  corpora, guard correctly silent
+
+None of these were broken. Each was watching an axis the failure did not travel on.
+The check that catches it: **name the axis the guard watches, then ask whether the
+failure you fear actually moves along it.**
+
 ## The medicine (one prescription, all four)
 
 **Make the result carry its reason, and never let "unknown" or "wrong" wear the face
@@ -42,9 +71,12 @@ Concretely, in order of how often it bit us:
 ## Corollaries about *testing* the above
 
 - **Test that the detector detects.** After writing the test, revert the fix and run it —
-  it MUST go red. A test that stays green while the bug returns guards nothing. We were
-  burned twice: #669's test exercised the pure endpoint builder but not the call site
-  that decides to *use* it, so the link-local bug walked right through to #671.
+  it MUST go red. A test that stays green while the bug returns guards nothing. #669's
+  test exercised the pure endpoint builder but not the call site that decides to *use*
+  it: reverting the pin at the call site would have kept the suite green. Nothing
+  exploited that gap in the end — the failure that outlived #669 was environmental
+  (macOS Local Network permission denying the PM2 daemon), not code — but the gap was
+  real, and #670 closed it.
 
 - **Measure a thing where it happens.** A number computed inside a shared loop is the
   loop's number, not the item's — peer latency absorbed other peers' blocking DNS until
