@@ -164,6 +164,10 @@ struct FederationStatusPayload {
     peers: Vec<FederationStatusPeer>,
 }
 
+// A wire/display row: each bool is a distinct flag the /fed page and consumers
+// read by name (reachable / node_unique / loopback_self / clock_warning), so
+// grouping them would break the JSON contract, not clarify it.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 struct FederationStatusPeer {
     url: String,
@@ -190,6 +194,11 @@ struct FederationStatusPeer {
     /// meaning four things at once. `None` = the fetch succeeded.
     #[serde(skip_serializing_if = "Option::is_none")]
     fetch_error: Option<String>,
+    /// `true` when `resolved_ip` is one of THIS machine's own interface addresses
+    /// — the probe looped back to our own serve, so those `agents` are ours, not
+    /// the peer's ("green while broken"). Catches self-reference through a real
+    /// interface (e.g. `10.20.0.18`), not just `127.0.0.1` (twin-found).
+    loopback_self: bool,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -238,6 +247,7 @@ fn federation_status_payload(status: &FederationStatus) -> FederationStatusPaylo
                 node_unique: federation_node_unique(&node_counts, peer.node.as_deref()),
                 auth_ok: None,
                 fetch_error: None,
+                loopback_self: false,
             })
             .collect(),
     }
@@ -269,8 +279,45 @@ async fn federation_live_payload() -> FederationStatusPayload {
         .values()
         .map(|record| record.url.clone())
         .collect::<Vec<_>>();
-    let outcomes = federation_fleet_sessions(&urls).await;
-    federation_payload_from_store(&store, &outcomes)
+    // Resolve every peer's routable IP ONCE, concurrently and ASYNC. A blocking
+    // getaddrinfo inside the sweep serialized the fetches and made one peer's
+    // measured latency include another peer's DNS wait — the number was the
+    // loop's, not the peer's (twin). The fetch pin AND the displayed resolved_ip
+    // both read this one map, so they cannot diverge either.
+    let resolved = federation_resolve_all(&urls).await;
+    let outcomes = federation_fleet_sessions(&urls, &resolved).await;
+    federation_payload_from_store(&store, &outcomes, &resolved)
+}
+
+/// Resolve each URL's routable IP concurrently, off the blocking DNS path.
+async fn federation_resolve_all(urls: &[String]) -> BTreeMap<String, std::net::IpAddr> {
+    let lookups = urls.iter().cloned().map(|url| async move {
+        let ip = federation_resolve_routable(&url).await?;
+        Some((url, ip))
+    });
+    futures_util::future::join_all(lookups)
+        .await
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+/// Async routable resolution — tokio's non-blocking `lookup_host` plus the same
+/// link-local/loopback filter, preferring IPv4. Replaces the blocking
+/// `to_socket_addrs` that was sitting inside the async sweep.
+async fn federation_resolve_routable(url: &str) -> Option<std::net::IpAddr> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    let host = parsed.host_str()?.to_owned();
+    let port = parsed.port_or_known_default().unwrap_or(3456);
+    let host_is_loopback = federation_host_is_loopback(&host);
+    let mut addrs = tokio::net::lookup_host((host.as_str(), port))
+        .await
+        .ok()?
+        .filter(|addr| host_is_loopback || federation_addr_is_routable(&addr.ip()))
+        .collect::<Vec<_>>();
+    // Prefer IPv4 — LAN peers answer on it and it dodges zone-less IPv6.
+    addrs.sort_by_key(|addr| u8::from(addr.is_ipv6()));
+    addrs.into_iter().next().map(|addr| addr.ip())
 }
 
 /// One peer's live fetch result. `error` is kept so an empty `sessions` says WHY
@@ -325,7 +372,10 @@ fn fleet_sessions_cache() -> &'static FleetSessionsCache {
 /// the browser never fans out to peers (CORS + auth + N connections). The lock
 /// is never held across the `.await`, so concurrent requests at most double a
 /// sweep (idempotent) rather than deadlock (#15).
-async fn federation_fleet_sessions(urls: &[String]) -> BTreeMap<String, FleetOutcome> {
+async fn federation_fleet_sessions(
+    urls: &[String],
+    resolved: &BTreeMap<String, std::net::IpAddr>,
+) -> BTreeMap<String, FleetOutcome> {
     let now = federation_now_millis();
     if let Ok(guard) = fleet_sessions_cache().lock() {
         if !guard.1.is_empty() && now.saturating_sub(guard.0) < FLEET_SESSIONS_TTL_MS {
@@ -347,8 +397,9 @@ async fn federation_fleet_sessions(urls: &[String]) -> BTreeMap<String, FleetOut
     };
     let fetches = urls.iter().cloned().map(|url| {
         let client = client.clone();
+        let pin = resolved.get(&url).copied();
         async move {
-            let outcome = federation_fetch_peer_sessions(&client, &url).await;
+            let outcome = federation_fetch_peer_sessions(&client, &url, pin).await;
             (url, outcome)
         }
     });
@@ -366,14 +417,16 @@ async fn federation_fleet_sessions(urls: &[String]) -> BTreeMap<String, FleetOut
 
 /// Fetch one peer's `/api/sessions` and keep just the session names, plus the
 /// error string when it did not succeed — so `agents: []` is never ambiguous.
-async fn federation_fetch_peer_sessions(client: &reqwest::Client, url: &str) -> FleetOutcome {
-    // The routable resolver is passed INTO the endpoint builder (not applied
-    // here) so the pin decision lives inside the tested unit — a zone-less
+async fn federation_fetch_peer_sessions(
+    client: &reqwest::Client,
+    url: &str,
+    pin: Option<std::net::IpAddr>,
+) -> FleetOutcome {
+    // `pin` was resolved once, up front, off the blocking DNS path — a zone-less
     // link-local IPv6 (which getaddrinfo may return first) can't silently sink
-    // the fetch, and a test with a fake resolver guards that it stays wired.
-    let Some(endpoint) = federation_sessions_endpoint(url, |host, port| {
-        federation_first_routable_addr(host, port).map(|addr| addr.ip())
-    }) else {
+    // the fetch, and because resolution is not in this timed region the latency
+    // below measures only this peer's round-trip.
+    let Some(endpoint) = federation_sessions_endpoint(url, pin) else {
         return FleetOutcome::failed(format!("could not build endpoint from {url}"), false);
     };
     let target = endpoint.to_string();
@@ -446,6 +499,7 @@ fn federation_send_error(target: &str, error: &reqwest::Error) -> String {
 fn federation_payload_from_store(
     store: &maw_peer::PeerStoreFile,
     outcomes: &BTreeMap<String, FleetOutcome>,
+    resolved: &BTreeMap<String, std::net::IpAddr>,
 ) -> FederationStatusPayload {
     let node_counts =
         federation_node_counts(store.peers.values().map(|record| record.node.as_deref()));
@@ -472,10 +526,13 @@ fn federation_payload_from_store(
                     .as_ref()
                     .map(|identity| identity.oracle.clone())
                     .filter(|oracle| !oracle.is_empty()),
-                resolved_ip: federation_resolve_ip(&record.url),
+                resolved_ip: resolved.get(&record.url).map(std::net::IpAddr::to_string),
                 node_unique: federation_node_unique(&node_counts, record.node.as_deref()),
                 auth_ok: record.auth_ok,
                 fetch_error: outcome.and_then(|outcome| outcome.error.clone()),
+                loopback_self: resolved
+                    .get(&record.url)
+                    .is_some_and(|ip| federation_is_local_ip(*ip)),
             }
         })
         .collect();
@@ -518,17 +575,18 @@ fn federation_load_real_peer_store() -> maw_peer::PeerStoreFile {
 /// test with a fake resolver guards the *whole* decision — reverting the pin,
 /// the resolver call, or the path-append all turn a test red. Guarding only the
 /// pure predicates would leave the "do we even resolve+pin?" wiring unwatched.
-fn federation_sessions_endpoint(
-    url: &str,
-    resolve: impl Fn(&str, u16) -> Option<std::net::IpAddr>,
-) -> Option<reqwest::Url> {
+/// Build the `/api/sessions` endpoint: pin the host to the pre-resolved routable
+/// `pin` (so a zone-less link-local address can't sink the fetch) and **append**
+/// `/api/sessions` to any existing base path rather than replacing it — a peer
+/// behind a reverse-proxy prefix (`…/maw`) keeps it. `pin` is resolved once,
+/// up front and async, so the pin decision + the displayed `resolved_ip` share a
+/// single source and the sweep never blocks on DNS. Reverting the pin or the
+/// path-append turns a test red.
+fn federation_sessions_endpoint(url: &str, pin: Option<std::net::IpAddr>) -> Option<reqwest::Url> {
     let mut endpoint = reqwest::Url::parse(url).ok()?;
-    let host = endpoint.host_str()?.to_owned();
-    let port = endpoint.port_or_known_default().unwrap_or(3456);
-    if let Some(ip) = resolve(&host, port) {
+    if let Some(ip) = pin {
         // Fail OPEN: if pinning ever fails, keep the hostname and let the client
-        // resolve rather than abandoning the fetch — the previous `?` here turned
-        // a pin hiccup into a silent empty result (twin nit 1). `set_ip_host`
+        // resolve rather than abandoning the fetch (twin nit 1). `set_ip_host`
         // only errors for a cannot-be-a-base URL, which http never is.
         let _ = endpoint.set_ip_host(ip);
     }
@@ -537,32 +595,12 @@ fn federation_sessions_endpoint(
     Some(endpoint)
 }
 
-/// Resolve a peer URL's host to a **routable** IP so the map can catch the
-/// loopback-to-self trap. `None` when the URL has no host or DNS fails.
-fn federation_resolve_ip(url: &str) -> Option<String> {
-    let parsed = reqwest::Url::parse(url).ok()?;
-    let host = parsed.host_str()?;
-    let port = parsed.port_or_known_default().unwrap_or(3456);
-    federation_first_routable_addr(host, port).map(|addr| addr.ip().to_string())
-}
-
-/// First routable address for `host:port`, preferring IPv4. For a non-loopback
-/// host, link-local (`fe80::/10`, `169.254/16`) and loopback addresses are
-/// skipped — `getaddrinfo` often returns a link-local IPv6 first, and picking it
-/// makes every connection to that peer fail silently (twin-found: black
-/// resolved to `fe80::…`, so m5's session aggregation saw `agents=[]`). A
-/// loopback host keeps loopback so the `m5.local → 127.0.0.1` self-trap still flags.
-fn federation_first_routable_addr(host: &str, port: u16) -> Option<std::net::SocketAddr> {
-    use std::net::ToSocketAddrs;
-    let host_is_loopback = federation_host_is_loopback(host);
-    let mut addrs = (host, port)
-        .to_socket_addrs()
-        .ok()?
-        .filter(|addr| host_is_loopback || federation_addr_is_routable(&addr.ip()))
-        .collect::<Vec<_>>();
-    // Prefer IPv4 — LAN peers answer on it and it dodges zone-less IPv6.
-    addrs.sort_by_key(|addr| u8::from(addr.is_ipv6()));
-    addrs.into_iter().next()
+/// Is `ip` one of THIS machine's own interface addresses? Binding an ephemeral
+/// socket to it succeeds only for a local address (the OS rejects binding a
+/// non-local IP with `EADDRNOTAVAIL`), so this catches self-reference through any
+/// real interface — loopback AND e.g. `10.20.0.18` — with no crate and no unsafe.
+fn federation_is_local_ip(ip: std::net::IpAddr) -> bool {
+    std::net::TcpListener::bind((ip, 0)).is_ok()
 }
 
 fn federation_host_is_loopback(host: &str) -> bool {
@@ -852,7 +890,7 @@ mod tests {
             federation_store_record("http://c.test:3456", "solo", Some("nova"), false),
         );
 
-        let payload = federation_payload_from_store(&store, &BTreeMap::new());
+        let payload = federation_payload_from_store(&store, &BTreeMap::new(), &BTreeMap::new());
         assert_eq!(payload.peers.len(), 3, "real peers, not the empty stub");
 
         let by_node = |node: &str| {
@@ -891,6 +929,7 @@ mod tests {
                 node_unique: true,
                 auth_ok: None,
                 fetch_error: Some("GET http://192.168.1.118:3456/api/sessions: boom".to_owned()),
+                loopback_self: false,
             }],
         };
         federation_redact_payload(&mut payload);
@@ -933,16 +972,24 @@ mod tests {
     }
 
     #[test]
+    fn federation_is_local_ip_flags_own_interface_not_a_remote() {
+        use std::net::{IpAddr, Ipv4Addr};
+        // Loopback is always a local interface → self-reference.
+        assert!(federation_is_local_ip(IpAddr::V4(Ipv4Addr::LOCALHOST)));
+        // TEST-NET-3 (203.0.113.0/24, RFC 5737) is never assigned to an
+        // interface → a real remote. This is the flag the CLI/page rely on to
+        // catch "the probe reached our own serve" even via a non-loopback IP.
+        assert!(!federation_is_local_ip(IpAddr::V4(Ipv4Addr::new(
+            203, 0, 113, 7
+        ))));
+    }
+
+    #[test]
     fn federation_sessions_endpoint_resolves_pins_and_keeps_base_path() {
         use std::net::{IpAddr, Ipv4Addr};
-        // Fake resolver = what first_routable_addr must do: skip the link-local
-        // address getaddrinfo returns first and hand back the routable one.
-        // Because the resolver is a parameter, reverting the resolve+pin (or the
-        // path-append) inside the fn — OR the call site no longer passing a real
-        // resolver — turns this red. That's the whole decision guarded, not just
-        // a predicate.
-        let routable = |_h: &str, _p: u16| Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 184)));
-        let unresolved = |_h: &str, _p: u16| None;
+        // The pin is the pre-resolved routable IP (async resolution happens up
+        // front now). Reverting the pin or the path-append turns this red.
+        let routable = Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 184)));
         assert_eq!(
             federation_sessions_endpoint("http://black.local:3456", routable)
                 .unwrap()
@@ -951,14 +998,14 @@ mod tests {
         );
         // R3: a reverse-proxy base path is preserved, not discarded.
         assert_eq!(
-            federation_sessions_endpoint("http://host:3456/maw", unresolved)
+            federation_sessions_endpoint("http://host:3456/maw", None)
                 .unwrap()
                 .as_str(),
             "http://host:3456/maw/api/sessions"
         );
         // No pin + no base path → clean /api/sessions.
         assert_eq!(
-            federation_sessions_endpoint("http://host:3456", unresolved)
+            federation_sessions_endpoint("http://host:3456", None)
                 .unwrap()
                 .as_str(),
             "http://host:3456/api/sessions"
@@ -1008,7 +1055,14 @@ mod tests {
                 Some(9),
             ),
         );
-        let mut payload = federation_payload_from_store(&store, &outcomes);
+        // resolved_ip on the payload comes from this pre-resolved map (shared
+        // with the fetch pin), not a separate lookup that could disagree.
+        let mut resolved = BTreeMap::new();
+        resolved.insert(
+            "http://a.test:3456".to_owned(),
+            "192.168.1.10".parse::<std::net::IpAddr>().unwrap(),
+        );
+        let mut payload = federation_payload_from_store(&store, &outcomes, &resolved);
         let by_url = |u: &str| {
             payload
                 .peers
@@ -1020,6 +1074,10 @@ mod tests {
         assert_eq!(by_url("http://a.test:3456").agents, vec!["06-fb", "08-gpu"]);
         assert_eq!(by_url("http://a.test:3456").fetch_error, None);
         assert!(by_url("http://a.test:3456").reachable);
+        assert_eq!(
+            by_url("http://a.test:3456").resolved_ip.as_deref(),
+            Some("192.168.1.10")
+        );
         assert_eq!(by_url("http://a.test:3456").latency, Some(7));
         assert!(by_url("http://b.test:3456").agents.is_empty());
         assert!(
