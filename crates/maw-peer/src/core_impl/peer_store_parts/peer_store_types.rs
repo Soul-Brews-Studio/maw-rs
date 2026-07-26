@@ -1,5 +1,3 @@
-const PEER_DEFAULT_ORACLE: &str = "mawjs";
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ParsedRemoteIdentity {
     pubkey: Option<String>,
@@ -22,10 +20,13 @@ fn parse_remote_identity(identity: &ProbeRemoteIdentity) -> Option<ParsedRemoteI
         .map(str::to_owned);
     let node = node.as_deref().filter(|value| !value.is_empty());
     let identity = node.map(|node| PeerIdentity {
+        // A peer that does not report an oracle stores "" — rendered as "-"/"—" downstream —
+        // never a fabricated "mawjs" default. A default that looks like probed data is the
+        // bug, not the missing data (#677).
         oracle: oracle
             .as_deref()
             .filter(|value| !value.is_empty())
-            .unwrap_or(PEER_DEFAULT_ORACLE)
+            .unwrap_or_default()
             .to_owned(),
         node: node.to_owned(),
     });
@@ -221,5 +222,43 @@ fn legacy_peer_store_path(env: &PeerStoreEnv) -> Option<PathBuf> {
     }
     let legacy = env.home_dir().join(".maw").join("peers.json");
     (legacy != peer_store_path(env)).then_some(legacy)
+}
+
+#[cfg(test)]
+mod parse_remote_identity_tests {
+    use super::*;
+
+    fn body(oracle: Option<&str>) -> ProbeRemoteIdentity {
+        ProbeRemoteIdentity::Body {
+            pubkey: Some("pk".to_owned()),
+            oracle: oracle.map(str::to_owned),
+            node: Some("black".to_owned()),
+        }
+    }
+
+    #[test]
+    fn present_oracle_is_stored_verbatim() {
+        let parsed = parse_remote_identity(&body(Some("arra"))).expect("identity");
+        assert_eq!(parsed.identity.expect("identity").oracle, "arra");
+    }
+
+    #[test]
+    fn absent_oracle_stores_empty_never_a_fabricated_default() {
+        // #677: a peer that does not report an oracle must NOT be labelled "mawjs" (or any
+        // constant). Empty renders as "-"/"—"; the masquerade would make an unknown look probed.
+        // Reverting parse_remote_identity to `.unwrap_or("mawjs")` MUST turn this test red.
+        let parsed = parse_remote_identity(&body(None)).expect("identity");
+        let oracle = parsed.identity.expect("identity").oracle;
+        assert_eq!(oracle, "");
+        assert_ne!(oracle, "mawjs");
+    }
+
+    #[test]
+    fn empty_oracle_string_is_treated_as_absent() {
+        // The empty case is exactly what /api/identity now emits: the field is omitted →
+        // deserializes to None → stored as "". Confirm it never resurrects a default.
+        let parsed = parse_remote_identity(&body(Some(""))).expect("identity");
+        assert_eq!(parsed.identity.expect("identity").oracle, "");
+    }
 }
 
