@@ -359,8 +359,15 @@ fn spawn_serve_peer_refresh() {
                 peers_probe_all_and_persist(PEERS_DEFAULT_PROBE_TIMEOUT_MS)
             })
             .await;
-            if let Ok(Err(error)) = outcome {
-                eprintln!("maw-rs serve peer-refresh: {error}");
+            match outcome {
+                Ok(Err(error)) => eprintln!("maw-rs serve peer-refresh: {error}"),
+                // A panic in the blocking probe surfaces as JoinError. Never swallow it:
+                // a sweep that panics every tick would otherwise freeze lastSeen in total
+                // silence — the exact #684 disease this task exists to cure.
+                Err(join_error) => {
+                    eprintln!("maw-rs serve peer-refresh: sweep task panicked: {join_error}");
+                }
+                Ok(Ok(_)) => {}
             }
         }
     });
