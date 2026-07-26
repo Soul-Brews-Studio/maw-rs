@@ -302,22 +302,31 @@ async fn federation_resolve_all(urls: &[String]) -> BTreeMap<String, std::net::I
         .collect()
 }
 
-/// Async routable resolution — tokio's non-blocking `lookup_host` plus the same
-/// link-local/loopback filter, preferring IPv4. Replaces the blocking
-/// `to_socket_addrs` that was sitting inside the async sweep.
+/// Routable resolution, off the async task. Uses `std::to_socket_addrs` on a
+/// blocking thread (`spawn_blocking`) — NOT `tokio::net::lookup_host`, which
+/// returned nothing for `.local`/mDNS names on Linux and broke every hostname
+/// peer (regression in v1503). This keeps the sync resolver that actually
+/// resolves `.local`, while still not blocking the sweep, plus the same
+/// link-local/loopback filter, preferring IPv4.
 async fn federation_resolve_routable(url: &str) -> Option<std::net::IpAddr> {
     let parsed = reqwest::Url::parse(url).ok()?;
     let host = parsed.host_str()?.to_owned();
     let port = parsed.port_or_known_default().unwrap_or(3456);
     let host_is_loopback = federation_host_is_loopback(&host);
-    let mut addrs = tokio::net::lookup_host((host.as_str(), port))
-        .await
-        .ok()?
-        .filter(|addr| host_is_loopback || federation_addr_is_routable(&addr.ip()))
-        .collect::<Vec<_>>();
-    // Prefer IPv4 — LAN peers answer on it and it dodges zone-less IPv6.
-    addrs.sort_by_key(|addr| u8::from(addr.is_ipv6()));
-    addrs.into_iter().next().map(|addr| addr.ip())
+    tokio::task::spawn_blocking(move || {
+        use std::net::ToSocketAddrs;
+        let mut addrs = (host.as_str(), port)
+            .to_socket_addrs()
+            .ok()?
+            .filter(|addr| host_is_loopback || federation_addr_is_routable(&addr.ip()))
+            .collect::<Vec<_>>();
+        // Prefer IPv4 — LAN peers answer on it and it dodges zone-less IPv6.
+        addrs.sort_by_key(|addr| u8::from(addr.is_ipv6()));
+        addrs.into_iter().next().map(|addr| addr.ip())
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 /// One peer's live fetch result. `error` is kept so an empty `sessions` says WHY
