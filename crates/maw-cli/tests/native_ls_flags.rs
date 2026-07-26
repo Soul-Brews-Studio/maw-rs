@@ -48,11 +48,16 @@ exit 42
 
 fn write_fake_curl(bin_dir: &Path) {
     let curl = bin_dir.join("curl");
+    // GET /api/sessions returns a TOP-LEVEL array (measured against a real serve), not a
+    // {"sessions":[…]} envelope. The stub mirrors that measured shape so both federation
+    // tests exercise the `as_array` branch of ls_sessions_from_payload — deleting that
+    // branch then turns these RED instead of silently returning empty for every real peer
+    // (#676; the old stub encoded the imagined shape of the never-existent /api/ls).
     fs::write(
         &curl,
         r#"#!/bin/sh
 printf '%s\n' "$*" >> "$MAW_LS_CURL_LOG"
-printf '{"sessions":[{"name":"blue-oracle","windows":[{"name":"main","index":0,"active":true}]}]}'
+printf '[{"name":"blue-oracle","windows":[{"name":"main","index":0,"active":true}]}]'
 "#,
     )
     .expect("write fake curl");
