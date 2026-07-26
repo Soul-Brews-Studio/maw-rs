@@ -112,6 +112,21 @@ fn write_bun_shim(dir: &Path) {
     }
 }
 
+fn write_silent_bun_shim(dir: &Path) {
+    let shim = dir.join("bun");
+    write(&shim, "#!/bin/sh\nexit 0\n").expect("write silent bun shim");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = std::fs::metadata(&shim)
+            .expect("shim metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&shim, permissions).expect("chmod silent bun shim");
+    }
+}
+
 fn write_ts_plugin(plugins_dir: &Path, dir_name: &str, command: &str) {
     write_ts_plugin_with_runtime(plugins_dir, dir_name, command, None);
 }
@@ -294,6 +309,32 @@ fn dispatch_cli_plugin_reports_missing_bun_for_bun_dev_runtime() {
     assert_eq!(
         dispatched.stderr,
         "⚠ [dev-tier: bun] weather-demo — TS runs unsandboxed; ship tier = WASM (maw plugin build)\ndev-tier plugin weather-demo needs bun; install bun or build wasm\n"
+    );
+
+    remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn dispatch_cli_plugin_warns_when_bun_dev_plugin_exits_silently() {
+    let _guard = env_lock().lock().expect("env lock");
+    let _restore = EnvRestore::capture();
+    let root = temp_dir("bun-dev-silent");
+    let bin_dir = root.join("bin");
+    let plugins_dir = root.join("plugins");
+    create_dir_all(&bin_dir).expect("bin dir");
+    create_dir_all(&plugins_dir).expect("plugins dir");
+    write_silent_bun_shim(&bin_dir);
+    write_bun_dev_ts_plugin(&plugins_dir, "weather-demo", "weather report");
+    std::env::set_var("PATH", &bin_dir);
+    std::env::set_var("MAW_PLUGINS_DIR", &plugins_dir);
+
+    let dispatched = run_cli(&args(&["weather", "report"]));
+
+    assert_eq!(dispatched.code, 0, "{}", dispatched.stderr);
+    assert!(dispatched.stdout.is_empty(), "{}", dispatched.stdout);
+    assert_eq!(
+        dispatched.stderr,
+        "⚠ [dev-tier: bun] weather-demo — TS runs unsandboxed; ship tier = WASM (maw plugin build)\nplugin weather-demo exited 0 with no output — maw executes the entry file, it does not import it; if your entry only exports a default function add an `import.meta.main` block\n"
     );
 
     remove_dir_all(root).expect("cleanup");
