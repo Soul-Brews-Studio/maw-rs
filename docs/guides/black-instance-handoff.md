@@ -115,6 +115,35 @@ production `block_on` (swept them all).
 - **`maw pair` writes peer records** (`pair_write_peer`) — treat any failure in
   that flow as store-affecting, return `Result`, never `panic`.
 
+## 3b. Older traps from this instance's memory (repo-relevant, undocumented)
+
+These predate this week but live only in this instance's private memory, so they
+vanish with it unless recorded. Each has bitten before.
+
+- **Native vs WASM: settle it by real-invoke, not by reading.** `grep` and even
+  careful source-reading both *lied* about whether stream/hub/layout run native or
+  via a WASM plugin. Only invoking the verb on a **default (no-`wasm-host`) build**
+  settles it — a WASM-routed verb errors `ship-tier WASM plugin` there, a native
+  one runs. Don't conclude "this is native" from the call graph; run it.
+- **A versioned binary breaks process-name predicates (#520).** For a
+  self-updating client, `pane_current_command` is the **version string**
+  (e.g. `2.1.207`), not the program name (`claude`). Any predicate keying on the
+  process *name* silently matches nothing. Native code was patched to handle this;
+  **plugins fossilize the old assumption** — check both when a pane predicate
+  "sees nothing."
+- **Serve auth is env-or-config, and loopback trusts itself by default.**
+  `serve.token` and `loopbackExempt` are **config keys, not CLI flags** (passing
+  them as `--flags` silently does nothing). `loopbackExempt` **defaults true** — two
+  UIDs on loopback trust each other's signed requests without a token. This is
+  exactly why `curl localhost:3456` and `:3458` both return 200 with no credential
+  (see #685) — it's the loopback exemption, not a broken auth check. Matters
+  directly for the two-process (:3456/:3458) setup on black.
+- **Federation wake can report success while doing nothing (#524).** `/api/wake`
+  verified the request then returned `ok:true` as a no-op. Never trust a
+  **sender-side** "woke it" — verify the **receiver-side effect** (did the pane
+  actually change?). Same family as the reachable-vs-fetch and dry-run-vs-send
+  traps: a success that doesn't carry proof of the effect can lie.
+
 ## 4. The meta-lesson (the one worth keeping)
 
 Both this instance and m5 **misdiagnosed twice each** this week, and both
