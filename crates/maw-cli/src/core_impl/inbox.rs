@@ -149,23 +149,32 @@ async fn inbox_run(
     env: &InboxEnv,
     sender: &mut impl InboxSender,
 ) -> Result<String, String> {
+    inbox_run_at(argv, env, sender, inbox_now_ms()).await
+}
+
+async fn inbox_run_at(
+    argv: &[String],
+    env: &InboxEnv,
+    sender: &mut impl InboxSender,
+    now_ms: u64,
+) -> Result<String, String> {
     if wants_help_before_positionals(argv, &["--from", "--last"]) {
         return Ok(format!("usage: {INBOX_USAGE}\n"));
     }
     match argv.first().map(String::as_str) {
-        Some("pending" | "queue") => inbox_run_pending(env, inbox_now_ms()),
-        Some("show-pending" | "pending-show") => inbox_run_show_pending(&argv[1..], env, inbox_now_ms()),
-        Some("approve") => inbox_run_approve(&argv[1..], env, sender, inbox_now_ms()).await,
-        Some("reject") => inbox_run_reject(&argv[1..], env, inbox_now_ms()),
-        Some("list" | "ls") => inbox_run_list(&argv[1..], env, inbox_now_ms()),
+        Some("pending" | "queue") => inbox_run_pending(env, now_ms),
+        Some("show-pending" | "pending-show") => inbox_run_show_pending(&argv[1..], env, now_ms),
+        Some("approve") => inbox_run_approve(&argv[1..], env, sender, now_ms).await,
+        Some("reject") => inbox_run_reject(&argv[1..], env, now_ms),
+        Some("list" | "ls") => inbox_run_list(&argv[1..], env, now_ms),
         Some("read") => inbox_run_mark_read(&argv[1..], env),
         Some("show") => inbox_run_show(&argv[1..], env),
-        Some("write") => inbox_run_write(&argv[1..], env, inbox_now_ms()),
-        Some("status") => inbox_run_status(&argv[1..], env, inbox_now_ms()),
-        Some("drain") => inbox_run_drain(&argv[1..], env, inbox_now_ms()),
-        Some(value) if value.starts_with('-') => inbox_run_list(argv, env, inbox_now_ms()),
+        Some("write") => inbox_run_write(&argv[1..], env, now_ms),
+        Some("status") => inbox_run_status(&argv[1..], env, now_ms),
+        Some("drain") => inbox_run_drain(&argv[1..], env, now_ms),
+        Some(value) if value.starts_with('-') => inbox_run_list(argv, env, now_ms),
         Some(value) => Err(format!("inbox: unknown subcommand {value}")),
-        None => inbox_run_list(argv, env, inbox_now_ms()),
+        None => inbox_run_list(argv, env, now_ms),
     }
 }
 
@@ -1680,6 +1689,16 @@ mod inbox_tests {
         }
     }
 
+    // 2026-06-25T00:05:00.000Z -- five minutes after every fixture's
+    // hardcoded `sent_at`/timestamp in this file. Every inbox test runs
+    // against this frozen instant, not the real wall clock: pending items
+    // are gated by a 30-day TTL (INBOX_PENDING_TTL_SECONDS) measured from
+    // `inbox_now_ms()`, so a fixture dated 2026-06-25 silently "expires"
+    // once real time drifts more than 30 days past it -- which is exactly
+    // what made 5 of these tests fail starting sometime after 2026-07-25
+    // (#700/#688), despite every path already being isolated via InboxEnv.
+    const INBOX_TEST_NOW_MS: u64 = 1_782_345_900_000;
+
     fn inbox_run_test(
         argv: &[String],
         env: &InboxEnv,
@@ -1689,7 +1708,7 @@ mod inbox_tests {
             .enable_all()
             .build()
             .expect("test runtime")
-            .block_on(inbox_run(argv, env, sender))
+            .block_on(inbox_run_at(argv, env, sender, INBOX_TEST_NOW_MS))
     }
 
     fn inbox_temp_env(name: &str) -> InboxEnv {
@@ -2016,7 +2035,7 @@ mod inbox_tests {
         assert!(err.contains("fake send failed"));
         let path = inbox_state_pending_dir(&env).join("abc123.json");
         assert!(path.exists());
-        let pending = inbox_load_pending_for_env(&env, inbox_now_ms()).unwrap();
+        let pending = inbox_load_pending_for_env(&env, INBOX_TEST_NOW_MS).unwrap();
         assert_eq!(pending[0].status, "pending");
     }
 
