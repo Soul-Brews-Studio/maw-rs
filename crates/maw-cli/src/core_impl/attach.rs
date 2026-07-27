@@ -324,13 +324,13 @@ fn attach_picker_output(
     candidates: &[maw_matcher::ResolveMatch],
     options: &AttachOptions,
 ) -> Result<String, CliOutput> {
-    let rows = attach_picker_rows(candidates);
+    let rows = attach_picker_rows(target, candidates);
     if rows.is_empty() {
         return Ok(target.to_owned());
     }
     let json = attach_has_flag(options, ATTACH_FLAG_PLAN_JSON);
     if attach_has_flag(options, ATTACH_FLAG_YES) && rows.len() == 1 {
-        return attach_run_picker_row(rows[0].clone());
+        return attach_run_picker_row(target, rows[0].clone());
     }
     if json || attach_has_flag(options, ATTACH_FLAG_PRINT) || !attach_stdin_is_terminal() {
         let stdout = if json {
@@ -352,31 +352,38 @@ fn attach_picker_output(
                 stderr: "attach: picker cancelled\n".to_owned(),
             })
         },
-        attach_run_picker_row,
+        |row| attach_run_picker_row(target, row),
     )
 }
 
-fn attach_picker_rows(candidates: &[maw_matcher::ResolveMatch]) -> Vec<PickerRow> {
+fn attach_picker_rows(target: &str, candidates: &[maw_matcher::ResolveMatch]) -> Vec<PickerRow> {
     candidates
         .iter()
         .filter_map(|matched| {
             Some(PickerRow {
                 matched: matched.clone(),
                 detail: attach_picker_detail(matched),
-                action: attach_picker_action(matched)?,
+                action: attach_picker_action(target, matched)?,
             })
         })
         .collect()
 }
 
-fn attach_picker_action(matched: &maw_matcher::ResolveMatch) -> Option<String> {
+// `target` is the RAW query the caller typed, not the (possibly coarser)
+// resolved candidate name -- for SleepingRegistry, the candidate is keyed on
+// the whole fleet session, but the session can hold many windows sharing
+// that session's registry entry. Handing wake the raw query lets wake's own
+// resolver (which already disambiguates by window/oracle name) land on the
+// specific window the user asked for, instead of silently falling back to
+// the session's active/first window (#711).
+fn attach_picker_action(target: &str, matched: &maw_matcher::ResolveMatch) -> Option<String> {
     match matched.candidate.kind {
         maw_matcher::ResolveCandidateKind::FleetSquad => {
             Some(format!("maw fleet wake {}", matched.candidate.name))
         }
         maw_matcher::ResolveCandidateKind::SleepingRegistry => Some(format!(
-            "maw wake {} --attach --session {}",
-            matched.candidate.name, matched.candidate.name
+            "maw wake {target} --attach --session {}",
+            matched.candidate.name
         )),
         maw_matcher::ResolveCandidateKind::Oracle => {
             Some(format!("maw wake {} --attach", matched.candidate.name))
@@ -426,14 +433,14 @@ fn picker_prompt(command: &str, target: &str, context: &str, rows: &[PickerRow])
     }
 }
 
-fn attach_run_picker_row(row: PickerRow) -> Result<String, CliOutput> {
+fn attach_run_picker_row(target: &str, row: PickerRow) -> Result<String, CliOutput> {
     attach_validate_token(&row.matched.candidate.name, "picker target")
         .map_err(|message| command_target_error("attach", &message))?;
     match row.matched.candidate.kind {
         maw_matcher::ResolveCandidateKind::LiveSession
         | maw_matcher::ResolveCandidateKind::Window => Ok(row.matched.candidate.name),
         maw_matcher::ResolveCandidateKind::SleepingRegistry => Err(run_wake_command(&[
-            row.matched.candidate.name.clone(),
+            target.to_owned(),
             "--attach".to_owned(),
             "--session".to_owned(),
             row.matched.candidate.name,
@@ -1114,16 +1121,38 @@ mod attach_tests {
         assert_eq!(picker_parse_selection("y", 1), PickerSelection::Pick(0));
         assert_eq!(picker_parse_selection("2", 3), PickerSelection::Pick(1));
         assert_eq!(
-            attach_picker_action(&group).as_deref(),
+            attach_picker_action("3e", &group).as_deref(),
             Some("maw fleet wake 3e")
         );
         assert_eq!(
-            attach_picker_action(&sleeping).as_deref(),
+            attach_picker_action("47-3e-infra", &sleeping).as_deref(),
             Some("maw wake 47-3e-infra --attach --session 47-3e-infra")
         );
         assert_eq!(
-            attach_picker_action(&live).as_deref(),
+            attach_picker_action("99-live", &live).as_deref(),
             Some("maw attach 99-live")
+        );
+    }
+
+    #[test]
+    fn attach_picker_action_carries_the_raw_window_query_through_to_wake_not_the_session_name() {
+        // #711: the SleepingRegistry candidate is keyed on the whole fleet
+        // session (one registry entry can hold many windows), so the
+        // resolved candidate name alone can't say which window the caller
+        // meant. The raw query -- e.g. a specific window/oracle name typed
+        // by the caller -- must survive into the wake invocation, or wake
+        // silently falls back to the session's active/first window.
+        let sleeping = maw_matcher::ResolveMatch {
+            rank: maw_matcher::ResolveMatchRank::Registry,
+            candidate: maw_matcher::ResolveTypedCandidate {
+                kind: maw_matcher::ResolveCandidateKind::SleepingRegistry,
+                name: "05-rpro-ent".to_owned(),
+                aliases: Vec::new(),
+            },
+        };
+        assert_eq!(
+            attach_picker_action("rpro-ent-codex-2", &sleeping).as_deref(),
+            Some("maw wake rpro-ent-codex-2 --attach --session 05-rpro-ent")
         );
     }
 
