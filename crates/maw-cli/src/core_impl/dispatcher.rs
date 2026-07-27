@@ -950,11 +950,24 @@ fn dispatch_bun_dev_plugin(plugin: &LoadedPlugin, ctx: &InvokeContext) -> CliOut
         .output();
 
     match output {
-        Ok(output) => CliOutput {
-            code: output.status.code().unwrap_or(1),
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: format!("{banner}{}", String::from_utf8_lossy(&output.stderr)),
-        },
+        Ok(output) => {
+            let code = output.status.code().unwrap_or(1);
+            let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+            let plugin_stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+            let silence_note = if code == 0 && stdout.is_empty() && plugin_stderr.is_empty() {
+                format!(
+                    "plugin {} exited 0 with no output — maw executes the entry file, it does not import it; if your entry only exports a default function add an `import.meta.main` block\n",
+                    plugin.manifest.name
+                )
+            } else {
+                String::new()
+            };
+            CliOutput {
+                code,
+                stdout,
+                stderr: format!("{banner}{plugin_stderr}{silence_note}"),
+            }
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => CliOutput {
             code: 2,
             stdout: String::new(),

@@ -117,7 +117,7 @@ fn pluginartifact_plan_project(dir: &std::path::Path) -> Result<String, String> 
 }
 
 fn pluginartifact_contract_text() -> &'static str {
-    "plugin artifact contract v1\n  manifest: plugin.json\n  wasm: target=wasm plus wasm=<relative .wasm> or entry={kind:wasm,path,export}\n  artifact: artifact.path=<relative .wasm> and artifact.sha256=sha256:<hex> before install/load\n  capabilities: plugin.json capabilities array is preserved and consumed by runtime/registry gates\n  runtime ladder: WASM is ship tier via extism-wasm with sha256-verified artifacts\n  runtime ladder: Bun is explicit dev tier only via runtime=\"bun-dev\"; it prints a loud banner and runs unsandboxed\n  runtime ladder: maw-js subprocess fallback is not part of plugin dispatch\n  supported: Rust-WASM first-class via cargo wasm32-unknown-unknown\n  supported: prebuilt WASM artifact with sha256 and declared capabilities/export\n  refused: AssemblyScript/TS unless a pinned compiler/prebuilt WASM artifact is supplied\n  seam: part287 plugin-manifest consumes the same plugin.json + wasm/artifact + sha256 + capabilities + export contract\n"
+    "plugin artifact contract v1\n  manifest: plugin.json\n  wasm: target=wasm plus wasm=<relative .wasm> or entry={kind:wasm,path,export}\n  artifact: artifact.path=<relative .wasm> and artifact.sha256=sha256:<hex> before install/load\n  capabilities: plugin.json capabilities array is preserved and consumed by runtime/registry gates\n  runtime ladder: WASM is ship tier via extism-wasm with sha256-verified artifacts\n  runtime ladder: Bun is explicit dev tier only via runtime=\"bun-dev\"; it prints a loud banner and runs unsandboxed\n  runtime ladder: bun-dev entry contract: the entry file is executed as a script, never imported — a bare `export default` is never called; add an `import.meta.main` (or top-level await/call) to actually run\n  runtime ladder: maw-js subprocess fallback is not part of plugin dispatch\n  supported: Rust-WASM first-class via cargo wasm32-unknown-unknown\n  supported: prebuilt WASM artifact with sha256 and declared capabilities/export\n  refused: AssemblyScript/TS unless a pinned compiler/prebuilt WASM artifact is supplied\n  seam: part287 plugin-manifest consumes the same plugin.json + wasm/artifact + sha256 + capabilities + export contract\n"
 }
 
 fn pluginartifact_validate_dir(value: &str) -> Result<std::path::PathBuf, String> {
@@ -297,6 +297,8 @@ mod pluginartifact_tests {
         assert!(out.stdout.contains("part287 plugin-manifest consumes"));
         assert!(out.stdout.contains("runtime=\"bun-dev\""));
         assert!(out.stdout.contains("runs unsandboxed"));
+        assert!(out.stdout.contains("executed as a script, never imported"));
+        assert!(out.stdout.contains("import.meta.main"));
     }
 
     #[test]
