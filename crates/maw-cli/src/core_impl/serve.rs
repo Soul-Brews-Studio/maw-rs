@@ -1364,6 +1364,132 @@ struct ServeDeliverContext<'a> {
     idempotency_key: Option<DeliveryIdempotencyKey>,
 }
 
+/// #709: a bare session target resolves to a specific window/pane (often
+/// index 0) with no check that anything agent-shaped is actually there --
+/// window renames, pane replacement, or an agent closing leave `delivered`
+/// reporting success into a plain shell. Same keyword/semver-command
+/// heuristic as `agents_is_agent_pane` (#699/#690) — kept as a small local
+/// duplicate rather than reaching into `serve_core::modules::agent_routes`,
+/// since the two call sites (this file and the `/api/agents` listing) sit in
+/// different module trees.
+fn serve_pane_looks_like_agent(command: &str, title: &str) -> bool {
+    let command_lower = command.to_ascii_lowercase();
+    let title_lower = title.to_ascii_lowercase();
+    title_lower.contains("agent")
+        || title_lower.contains("oracle")
+        || title_lower.contains("codex")
+        || title_lower.contains("claude")
+        || command_lower.contains("codex")
+        || command_lower.contains("claude")
+        || serve_command_is_versioned_binary(command)
+}
+
+/// A live Claude Code pane reports its own version string as the pane
+/// command (e.g. `2.1.219`) rather than a process name.
+fn serve_command_is_versioned_binary(command: &str) -> bool {
+    let mut parts = command.split('.');
+    let Some(major) = parts.next() else {
+        return false;
+    };
+    let Some(minor) = parts.next() else {
+        return false;
+    };
+    let rest: Vec<&str> = parts.collect();
+    !major.is_empty()
+        && !minor.is_empty()
+        && !rest.is_empty()
+        && major.bytes().all(|byte| byte.is_ascii_digit())
+        && minor.bytes().all(|byte| byte.is_ascii_digit())
+        && rest
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+/// `resolved` (from `resolve_route_target`) is `session:windowIndex` -- but
+/// `TmuxPane::target` (from `list_panes`) reports panes as `session:
+/// windowNAME.paneIndex`. Resolve the index to the window's actual name
+/// against the session list before any pane lookup can work at all; without
+/// this step a naive string match against `resolved` silently never finds
+/// the pane (caught by this fix's own test before it shipped).
+fn serve_window_name_for_resolved_target(sessions: &[RouteSession], resolved: &str) -> Option<String> {
+    let (session_name, window_part) = resolved.split_once(':')?;
+    let window_part = window_part.split('.').next().unwrap_or(window_part);
+    let session = sessions.iter().find(|session| session.name == session_name)?;
+    if let Ok(index) = window_part.parse::<u32>() {
+        session
+            .windows
+            .iter()
+            .find(|window| window.index == index)
+            .map(|window| window.name.clone())
+    } else {
+        session
+            .windows
+            .iter()
+            .find(|window| window.name.eq_ignore_ascii_case(window_part))
+            .map(|window| window.name.clone())
+    }
+}
+
+/// Find the live pane(s) under a resolved session:window, matched by window
+/// NAME (see `serve_window_name_for_resolved_target`) -- the first pane
+/// (lowest pane index) is what a windowless target like `session:0` sends to.
+fn serve_pane_for_resolved_target<'a>(
+    panes: &'a [TmuxPane],
+    session_name: &str,
+    window_name: &str,
+) -> Option<&'a TmuxPane> {
+    let prefix = format!("{session_name}:{window_name}.");
+    let mut matches: Vec<&TmuxPane> = panes.iter().filter(|pane| pane.target.starts_with(&prefix)).collect();
+    matches.sort_by(|left, right| left.target.cmp(&right.target));
+    matches.into_iter().next()
+}
+
+/// `None` when the pane could not be found at all (already covered by the
+/// existing toctou/target-disappeared checks) or when it looks agent-shaped.
+/// `Some(warning)` names exactly what `delivered` actually reached, per #709's
+/// third ask ("delivered should name what it delivered to"). Pure over
+/// already-fetched session/pane data so it's testable without a real tmux.
+fn serve_non_agent_pane_warning_from_panes(
+    sessions: &[RouteSession],
+    panes: &[TmuxPane],
+    resolved: &str,
+) -> Option<String> {
+    let (session_name, _) = resolved.split_once(':')?;
+    let window_name = serve_window_name_for_resolved_target(sessions, resolved)?;
+    let pane = serve_pane_for_resolved_target(panes, session_name, &window_name)?;
+    if serve_pane_looks_like_agent(&pane.command, &pane.title) {
+        return None;
+    }
+    Some(format!(
+        "delivered to {resolved} (window '{window_name}') but its pane runs '{}' (title: '{}'), not an agent -- likely misaddressed",
+        pane.command, pane.title
+    ))
+}
+
+fn serve_non_agent_pane_warning(resolved: &str) -> Option<String> {
+    let mut tmux = TmuxClient::local();
+    let sessions = route_sessions_from_tmux(&mut tmux);
+    let panes = tmux.list_panes();
+    serve_non_agent_pane_warning_from_panes(&sessions, &panes, resolved)
+}
+
+fn serve_log_non_agent_pane_warning(state: &ServeState, resolved: &str) -> Option<String> {
+    let warning = serve_non_agent_pane_warning(resolved)?;
+    serve_log_lifecycle(
+        state,
+        json!({
+            "kind": "context.message",
+            "direction": "inbound",
+            "state": "delivered-non-agent",
+            "route": "local",
+            "target": resolved,
+            "warning": &warning,
+            "source": "maw-rs-native",
+        }),
+    );
+    Some(warning)
+}
+
 fn serve_deliver_local(
     state: &ServeState,
     context: &ServeDeliverContext<'_>,
@@ -1452,6 +1578,7 @@ fn serve_deliver_local(
             "source": "maw-rs-native",
         }),
     );
+    let non_agent_warning = serve_log_non_agent_pane_warning(state, context.resolved);
     Json(json!({
         "ok": true,
         "target": context.resolved,
@@ -1459,6 +1586,7 @@ fn serve_deliver_local(
         "source": "maw-rs",
         "state": state_name,
         "lastLine": last_line,
+        "warning": non_agent_warning,
     }))
     .into_response()
 }
@@ -3365,6 +3493,89 @@ struct CaptureQuery {
 #[allow(clippy::redundant_closure_for_method_calls)]
 mod serve_tests {
     use super::*;
+
+    fn non_agent_pane(target: &str) -> TmuxPane {
+        TmuxPane {
+            id: "%1".to_owned(),
+            command: "bash".to_owned(),
+            target: target.to_owned(),
+            title: "nat-LOCAL (shell)".to_owned(),
+            pid: Some(100),
+            cwd: None,
+            last_activity: None,
+        }
+    }
+
+    fn agent_pane(target: &str, command: &str) -> TmuxPane {
+        TmuxPane {
+            id: "%2".to_owned(),
+            command: command.to_owned(),
+            target: target.to_owned(),
+            title: "\u{2733} Claude Code".to_owned(),
+            pid: Some(200),
+            cwd: None,
+            last_activity: None,
+        }
+    }
+
+    #[test]
+    fn serve_pane_looks_like_agent_matches_keywords_and_versioned_commands() {
+        assert!(serve_pane_looks_like_agent("codex", "shell"));
+        assert!(serve_pane_looks_like_agent("bash", "maw-rs-oracle"));
+        assert!(serve_pane_looks_like_agent("2.1.219", "some task status line"));
+        assert!(!serve_pane_looks_like_agent("bash", "nat-LOCAL (shell)"));
+        assert!(!serve_pane_looks_like_agent("sudo", "MAWRS-REMOTE (live, read-only)"));
+    }
+
+    fn console_session() -> RouteSession {
+        RouteSession {
+            name: "33-maw-rs".to_owned(),
+            windows: vec![RouteWindow { index: 0, name: "console".to_owned(), active: true, kind: None }],
+            source: None,
+        }
+    }
+
+    #[test]
+    fn serve_window_name_for_resolved_target_resolves_index_to_name() {
+        let sessions = vec![console_session()];
+        assert_eq!(
+            serve_window_name_for_resolved_target(&sessions, "33-maw-rs:0").as_deref(),
+            Some("console")
+        );
+        assert_eq!(serve_window_name_for_resolved_target(&sessions, "33-maw-rs:9"), None);
+        assert_eq!(serve_window_name_for_resolved_target(&sessions, "no-such-session:0"), None);
+    }
+
+    #[test]
+    fn serve_non_agent_pane_warning_from_panes_flags_the_709_repro_shape() {
+        // #709: 33-maw-rs used to be one window named maw-rs running Claude;
+        // rebuilt as a two-pane bash/sudo console. hey blackmachine:33-maw-rs
+        // resolves to window INDEX 0, but list_panes reports panes by window
+        // NAME ("console") -- the index must be resolved through the session
+        // list before a pane lookup can find anything at all.
+        let sessions = vec![console_session()];
+        let panes = vec![
+            non_agent_pane("33-maw-rs:console.0"),
+            non_agent_pane("33-maw-rs:console.1"),
+        ];
+        let warning = serve_non_agent_pane_warning_from_panes(&sessions, &panes, "33-maw-rs:0")
+            .expect("bash pane must warn");
+        assert!(warning.contains("33-maw-rs:0"), "{warning}");
+        assert!(warning.contains("console"), "{warning}");
+        assert!(warning.contains("bash"), "{warning}");
+        assert!(warning.contains("not an agent"), "{warning}");
+    }
+
+    #[test]
+    fn serve_non_agent_pane_warning_from_panes_is_silent_for_real_agents_and_unknown_targets() {
+        let sessions = vec![console_session()];
+        let panes = vec![agent_pane("33-maw-rs:console.0", "2.1.219")];
+        assert!(serve_non_agent_pane_warning_from_panes(&sessions, &panes, "33-maw-rs:0").is_none());
+        assert!(
+            serve_non_agent_pane_warning_from_panes(&sessions, &panes, "no-such-session:0").is_none(),
+            "target not found is a different, already-handled failure mode"
+        );
+    }
 
     #[test]
     fn serve_peer_refresh_interval_defaults_and_parses() {

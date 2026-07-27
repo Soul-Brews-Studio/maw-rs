@@ -904,10 +904,16 @@ fn send_local_message_with_audit(
         };
     }
     send_record_success(command, audit_args, config, sender_oracle, from, query, &outbound, "local", signature.as_ref());
+    // #709: `delivered` must not stay silent when the resolved pane isn't
+    // agent-shaped (window rename, pane replaced, agent closed) -- warn
+    // rather than let a shell-prompt delivery look identical to a real one.
+    let warning = serve_non_agent_pane_warning(target)
+        .map(|warning| format!("\x1b[33mwarning: {warning}\x1b[0m\n"))
+        .unwrap_or_default();
     CliOutput {
         code: 0,
         stdout: send_success_output(command, target, &outbound),
-        stderr: String::new(),
+        stderr: warning,
     }
 }
 
@@ -1099,6 +1105,15 @@ async fn send_peer_message(
             let display_from = send_display_from(args.from.as_deref());
             let outbound = format_local_hey_message(&args.text, config, sender_oracle, display_from.as_deref());
             send_record_success(command, audit_args, config, sender_oracle, args.from.as_deref(), &args.target, &outbound, &format!("peer:{node}"), signature.as_ref());
+            // #709: the receiving serve may have delivered into a pane that
+            // is not agent-shaped -- surface that here too, not just on the
+            // local delivery path, since this is the exact shape m5's field
+            // repro hit (a cross-node `hey` landing in a bash prompt).
+            let stderr = response
+                .warning
+                .as_deref()
+                .map(|warning| format!("\x1b[33mwarning: {warning}\x1b[0m\n"))
+                .unwrap_or_default();
             CliOutput {
                 code: 0,
                 stdout: format!(
@@ -1106,7 +1121,7 @@ async fn send_peer_message(
                     response.state.as_deref().unwrap_or("queued"),
                     response.target.as_deref().unwrap_or(target)
                 ),
-                stderr: String::new(),
+                stderr,
             }
         },
         Err(message) => CliOutput {
