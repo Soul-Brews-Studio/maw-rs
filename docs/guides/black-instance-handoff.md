@@ -144,6 +144,16 @@ vanish with it unless recorded. Each has bitten before.
   actually change?). Same family as the reachable-vs-fetch and dry-run-vs-send
   traps: a success that doesn't carry proof of the effect can lie.
 
+- **Background work started inside a subagent dies at that subagent's turn-end
+  (harness behavior).** A `Bash(run_in_background)` (or any detached process) spawned
+  *within* a subagent is orphaned/killed when that subagent's turn ends — it does
+  **not** keep running to feed a later step. So a subagent result that says "build
+  running / waiting on X / gate in progress" means the work is **incomplete**, not
+  pending — treat it as a failure to finish, not a promise to check back. Run long
+  gates/builds in the lead session (which persists across turns), not inside a
+  spawned subagent. This one is invisible until a "waiting" result quietly never
+  resolves.
+
 ## 3c. Operating norms the primary inherits (not in any doc, they're Nat's rules)
 
 - **Report back every time, not just when done.** Report to the fleet lead
