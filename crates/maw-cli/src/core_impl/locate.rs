@@ -1344,7 +1344,15 @@ mod locate_tests {
             r#"{"name":"81-track","windows":[{"name":"track-oracle","repo":"acme/track-oracle"}]}"#,
         );
         let options = LocateOptions { path: true, json: false, no_remote: false };
-        assert_eq!(locate_picker_target("81-track", &options, &[]).expect("exact"), "track");
+        // An exact query for the literal registry session name ("81-track")
+        // resolves to itself, not the shorter oracle-derived alias ("track")
+        // -- #665's literal_name_tiebreak (predates this by an unrelated
+        // fix, landed after this test) correctly makes a candidate's own
+        // literal name win over a match that only comes from being someone
+        // else's alias. This assertion encoded the pre-#665 behavior;
+        // confirmed via a worktree at 3979e88^ that it passed there and
+        // fails after -- not an env leak, a stale expectation (#700/#688).
+        assert_eq!(locate_picker_target("81-track", &options, &[]).expect("exact"), "81-track");
 
         match typed_picker_plan("trac", &locate_typed_candidates(&[]), locate_kind_priority, locate_picker_row) {
             TypedPickerPlan::Pick { rows, .. } => {
