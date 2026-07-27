@@ -123,8 +123,11 @@ async fn run_send_like_async_with_args(
     if send_args.dry_run {
         return send_dry_run_output(command, &send_args, &result);
     }
+    if let Some(refusal) = send_route_gate(command, &send_args.target, &send_args.text, &result) {
+        return refusal;
+    }
     match result {
-        RouteResult::Local { target } | RouteResult::SelfNode { target } => send_local_message_with_audit(
+        RouteResult::Local { target } => send_local_message_with_audit(
             command,
             &mut tmux,
             &target,
@@ -135,6 +138,9 @@ async fn run_send_like_async_with_args(
             send_args.from.as_deref(),
             &audit_args,
         ),
+        RouteResult::SelfNode { .. } => {
+            unreachable!("send_route_gate already refused SelfNode before this match")
+        }
         RouteResult::Peer {
             peer_url,
             target,
@@ -899,6 +905,53 @@ fn send_local_message_with_audit(
 
 fn send_success_output(command: &str, target: &str, outbound: &str) -> String {
     if command == "hey" { format!("delivered → {target}: {outbound}\n") } else { format!("delivered {target}\n") }
+}
+
+/// An empty message body must never reach delivery (#695): a caller with no
+/// text to send gets a refusal here, not a `[node:sender]` tag arriving in a
+/// pane with nothing after it — which is indistinguishable from a real
+/// message that failed to type, and burns a turn for whatever reads the pane.
+fn send_empty_body_output(command: &str, text: &str) -> Option<CliOutput> {
+    if text.trim().is_empty() {
+        return Some(CliOutput {
+            code: send_error_code(command),
+            stdout: String::new(),
+            stderr: format!("{command}: refusing to deliver an empty message body\n"),
+        });
+    }
+    None
+}
+
+/// The single decision point `run_send_like_async_with_args` consults before
+/// any delivery path runs (#695): refuses an empty body regardless of route,
+/// and refuses a `SelfNode` route outright. Kept as one pure function, tested
+/// directly against constructed `RouteResult` values, so the wiring itself is
+/// pinned — not just the message text each refusal produces.
+fn send_route_gate(command: &str, query: &str, text: &str, result: &RouteResult) -> Option<CliOutput> {
+    if let Some(refusal) = send_empty_body_output(command, text) {
+        return Some(refusal);
+    }
+    if let RouteResult::SelfNode { target } = result {
+        return Some(send_self_node_refusal_output(command, query, target));
+    }
+    None
+}
+
+/// `RouteResult::SelfNode` fires only when a query used the full cross-node
+/// `<node>:<agent>` form and `<node>` happened to name this very node (#695)
+/// — a shape that looks like a caller addressing a peer that turned out to
+/// be itself, not an intentional local/self-window send (`hey me` and bare
+/// local targets resolve as plain `Local` and are unaffected). Refuse rather
+/// than inject: a message quietly delivered to yourself under a peer address
+/// is the same "sender == receiver" symptom #695 reported, not a feature.
+fn send_self_node_refusal_output(command: &str, query: &str, target: &str) -> CliOutput {
+    CliOutput {
+        code: send_error_code(command),
+        stdout: String::new(),
+        stderr: format!(
+            "{command}: refusing to deliver — '{query}' addresses this node via its own cross-node name and resolved back to a local pane ({target}); use a plain local target instead\n"
+        ),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1968,6 +2021,94 @@ fn format_reply_list(body: &str) -> String {
 #[cfg(test)]
 mod send_acl_hotpath_tests {
     use super::*;
+
+    #[test]
+    fn send_empty_body_output_refuses_empty_and_whitespace_text() {
+        let hey = send_empty_body_output("hey", "").expect("empty");
+        assert_eq!(hey.code, 1);
+        assert!(hey.stdout.is_empty());
+        assert_eq!(hey.stderr, "hey: refusing to deliver an empty message body\n");
+
+        let whitespace = send_empty_body_output("hey", "   \n\t").expect("whitespace-only");
+        assert_eq!(whitespace.stderr, hey.stderr);
+
+        let notify = send_empty_body_output("notify", "").expect("empty");
+        assert_eq!(notify.code, 2);
+        assert_eq!(notify.stderr, "notify: refusing to deliver an empty message body\n");
+    }
+
+    #[test]
+    fn send_empty_body_output_allows_real_text() {
+        assert!(send_empty_body_output("hey", "hello fleet").is_none());
+        assert!(send_empty_body_output("hey", "  padded  ").is_none());
+    }
+
+    #[test]
+    fn send_self_node_refusal_output_explains_the_cross_node_loopback() {
+        let output = send_self_node_refusal_output("hey", "black:33-maw-rs", "33-maw-rs:0");
+        assert_eq!(output.code, 1);
+        assert!(output.stdout.is_empty());
+        assert!(output.stderr.contains("refusing to deliver"));
+        assert!(output.stderr.contains("black:33-maw-rs"));
+        assert!(output.stderr.contains("33-maw-rs:0"));
+    }
+
+    // #695 regression, pinned at the wiring level (not just the leaf
+    // formatters above): send_route_gate is the exact function
+    // run_send_like_async_with_args consults, called with real RouteResult
+    // variants — a wiring mistake (e.g. forgetting to check SelfNode, or
+    // checking the wrong field) fails these, not just a helper in isolation.
+    #[test]
+    fn send_route_gate_refuses_self_node_regardless_of_text() {
+        let result = RouteResult::SelfNode { target: "33-maw-rs:0".to_owned() };
+        let refusal = send_route_gate("hey", "black:33-maw-rs", "hello", &result)
+            .expect("SelfNode must be refused");
+        assert!(refusal.stderr.contains("black:33-maw-rs"));
+        assert!(refusal.stderr.contains("33-maw-rs:0"));
+    }
+
+    #[test]
+    fn send_route_gate_refuses_empty_text_on_every_route_shape() {
+        let local = RouteResult::Local { target: "s:0".to_owned() };
+        assert!(send_route_gate("hey", "s", "", &local).is_some());
+
+        let peer = RouteResult::Peer {
+            peer_url: "http://peer".to_owned(),
+            target: "s:0".to_owned(),
+            node: "m5".to_owned(),
+        };
+        assert!(send_route_gate("hey", "m5:s", "   ", &peer).is_some());
+
+        let error = RouteResult::Error {
+            reason: "not_found".to_owned(),
+            detail: "nope".to_owned(),
+            hint: None,
+        };
+        assert!(send_route_gate("hey", "s", "", &error).is_some());
+    }
+
+    #[test]
+    fn send_route_gate_lets_local_and_peer_proceed_with_real_text() {
+        let local = RouteResult::Local { target: "s:0".to_owned() };
+        assert!(send_route_gate("hey", "s", "hello fleet", &local).is_none());
+
+        let peer = RouteResult::Peer {
+            peer_url: "http://peer".to_owned(),
+            target: "s:0".to_owned(),
+            node: "m5".to_owned(),
+        };
+        assert!(send_route_gate("hey", "m5:s", "hello fleet", &peer).is_none());
+
+        let error = RouteResult::Error {
+            reason: "not_found".to_owned(),
+            detail: "nope".to_owned(),
+            hint: None,
+        };
+        assert!(
+            send_route_gate("hey", "s", "hello fleet", &error).is_none(),
+            "Error is not a delivery decision the gate should intercept — the existing Error arm handles it"
+        );
+    }
 
     #[derive(Debug, Default)]
     struct SendFakeTmuxRunner {
