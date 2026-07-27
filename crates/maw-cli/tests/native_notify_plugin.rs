@@ -14,6 +14,16 @@ fn notify_write(path: &Path, text: &str) {
     std::fs::write(path, text).expect("write");
 }
 
+// The receiver ("nova") is a distinct oracle with its own repo, resolved via
+// locate_find_oracle_repo_path's ghq-scan fallback (a real "<oracle>-oracle"
+// directory under GHQ_ROOT) -- not the sender's own psiPath. #694 fixed local
+// delivery to land in the RECEIVER's ψ/inbox instead of the sender's; a
+// receiver this fixture doesn't register is correctly unresolvable, not a
+// hermeticity gap.
+fn notify_receiver_repo(root: &Path) -> PathBuf {
+    root.join("ghq/github.com/acme/nova-oracle")
+}
+
 fn notify_temp(name: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!(
         "maw-rs-native-notify-{name}-{}",
@@ -22,6 +32,7 @@ fn notify_temp(name: &str) -> PathBuf {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("bin")).expect("bin");
     std::fs::create_dir_all(root.join("psi/inbox")).expect("inbox");
+    std::fs::create_dir_all(notify_receiver_repo(&root)).expect("receiver repo");
     notify_write(
         &root.join("xdg-config/maw/maw.config.json"),
         &format!(
@@ -77,6 +88,7 @@ fn notify_command(root: &Path) -> Command {
         .env("XDG_STATE_HOME", root.join("xdg-state"))
         .env("XDG_DATA_HOME", root.join("xdg-data"))
         .env("XDG_CACHE_HOME", root.join("xdg-cache"))
+        .env("GHQ_ROOT", root.join("ghq"))
         .env("TMUX", "/tmp/tmux-80,1,0")
         .env("TMUX_PANE", "%1")
         .env("MAW_SENDER", "bigboy-vps:08-gm-bo")
@@ -101,8 +113,10 @@ fn notify_native_local_writes_inbox_only_without_pane_injection() {
     let stdout = String::from_utf8(output.stdout).expect("stdout");
     assert!(stdout.contains("queued inbox nova"), "{stdout}");
     assert_eq!(dispatcher_status("notify"), DispatchKind::Native);
-    let entries = std::fs::read_dir(root.join("psi/inbox"))
-        .expect("inbox")
+    // #694: delivery lands in the RECEIVER's (nova's) ψ/inbox, resolved via
+    // the ghq-scan fallback -- never the sender's own psiPath.
+    let entries = std::fs::read_dir(notify_receiver_repo(&root).join("ψ").join("inbox"))
+        .expect("receiver inbox")
         .collect::<Result<Vec<_>, _>>()
         .expect("entries");
     assert_eq!(entries.len(), 1);
@@ -110,6 +124,13 @@ fn notify_native_local_writes_inbox_only_without_pane_injection() {
     assert!(body.contains("from: bigboy-vps:08-gm-bo"), "{body}");
     assert!(body.contains("to: nova"), "{body}");
     assert!(body.contains("routine done"), "{body}");
+    assert_eq!(
+        std::fs::read_dir(root.join("psi/inbox"))
+            .expect("sender inbox")
+            .count(),
+        0,
+        "must not also land in the sender's own inbox"
+    );
     let log = std::fs::read_to_string(root.join("tmux.log")).unwrap_or_default();
     assert!(log.contains("list-windows -a -F"), "{log}");
     assert!(
@@ -145,8 +166,8 @@ fn notify_native_force_warns_but_stays_inbox_only() {
         stdout.contains("--force is not meaningful for notify"),
         "{stdout}"
     );
-    let entries = std::fs::read_dir(root.join("psi/inbox"))
-        .expect("inbox")
+    let entries = std::fs::read_dir(notify_receiver_repo(&root).join("ψ").join("inbox"))
+        .expect("receiver inbox")
         .collect::<Result<Vec<_>, _>>()
         .expect("entries");
     let body = std::fs::read_to_string(entries[0].path()).expect("message");
