@@ -144,6 +144,27 @@ vanish with it unless recorded. Each has bitten before.
   actually change?). Same family as the reachable-vs-fetch and dry-run-vs-send
   traps: a success that doesn't carry proof of the effect can lie.
 
+## 3c. Operating norms the primary inherits (not in any doc, they're Nat's rules)
+
+- **Report back every time, not just when done.** Report to the fleet lead
+  (`m5:33-maw-rs:maw-rs`) on: done / stuck / a decision that diverges from what was
+  agreed / cut a release / before `/clear`. On "done": the PR link, the 4-dim gate
+  result with the **failing test names** (never a count), and a one-line root cause.
+  Nat having to ask "are you done yet?" is the smell of unreported progress. Use
+  `gh` comments — they persist across `/clear`; `hey` messages don't.
+- **Ask without blocking.** When you'd stall on a picker or a question, send the
+  QUESTION via `hey` to the lead **and proceed on your best recommendation** — do
+  not freeze the loop waiting. The coder owns the loop; the lead course-corrects
+  after. (This whole session ran that way because the human's composer input kept
+  not reaching the pane — decisions came via the m5 relay, and work continued.)
+- **Config: don't debug by reading files — ask the tool.** A **no-NN**
+  `maw.config.json` is silently ignored once *any* NN layer (`maw.config.50.json`,
+  etc.) exists. If a value "isn't taking," run `maw config explain <key>`: it shows
+  every layer, which one wins, and (since #623) tags shadowed project layers
+  `[SHADOWED]`. The file having your value proves nothing about the runtime value.
+- **`hey` and the shell `$`.** Double-quoted `maw hey "…$VAR…"` lets *your* shell
+  expand `$VAR` before it's sent. Single-quote to send literally.
+
 ## 4. The meta-lesson (the one worth keeping)
 
 Both this instance and m5 **misdiagnosed twice each** this week, and both
