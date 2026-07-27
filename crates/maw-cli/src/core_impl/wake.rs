@@ -1766,6 +1766,62 @@ fn wake_registry_windows(
 mod wake_tests {
     use super::*;
 
+    fn rpro_ent_fleet_entry() -> NativeFleetEntry {
+        // #711 repro: 7 windows in one session, all pointing at the same
+        // repo (a codex fan-out) -- exactly the shape the issue's evidence
+        // table says breaks every multi-window session on a shared repo.
+        let window = |name: &str| NativeFleetWindow {
+            name: name.to_owned(),
+            repo: "switchaphon/rpro-ent-oracle".to_owned(),
+            kind: None,
+        };
+        NativeFleetEntry {
+            file: "05-rpro-ent.json".to_owned(),
+            path: std::path::PathBuf::from("05-rpro-ent.json"),
+            session: NativeFleetSession {
+                name: "05-rpro-ent".to_owned(),
+                windows: vec![
+                    window("rpro-ent-oracle"),
+                    window("rpro-ent-codex-1"),
+                    window("rpro-ent-codex-2"),
+                    window("rpro-ent-maw-rs-migration"),
+                    window("rpro-ent-nats-books"),
+                    window("rpro-ent-nats-book3"),
+                    window("rpro-ent-nats-books-4-7"),
+                ],
+                ..NativeFleetSession::default()
+            },
+        }
+    }
+
+    #[test]
+    fn wake_resolve_registry_target_picks_the_named_window_among_repo_siblings() {
+        // #711: the window literally NAMED rpro-ent-oracle must win over six
+        // siblings that only share its repo -- if this regresses, #711
+        // reopens verbatim (7-way "ambiguous registry target"). The repo
+        // isn't actually cloned on the test machine, so resolution still
+        // errors downstream -- the point is WHICH error: "repo not cloned"
+        // proves the matcher already picked exactly one candidate and moved
+        // past the ambiguity check; "ambiguous registry target" would mean
+        // #711 is still live.
+        let entries = vec![rpro_ent_fleet_entry()];
+        let error = wake_resolve_registry_target("rpro-ent-oracle", &entries)
+            .expect_err("repo is not actually cloned in this test");
+        assert!(!error.contains("ambiguous"), "{error}");
+        assert!(error.contains("not cloned"), "{error}");
+    }
+
+    #[test]
+    fn wake_resolve_registry_target_session_stem_alone_stays_genuinely_ambiguous() {
+        // The bare session stem ("rpro-ent", no window-discriminating part)
+        // matches all 7 windows equally -- correctly ambiguous, not a bug:
+        // there is no way to tell which of 7 windows the caller means.
+        let entries = vec![rpro_ent_fleet_entry()];
+        let error = wake_resolve_registry_target("rpro-ent", &entries)
+            .expect_err("7 equally-plausible windows must not silently pick one");
+        assert!(error.contains("ambiguous"), "{error}");
+    }
+
     #[derive(Debug, Default)]
     #[allow(clippy::struct_excessive_bools)]
     struct WakeMockTmux {
