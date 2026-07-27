@@ -719,6 +719,13 @@ fn wake_oracle(options: &WakeOptionsNative) -> Result<String, String> {
         .or_else(|| slug.as_deref().and_then(|value| value.rsplit('/').next()))
         .or_else(|| options.target.trim_end_matches('/').split('/').next_back())
         .unwrap_or(&options.target);
+    // Accept `session:window` -- the exact form wake's own ambiguous-target
+    // error already prints back at the caller -- by taking just the window
+    // part. This is only ever a degenerate fallback identity: a colon target
+    // that matches a registry candidate resolves via its literal name in
+    // wake_resolve_registry_target before this value is used for anything
+    // but validation.
+    let raw = raw.rsplit(':').next().unwrap_or(raw);
     let raw = raw.strip_suffix(".git").unwrap_or(raw);
     let oracle = raw.strip_suffix("-oracle").unwrap_or(raw).trim();
     wake_validate_slug(oracle, "oracle")?;
@@ -2782,6 +2789,32 @@ mod wake_tests {
                 "wake: ambiguous registry target for rpro-ent: 05-rpro-ent:rpro-ent-oracle, 05-rpro-ent:rpro-ent-codex-1"
             );
             assert!(tmux.actions.is_empty());
+        });
+    }
+
+    #[test]
+    fn wake_accepts_the_session_window_syntax_its_own_ambiguous_error_prints() {
+        // #711 fix 5: wake's own ambiguous-registry-target error prints
+        // candidates as "session:window" (see the assertion above) but
+        // rejected that exact syntax as input -- "wake: invalid oracle" --
+        // because wake_oracle's degenerate fallback identity choked on the
+        // colon before the typed resolver, which already handles this shape
+        // via an exact name match, ever got a chance to run.
+        wake_with_fixture(|root| {
+            let session = "05-rpro-ent";
+            let repo = root.join("ghq/github.com/switchaphon/rpro-ent-oracle");
+            std::fs::create_dir_all(&repo).expect("repo");
+            std::fs::write(
+                root.join("config/fleet").join(format!("{session}.json")),
+                r#"{"name":"05-rpro-ent","windows":[{"name":"rpro-ent-oracle","repo":"switchaphon/rpro-ent-oracle"},{"name":"rpro-ent-codex-1","repo":"switchaphon/rpro-ent-oracle"}]}"#,
+            )
+            .expect("write registry");
+            let mut tmux = WakeMockTmux::default();
+            let (code, stdout) =
+                wake_run(&wake_strings(&["05-rpro-ent:rpro-ent-codex-1", "--dry-run"]), &mut tmux).expect("run");
+            assert_eq!(code, 0, "{stdout}");
+            assert!(stdout.contains("would wake window 'rpro-ent-codex-1' in session '05-rpro-ent'"), "{stdout}");
+            assert!(!stdout.contains("'rpro-ent'"), "collapsed to the generic oracle name: {stdout}");
         });
     }
 
