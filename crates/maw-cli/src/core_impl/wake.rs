@@ -73,6 +73,7 @@ struct WakeRepoCandidate {
 struct WakeTypedRegistryCandidate {
     candidate: maw_matcher::ResolveTypedCandidate,
     oracle: String,
+    window: String,
     session: String,
     repo: String,
     repo_path: std::path::PathBuf,
@@ -89,6 +90,17 @@ struct WakeTypedResolution {
     oracle: String,
     repo: WakeRepoResolution,
     session_hint: Option<String>,
+    /// The literal name of the registry window the resolver actually
+    /// matched, when the match came from an existing registry entry.
+    /// `oracle` answers "whose identity is this" (repo-derived, used for
+    /// display/session naming); this answers "which window do I act on."
+    /// The two agree whenever a window happens to be named after its
+    /// oracle, which is why the difference went unnoticed -- they diverge
+    /// exactly in the fan-out case #711 describes, where sibling windows on
+    /// one repo all derive the same oracle but are literally named
+    /// differently. `None` for a fresh-spawn/repo-fuzzy match, where there
+    /// is no existing window to preserve the identity of.
+    matched_window: Option<String>,
 }
 
 impl maw_matcher::Named for WakeRepoCandidate {
@@ -671,6 +683,7 @@ fn wake_resolve(options: &WakeOptionsNative, sessions: &[TmuxSession]) -> Result
     let initial_oracle = wake_oracle(options)?;
     let typed = wake_typed_resolution(options, &initial_oracle, &fleet_entries)?;
     let typed_session_hint = typed.as_ref().and_then(|resolution| resolution.session_hint.clone());
+    let matched_window = typed.as_ref().and_then(|resolution| resolution.matched_window.clone());
     let oracle = typed.as_ref().map_or_else(|| initial_oracle.clone(), |resolution| resolution.oracle.clone());
     let repo = typed.map_or_else(|| wake_repo_path(options, &oracle, &fleet_entries), |resolution| Ok(resolution.repo))?;
     let repo_path = repo.path;
@@ -682,7 +695,7 @@ fn wake_resolve(options: &WakeOptionsNative, sessions: &[TmuxSession]) -> Result
         .or(session_hint)
         .or_else(|| wake_detect_session_from_fleet_registry(&oracle, &repo_path, &fleet_entries))
         .unwrap_or_else(|| wake_session_name(&oracle, sessions));
-    let window = wake_window_name(options, &oracle);
+    let window = wake_window_name(options, &oracle, matched_window.as_deref());
     let target = format!("{session}:{window}");
     let (command, command_warnings) = wake_command(&window, &repo_path, options);
     Ok(WakeResolvedNative {
@@ -801,6 +814,7 @@ fn wake_resolve_exact_registry_session(target: &str, fleet_entries: &[NativeFlee
         oracle,
         repo,
         session_hint: Some(entry.session.name.clone()),
+        matched_window: Some(window.name.clone()),
     }))
 }
 
@@ -823,6 +837,7 @@ fn wake_resolve_registry_target(target: &str, fleet_entries: &[NativeFleetEntry]
                 .into_iter()
                 .find(|candidate| candidate.candidate == matched.candidate)
                 .ok_or_else(|| format!("wake: internal resolver mismatch for {target}"))?;
+            let window = candidate.window.clone();
             let stem = maw_identity::parse_session_name(&candidate.session).stem;
             let (oracle, repo) = if candidate.repo_path.is_dir() {
                 (candidate.oracle, wake_exact_repo_resolution(candidate.repo_path))
@@ -834,6 +849,7 @@ fn wake_resolve_registry_target(target: &str, fleet_entries: &[NativeFleetEntry]
                 oracle,
                 repo,
                 session_hint: Some(candidate.session),
+                matched_window: Some(window),
             }))
         }
         maw_matcher::ResolveTypedResult::Ambiguous { candidates } => Err(format!(
@@ -858,6 +874,7 @@ fn wake_resolve_repo_target(oracle: &str, fleet_entries: &[NativeFleetEntry]) ->
                 oracle,
                 repo: WakeRepoResolution { path: candidate.path, fuzzy_match, warning: None },
                 session_hint: None,
+                matched_window: None,
             })
         }
         maw_matcher::ResolveTypedResult::Ambiguous { candidates } => Err(format!(
@@ -1042,6 +1059,7 @@ fn wake_typed_registry_candidates(fleet_entries: &[NativeFleetEntry]) -> Vec<Wak
                     aliases: wake_registry_aliases(window, &oracle),
                 },
                 oracle,
+                window: window.name.clone(),
                 session: entry.session.name.clone(),
                 repo: window.repo.clone(),
                 repo_path: path,
@@ -1195,9 +1213,14 @@ fn wake_slot(oracle: &str) -> u32 {
     10 + (hash % 80)
 }
 
-fn wake_window_name(options: &WakeOptionsNative, oracle: &str) -> String {
+fn wake_window_name(options: &WakeOptionsNative, oracle: &str, matched_window: Option<&str>) -> String {
     let suffix = options.wt.as_deref().or(options.task.as_deref()).map(wake_sanitize_branch);
-    suffix.map_or_else(|| oracle.to_owned(), |task| format!("{oracle}-{task}"))
+    match suffix {
+        // `--wt`/`--task` asks for a derived window, not the one that was
+        // matched -- oracle-derived naming applies regardless of a match.
+        Some(task) => format!("{oracle}-{task}"),
+        None => matched_window.map_or_else(|| oracle.to_owned(), str::to_owned),
+    }
 }
 
 fn wake_sanitize_branch(value: &str) -> String {
@@ -2676,6 +2699,88 @@ mod wake_tests {
             assert!(stdout.contains(&main_repo.display().to_string()), "{stdout}");
             assert!(stdout.contains(&format!("would wake window 'arra-oracle-v3' in session '{session}'")), "{stdout}");
             assert!(!stdout.contains("ambiguous registry target"), "{stdout}");
+            assert!(tmux.actions.is_empty());
+        });
+    }
+
+    #[test]
+    fn wake_names_and_reuses_the_matched_sibling_not_the_generic_oracle() {
+        // #711: sibling windows on one repo all derive the same oracle
+        // ("rpro-ent"), so resolving to the RIGHT candidate isn't enough --
+        // if the final window name collapses back to that shared oracle,
+        // wake silently wakes the wrong thing. Two things are checked
+        // together on purpose (not two separate tests): the naming bug and
+        // wake_create_or_reuse_window's live-window comparison are on the
+        // same path, and testing them apart could pass with the live path
+        // still broken.
+        wake_with_fixture(|root| {
+            let session = "05-rpro-ent";
+            let repo = root.join("ghq/github.com/switchaphon/rpro-ent-oracle");
+            std::fs::create_dir_all(&repo).expect("repo");
+            std::fs::write(
+                root.join("config/fleet").join(format!("{session}.json")),
+                r#"{"name":"05-rpro-ent","windows":[{"name":"rpro-ent-oracle","repo":"switchaphon/rpro-ent-oracle"},{"name":"rpro-ent-codex-1","repo":"switchaphon/rpro-ent-oracle"}]}"#,
+            )
+            .expect("write registry");
+
+            // dry-run: naming the sibling by its own name must produce a
+            // plan for THAT sibling, not the shared, generic oracle name.
+            let mut dry_tmux = WakeMockTmux::default();
+            let (code, stdout) = wake_run(&wake_strings(&["rpro-ent-codex-1", "--dry-run"]), &mut dry_tmux).expect("dry run");
+            assert_eq!(code, 0, "{stdout}");
+            assert!(stdout.contains("would wake window 'rpro-ent-codex-1' in session '05-rpro-ent'"), "{stdout}");
+            assert!(!stdout.contains("'rpro-ent'"), "collapsed to the generic oracle name: {stdout}");
+
+            // live: the sibling already exists as its own tmux window --
+            // must be reused, never re-created under the generic name.
+            let mut tmux = WakeMockTmux {
+                sessions: vec![TmuxSession {
+                    name: session.to_owned(),
+                    windows: vec![
+                        maw_tmux::TmuxWindow { index: 0, name: "rpro-ent-oracle".to_owned(), active: true, cwd: None },
+                        maw_tmux::TmuxWindow { index: 1, name: "rpro-ent-codex-1".to_owned(), active: false, cwd: None },
+                    ],
+                }],
+                ..WakeMockTmux::default()
+            };
+            let (code, stdout) = wake_run(&wake_strings(&["rpro-ent-codex-1", "--no-attach"]), &mut tmux).expect("apply");
+            assert_eq!(code, 0, "{stdout}");
+            assert!(stdout.contains("rpro-ent-codex-1"), "{stdout}");
+            assert!(
+                !tmux.actions.iter().any(|action| action.starts_with("new-window")),
+                "reused window should not be re-created: {:?}",
+                tmux.actions
+            );
+        });
+    }
+
+    #[test]
+    fn wake_shared_derived_oracle_stays_ambiguous_same_as_before_the_identity_split() {
+        // The matched_window split changes what a *resolved* candidate is
+        // named -- it must not change *whether* a query resolves at all.
+        // "rpro-ent" is the oracle both siblings derive from their shared
+        // repo, so it still hits the same two-way tie in resolve_typed_target
+        // before wake ever reaches window naming. Confirmed byte-for-byte
+        // against a checkout of this file predating the split: identical
+        // error text, not just "still an error" -- checked, not assumed
+        // (the #703 lesson: an unverified "X is unaffected" is how that
+        // regression got approved and shipped).
+        wake_with_fixture(|root| {
+            let session = "05-rpro-ent";
+            let repo = root.join("ghq/github.com/switchaphon/rpro-ent-oracle");
+            std::fs::create_dir_all(&repo).expect("repo");
+            std::fs::write(
+                root.join("config/fleet").join(format!("{session}.json")),
+                r#"{"name":"05-rpro-ent","windows":[{"name":"rpro-ent-oracle","repo":"switchaphon/rpro-ent-oracle"},{"name":"rpro-ent-codex-1","repo":"switchaphon/rpro-ent-oracle"}]}"#,
+            )
+            .expect("write registry");
+            let mut tmux = WakeMockTmux::default();
+            let error = wake_run(&wake_strings(&["rpro-ent", "--dry-run"]), &mut tmux)
+                .expect_err("shared oracle across two real siblings must stay ambiguous");
+            assert_eq!(
+                error,
+                "wake: ambiguous registry target for rpro-ent: 05-rpro-ent:rpro-ent-oracle, 05-rpro-ent:rpro-ent-codex-1"
+            );
             assert!(tmux.actions.is_empty());
         });
     }
