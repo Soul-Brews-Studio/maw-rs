@@ -300,6 +300,7 @@ async fn run_serve_async_impl(raw_args: &[String]) -> CliOutput {
     });
     println!("maw-rs serve listening http://{local_addr}");
     println!("maw-rs serve auth: {}", api_token_auth.mode_label());
+    spawn_serve_peer_refresh();
     match axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
@@ -317,6 +318,59 @@ async fn run_serve_async_impl(raw_args: &[String]) -> CliOutput {
             stderr: format!("serve: server error: {error}\n"),
         },
     }
+}
+
+/// Default background peer-refresh cadence for `maw serve`, in seconds.
+const SERVE_PEER_REFRESH_DEFAULT_SECS: u64 = 60;
+
+/// How often `maw serve` re-probes its peers and persists the result, in seconds.
+/// `0` disables the sweep. Read from `MAW_PEER_REFRESH_SECS`; a missing or
+/// unparseable value falls back to [`SERVE_PEER_REFRESH_DEFAULT_SECS`].
+fn serve_peer_refresh_interval_secs() -> u64 {
+    match std::env::var("MAW_PEER_REFRESH_SECS") {
+        Ok(raw) => raw
+            .trim()
+            .parse::<u64>()
+            .unwrap_or(SERVE_PEER_REFRESH_DEFAULT_SECS),
+        Err(_) => SERVE_PEER_REFRESH_DEFAULT_SECS,
+    }
+}
+
+/// Spawn the periodic peer-refresh sweep unless disabled. Detached: it runs for the
+/// life of the serve process (torn down when the process exits). Each tick runs the
+/// blocking probe-all on a blocking thread so it never stalls the HTTP runtime, and
+/// persistence goes through the one existing peer-store writer
+/// (`peers_probe_all_and_persist`) — never the read-only federation-map render, so
+/// there is a single write path (#677/#684). This is what keeps the map's stored
+/// `node` / `oracle` / `lastSeen` fresh instead of frozen at add time.
+fn spawn_serve_peer_refresh() {
+    let secs = serve_peer_refresh_interval_secs();
+    if secs == 0 {
+        println!("maw-rs serve peer-refresh: disabled (MAW_PEER_REFRESH_SECS=0)");
+        return;
+    }
+    println!("maw-rs serve peer-refresh: every {secs}s");
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(secs));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            ticker.tick().await;
+            let outcome = tokio::task::spawn_blocking(|| {
+                peers_probe_all_and_persist(PEERS_DEFAULT_PROBE_TIMEOUT_MS)
+            })
+            .await;
+            match outcome {
+                Ok(Err(error)) => eprintln!("maw-rs serve peer-refresh: {error}"),
+                // A panic in the blocking probe surfaces as JoinError. Never swallow it:
+                // a sweep that panics every tick would otherwise freeze lastSeen in total
+                // silence — the exact #684 disease this task exists to cure.
+                Err(join_error) => {
+                    eprintln!("maw-rs serve peer-refresh: sweep task panicked: {join_error}");
+                }
+                Ok(Ok(_)) => {}
+            }
+        }
+    });
 }
 
 struct ServePidFileGuard {
@@ -3311,6 +3365,33 @@ struct CaptureQuery {
 #[allow(clippy::redundant_closure_for_method_calls)]
 mod serve_tests {
     use super::*;
+
+    #[test]
+    fn serve_peer_refresh_interval_defaults_and_parses() {
+        let _guard = env_test_lock();
+        let _restore = EnvVarRestore::capture("MAW_PEER_REFRESH_SECS");
+
+        std::env::remove_var("MAW_PEER_REFRESH_SECS");
+        assert_eq!(
+            serve_peer_refresh_interval_secs(),
+            SERVE_PEER_REFRESH_DEFAULT_SECS,
+            "missing env → default cadence"
+        );
+
+        std::env::set_var("MAW_PEER_REFRESH_SECS", "30");
+        assert_eq!(serve_peer_refresh_interval_secs(), 30);
+
+        std::env::set_var("MAW_PEER_REFRESH_SECS", " 0 ");
+        assert_eq!(serve_peer_refresh_interval_secs(), 0, "0 disables the sweep");
+
+        std::env::set_var("MAW_PEER_REFRESH_SECS", "not-a-number");
+        assert_eq!(
+            serve_peer_refresh_interval_secs(),
+            SERVE_PEER_REFRESH_DEFAULT_SECS,
+            "unparseable env → default, never a panic"
+        );
+    }
+
     use axum::body::Body;
     use futures_util::{SinkExt, StreamExt};
     use maw_auth::{build_legacy_from_sign_payload, hash_body, sign_headers_v3_at, sign_hmac_sig};

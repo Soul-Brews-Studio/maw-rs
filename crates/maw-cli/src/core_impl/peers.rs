@@ -199,24 +199,74 @@ fn peers_cmd_probe(positional: &[&str]) -> Result<CliOutput, String> {
     Ok(CliOutput { code, stdout, stderr: peers_probe_stderr(alias, &url, &probe) })
 }
 
+/// One probe-all row: `(alias, url, status_code_string)`.
+type PeersProbeRow = (String, String, String);
+
+/// Probe every stored peer and persist the refreshed identity / lastSeen back to
+/// `peers.json` through the single peer-store writer (`peers_apply_probe_result` +
+/// `peers_save_store`). Shared by `maw peers probe-all` and the serve background
+/// refresh so probe results have exactly ONE write path — never the read-only
+/// federation-map render (#677/#684). Returns the per-peer rows and the worst probe
+/// exit code (`0` when the store is empty).
+fn peers_probe_all_and_persist(timeout_ms: u64) -> Result<(Vec<PeersProbeRow>, i32), String> {
+    peers_probe_all_and_persist_with(timeout_ms, &peers_probe_peer)
+}
+
+/// See [`peers_probe_all_and_persist`]. The `probe` seam is split out so a test can
+/// drive the persistence deterministically without real network I/O.
+///
+/// Lost-update safety: the peer list is snapshotted for probing, but each result is
+/// applied onto a **freshly re-read** store just before saving — so a concurrent
+/// `maw peers add` / `remove` during the slow, network-bound probe loop is not
+/// clobbered by a stale in-memory copy (the sweep's load→save window is otherwise
+/// ~timeout×peers long, ~12s on a 10-peer fleet). Each result only touches the
+/// probe-owned fields (`lastSeen` / `lastError` / `node` / `identity` / `pubkey` /
+/// `authOk`) via `peers_apply_probe_result`, never `url` or `addedAt`, so the sweep
+/// and the CLI cannot fight over a peer's non-probe fields. A residual sub-millisecond
+/// reload→save window remains; a lock file would close it (follow-up, #689).
+fn peers_probe_all_and_persist_with(
+    timeout_ms: u64,
+    probe: &dyn Fn(&str, u64, &str) -> maw_peer::ProbePeerResult,
+) -> Result<(Vec<PeersProbeRow>, i32), String> {
+    let store = peers_load_store();
+    if store.peers.is_empty() {
+        return Ok((Vec::new(), 0));
+    }
+    let targets = store
+        .peers
+        .iter()
+        .map(|(alias, peer)| (alias.clone(), peer.url.clone()))
+        .collect::<Vec<_>>();
+    let mut rows = Vec::new();
+    let mut worst = 0;
+    let mut results = Vec::new();
+    for (alias, url) in &targets {
+        let now = peers_now_iso();
+        let result = probe(url, timeout_ms, &now);
+        worst = worst.max(peers_probe_exit_code(&result));
+        let status = result.error.as_ref().map_or("OK", |error| error.code.as_str());
+        rows.push((alias.clone(), url.clone(), status.to_owned()));
+        results.push((alias.clone(), result, now));
+    }
+    // Re-read fresh so a concurrent add/remove during the probe loop survives; apply
+    // only the probe-owned fields onto whatever peers still exist.
+    let mut fresh = peers_load_store();
+    for (alias, result, now) in &results {
+        if let Some(peer) = fresh.peers.get_mut(alias) {
+            peers_apply_probe_result(peer, result, now)?;
+        }
+    }
+    peers_save_store(&fresh)?;
+    Ok((rows, worst))
+}
+
 fn peers_cmd_probe_all(argv: &[String]) -> Result<CliOutput, String> {
     let timeout = if let Some(raw) = peers_flag_value(argv, "--timeout") { peers_parse_positive_u64(&raw, "usage: maw peers probe-all [--timeout <ms>]")? } else { PEERS_DEFAULT_PROBE_TIMEOUT_MS };
-    let mut store = peers_load_store();
-    if store.peers.is_empty() { return Ok(peers_ok("alias  url  status\n-----  ---  ------\n")); }
+    let (rows, worst) = peers_probe_all_and_persist(timeout)?;
     let mut stdout = String::from("alias  url  status\n-----  ---  ------\n");
-    let aliases = store.peers.keys().cloned().collect::<Vec<_>>();
-    let mut worst = 0;
-    for alias in aliases {
-        let url = store.peers.get(&alias).map(|peer| peer.url.clone()).unwrap_or_default();
-        let now = peers_now_iso();
-        let probe = peers_probe_peer(&url, timeout, &now);
-        if let Some(peer) = store.peers.get_mut(&alias) { peers_apply_probe_result(peer, &probe, &now)?; }
-        let code = peers_probe_exit_code(&probe);
-        worst = worst.max(code);
-        let status = probe.error.as_ref().map_or("OK", |error| error.code.as_str());
+    for (alias, url, status) in &rows {
         let _ = writeln!(stdout, "{alias}  {url}  {status}");
     }
-    peers_save_store(&store)?;
     let allow = argv.iter().any(|arg| arg == "--allow-unreachable");
     Ok(CliOutput { code: if allow { 0 } else { worst }, stdout, stderr: String::new() })
 }
@@ -693,6 +743,82 @@ mod peers_tests {
     #[test]
     fn peers_map_dispatch_is_native() {
         assert!(peers_format_map(&[]).contains("federation is empty"));
+    }
+
+    fn peers_probe_all_temp_store(tag: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("maw-rs-probeall-{}-{}.json", std::process::id(), tag))
+    }
+
+    #[test]
+    fn probe_all_persist_advances_last_seen_off_a_frozen_value() {
+        // #684: the sweep exists to move lastSeen; a test must prove it does. Seed a peer
+        // frozen at lastSeen="1000", run the persist with a successful probe, and assert the
+        // stored value advanced. Deleting `peers_save_store` (or freezing the write) turns
+        // this RED — the silence #684 is about is caught here, not just the env knob.
+        let _guard = env_test_lock();
+        let _restore = EnvVarRestore::capture("PEERS_FILE");
+        let path = peers_probe_all_temp_store("advances");
+        std::fs::write(
+            &path,
+            r#"{"version":1,"peers":{"m5":{"url":"http://127.0.0.1:1/","addedAt":"1000","lastSeen":"1000"}}}"#,
+        )
+        .expect("seed store");
+        std::env::set_var("PEERS_FILE", &path);
+
+        let fake = |_url: &str, _timeout: u64, _now: &str| maw_peer::ProbePeerResult {
+            node: Some("m5".to_owned()),
+            identity: Some(maw_peer::PeerIdentity { oracle: "arra".to_owned(), node: "m5".to_owned() }),
+            pubkey: Some("pk".to_owned()),
+            error: None,
+            ..maw_peer::ProbePeerResult::default()
+        };
+        let (rows, worst) = peers_probe_all_and_persist_with(2_000, &fake).expect("persist");
+        assert_eq!(worst, 0);
+        assert_eq!(rows.len(), 1);
+
+        let reloaded = peers_load_store();
+        let peer = reloaded.peers.get("m5").expect("m5 present");
+        assert_ne!(peer.last_seen.as_deref(), Some("1000"), "lastSeen must advance, not freeze (#684)");
+        assert_eq!(
+            peer.identity.as_ref().and_then(|id| id.get("oracle")).and_then(|v| v.as_str()),
+            Some("arra"),
+            "probe-owned oracle is persisted through the one writer",
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn probe_all_persist_preserves_a_concurrent_add() {
+        // #689 lost-update race: a `maw peers add` that lands DURING the slow probe loop must
+        // not be clobbered by the sweep's stale in-memory copy. The probe fn writes a new peer
+        // mid-loop; the reload-before-save must preserve it. Reverting to saving the initially
+        // loaded store turns this RED (the new peer vanishes).
+        let _guard = env_test_lock();
+        let _restore = EnvVarRestore::capture("PEERS_FILE");
+        let path = peers_probe_all_temp_store("race");
+        std::fs::write(
+            &path,
+            r#"{"version":1,"peers":{"a":{"url":"http://127.0.0.1:1/","addedAt":"1000"}}}"#,
+        )
+        .expect("seed store");
+        std::env::set_var("PEERS_FILE", &path);
+
+        let race_path = path.clone();
+        let fake = move |_url: &str, _timeout: u64, _now: &str| {
+            // Simulate a concurrent `maw peers add b` landing while we probe peer a.
+            std::fs::write(
+                &race_path,
+                r#"{"version":1,"peers":{"a":{"url":"http://127.0.0.1:1/","addedAt":"1000"},"b":{"url":"http://127.0.0.1:2/","addedAt":"2000"}}}"#,
+            )
+            .expect("concurrent add");
+            maw_peer::ProbePeerResult { node: Some("a".to_owned()), error: None, ..maw_peer::ProbePeerResult::default() }
+        };
+        peers_probe_all_and_persist_with(2_000, &fake).expect("persist");
+
+        let reloaded = peers_load_store();
+        assert!(reloaded.peers.contains_key("b"), "concurrent add must survive the sweep (#689 lost-update)");
+        assert!(reloaded.peers.contains_key("a"), "probed peer still present");
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]
