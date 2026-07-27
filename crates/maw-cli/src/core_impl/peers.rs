@@ -516,6 +516,7 @@ struct PeersMapRow {
     loopback_self: bool,
     node_unique: bool,
     auth_ok: Option<bool>,
+    auth_error: Option<String>,
 }
 
 /// Deterministic core of `maw peers map`: map the peer store to rows, with the
@@ -552,6 +553,7 @@ fn peers_map_rows(
                 node: if node.is_empty() { "-".to_owned() } else { node },
                 resolved_ip,
                 auth_ok: peer.auth_ok,
+                auth_error: peer.auth_error.clone(),
             }
         })
         .collect()
@@ -569,13 +571,27 @@ fn peers_format_map(rows: &[PeersMapRow]) -> String {
             let ip = row.resolved_ip.clone().unwrap_or_else(|| "-".to_owned());
             let mut flags = Vec::new();
             if row.loopback_self {
-                flags.push("loopback-self");
+                flags.push("loopback-self".to_owned());
             }
             if !row.node_unique {
-                flags.push("dup-node");
+                flags.push("dup-node".to_owned());
             }
             if row.auth_ok == Some(false) {
-                flags.push("auth-fail");
+                // The reason this flags: `auth_ok` reflects the signed-request
+                // handshake used by /api/send, /api/probe, /api/wake -- the
+                // action-capable surface, which the fleet DOES always enforce
+                // (loopback-exempt only, no config opt-out). It is unrelated
+                // to whether read-only endpoints like /api/sessions answer --
+                // those are gated separately, by an opt-in bearer token, and
+                // are open by design when no token is configured (#685).
+                // Bare "auth-fail" with no reason is how #685 happened: a
+                // flag nobody could act on. Show the reason whenever it's
+                // known; "never negotiated" itself is real, useful information
+                // (distinct from "credential rejected"), not a placeholder.
+                flags.push(row.auth_error.as_deref().map_or_else(
+                    || "auth-fail".to_owned(),
+                    |reason| format!("auth-fail:{reason}"),
+                ));
             }
             let flags = if flags.is_empty() {
                 "-".to_owned()
@@ -750,6 +766,31 @@ mod peers_tests {
         assert!(!row("d1").reachable, "lastError set → down");
         assert!(row("d2").reachable);
         assert!(!row("d2").loopback_self);
+    }
+
+    #[test]
+    fn peers_format_map_carries_the_auth_error_reason_not_a_bare_flag() {
+        // #685 half 2: `auth_ok: false` with no reason is a flag the user
+        // can't act on. auth_ok reflects the signed-request handshake used
+        // by send/probe/wake (always enforced, loopback-exempt only) --
+        // separate from read-only endpoints like /api/sessions, which are
+        // gated by their own opt-in bearer token and answer regardless.
+        // Surfacing the reason here, rather than newly gating those
+        // read-only endpoints, is the fix: it doesn't change what the
+        // fleet enforces (already correct), it fixes what the map explains.
+        let row = PeersMapRow {
+            alias: "m5".to_owned(),
+            node: "m5".to_owned(),
+            oracle: "atlas".to_owned(),
+            reachable: true,
+            resolved_ip: Some("192.168.1.9".to_owned()),
+            loopback_self: false,
+            node_unique: true,
+            auth_ok: Some(false),
+            auth_error: Some("pubkey-mismatch".to_owned()),
+        };
+        let text = peers_format_map(&[row]);
+        assert!(text.contains("auth-fail:pubkey-mismatch"), "{text}");
     }
 
     #[test]
