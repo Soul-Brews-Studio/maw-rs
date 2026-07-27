@@ -127,7 +127,18 @@ async fn run_send_like_async_with_args(
         return refusal;
     }
     match result {
-        RouteResult::Local { target } => send_local_message_with_audit(
+        RouteResult::Local { target } | RouteResult::SelfNode { target } if send_args.inbox == Some(true) => {
+            send_local_inbox_only(
+                command,
+                &send_args.target,
+                &target,
+                &send_args.text,
+                &config,
+                &sender_oracle,
+                send_args.from.as_deref(),
+            )
+        }
+        RouteResult::Local { target } | RouteResult::SelfNode { target } => send_local_message_with_audit(
             command,
             &mut tmux,
             &target,
@@ -138,9 +149,6 @@ async fn run_send_like_async_with_args(
             send_args.from.as_deref(),
             &audit_args,
         ),
-        RouteResult::SelfNode { .. } => {
-            unreachable!("send_route_gate already refused SelfNode before this match")
-        }
         RouteResult::Peer {
             peer_url,
             target,
@@ -903,6 +911,58 @@ fn send_local_message_with_audit(
     }
 }
 
+/// `--inbox` on a local target must write the receiver's `ψ/inbox`, not
+/// inject into the pane (#672 defect 2) — `send_local_message_with_audit`
+/// takes no `inbox` parameter and always injects, so this is a separate
+/// path taken before that function is ever reached. Mirrors `notify_local_with`
+/// (same receiver-repo resolution via the registry, same `inbox_write_file`),
+/// so the two durable-write commands stay consistent instead of diverging.
+#[allow(clippy::too_many_arguments)]
+fn send_local_inbox_only(
+    command: &str,
+    query: &str,
+    target: &str,
+    text: &str,
+    config: &HeyConfig,
+    sender_oracle: &str,
+    from: Option<&str>,
+) -> CliOutput {
+    send_local_inbox_only_with(command, query, target, text, config, sender_oracle, from, &locate_find_oracle_repo_path)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn send_local_inbox_only_with(
+    command: &str,
+    query: &str,
+    target: &str,
+    text: &str,
+    config: &HeyConfig,
+    sender_oracle: &str,
+    from: Option<&str>,
+    resolve_repo: &dyn Fn(&str) -> Option<String>,
+) -> CliOutput {
+    let to = notify_inbox_to(query, target);
+    let Some(repo_path) = resolve_repo(&to) else {
+        return CliOutput {
+            code: send_error_code(command),
+            stdout: String::new(),
+            stderr: format!(
+                "{command}: cannot resolve a local inbox for '{to}'; not a known local oracle — check `maw locate {to} --path`\n"
+            ),
+        };
+    };
+    let display_from = notify_display_from(from, config, sender_oracle);
+    let inbox_dir = std::path::Path::new(&repo_path).join("ψ").join("inbox");
+    match inbox_write_file(&inbox_dir, &display_from, &to, text, inbox_now_ms()) {
+        Ok(filename) => CliOutput {
+            code: 0,
+            stdout: format!("queued inbox {to} {filename}\n"),
+            stderr: String::new(),
+        },
+        Err(message) => CliOutput { code: 1, stdout: String::new(), stderr: format!("{command}: {message}\n") },
+    }
+}
+
 fn send_success_output(command: &str, target: &str, outbound: &str) -> String {
     if command == "hey" { format!("delivered → {target}: {outbound}\n") } else { format!("delivered {target}\n") }
 }
@@ -932,9 +992,24 @@ fn send_route_gate(command: &str, query: &str, text: &str, result: &RouteResult)
         return Some(refusal);
     }
     if let RouteResult::SelfNode { target } = result {
-        return Some(send_self_node_refusal_output(command, query, target));
+        if !send_query_uses_explicit_local_prefix(query) {
+            return Some(send_self_node_refusal_output(command, query, target));
+        }
     }
     None
+}
+
+/// `maw-routing` resolves the documented `local:<agent>` form (an explicit
+/// same-node target — see the `hey` usage text) through the SAME `SelfNode`
+/// branch as a real cross-node alias that happens to equal this node's own
+/// identity: both take the `node_name == self_node || node_name == "local"`
+/// path in `resolve_target_with_current_session`. Only the second shape is
+/// the #695 loopback-self bug; `local:` is normal, heavily-used, intentional
+/// routing and must keep working. `ResolveResult`/`RouteResult` carries no
+/// discriminant between the two (both are just `SelfNode { target }`), so
+/// the query string itself is the only signal available client-side.
+fn send_query_uses_explicit_local_prefix(query: &str) -> bool {
+    query.split_once(':').is_some_and(|(node, _)| node == "local")
 }
 
 /// `RouteResult::SelfNode` fires only when a query used the full cross-node
@@ -2053,6 +2128,61 @@ mod send_acl_hotpath_tests {
         assert!(output.stderr.contains("33-maw-rs:0"));
     }
 
+    #[test]
+    fn send_local_inbox_only_writes_to_the_receiver_inbox_not_the_pane() {
+        // #672 defect 2: `hey --inbox local:<agent>` must write the RECEIVER's
+        // ψ/inbox, never inject into the pane. send_local_message_with_audit
+        // (the pane-injection path) is never called here -- reverting the
+        // wiring in run_send_like_async_with_args back to always calling it
+        // leaves the receiver inbox empty -> RED.
+        let receiver = std::env::temp_dir().join(format!("maw-rs-hey-inbox-recv-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&receiver);
+        std::fs::create_dir_all(&receiver).expect("receiver repo");
+        let receiver_str = receiver.to_string_lossy().into_owned();
+        let resolve = |oracle: &str| {
+            assert_eq!(oracle, "arra-oracle-v3", "resolver is asked for the receiver, not the sender");
+            Some(receiver_str.clone())
+        };
+
+        let out = send_local_inbox_only_with(
+            "hey",
+            "local:arra-oracle-v3",
+            "41-arra-oracle-v3:1",
+            "inbox-probe",
+            &HeyConfig::default(),
+            "ui",
+            None,
+            &resolve,
+        );
+        assert_eq!(out.code, 0, "stderr={}", out.stderr);
+        assert!(out.stdout.starts_with("queued inbox arra-oracle-v3 "), "{}", out.stdout);
+
+        let inbox = receiver.join("ψ").join("inbox");
+        let files: Vec<_> = std::fs::read_dir(&inbox).expect("receiver inbox exists").filter_map(Result::ok).collect();
+        assert_eq!(files.len(), 1, "exactly one message filed in the RECEIVER inbox");
+        let body = std::fs::read_to_string(files[0].path()).expect("read msg");
+        assert!(body.contains("to: arra-oracle-v3"), "{body}");
+        assert!(body.contains("inbox-probe"), "{body}");
+        std::fs::remove_dir_all(&receiver).ok();
+    }
+
+    #[test]
+    fn send_local_inbox_only_errors_clearly_when_receiver_unknown() {
+        let out = send_local_inbox_only_with(
+            "hey",
+            "local:ghost-oracle",
+            "ghost:0",
+            "hi",
+            &HeyConfig::default(),
+            "ui",
+            None,
+            &|_oracle: &str| None,
+        );
+        assert_eq!(out.code, 1);
+        assert!(out.stdout.is_empty());
+        assert!(out.stderr.contains("cannot resolve a local inbox for 'ghost-oracle'"), "{}", out.stderr);
+    }
+
     // #695 regression, pinned at the wiring level (not just the leaf
     // formatters above): send_route_gate is the exact function
     // run_send_like_async_with_args consults, called with real RouteResult
@@ -2065,6 +2195,33 @@ mod send_acl_hotpath_tests {
             .expect("SelfNode must be refused");
         assert!(refusal.stderr.contains("black:33-maw-rs"));
         assert!(refusal.stderr.contains("33-maw-rs:0"));
+    }
+
+    // Regression: maw-routing resolves the documented `local:<agent>` form
+    // through the SAME SelfNode variant as a real cross-node alias that
+    // happens to equal this node's own identity (see
+    // send_query_uses_explicit_local_prefix's doc comment) -- v1 of this
+    // gate refused BOTH, which broke `local:` targeting fleet-wide (caught
+    // live: `hey local:maw-rs` started erroring right after #703 shipped).
+    // `local:` must always be allowed through; only a real alias resolving
+    // to self is the #695 bug.
+    #[test]
+    fn send_route_gate_allows_self_node_reached_via_explicit_local_prefix() {
+        let result = RouteResult::SelfNode { target: "33-maw-rs:0".to_owned() };
+        assert!(
+            send_route_gate("hey", "local:maw-rs", "hello", &result).is_none(),
+            "local: is documented, intentional same-node routing, not the loopback-self bug"
+        );
+    }
+
+    #[test]
+    fn send_query_uses_explicit_local_prefix_matches_only_the_local_node_name() {
+        assert!(send_query_uses_explicit_local_prefix("local:maw-rs"));
+        assert!(send_query_uses_explicit_local_prefix("local:"));
+        assert!(!send_query_uses_explicit_local_prefix("black:33-maw-rs"));
+        assert!(!send_query_uses_explicit_local_prefix("blackmachine:33-maw-rs"));
+        assert!(!send_query_uses_explicit_local_prefix("maw-rs"));
+        assert!(!send_query_uses_explicit_local_prefix(""));
     }
 
     #[test]
