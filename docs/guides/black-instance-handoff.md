@@ -134,10 +134,13 @@ vanish with it unless recorded. Each has bitten before.
 - **Serve auth is env-or-config, and loopback trusts itself by default.**
   `serve.token` and `loopbackExempt` are **config keys, not CLI flags** (passing
   them as `--flags` silently does nothing). `loopbackExempt` **defaults true** — two
-  UIDs on loopback trust each other's signed requests without a token. This is
-  exactly why `curl localhost:3456` and `:3458` both return 200 with no credential
-  (see #685) — it's the loopback exemption, not a broken auth check. Matters
-  directly for the two-process (:3456/:3458) setup on black.
+  UIDs on loopback trust each other's signed requests without a token. That is
+  why `curl 127.0.0.1:3456` and `:3458` (run **on black itself**) both return 200
+  with no credential — it's the loopback exemption, not a broken auth check.
+  Matters directly for the two-process (:3456/:3458) setup on black. It does
+  **not** explain a LAN host getting the same unauthenticated 200 — #685's
+  measurement was taken from a different machine, where the loopback exemption
+  cannot apply; that question is still open, see #685's latest comment.
 - **Federation wake can report success while doing nothing (#524).** `/api/wake`
   verified the request then returned `ok:true` as a no-op. Never trust a
   **sender-side** "woke it" — verify the **receiver-side effect** (did the pane
