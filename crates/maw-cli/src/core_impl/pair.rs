@@ -319,18 +319,33 @@ fn pair_system_accept_live(plan: &PairAcceptPlan, config: &PairConfig) -> Result
 }
 
 fn pair_http_json(method: &str, url: &str, body: Option<String>) -> Result<maw_transport::HttpResponse, String> {
-    let io = ReqwestHttpTransportIo::new(5_000)?;
-    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|error| format!("pair http runtime failed: {error}"))?;
-    runtime.block_on(io.request(&TransportHttpRequest {
-        method: method.to_owned(),
-        url: url.to_owned(),
-        headers: BTreeMap::from([("content-type".to_owned(), "application/json".to_owned())]),
-        body,
-        timeout_ms: Some(5_000),
-        follow_redirects: false,
-        pinned_addr: None,
-        max_response_bytes: None,
-    }))
+    let method = method.to_owned();
+    let url = url.to_owned();
+    // Run block_on on a fresh OS thread with no ambient runtime, so this stays callable
+    // from inside the dispatcher's tokio runtime. Calling block_on on a runtime worker
+    // thread panics ("cannot start a runtime from within a runtime") instead of returning —
+    // and a panic mid-pairing would abort before/after `pair_write_peer` and leave the peer
+    // store in a state nobody chose. A Result lets the caller stop cleanly. Mirrors
+    // `peers_fetch_identity` / `probe_peer_auth`. (#696)
+    std::thread::spawn(move || -> Result<maw_transport::HttpResponse, String> {
+        let io = ReqwestHttpTransportIo::new(5_000)?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| format!("pair http runtime failed: {error}"))?;
+        runtime.block_on(io.request(&TransportHttpRequest {
+            method,
+            url,
+            headers: BTreeMap::from([("content-type".to_owned(), "application/json".to_owned())]),
+            body,
+            timeout_ms: Some(5_000),
+            follow_redirects: false,
+            pinned_addr: None,
+            max_response_bytes: None,
+        }))
+    })
+    .join()
+    .map_err(|_| "pair http request thread panicked".to_owned())?
 }
 
 fn pair_parse_json(raw: &str, label: &str) -> Result<serde_json::Value, String> {
@@ -548,5 +563,22 @@ mod pair_tests {
         assert_eq!(output.code, 0);
         assert!(!output.stdout.contains("auto-approve"));
         assert!(output.stdout.contains("human"));
+    }
+
+    #[test]
+    fn pair_http_json_from_within_a_runtime_returns_err_never_panics() {
+        // #696: `maw pair` runs under the dispatcher's tokio runtime, so pair_http_json must
+        // not block_on on a runtime worker thread — that panics ("cannot start a runtime from
+        // within a runtime") and can abort a pairing flow mid-store-write. Called from inside
+        // a runtime, an unreachable peer must come back as an Err, not a panic. Removing the
+        // thread::spawn wrap turns this RED (the block_on panics before the assert is reached).
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let result = runtime.block_on(async {
+            pair_http_json("GET", "http://127.0.0.1:1/pair-696", None)
+        });
+        assert!(result.is_err(), "unreachable peer inside a runtime must be Err, got {result:?}");
     }
 }
