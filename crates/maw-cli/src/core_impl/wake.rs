@@ -719,13 +719,18 @@ fn wake_oracle(options: &WakeOptionsNative) -> Result<String, String> {
         .or_else(|| slug.as_deref().and_then(|value| value.rsplit('/').next()))
         .or_else(|| options.target.trim_end_matches('/').split('/').next_back())
         .unwrap_or(&options.target);
-    // Accept `session:window` -- the exact form wake's own ambiguous-target
-    // error already prints back at the caller -- by taking just the window
-    // part. This is only ever a degenerate fallback identity: a colon target
-    // that matches a registry candidate resolves via its literal name in
-    // wake_resolve_registry_target before this value is used for anything
-    // but validation.
-    let raw = raw.rsplit(':').next().unwrap_or(raw);
+    // Accept `session:window` (exactly one colon) -- the form wake's own
+    // ambiguous-target error already prints back at the caller -- by taking
+    // just the window part. This is only ever a degenerate fallback
+    // identity: a colon target that matches a registry candidate resolves
+    // via its literal name in wake_resolve_registry_target before this
+    // value is used for anything but validation. Two or more colons is
+    // `node:session:window` -- wake takes a node via `--peer`, never via the
+    // positional target -- so that shape is left untouched here and still
+    // rejected below: silently taking its last segment let a real local
+    // repo/session sharing that segment's name resolve in place of the
+    // node the caller actually named (#711 fix 5 follow-up).
+    let raw = if raw.matches(':').count() == 1 { raw.rsplit(':').next().unwrap_or(raw) } else { raw };
     let raw = raw.strip_suffix(".git").unwrap_or(raw);
     let oracle = raw.strip_suffix("-oracle").unwrap_or(raw).trim();
     wake_validate_slug(oracle, "oracle")?;
@@ -2815,6 +2820,29 @@ mod wake_tests {
             assert_eq!(code, 0, "{stdout}");
             assert!(stdout.contains("would wake window 'rpro-ent-codex-1' in session '05-rpro-ent'"), "{stdout}");
             assert!(!stdout.contains("'rpro-ent'"), "collapsed to the generic oracle name: {stdout}");
+        });
+    }
+
+    #[test]
+    fn wake_rejects_node_qualified_targets_even_when_the_last_segment_is_a_real_local_repo() {
+        // m5's review of #716: `hey`/`ls -v` print and pass around
+        // node:session:window strings, and people copy those into other
+        // commands. Before this guard, stripping to the LAST colon segment
+        // for the genuine "session:window" case ALSO stripped a
+        // node-qualified target down to its bare window name -- and if that
+        // last segment happens to name a real local repo (independent of
+        // the actual node/session the caller meant), it resolved locally
+        // and silently discarded the node the caller explicitly named. Same
+        // family as #715: succeeding at the wrong thing, not erroring.
+        // `black:33-maw-rs:maw-rs` reproduces that exactly: "maw-rs" is a
+        // real local repo here, but the caller asked for node "black".
+        wake_with_fixture(|root| {
+            std::fs::create_dir_all(root.join("ghq/github.com/acme/maw-rs")).expect("real local repo");
+            let mut tmux = WakeMockTmux::default();
+            let error = wake_run(&wake_strings(&["black:33-maw-rs:maw-rs", "--dry-run"]), &mut tmux)
+                .expect_err("node-qualified target must not resolve locally");
+            assert_eq!(error, "wake: invalid oracle");
+            assert!(tmux.actions.is_empty());
         });
     }
 
