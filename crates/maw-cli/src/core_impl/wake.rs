@@ -2755,6 +2755,37 @@ mod wake_tests {
     }
 
     #[test]
+    fn wake_shared_derived_oracle_stays_ambiguous_same_as_before_the_identity_split() {
+        // The matched_window split changes what a *resolved* candidate is
+        // named -- it must not change *whether* a query resolves at all.
+        // "rpro-ent" is the oracle both siblings derive from their shared
+        // repo, so it still hits the same two-way tie in resolve_typed_target
+        // before wake ever reaches window naming. Confirmed byte-for-byte
+        // against a checkout of this file predating the split: identical
+        // error text, not just "still an error" -- checked, not assumed
+        // (the #703 lesson: an unverified "X is unaffected" is how that
+        // regression got approved and shipped).
+        wake_with_fixture(|root| {
+            let session = "05-rpro-ent";
+            let repo = root.join("ghq/github.com/switchaphon/rpro-ent-oracle");
+            std::fs::create_dir_all(&repo).expect("repo");
+            std::fs::write(
+                root.join("config/fleet").join(format!("{session}.json")),
+                r#"{"name":"05-rpro-ent","windows":[{"name":"rpro-ent-oracle","repo":"switchaphon/rpro-ent-oracle"},{"name":"rpro-ent-codex-1","repo":"switchaphon/rpro-ent-oracle"}]}"#,
+            )
+            .expect("write registry");
+            let mut tmux = WakeMockTmux::default();
+            let error = wake_run(&wake_strings(&["rpro-ent", "--dry-run"]), &mut tmux)
+                .expect_err("shared oracle across two real siblings must stay ambiguous");
+            assert_eq!(
+                error,
+                "wake: ambiguous registry target for rpro-ent: 05-rpro-ent:rpro-ent-oracle, 05-rpro-ent:rpro-ent-codex-1"
+            );
+            assert!(tmux.actions.is_empty());
+        });
+    }
+
+    #[test]
     fn wake_unknown_name_reports_not_found_without_tmux_mutation() {
         wake_with_fixture(|_| {
             let mut tmux = WakeMockTmux::default();
