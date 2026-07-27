@@ -3392,6 +3392,44 @@ mod serve_tests {
         );
     }
 
+    #[tokio::test]
+    async fn federation_ls_path_is_mounted_and_dead_api_ls_stays_404() {
+        // #676: `maw ls --federation` GET'd /api/ls, which NO serve mounts, so it 404'd
+        // and blamed healthy peers. The client now targets /api/sessions. Guard the round
+        // trip: the dead path must stay 404, and a mounted route (/api/health, tmux-free)
+        // must not — so the test proves the router discriminates, not that all paths 404.
+        let app = serve_test_app_with_plugin_routes(Vec::new());
+        let health = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/health")
+                    .body(Body::empty())
+                    .expect("health request"),
+            )
+            .await
+            .expect("health response");
+        assert_ne!(
+            health.status(),
+            StatusCode::NOT_FOUND,
+            "control: a mounted route must not 404"
+        );
+        let dead = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/ls")
+                    .body(Body::empty())
+                    .expect("ls request"),
+            )
+            .await
+            .expect("ls response");
+        assert_eq!(
+            dead.status(),
+            StatusCode::NOT_FOUND,
+            "#676: /api/ls is implemented by no serve; the client must not target it"
+        );
+    }
+
     use axum::body::Body;
     use futures_util::{SinkExt, StreamExt};
     use maw_auth::{build_legacy_from_sign_payload, hash_body, sign_headers_v3_at, sign_hmac_sig};
