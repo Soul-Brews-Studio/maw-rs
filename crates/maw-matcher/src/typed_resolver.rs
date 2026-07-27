@@ -107,12 +107,32 @@ pub fn resolve_typed_target(
         (Some(first), Some(second)) => {
             let mut candidates = vec![first, second];
             candidates.extend(iter);
+            if let Some(winner) = live_tiebreak(&candidates) {
+                return ResolveTypedResult::Match { matched: winner };
+            }
             if let Some(winner) = literal_name_tiebreak(&raw, &candidates) {
                 return ResolveTypedResult::Match { matched: winner };
             }
             ResolveTypedResult::Ambiguous { candidates }
         }
     }
+}
+
+/// A live session should win a same-rank tie against anything non-live --
+/// predates `literal_name_tiebreak` (#612) and must run first: a non-live
+/// candidate whose name literally equals the target (e.g. an oracle-registry
+/// entry) can out-score a live session whose name only matches after
+/// stripping a numeric session prefix, silently reversing #612's policy
+/// (confirmed: this file's own tests passed before #665 landed and failed
+/// after, on exactly this shape). Only fires when exactly one candidate in
+/// the tie is live -- two live candidates (or none) stay genuinely ambiguous
+/// or fall through to the literal-name tiebreak.
+fn live_tiebreak(candidates: &[ResolveMatch]) -> Option<ResolveMatch> {
+    let mut live = candidates
+        .iter()
+        .filter(|matched| is_live(matched.candidate.kind));
+    let only = live.next()?;
+    live.next().is_none().then(|| only.clone())
 }
 
 /// When a tie leaves more than one candidate at the best rank, prefer the
@@ -322,6 +342,37 @@ mod tests {
         match resolve_typed_target("maw-rs", &candidates) {
             ResolveTypedResult::Ambiguous { .. } => {}
             other => panic!("expected Ambiguous, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn live_session_beats_an_oracle_registry_exact_tie_even_when_its_name_scores_lower() {
+        // #612's whole point: a live session should win a same-rank tie
+        // against a non-live candidate. Both rank Exact here -- the oracle
+        // candidate via its literal name, the live session via its numeric-
+        // prefix-stripped name -- but literal_name_tiebreak (#665, unaware
+        // of liveness) scores the oracle's whole-name match (3) higher than
+        // the live session's stem-only match (1) and would otherwise pick
+        // it outright, silently reversing #612. live_tiebreak must run
+        // first. Confirmed via a worktree at #665's parent commit that the
+        // maw-cli test this mirrors (attach_auto_picks_single_live_session_
+        // over_oracle_registry_tie) passed there and failed after.
+        let live = ResolveTypedCandidate {
+            kind: ResolveCandidateKind::LiveSession,
+            name: "14-oracle-hall".to_owned(),
+            aliases: Vec::new(),
+        };
+        let oracle = ResolveTypedCandidate {
+            kind: ResolveCandidateKind::Oracle,
+            name: "oracle-hall".to_owned(),
+            aliases: Vec::new(),
+        };
+        match resolve_typed_target("oracle-hall", &[oracle, live]) {
+            ResolveTypedResult::Match { matched } => {
+                assert_eq!(matched.candidate.kind, ResolveCandidateKind::LiveSession);
+                assert_eq!(matched.candidate.name, "14-oracle-hall");
+            }
+            other => panic!("expected the live session to win, got {other:?}"),
         }
     }
 }
