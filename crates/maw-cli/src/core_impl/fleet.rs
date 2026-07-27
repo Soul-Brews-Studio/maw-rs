@@ -679,7 +679,42 @@ fn fleet_findings(state: &FleetState, live: &[TmuxSession]) -> Vec<FleetFinding>
     fleet_repo_findings(state, &mut findings);
     fleet_duplicate_window_findings(state, live, &mut findings);
     fleet_duplicate_session_findings(state, &mut findings);
+    fleet_resolvability_findings(state, &mut findings);
     findings
+}
+
+// #711: sibling windows on the same repo inherit identical repo-derived
+// aliases (`wake_registry_aliases`), so `maw wake <oracle>` can be
+// permanently ambiguous even though the registry itself looks fine --
+// `fleet_duplicate_window_findings` above only catches windows that also
+// share a *name* alias, a different case. This runs the same resolver wake
+// itself uses and flags any oracle identity that can never pick a single
+// target, so it shows up in `doctor` instead of at the moment someone
+// actually tries to wake it.
+fn fleet_resolvability_findings(state: &FleetState, findings: &mut Vec<FleetFinding>) {
+    let candidates = wake_typed_registry_candidates(&state.fleet_entries);
+    let typed = candidates.iter().map(|candidate| candidate.candidate.clone()).collect::<Vec<_>>();
+    let mut checked = BTreeSet::new();
+    for candidate in &candidates {
+        if !checked.insert(candidate.oracle.clone()) {
+            continue;
+        }
+        if let maw_matcher::ResolveTypedResult::Ambiguous { candidates: ambiguous } =
+            maw_matcher::resolve_typed_target(&candidate.oracle, &typed)
+        {
+            let names = ambiguous.iter().map(|matched| matched.candidate.name.as_str()).collect::<Vec<_>>().join(", ");
+            findings.push(fleet_finding(
+                "fatal",
+                "ambiguous-oracle",
+                &candidate.oracle,
+                &format!(
+                    "resolves to {} registry windows ({names}); 'maw wake {}' can never pick one",
+                    ambiguous.len(),
+                    candidate.oracle,
+                ),
+            ));
+        }
+    }
 }
 
 fn fleet_duplicate_window_findings(state: &FleetState, live: &[TmuxSession], findings: &mut Vec<FleetFinding>) {
@@ -1978,6 +2013,36 @@ mod fleet_tests {
     }
 
     #[test]
+    fn fleet_doctor_flags_oracle_names_that_resolve_to_multiple_registry_windows() {
+        // #711: two windows sharing one repo, neither literally named the
+        // derived oracle -- so unlike the issue's original repro (fixed by
+        // #665's literal_name_tiebreak, a window named exactly "rpro-ent-
+        // oracle" wins the tie), there is no name match to break the tie.
+        // `maw wake twin` would be permanently ambiguous; doctor must say so.
+        fleet_with_fixture(|root| {
+            std::fs::write(
+                root.join("config/fleet/09-twin.json"),
+                r#"{"name":"09-twin","windows":[{"name":"twin-codex-1","repo":"acme/twin-oracle"},{"name":"twin-codex-2","repo":"acme/twin-oracle"}]}"#,
+            )
+            .expect("twin registry");
+            let mut runtime = FleetFakeRuntime::default();
+            let (_, dry_run) = fleet_run_with(&fleet_strings(&["doctor", "--json"]), &mut runtime).expect("dry run");
+            let dry_json: serde_json::Value = serde_json::from_str(&dry_run).expect("dry json");
+            let ambiguous = dry_json["findings"]
+                .as_array()
+                .expect("findings")
+                .iter()
+                .filter(|finding| finding["code"] == "ambiguous-oracle")
+                .collect::<Vec<_>>();
+            assert_eq!(ambiguous.len(), 1, "{dry_json}");
+            assert_eq!(ambiguous[0]["subject"], "twin");
+            let detail = ambiguous[0]["detail"].as_str().expect("detail");
+            assert!(detail.contains("twin-codex-1"), "{detail}");
+            assert!(detail.contains("twin-codex-2"), "{detail}");
+        });
+    }
+
+    #[test]
     fn fleet_doctor_detects_and_fixes_aliases_for_the_same_live_window() {
         fleet_with_fixture(|root| {
             let fleet_dir = root.join("config/fleet");
@@ -2047,10 +2112,19 @@ mod fleet_tests {
                 ..Default::default()
             };
 
-            let (code, dry_run) = fleet_run_with(&fleet_strings(&["doctor", "--json"]), &mut runtime).expect("dry run");
+            let (_, dry_run) = fleet_run_with(&fleet_strings(&["doctor", "--json"]), &mut runtime).expect("dry run");
             let dry_json: serde_json::Value = serde_json::from_str(&dry_run).expect("dry json");
-            assert_eq!(code, 0, "{dry_run}");
-            assert_eq!(dry_json["findings"], serde_json::json!([]));
+            let findings = dry_json["findings"].as_array().expect("findings");
+            // The original alias-based dedup check must stay silent: these
+            // are genuinely distinct windows, not the same window under two
+            // names. It's a *different* claim from "wake maw-rs resolves" --
+            // none of the three is literally named maw-rs, so that oracle
+            // identity IS genuinely ambiguous (#711) and doctor should say so.
+            assert!(!findings.iter().any(|finding| finding["code"] == "duplicate-window-repo"), "{dry_json}");
+            assert!(
+                findings.iter().any(|finding| finding["code"] == "ambiguous-oracle" && finding["subject"] == "maw-rs"),
+                "{dry_json}"
+            );
 
             let (_, fixed) = fleet_run_with(&fleet_strings(&["doctor", "--fix", "--json"]), &mut runtime).expect("fix");
             let fixed_json: serde_json::Value = serde_json::from_str(&fixed).expect("fixed json");
