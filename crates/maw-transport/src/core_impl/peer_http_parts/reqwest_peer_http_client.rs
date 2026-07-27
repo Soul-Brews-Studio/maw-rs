@@ -42,6 +42,10 @@ pub struct PeerSendResponse {
     pub last_line: Option<String>,
     pub error: Option<String>,
     pub decision: Option<String>,
+    /// #709: set when the receiving serve delivered into a pane that does
+    /// not look agent-shaped (a plain shell, most often) -- the send still
+    /// succeeded, this names why it is probably wrong.
+    pub warning: Option<String>,
 }
 
 /// Parsed `/api/wake` response outcome.
@@ -180,6 +184,7 @@ impl ReqwestHttpTransportIo {
             last_line: wire.last_line,
             error: wire.error,
             decision: wire.decision,
+            warning: wire.warning,
         };
         if status >= 400 {
             return Err(peer_send_error_message(status, &parsed));
@@ -335,6 +340,7 @@ mod decision_tests {
             last_line: None,
             error: error.map(str::to_owned),
             decision: decision.map(str::to_owned),
+            warning: None,
         }
     }
 
