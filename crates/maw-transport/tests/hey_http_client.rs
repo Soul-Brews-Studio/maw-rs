@@ -107,6 +107,91 @@ async fn reqwest_http_transport_posts_api_send_with_verifiable_v3_signature() {
     assert!(verify_hmac_sig(peer_key, &payload, signature));
 }
 
+/// #685: `verify_protected_request_outcome` on the receiving serve already
+/// names the reason for a 401/403 in the response body
+/// (`{"error":"unauthorized","decision":"<reason>"}`) -- `probe_peer_auth`
+/// must carry that reason through, not reduce straight to a bare bool the
+/// way it silently discarded the body before this fix.
+#[tokio::test]
+async fn reqwest_http_transport_probe_peer_auth_carries_the_named_401_reason() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let (tx, rx) = tokio::sync::oneshot::channel();
+
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accept");
+        let captured = read_one_http_request(&mut socket).await;
+        let body = br#"{"error":"unauthorized","decision":"pubkey-mismatch"}"#;
+        socket
+            .write_all(
+                format!(
+                    "HTTP/1.1 401 Unauthorized\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .expect("status line");
+        socket.write_all(body).await.expect("body");
+        tx.send(captured).expect("send capture");
+    });
+
+    let client = ReqwestHttpTransportIo::new(2_000).expect("client");
+    let result = client
+        .probe_peer_auth(&PeerWakeRequest {
+            peer_url: format!("http://{addr}"),
+            target: String::new(),
+            task: None,
+            from: "sender-oracle:sender-node".to_owned(),
+            federation_token: "known-federation-token".to_owned(),
+            peer_key: "known-peer-key".to_owned(),
+            timestamp: 1_700_000_123_i64,
+        })
+        .await
+        .expect("probe peer auth");
+
+    assert_eq!(result.ok, Some(false));
+    assert_eq!(result.reason.as_deref(), Some("pubkey-mismatch"));
+
+    let captured = rx.await.expect("capture");
+    assert_eq!(captured.method, "POST");
+    assert_eq!(captured.path, "/api/probe");
+}
+
+#[tokio::test]
+async fn reqwest_http_transport_probe_peer_auth_ok_carries_no_reason() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("addr");
+
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accept");
+        let _captured = read_one_http_request(&mut socket).await;
+        socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 11\r\n\r\n{\"ok\":true}",
+            )
+            .await
+            .expect("response");
+    });
+
+    let client = ReqwestHttpTransportIo::new(2_000).expect("client");
+    let result = client
+        .probe_peer_auth(&PeerWakeRequest {
+            peer_url: format!("http://{addr}"),
+            target: String::new(),
+            task: None,
+            from: "sender-oracle:sender-node".to_owned(),
+            federation_token: "known-federation-token".to_owned(),
+            peer_key: "known-peer-key".to_owned(),
+            timestamp: 1_700_000_123_i64,
+        })
+        .await
+        .expect("probe peer auth");
+
+    assert_eq!(result.ok, Some(true));
+    assert!(result.reason.is_none());
+}
+
 #[tokio::test]
 async fn reqwest_http_transport_posts_api_wake_with_verifiable_v3_signature() {
     let peer_key = "known-peer-key";

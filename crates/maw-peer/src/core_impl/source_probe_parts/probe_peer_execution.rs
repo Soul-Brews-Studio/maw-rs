@@ -17,6 +17,12 @@ pub struct ProbePeerPlan {
     /// trusted, `Some(false)` = reachable but auth refused (e.g. 401). Never
     /// derived from `POST /api/send`, which would deliver a real message.
     pub auth_ok: Option<bool>,
+    /// The peer's own named reason for `auth_ok == Some(false)` (#685) --
+    /// e.g. a pubkey-mismatch kind or `refuse-unsigned` -- carried from the
+    /// `/api/probe` response body rather than reduced to a bare bool. `None`
+    /// when `auth_ok` isn't `Some(false)`, or the peer's response predates
+    /// this field.
+    pub auth_error: Option<String>,
 }
 
 /// Deterministic output for maw-js `probePeer`.
@@ -31,6 +37,8 @@ pub struct ProbePeerResult {
     pub resolved_ip: Option<String>,
     /// Read-only auth outcome carried through from the plan.
     pub auth_ok: Option<bool>,
+    /// Named reason for `auth_ok == Some(false)`, carried through from the plan.
+    pub auth_error: Option<String>,
     /// `true` when `resolved_ip` is a loopback address — the probe reached our
     /// own serve, not the remote peer, so a `200 OK` here is a false "reachable".
     pub loopback_self: bool,
@@ -63,6 +71,7 @@ pub fn probe_peer_from_plan(plan: &ProbePeerPlan) -> ProbePeerResult {
     result.resolved_ip.clone_from(&plan.resolved_ip);
     result.loopback_self = is_loopback_ip(plan.resolved_ip.as_deref());
     result.auth_ok = plan.auth_ok;
+    result.auth_error.clone_from(&plan.auth_error);
     result
 }
 
@@ -178,6 +187,7 @@ mod truth_probe_tests {
             identity: None,
             resolved_ip: resolved_ip.map(str::to_owned),
             auth_ok,
+            auth_error: None,
         }
     }
 
@@ -190,6 +200,18 @@ mod truth_probe_tests {
         assert_eq!(result.resolved_ip.as_deref(), Some("127.0.0.1"));
         assert!(result.loopback_self);
         assert_eq!(result.auth_ok, Some(true));
+    }
+
+    #[test]
+    fn probe_peer_from_plan_carries_the_auth_error_reason_through_to_the_result() {
+        // #685: auth_ok alone doesn't say WHY a 401/403 happened. The plan's
+        // auth_error (already parsed from the peer's response body by the
+        // transport layer) must survive into the result unchanged.
+        let mut plan = body_plan(Some("192.168.1.184"), Some(false));
+        plan.auth_error = Some("pubkey-mismatch".to_owned());
+        let result = probe_peer_from_plan(&plan);
+        assert_eq!(result.auth_ok, Some(false));
+        assert_eq!(result.auth_error.as_deref(), Some("pubkey-mismatch"));
     }
 
     #[test]

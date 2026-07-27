@@ -39,6 +39,8 @@ struct PeersPeerNative {
     ssh_user: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     auth_ok: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    auth_error: Option<String>,
 }
 
 fn peers_version_one() -> u8 { 1 }
@@ -294,12 +296,21 @@ fn peers_probe_peer(url: &str, timeout_ms: u64, now: &str) -> maw_peer::ProbePee
     // Read-only signed auth probe (POST /api/probe verifies the v3 from-signature
     // and has no side effect) — only when /info succeeded, so we do not sign
     // requests to an unreachable host. None when we cannot sign (no key/token).
-    let auth_ok = if matches!(info, maw_peer::ProbeInfoOutcome::Body(_)) {
+    let auth_probe = if matches!(info, maw_peer::ProbeInfoOutcome::Body(_)) {
         federation_probe_auth(url, timeout_ms)
     } else {
-        None
+        maw_transport::PeerProbeAuthResult::default()
     };
-    maw_peer::probe_peer_from_plan(&maw_peer::ProbePeerPlan { url: url.to_owned(), now: now.to_owned(), dns_error: None, info, identity, resolved_ip, auth_ok })
+    maw_peer::probe_peer_from_plan(&maw_peer::ProbePeerPlan {
+        url: url.to_owned(),
+        now: now.to_owned(),
+        dns_error: None,
+        info,
+        identity,
+        resolved_ip,
+        auth_ok: auth_probe.ok,
+        auth_error: auth_probe.reason,
+    })
 }
 
 /// Resolve the host in a peer URL to a **routable** IP, so a probe can tell a
@@ -456,6 +467,7 @@ fn peers_apply_probe_result(peer: &mut PeersPeerNative, probe: &maw_peer::ProbeP
     }
     if let Some(identity) = &probe.identity { peer.identity = Some(serde_json::to_value(identity).map_err(|error| format!("peers: render identity: {error}"))?); }
     peer.auth_ok = probe.auth_ok;
+    peer.auth_error.clone_from(&probe.auth_error);
     Ok(())
 }
 
@@ -843,6 +855,7 @@ mod peers_tests {
             identity,
             resolved_ip: None,
             auth_ok: None,
+            auth_error: None,
         })
     }
 
@@ -855,6 +868,27 @@ mod peers_tests {
         peers_apply_probe_result(&mut peer, &probe, "1700000000000").unwrap();
         assert_eq!(peer.pubkey.as_deref(), Some("pub-545"));
         assert_eq!(peer.pubkey_first_seen.as_deref(), Some("1700000000000"));
+    }
+
+    #[test]
+    fn peers_apply_probe_result_persists_the_auth_error_reason() {
+        // #685: `auth_ok: false` with no reason is the same disease as the six
+        // bugs behind #680 -- the peer record must persist WHY, so `peers info`
+        // can show it, not just a bare boolean the map already renders as
+        // "auth-fail".
+        let probe = maw_peer::ProbePeerResult {
+            node: Some("peer-node".to_owned()),
+            auth_ok: Some(false),
+            auth_error: Some("pubkey-mismatch".to_owned()),
+            ..maw_peer::ProbePeerResult::default()
+        };
+        let mut peer = PeersPeerNative { url: "http://peer.test:3456".to_owned(), ..PeersPeerNative::default() };
+        peers_apply_probe_result(&mut peer, &probe, "1700000000000").unwrap();
+        assert_eq!(peer.auth_ok, Some(false));
+        assert_eq!(peer.auth_error.as_deref(), Some("pubkey-mismatch"));
+
+        let value = serde_json::to_value(&peer).expect("serialize");
+        assert_eq!(value["authError"], "pubkey-mismatch", "{value}");
     }
 
     #[test]

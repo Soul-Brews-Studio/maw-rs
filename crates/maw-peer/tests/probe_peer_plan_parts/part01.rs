@@ -32,7 +32,7 @@ fn probe_peer_plan_returns_modern_identity_like_maw_js_probe_peer() {
             oracle: Some("oracle-x".to_owned()),
             node: Some("peer-node".to_owned()),
         }),
-            resolved_ip: None, auth_ok: None,
+            resolved_ip: None, auth_ok: None, auth_error: None,
         });
 
     assert_eq!(
@@ -68,7 +68,7 @@ fn probe_peer_plan_uses_legacy_name_and_default_oracle_identity() {
             oracle: None,
             node: Some("legacy-name".to_owned()),
         }),
-            resolved_ip: None, auth_ok: None,
+            resolved_ip: None, auth_ok: None, auth_error: None,
         });
 
     assert_eq!(
@@ -104,7 +104,7 @@ fn probe_peer_plan_treats_blank_identity_fields_like_maw_js() {
             oracle: Some(String::new()),
             node: Some("identity-node".to_owned()),
         }),
-            resolved_ip: None, auth_ok: None,
+            resolved_ip: None, auth_ok: None, auth_error: None,
         });
 
     assert_eq!(result.pubkey, None);
@@ -130,7 +130,7 @@ fn probe_peer_plan_keeps_info_success_when_identity_is_absent_or_malformed() {
             nickname: Some("Legacy Peer".to_owned()),
         }),
         identity: Some(ProbeRemoteIdentity::Missing),
-            resolved_ip: None, auth_ok: None,
+            resolved_ip: None, auth_ok: None, auth_error: None,
         };
 
     assert_eq!(
