@@ -74,8 +74,8 @@ use maw_transport::{
     classify_error, classify_symmetric_federation_status, FederationPeerStatus, FederationPeerView,
     FederationStatus, PairStatus, PeerFederationStatus, PeerFederationStatusResult,
     SymmetricFederationStatus, Transport, TransportFailureReason, TransportResult, TransportRouter,
-    HttpRequest as TransportHttpRequest, PeerSendRequest, PeerWakeRequest, ReqwestHttpTransportIo,
-    TransportTarget,
+    HttpRequest as TransportHttpRequest, PeerProbeAuthResult, PeerSendRequest, PeerWakeRequest,
+    ReqwestHttpTransportIo, TransportTarget,
 };
 use maw_worktree::{
     resolve_worktree_window, Session as WorktreeSession, Window as WorktreeWindow,

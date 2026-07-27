@@ -53,6 +53,22 @@ pub struct PeerWakeResponse {
     pub error: Option<String>,
 }
 
+/// `/api/probe` outcome, with the server's own reason for a 401/403 (#685) --
+/// `verify_protected_request_outcome` on the receiving serve already computes
+/// a named decision (`refuse-unsigned`, a pubkey-mismatch kind, ...) and puts
+/// it in the response body; this is that value, not re-derived.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PeerProbeAuthResult {
+    pub ok: Option<bool>,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PeerProbeWireResponse {
+    #[serde(default)]
+    decision: Option<String>,
+}
+
 fn peer_send_error_message(status: u16, parsed: &PeerSendResponse) -> String {
     let mut msg = format!(
         "remote /api/send returned HTTP {status}: {}",
@@ -239,8 +255,8 @@ impl ReqwestHttpTransportIo {
     pub async fn probe_peer_auth(
         &self,
         request: &PeerWakeRequest,
-    ) -> Result<Option<bool>, String> {
-        let (status, _text) = self
+    ) -> Result<PeerProbeAuthResult, String> {
+        let (status, text) = self
             .post_signed_json(
                 &request.peer_url,
                 "/api/probe",
@@ -253,10 +269,17 @@ impl ReqwestHttpTransportIo {
                 },
             )
             .await?;
+        // #685: the reason for a 401/403 (pubkey mismatch, refused-unsigned,
+        // token mismatch, ...) is already in the response body -- carry it
+        // through instead of reducing straight to a bare bool, the same
+        // treatment #671 gave `fetch_error`.
+        let reason = serde_json::from_str::<PeerProbeWireResponse>(&text)
+            .ok()
+            .and_then(|wire| wire.decision);
         Ok(match status {
-            200..=299 => Some(true),
-            401 | 403 => Some(false),
-            _ => None,
+            200..=299 => PeerProbeAuthResult { ok: Some(true), reason: None },
+            401 | 403 => PeerProbeAuthResult { ok: Some(false), reason },
+            _ => PeerProbeAuthResult { ok: None, reason: None },
         })
     }
 

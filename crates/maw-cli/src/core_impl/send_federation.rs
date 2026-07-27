@@ -1775,12 +1775,18 @@ fn load_federation_token() -> Result<String, String> {
 /// green result here means a real `maw hey` to this peer would also
 /// authenticate. `Some(true)` trusted, `Some(false)` refused (401/403),
 /// `None` when we cannot even sign (no key/token/identity) or on error.
-pub(crate) fn federation_probe_auth(peer_url: &str, timeout_ms: u64) -> Option<bool> {
+pub(crate) fn federation_probe_auth(peer_url: &str, timeout_ms: u64) -> PeerProbeAuthResult {
     let config = load_hey_config();
     let sender_oracle = resolve_hey_sender_oracle_for_from(&config, None);
-    let from = resolve_hey_wire_from(None, &config, &sender_oracle).ok()?;
-    let peer_key = load_peer_key().ok()?;
-    let federation_token = load_federation_token().ok()?;
+    let Ok(from) = resolve_hey_wire_from(None, &config, &sender_oracle) else {
+        return PeerProbeAuthResult::default();
+    };
+    let Ok(peer_key) = load_peer_key() else {
+        return PeerProbeAuthResult::default();
+    };
+    let Ok(federation_token) = load_federation_token() else {
+        return PeerProbeAuthResult::default();
+    };
     let request = PeerWakeRequest {
         peer_url: peer_url.to_owned(),
         target: String::new(),
@@ -1798,14 +1804,12 @@ pub(crate) fn federation_probe_auth(peer_url: &str, timeout_ms: u64) -> Option<b
             .build()
             .ok()?;
         let client = ReqwestHttpTransportIo::new(timeout_ms).ok()?;
-        runtime
-            .block_on(client.probe_peer_auth(&request))
-            .ok()
-            .flatten()
+        runtime.block_on(client.probe_peer_auth(&request)).ok()
     })
     .join()
     .ok()
     .flatten()
+    .unwrap_or_default()
 }
 
 fn generate_peer_key() -> Result<String, String> {
