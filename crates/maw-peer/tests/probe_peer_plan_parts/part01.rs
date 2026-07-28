@@ -51,8 +51,13 @@ fn probe_peer_plan_returns_modern_identity_like_maw_js_probe_peer() {
     );
 }
 
+/// #687 deleted `PEER_DEFAULT_ORACLE`: a probe that carries no oracle now
+/// stores `""` instead of fabricating `"mawjs"`, because a constant that
+/// renders identically to a probed value is a guess wearing the costume of
+/// data. The old name ("default oracle identity") described a default that no
+/// longer exists.
 #[test]
-fn probe_peer_plan_uses_legacy_name_and_default_oracle_identity() {
+fn probe_peer_plan_uses_legacy_name_and_leaves_an_absent_oracle_empty() {
     let result = probe_peer_from_plan(&ProbePeerPlan {
         url: "http://127.0.0.1:3456".to_owned(),
         now: at(),
@@ -78,7 +83,7 @@ fn probe_peer_plan_uses_legacy_name_and_default_oracle_identity() {
             nickname: None,
             pubkey: Some("pub-default".to_owned()),
             identity: Some(PeerIdentity {
-                oracle: "mawjs".to_owned(),
+                oracle: String::new(),
                 node: "legacy-name".to_owned(),
             }),
             error: None,
@@ -87,8 +92,12 @@ fn probe_peer_plan_uses_legacy_name_and_default_oracle_identity() {
     );
 }
 
+/// Blank fields are still dropped the way maw-js drops them — except for
+/// `oracle`, where #687 made maw-rs deliberately diverge: maw-js emits the
+/// constant, maw-rs emits nothing rather than a plausible guess. The old name
+/// claimed parity that is now the opposite of the intent.
 #[test]
-fn probe_peer_plan_treats_blank_identity_fields_like_maw_js() {
+fn probe_peer_plan_blanks_identity_fields_but_never_fabricates_an_oracle() {
     let result = probe_peer_from_plan(&ProbePeerPlan {
         url: "http://127.0.0.1:3456".to_owned(),
         now: at(),
@@ -111,7 +120,7 @@ fn probe_peer_plan_treats_blank_identity_fields_like_maw_js() {
     assert_eq!(
         result.identity,
         Some(PeerIdentity {
-            oracle: "mawjs".to_owned(),
+            oracle: String::new(),
             node: "identity-node".to_owned(),
         })
     );
