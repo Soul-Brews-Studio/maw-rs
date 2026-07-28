@@ -109,6 +109,56 @@ fn decision_hint(decision: &str) -> Option<&'static str> {
     })
 }
 
+/// Name the layer that actually failed, and carry the real reason up with it.
+///
+/// `reqwest::Error`'s own `Display` stops at "error sending request for url
+/// (...)" — the reason (connection refused, dns failure, a header we built
+/// wrong) only lives in the `source()` chain. Calling every one of them a
+/// "network error" then points the reader at the wrong machine: a request
+/// rejected while being built never reached the network at all, so the peer,
+/// its port and its firewall are all innocent. Both halves of that cost a
+/// federation debug session on 2026-07-28, where the only way to tell
+/// client-side failure from an unreachable peer was to re-issue the request
+/// by hand with curl.
+fn request_error_message(action: &str, url: &str, error: &reqwest::Error) -> String {
+    let layer = if error.is_builder() {
+        "invalid request (never sent)"
+    } else if error.is_connect() {
+        "connect failed"
+    } else if error.is_timeout() {
+        "timed out"
+    } else if error.is_redirect() {
+        "too many redirects"
+    } else if error.is_decode() {
+        "malformed response"
+    } else {
+        "network error"
+    };
+    format!(
+        "{layer} {action} {url}: {}",
+        error_cause_chain(error, url)
+    )
+}
+
+/// Flatten an error's `source()` chain into one line, dropping links that only
+/// repeat the URL the caller already prints.
+fn error_cause_chain(error: &(dyn std::error::Error + 'static), url: &str) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let mut current = Some(error);
+    while let Some(link) = current {
+        let text = link.to_string();
+        if !text.contains(url) && !parts.contains(&text) {
+            parts.push(text);
+        }
+        current = link.source();
+    }
+    if parts.is_empty() {
+        "no further detail".to_owned()
+    } else {
+        parts.join(": ")
+    }
+}
+
 struct PeerAuth<'a> {
     from: &'a str,
     federation_token: &'a str,
@@ -317,13 +367,126 @@ impl ReqwestHttpTransportIo {
         let response = builder
             .send()
             .await
-            .map_err(|error| format!("network error posting {url}: {error}"))?;
+            .map_err(|error| request_error_message("posting", &url, &error))?;
         let status = response.status().as_u16();
         let text = response
             .text()
             .await
-            .map_err(|error| format!("network error reading {url}: {error}"))?;
+            .map_err(|error| request_error_message("reading", &url, &error))?;
         Ok((status, text))
+    }
+}
+
+#[cfg(test)]
+mod transport_error_tests {
+    use super::{error_cause_chain, PeerAuth, ReqwestHttpTransportIo};
+
+    /// Nothing listens on port 1, so this is a refusal, not a timeout — and it
+    /// needs no network beyond loopback.
+    const REFUSED_URL: &str = "http://127.0.0.1:1";
+
+    fn auth(from: &str) -> PeerAuth<'_> {
+        PeerAuth {
+            from,
+            federation_token: "token",
+            peer_key: "peer-key",
+            timestamp: 1_782_345_900,
+        }
+    }
+
+    async fn post_error(peer_url: &str, from: &str) -> String {
+        let io = ReqwestHttpTransportIo::new(2000).expect("client");
+        io.post_signed_json(peer_url, "/api/send", "{}", auth(from))
+            .await
+            .expect_err("must fail")
+    }
+
+    #[tokio::test]
+    async fn refused_connection_names_the_layer_and_the_reason() {
+        let message = post_error(REFUSED_URL, "maw-rs:black").await;
+        assert!(
+            message.starts_with("connect failed posting"),
+            "should name the layer that failed: {message}"
+        );
+        assert!(
+            message.to_lowercase().contains("refused"),
+            "the actual reason lives in source() and must be carried up: {message}"
+        );
+        // The bare reqwest Display prints the URL again after we already have it.
+        assert_eq!(message.matches(REFUSED_URL).count(), 1, "{message}");
+    }
+
+    /// A from-address carrying a control character cannot go in a header, so
+    /// the request dies while still being built. Calling that a "network
+    /// error" sends the reader to inspect a peer that was never contacted —
+    /// the port here is closed and stays irrelevant to the failure.
+    #[tokio::test]
+    async fn unsendable_header_is_not_reported_as_a_network_error() {
+        let message = post_error(REFUSED_URL, "black\nX-Injected: 1").await;
+        assert!(
+            message.starts_with("invalid request (never sent) posting"),
+            "a header we built wrong is ours, not the network's: {message}"
+        );
+        assert!(
+            !message.contains("network error"),
+            "must not blame the network: {message}"
+        );
+    }
+
+    /// Refutes the first hypothesis raised when federation broke on
+    /// 2026-07-28: that a non-ASCII oracle name produced a header reqwest
+    /// would reject. It does not — HTTP allows bytes 128-255 in a header
+    /// value as obs-text, so `ψ` travels fine and the request reaches the
+    /// network like any other. Recorded as a test so the idea is not
+    /// re-litigated by reading the code.
+    #[tokio::test]
+    async fn non_ascii_from_address_still_reaches_the_network() {
+        let message = post_error(REFUSED_URL, "ψ:black").await;
+        assert!(
+            message.starts_with("connect failed posting"),
+            "a non-ASCII from-address is sendable, not a builder error: {message}"
+        );
+    }
+
+    #[test]
+    fn cause_chain_drops_links_that_only_repeat_the_url() {
+        #[derive(Debug)]
+        struct Link(&'static str, Option<Box<Link>>);
+        impl std::fmt::Display for Link {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str(self.0)
+            }
+        }
+        impl std::error::Error for Link {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                self.1.as_deref().map(|link| link as &(dyn std::error::Error + 'static))
+            }
+        }
+
+        let chain = Link(
+            "error sending request for url (http://peer/api/send)",
+            Some(Box::new(Link("tcp connect error", Some(Box::new(Link("Connection refused", None)))))),
+        );
+        assert_eq!(
+            error_cause_chain(&chain, "http://peer/api/send"),
+            "tcp connect error: Connection refused"
+        );
+    }
+
+    #[test]
+    fn cause_chain_without_usable_links_still_says_something() {
+        #[derive(Debug)]
+        struct Only;
+        impl std::fmt::Display for Only {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("http://peer/api/send")
+            }
+        }
+        impl std::error::Error for Only {}
+        assert_eq!(
+            error_cause_chain(&Only, "http://peer/api/send"),
+            "no further detail"
+        );
     }
 }
 
