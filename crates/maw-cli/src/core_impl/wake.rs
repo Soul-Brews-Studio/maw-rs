@@ -681,13 +681,13 @@ fn wake_label(options: &WakeOptionsNative) -> String {
 fn wake_resolve(options: &WakeOptionsNative, sessions: &[TmuxSession]) -> Result<WakeResolvedNative, String> {
     let fleet_entries = fleet_load_entries().into_iter().filter(fleet_entry_is_session).collect::<Vec<_>>();
     let initial_oracle = wake_oracle(options)?;
-    let typed = wake_typed_resolution(options, &initial_oracle, &fleet_entries)?;
+    let typed = wake_typed_resolution(options, &initial_oracle, &fleet_entries, sessions)?;
     let typed_session_hint = typed.as_ref().and_then(|resolution| resolution.session_hint.clone());
     let matched_window = typed.as_ref().and_then(|resolution| resolution.matched_window.clone());
     let oracle = typed.as_ref().map_or_else(|| initial_oracle.clone(), |resolution| resolution.oracle.clone());
     let repo = typed.map_or_else(|| wake_repo_path(options, &oracle, &fleet_entries), |resolution| Ok(resolution.repo))?;
     let repo_path = repo.path;
-    let session_hint = typed_session_hint.or_else(|| wake_registry_session_hint(&initial_oracle, &repo_path, &fleet_entries));
+    let session_hint = typed_session_hint.or_else(|| wake_registry_session_hint(&initial_oracle, &repo_path, &fleet_entries, sessions));
     let session = options
         .parent
         .clone()
@@ -737,10 +737,15 @@ fn wake_oracle(options: &WakeOptionsNative) -> Result<String, String> {
     Ok(oracle.to_owned())
 }
 
-fn wake_typed_resolution(options: &WakeOptionsNative, oracle: &str, fleet_entries: &[NativeFleetEntry]) -> Result<Option<WakeTypedResolution>, String> {
+fn wake_typed_resolution(
+    options: &WakeOptionsNative,
+    oracle: &str,
+    fleet_entries: &[NativeFleetEntry],
+    sessions: &[TmuxSession],
+) -> Result<Option<WakeTypedResolution>, String> {
     if wake_should_bypass_typed_resolution(options) { return Ok(None); }
     if let Some(resolution) = wake_resolve_exact_registry_session(&options.target, fleet_entries)? { return Ok(Some(resolution)); }
-    if let Some(resolution) = wake_resolve_registry_target(&options.target, fleet_entries)? { return Ok(Some(resolution)); }
+    if let Some(resolution) = wake_resolve_registry_target(&options.target, fleet_entries, sessions)? { return Ok(Some(resolution)); }
     wake_resolve_repo_target(oracle, fleet_entries).map(Some)
 }
 
@@ -839,8 +844,12 @@ fn wake_primary_registry_window<'a>(entry: &'a NativeFleetEntry, stem: &str) -> 
         .or_else(|| entry.session.windows.first())
 }
 
-fn wake_resolve_registry_target(target: &str, fleet_entries: &[NativeFleetEntry]) -> Result<Option<WakeTypedResolution>, String> {
-    let candidates = wake_typed_registry_candidates(fleet_entries);
+fn wake_resolve_registry_target(
+    target: &str,
+    fleet_entries: &[NativeFleetEntry],
+    sessions: &[TmuxSession],
+) -> Result<Option<WakeTypedResolution>, String> {
+    let candidates = wake_typed_registry_candidates(fleet_entries, sessions);
     let typed = candidates.iter().map(|candidate| candidate.candidate.clone()).collect::<Vec<_>>();
     match maw_matcher::resolve_typed_target(target, &typed) {
         maw_matcher::ResolveTypedResult::None => Ok(None),
@@ -1047,15 +1056,32 @@ fn wake_registry_repo_fallback(names: &[&str], recorded_repo: &str) -> Option<(S
     wake_oracles_repo_fallback(names)
 }
 
-fn wake_registry_session_hint(oracle: &str, repo_path: &std::path::Path, fleet_entries: &[NativeFleetEntry]) -> Option<String> {
-    wake_resolve_registry_target(oracle, fleet_entries)
+fn wake_registry_session_hint(
+    oracle: &str,
+    repo_path: &std::path::Path,
+    fleet_entries: &[NativeFleetEntry],
+    sessions: &[TmuxSession],
+) -> Option<String> {
+    wake_resolve_registry_target(oracle, fleet_entries, sessions)
         .ok()
         .flatten()
         .filter(|resolution| wake_canonicalize_path(&resolution.repo.path) == wake_canonicalize_path(repo_path))
         .and_then(|resolution| resolution.session_hint)
 }
 
-fn wake_typed_registry_candidates(fleet_entries: &[NativeFleetEntry]) -> Vec<WakeTypedRegistryCandidate> {
+// `sessions` decides whether a candidate is tagged SleepingRegistry or
+// LiveSession, which in turn decides whether maw-matcher's live_tiebreak
+// (#719) can prefer it in a same-rank alias tie -- #711 part 2's chosen
+// policy: prefer the live window when exactly one candidate in a tie is
+// live, otherwise stay ambiguous. Pass `&[]` for a check that must judge
+// the registry's own naming, independent of what happens to be running
+// right now (see fleet_resolvability_findings in fleet.rs, #714) -- a
+// fleet with a genuinely ambiguous alias is worth flagging even while one
+// window is transiently live to break the tie for wake's purposes.
+fn wake_typed_registry_candidates(
+    fleet_entries: &[NativeFleetEntry],
+    sessions: &[TmuxSession],
+) -> Vec<WakeTypedRegistryCandidate> {
     let mut candidates = Vec::new();
     let mut seen = BTreeSet::new();
     for entry in fleet_entries {
@@ -1064,9 +1090,14 @@ fn wake_typed_registry_candidates(fleet_entries: &[NativeFleetEntry]) -> Vec<Wak
             let oracle = wake_oracle_from_repo_slug(&window.repo).unwrap_or_else(|| window.name.clone());
             let name = format!("{}:{}", entry.session.name, window.name);
             if !seen.insert((name.clone(), path.clone())) { continue; }
+            let kind = if wake_registry_window_is_live(entry, window, sessions) {
+                maw_matcher::ResolveCandidateKind::LiveSession
+            } else {
+                maw_matcher::ResolveCandidateKind::SleepingRegistry
+            };
             candidates.push(WakeTypedRegistryCandidate {
                 candidate: maw_matcher::ResolveTypedCandidate {
-                    kind: maw_matcher::ResolveCandidateKind::SleepingRegistry,
+                    kind,
                     name,
                     aliases: wake_registry_aliases(window, &oracle),
                 },
@@ -1079,6 +1110,12 @@ fn wake_typed_registry_candidates(fleet_entries: &[NativeFleetEntry]) -> Vec<Wak
         }
     }
     candidates
+}
+
+fn wake_registry_window_is_live(entry: &NativeFleetEntry, window: &NativeFleetWindow, sessions: &[TmuxSession]) -> bool {
+    sessions
+        .iter()
+        .any(|session| session.name == entry.session.name && session.windows.iter().any(|live| live.name == window.name))
 }
 
 fn wake_registry_aliases(window: &NativeFleetWindow, oracle: &str) -> Vec<String> {
@@ -1840,7 +1877,7 @@ mod wake_tests {
         // past the ambiguity check; "ambiguous registry target" would mean
         // #711 is still live.
         let entries = vec![rpro_ent_fleet_entry()];
-        let error = wake_resolve_registry_target("rpro-ent-oracle", &entries)
+        let error = wake_resolve_registry_target("rpro-ent-oracle", &entries, &[])
             .expect_err("repo is not actually cloned in this test");
         assert!(!error.contains("ambiguous"), "{error}");
         assert!(error.contains("not cloned"), "{error}");
@@ -1852,7 +1889,7 @@ mod wake_tests {
         // matches all 7 windows equally -- correctly ambiguous, not a bug:
         // there is no way to tell which of 7 windows the caller means.
         let entries = vec![rpro_ent_fleet_entry()];
-        let error = wake_resolve_registry_target("rpro-ent", &entries)
+        let error = wake_resolve_registry_target("rpro-ent", &entries, &[])
             .expect_err("7 equally-plausible windows must not silently pick one");
         assert!(error.contains("ambiguous"), "{error}");
     }
@@ -2763,6 +2800,74 @@ mod wake_tests {
                 "reused window should not be re-created: {:?}",
                 tmux.actions
             );
+        });
+    }
+
+    fn rpro_ent_registry_fixture(root: &std::path::Path) {
+        std::fs::create_dir_all(root.join("ghq/github.com/switchaphon/rpro-ent-oracle")).expect("repo");
+        std::fs::write(
+            root.join("config/fleet/05-rpro-ent.json"),
+            r#"{"name":"05-rpro-ent","windows":[{"name":"rpro-ent-oracle","repo":"switchaphon/rpro-ent-oracle"},{"name":"rpro-ent-codex-1","repo":"switchaphon/rpro-ent-oracle"}]}"#,
+        )
+        .expect("write registry");
+    }
+
+    fn rpro_ent_live_session(live_window: &str) -> WakeMockTmux {
+        WakeMockTmux {
+            sessions: vec![TmuxSession {
+                name: "05-rpro-ent".to_owned(),
+                windows: vec![maw_tmux::TmuxWindow {
+                    index: 0,
+                    name: live_window.to_owned(),
+                    active: true,
+                    cwd: None,
+                }],
+            }],
+            ..WakeMockTmux::default()
+        }
+    }
+
+    #[test]
+    fn wake_prefers_the_one_live_sibling_when_the_shared_alias_ties() {
+        // #711 part 2, Nat's chosen policy: when an alias genuinely ties
+        // multiple windows and exactly one of them is live, prefer it --
+        // never guess among several live candidates, never guess among
+        // several sleeping ones. "rpro-ent" (the oracle both siblings
+        // derive from their shared repo) used to always report ambiguous
+        // here regardless of live state, because wake_typed_registry_
+        // candidates tagged every window SleepingRegistry unconditionally --
+        // maw-matcher's live_tiebreak (#719) had no live candidate to ever
+        // prefer. Threading `sessions` through lets it see the real one.
+        wake_with_fixture(|root| {
+            rpro_ent_registry_fixture(root);
+            let mut tmux = rpro_ent_live_session("rpro-ent-codex-1");
+            let (code, stdout) = wake_run(&wake_strings(&["rpro-ent", "--dry-run"]), &mut tmux).expect("resolves");
+            assert_eq!(code, 0, "{stdout}");
+            assert!(stdout.contains("would wake window 'rpro-ent-codex-1' in session '05-rpro-ent'"), "{stdout}");
+        });
+    }
+
+    #[test]
+    fn wake_still_refuses_to_guess_when_multiple_siblings_are_live() {
+        // The other half of the same policy: liveness only disambiguates
+        // when it picks out exactly one candidate. Two live siblings sharing
+        // the tied alias must still error -- silently picking one of two
+        // equally-live windows is exactly the "succeeds at the wrong thing"
+        // shape #711's whole family was about.
+        wake_with_fixture(|root| {
+            rpro_ent_registry_fixture(root);
+            let mut tmux = WakeMockTmux {
+                sessions: vec![TmuxSession {
+                    name: "05-rpro-ent".to_owned(),
+                    windows: vec![
+                        maw_tmux::TmuxWindow { index: 0, name: "rpro-ent-oracle".to_owned(), active: true, cwd: None },
+                        maw_tmux::TmuxWindow { index: 1, name: "rpro-ent-codex-1".to_owned(), active: false, cwd: None },
+                    ],
+                }],
+                ..WakeMockTmux::default()
+            };
+            let error = wake_run(&wake_strings(&["rpro-ent", "--dry-run"]), &mut tmux).expect_err("still ambiguous");
+            assert!(error.contains("ambiguous registry target for rpro-ent"), "{error}");
         });
     }
 

@@ -692,7 +692,12 @@ fn fleet_findings(state: &FleetState, live: &[TmuxSession]) -> Vec<FleetFinding>
 // target, so it shows up in `doctor` instead of at the moment someone
 // actually tries to wake it.
 fn fleet_resolvability_findings(state: &FleetState, findings: &mut Vec<FleetFinding>) {
-    let candidates = wake_typed_registry_candidates(&state.fleet_entries);
+    // `&[]`, deliberately: this judges the registry's own naming, never
+    // whether a window happens to be live right now (#711 part 2). A fleet
+    // with a genuinely ambiguous alias is worth flagging even while one
+    // window is transiently live to break the tie for wake's own purposes --
+    // that tie doesn't hold the moment the live window closes.
+    let candidates = wake_typed_registry_candidates(&state.fleet_entries, &[]);
     let typed = candidates.iter().map(|candidate| candidate.candidate.clone()).collect::<Vec<_>>();
     let mut checked = BTreeSet::new();
     for candidate in &candidates {
