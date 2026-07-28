@@ -1,7 +1,7 @@
 # maw-rs
 
-[![CI](https://github.com/Soul-Brews-Studio/maw-rs/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Soul-Brews-Studio/maw-rs/actions/workflows/ci.yml)
-[![release](https://img.shields.io/github/v/release/Soul-Brews-Studio/maw-rs)](https://github.com/Soul-Brews-Studio/maw-rs/releases/latest)
+[![CI](https://github.com/Soul-Brews-Studio/maw-rs/actions/workflows/ci.yml/badge.svg?branch=alpha)](https://github.com/Soul-Brews-Studio/maw-rs/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/Soul-Brews-Studio/maw-rs?include_prereleases)](https://github.com/Soul-Brews-Studio/maw-rs/releases/latest)
 
 Distributed terminal multiplexing & fleet management for AI agent oracles — Rust port of maw-js.
 
