@@ -1,4 +1,4 @@
 team shutdown: alpha
   request shutdown builder
   did not force kill builder
-  cleaned up team directories
+  left 1 members running -- team directory NOT cleaned up

@@ -14,8 +14,10 @@ fn team_shutdown(argv: &[String]) -> Result<String, String> {
     let alive = team_shutdown_alive(&config, &panes)?;
     team_shutdown_archive_before(&opts.team)?;
     let mut actions = Vec::new();
+    let mut cleanup = false;
     if alive.is_empty() {
         actions.push("already exited".to_owned());
+        cleanup = true;
     } else {
         for live in &alive {
             team_shutdown_write_request(&opts.team, &live.member.name)?;
@@ -28,13 +30,22 @@ fn team_shutdown(argv: &[String]) -> Result<String, String> {
                 team_shutdown_kill(&live.pane.pane_id)?;
                 actions.push(format!("force kill {} {}", live.member.name, live.pane.pane_id));
             }
+            cleanup = true;
         } else {
             for live in &alive { actions.push(format!("did not force kill {}", live.member.name)); }
+            let still_alive = team_shutdown_alive(&config, &team_shutdown_panes())?;
+            if still_alive.is_empty() {
+                cleanup = true;
+            } else {
+                actions.push(format!("left {} members running -- team directory NOT cleaned up", still_alive.len()));
+            }
         }
     }
     if opts.merge { team_shutdown_merge(&opts.team, &config)?; actions.push("merged team knowledge".to_owned()); }
-    team_shutdown_cleanup(&opts.team)?;
-    actions.push("cleaned up team directories".to_owned());
+    if cleanup {
+        team_shutdown_cleanup(&opts.team)?;
+        actions.push("cleaned up team directories".to_owned());
+    }
     Ok(team_shutdown_render(&opts.team, &actions))
 }
 
