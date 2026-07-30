@@ -9,7 +9,10 @@ use std::os::fd::AsFd;
 use std::os::fd::AsRawFd;
 #[cfg(target_os = "macos")]
 use std::os::unix::ffi::OsStringExt;
+#[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,7 +42,14 @@ use url::Url;
 const MAX_HTTP_TIMEOUT_MS: u64 = 30_000;
 const MAX_EXEC_TIMEOUT_MS: u64 = 30_000;
 const MAX_READ_BYTES: u64 = 10 * 1024 * 1024;
+// Do not follow a symlink on the final path component: if the path was swapped
+// for a link, the open must fail rather than escape the sandbox root.
+#[cfg(unix)]
 const O_NOFOLLOW_FLAG: i32 = libc::O_NOFOLLOW;
+// Windows analog: open the reparse point itself instead of its target, so a
+// symlink/junction swap cannot redirect the handle out of the sandbox.
+#[cfg(windows)]
+const O_NOFOLLOW_FLAG: u32 = 0x0020_0000; // FILE_FLAG_OPEN_REPARSE_POINT
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostResult<T> {
