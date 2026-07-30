@@ -131,7 +131,7 @@ fn team_shutdown_force_merge_archives_fake_wait_and_kills_only_valid_panes() {
 }
 
 #[test]
-fn team_shutdown_no_force_requests_and_cleans_without_kill() {
+fn team_shutdown_no_force_keeps_state_when_members_survive() {
     let root = temp_dir("no-force");
     seed(&root);
     fs::write(
@@ -160,6 +160,8 @@ fn team_shutdown_no_force_requests_and_cleans_without_kill() {
         "wait\tfake-no-real-30s\n",
         "fake clock should avoid real 30s and no kill without --force"
     );
+    assert!(root.join("home/.claude/teams/alpha").exists(), "leftovers kept when members survive");
+    assert!(root.join("maw-home/teams/alpha").exists(), "leftovers kept when members survive");
 }
 
 #[test]
