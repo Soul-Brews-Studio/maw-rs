@@ -928,6 +928,53 @@ mod ts_plugin_dispatch_decision_tests {
         assert!(!called.get(), "runtime=bun-dev should bypass the probe");
         std::fs::remove_dir_all(dir).expect("cleanup");
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn dispatch_bun_dev_plugin_prefers_ctx_cwd_and_falls_back_to_plugin_dir() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let _env_guard = env_test_lock();
+        let _path_restore = EnvVarRestore::capture("PATH");
+        let (plugin_dir, plugin) = load_ts_plugin("bun-dev-cwd", Some("bun-dev"));
+        let caller_dir = temp_plugin_dir("caller-cwd");
+        let shim_dir = temp_plugin_dir("fake-bun-bin");
+        let fake_bun = shim_dir.join("bun");
+        std::fs::write(&fake_bun, "#!/bin/sh\npwd -P\n").expect("fake bun");
+        let mut permissions = std::fs::metadata(&fake_bun).expect("metadata").permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&fake_bun, permissions).expect("chmod");
+        let mut path_entries = vec![shim_dir.clone()];
+        if let Some(path) = std::env::var_os("PATH") {
+            path_entries.extend(std::env::split_paths(&path));
+        }
+        std::env::set_var("PATH", std::env::join_paths(path_entries).expect("PATH"));
+
+        let caller_ctx = InvokeContext {
+            source: InvokeSource::Cli,
+            args: Vec::new(),
+            cwd: Some(caller_dir.to_string_lossy().into_owned()),
+            home: None,
+        };
+        let caller_output = dispatch_bun_dev_plugin(&plugin, &caller_ctx);
+        assert_eq!(caller_output.code, 0);
+        assert_eq!(
+            caller_output.stdout,
+            format!("{}\n", caller_dir.canonicalize().expect("caller").display())
+        );
+
+        let fallback_ctx = InvokeContext { cwd: None, ..caller_ctx };
+        let fallback_output = dispatch_bun_dev_plugin(&plugin, &fallback_ctx);
+        assert_eq!(fallback_output.code, 0);
+        assert_eq!(
+            fallback_output.stdout,
+            format!("{}\n", plugin_dir.canonicalize().expect("plugin").display())
+        );
+
+        std::fs::remove_dir_all(plugin_dir).expect("cleanup plugin");
+        std::fs::remove_dir_all(caller_dir).expect("cleanup caller");
+        std::fs::remove_dir_all(shim_dir).expect("cleanup bun");
+    }
 }
 
 fn dispatch_bun_dev_plugin(plugin: &LoadedPlugin, ctx: &InvokeContext) -> CliOutput {
@@ -940,10 +987,11 @@ fn dispatch_bun_dev_plugin(plugin: &LoadedPlugin, ctx: &InvokeContext) -> CliOut
         };
     };
 
+    let cwd = ctx.cwd.as_deref().map_or(plugin.dir.as_path(), Path::new);
     let output = std::process::Command::new("bun")
         .arg(entry_path)
         .args(&ctx.args)
-        .current_dir(&plugin.dir)
+        .current_dir(cwd)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
