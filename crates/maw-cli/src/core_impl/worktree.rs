@@ -144,20 +144,18 @@ fn worktree_run_with(
         });
     }
     let options = worktree_parse_args(argv)?;
-    let cwd = runtime.worktree_cwd();
     let stdout = match options.command {
         WorktreeCommand::Ls => {
-            let base = worktree_resolve_base(runtime, &cwd);
-            let statuses = worktree_collect_statuses(runtime, &base).map_err(|message| (1, message))?;
+            let statuses = worktree_collect_statuses(runtime).map_err(|message| (1, message))?;
             worktree_render_ls(&statuses)
         }
         WorktreeCommand::Clean => {
-            let base = worktree_resolve_base(runtime, &cwd);
-            let statuses = worktree_collect_statuses(runtime, &base).map_err(|message| (1, message))?;
+            let statuses = worktree_collect_statuses(runtime).map_err(|message| (1, message))?;
             worktree_run_clean(runtime, &statuses, options.dry_run).map_err(|message| (1, message))?
         }
         WorktreeCommand::Add => {
             let records = worktree_list_records(runtime).map_err(|message| (1, message))?;
+            let cwd = runtime.worktree_cwd();
             let base = options.base.map_or_else(|| worktree_resolve_base(runtime, &cwd).reference, str::to_owned);
             worktree_run_add(runtime, &records, &options, &base).map_err(|message| (1, message))?
         }
@@ -257,19 +255,17 @@ fn worktree_validate_ref(value: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn worktree_collect_statuses(
-    runtime: &mut impl WorktreeRuntime,
-    base: &WorktreeBase,
-) -> Result<Vec<WorktreeStatus>, String> {
+fn worktree_collect_statuses(runtime: &mut impl WorktreeRuntime) -> Result<Vec<WorktreeStatus>, String> {
     let records = worktree_list_records(runtime)?;
     let Some(main_path) = records.first().map(|record| record.path.clone()) else {
         return Ok(Vec::new());
     };
+    let base = worktree_resolve_base(runtime, &main_path);
     let live_refs = worktree_live_refs(runtime, &main_path)?;
     Ok(records
         .into_iter()
         .map(|record| WorktreeStatus {
-            merged: worktree_branch_merged(runtime, &main_path, record.branch.as_deref(), base),
+            merged: worktree_branch_merged(runtime, &main_path, record.branch.as_deref(), &base),
             dirty: worktree_is_dirty(runtime, &record.path),
             live: worktree_find_live(&record.path, &live_refs),
             path: record.path,
@@ -1051,6 +1047,33 @@ mod worktree_tests {
         assert!(
             runtime.git_calls.iter().all(|(_, args)| args.first() != Some(&"merge-base".to_owned())),
             "clean must not infer merge state from the fallback base"
+        );
+    }
+
+    #[test]
+    fn clean_resolves_merge_base_from_primary_worktree_not_cwd() {
+        let mut runtime = runtime_with_two_worktrees("/repo/agents/old", "agents/old");
+        runtime.cwd = std::path::PathBuf::from("/repo/agents/current");
+
+        let output =
+            worktree_run_with(&strings(&["clean", "--dry-run"]), &mut runtime).expect("clean output");
+
+        assert!(output.stdout.contains("would remove /repo/agents/old"));
+        assert!(
+            runtime.git_calls.iter().any(|(cwd, args)| {
+                cwd == &std::path::PathBuf::from("/repo")
+                    && args == &strings(&["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])
+            }),
+            "clean must resolve its merge base from the primary worktree: {:?}",
+            runtime.git_calls
+        );
+        assert!(
+            runtime.git_calls.iter().all(|(cwd, args)| {
+                !(cwd == &std::path::PathBuf::from("/repo/agents/current")
+                    && args == &strings(&["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]))
+            }),
+            "clean must not let the caller cwd select the merge base: {:?}",
+            runtime.git_calls
         );
     }
 
