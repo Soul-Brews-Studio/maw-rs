@@ -199,15 +199,20 @@ fn pair_config_from_env() -> PairApiConfig {
         .ok()
         .or_else(|| cfg_str("oracle").map(ToOwned::to_owned))
         .unwrap_or_else(|| "mawjs".to_owned());
+    // #734: shared resolver with the client — MAW_BASE_URL > a real config host
+    // > localhost. The server must surface the localhost-fallback warning (the
+    // resolver returns it for exactly this case), not swallow it via `.0` —
+    // otherwise a serve with no MAW_BASE_URL and no real config host advertises
+    // localhost silently, the original self-pair trap. Log it once at startup.
+    let (base_url, base_url_warning) = maw_xdg::advertised_base_url(&pair_real_xdg_env(), port);
+    if let Some(warning) = base_url_warning {
+        eprintln!("maw serve: pair {warning}");
+    }
     PairApiConfig {
         node,
         oracle,
         port,
-        // #734: shared resolver with the client — MAW_BASE_URL > a real config
-        // host > localhost. Previously this read MAW_BASE_URL or hardcoded
-        // localhost, ignoring config `host`, so the serve answered localhost even
-        // when the node had a reachable configured host.
-        base_url: maw_xdg::advertised_base_url(&pair_real_xdg_env(), port).0,
+        base_url,
         federation_token: std::env::var("MAW_FEDERATION_TOKEN").unwrap_or_default(),
         pubkey: std::env::var("MAW_PUBKEY").unwrap_or_default(),
     }
