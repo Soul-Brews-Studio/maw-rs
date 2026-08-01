@@ -63,7 +63,11 @@ impl PairHost for PairSystemHost {
         PairConfig {
             node: config.node.unwrap_or_else(|| "local".to_owned()),
             oracle: config.oracle,
-            port: 3456,
+            // #734: the advertised local URL must carry the real config port, not
+            // the 3456 default — otherwise the peer entry written on the remote
+            // side points at a port that (on a multi-port host) is the remote's
+            // OWN serve, so a successful pair silently routes back to self.
+            port: load_hey_config_port().unwrap_or(3456),
         }
     }
 

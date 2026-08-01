@@ -1073,6 +1073,29 @@ mod peers_tests {
     }
 
     #[test]
+    fn pair_system_config_reads_port_and_node_from_config_not_defaults() {
+        // #734: PairSystemHost.pair_config must advertise the real config
+        // port/node, not the 3456/"local" defaults, so a pair handshake doesn't
+        // echo defaults that point each side at localhost:<default> (itself).
+        let _guard = env_test_lock();
+        let _c1 = EnvVarRestore::capture("MAW_CONFIG_DIR");
+        let _c2 = EnvVarRestore::capture("MAW_HOME");
+        let _c3 = EnvVarRestore::capture("MAW_NODE");
+        let _c4 = EnvVarRestore::capture("MAW_PORT");
+        let dir = std::env::temp_dir().join(format!("maw-pair-cfg-{}-port", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(dir.join("maw.config.json"), r#"{"port": 3457, "node": "fleet", "oracle": "arra"}"#).expect("config");
+        std::env::set_var("MAW_CONFIG_DIR", &dir);
+        std::env::remove_var("MAW_NODE");
+        std::env::remove_var("MAW_PORT");
+
+        let cfg = PairSystemHost.pair_config();
+        assert_eq!(cfg.port, 3457, "pair must advertise config.port, not the 3456 default (#734)");
+        assert_eq!(cfg.node, "fleet", "pair must advertise config.node, not \"local\"");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn peers_apply_probe_result_persists_the_auth_error_reason() {
         // #685: `auth_ok: false` with no reason is the same disease as the six
         // bugs behind #680 -- the peer record must persist WHY, so `peers info`

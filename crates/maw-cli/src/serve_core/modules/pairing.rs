@@ -174,20 +174,61 @@ impl PairServeState {
 }
 
 fn pair_config_from_env() -> PairApiConfig {
-    let node = std::env::var("MAW_NODE").unwrap_or_else(|_| "local".to_owned());
+    // #734: env wins, then the merged maw.config.json (the same source
+    // `maw hey`/`maw peers` read), then a default. Previously this read
+    // MAW_NODE/MAW_PORT/MAW_ORACLE env ONLY, so a serve started without those env
+    // vars advertised node "local" / port 3456 regardless of config — and a pair
+    // handshake echoed those defaults into both peers' stores, so a successful
+    // pair silently pointed each side at localhost:<default> (itself).
+    let merged = maw_xdg::load_merged_config(&pair_real_xdg_env()).config;
+    let cfg_str = |key: &str| merged.get(key).and_then(serde_json::Value::as_str).filter(|v| !v.is_empty());
+    let cfg_port = merged.get("port").and_then(|v| {
+        v.as_u64().and_then(|n| u16::try_from(n).ok()).or_else(|| v.as_str().and_then(|s| s.parse::<u16>().ok()))
+    });
+    let node = std::env::var("MAW_NODE")
+        .ok()
+        .or_else(|| cfg_str("node").map(ToOwned::to_owned))
+        .unwrap_or_else(|| "local".to_owned());
     let port = std::env::var("MAW_PORT")
         .ok()
         .and_then(|v| v.parse().ok())
+        .or(cfg_port)
         .unwrap_or(3456);
+    let oracle = std::env::var("MAW_ORACLE")
+        .ok()
+        .or_else(|| cfg_str("oracle").map(ToOwned::to_owned))
+        .unwrap_or_else(|| "mawjs".to_owned());
     PairApiConfig {
         node,
-        oracle: std::env::var("MAW_ORACLE").unwrap_or_else(|_| "mawjs".to_owned()),
+        oracle,
         port,
         base_url: std::env::var("MAW_BASE_URL")
             .unwrap_or_else(|_| format!("http://localhost:{port}")),
         federation_token: std::env::var("MAW_FEDERATION_TOKEN").unwrap_or_default(),
         pubkey: std::env::var("MAW_PUBKEY").unwrap_or_default(),
     }
+}
+
+/// Real-process XDG env for reading the merged maw config (mirrors `core_impl`'s
+/// `real_xdg_env`, which `serve_core` cannot reach because `core_impl` is private).
+fn pair_real_xdg_env() -> maw_xdg::MawXdgEnv {
+    let home = std::env::var_os("HOME").map_or_else(|| std::path::PathBuf::from("."), std::path::PathBuf::from);
+    let vars = [
+        "MAW_HOME",
+        "MAW_CONFIG_DIR",
+        "MAW_DATA_DIR",
+        "MAW_STATE_DIR",
+        "MAW_CACHE_DIR",
+        "MAW_XDG",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME",
+        "XDG_CACHE_HOME",
+        "MAW_TEST_MODE",
+    ]
+    .into_iter()
+    .filter_map(|name| std::env::var(name).ok().map(|value| (name.to_owned(), value)));
+    maw_xdg::MawXdgEnv::with_vars(home, vars)
 }
 
 fn pair_secure_code() -> String {
