@@ -398,6 +398,7 @@ mod send_acl_hotpath_tests {
                 target: "188-maw-rs:1".to_owned(),
             },
             &HeyConfig::default(),
+            None,
         );
         assert_eq!(output.code, 0);
         assert_eq!(output.stdout, "dry-run: hey me -> local 188-maw-rs:1\n");

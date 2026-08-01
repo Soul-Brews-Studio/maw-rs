@@ -107,7 +107,14 @@ async fn run_send_like_async_with_args(
     let result =
         route_result_prefer_pane_zero_for_ambiguous_agent(&send_args.target, result, &mut runner);
     if send_args.dry_run {
-        return send_dry_run_output(command, &send_args, &result, &config);
+        // #681: decide provenance at the resolve site (config + winning node in
+        // hand, by name) and pass it down — the dry-run output must not
+        // reverse-guess source from URL membership.
+        let peer_source = match &result {
+            RouteResult::Peer { node, .. } => Some(peer_source_label(node)),
+            _ => None,
+        };
+        return send_dry_run_output(command, &send_args, &result, &config, peer_source);
     }
     if let Some(refusal) = send_route_gate(command, &send_args.target, &send_args.text, &result) {
         return refusal;
@@ -399,32 +406,25 @@ fn blocked_store_peer_note(query: &str) -> String {
 
 
 
-/// Best-effort provenance label for a resolved peer URL used by `--dry-run`
-/// (#681: "say which store satisfied it"). Decides from the WINNING source, not
-/// raw store membership: config `namedPeers` wins on a name conflict, so a URL
-/// present in BOTH config and the store is config-sourced. Config is checked
-/// first, then the peer store.
-fn hey_peer_source_hint(peer_url: &str) -> &'static str {
-    let normalized = |raw: &str| raw.trim().trim_end_matches('/').to_ascii_lowercase();
-    let want = normalized(peer_url);
-    if config_named_peer_urls().iter().any(|url| normalized(url) == want) {
+/// Provenance label for the WINNING peer, by NAME not URL (#681 review: the hint
+/// must not reverse-guess from URL membership — a URL can sit in both config and
+/// the store under different names while config wins routing). Called at the
+/// resolve site with the winning `node`, then passed down to the dry-run output,
+/// so the output never re-investigates on its own.
+fn peer_source_label(node: &str) -> &'static str {
+    // config `namedPeers` win on a name conflict, so a name present in config is
+    // config-sourced even if a store peer shares its URL.
+    let config_names = parse_named_peers(merged_config_value_for_env(&real_xdg_env()).get("namedPeers"));
+    if config_names.iter().any(|peer| peer.name == node) {
         return "from config namedPeers";
     }
-    let in_store = peers_load_store().peers.values().any(|peer| normalized(&peer.url) == want);
-    if in_store { "from peer store (peers.json)" } else { "from config namedPeers" }
+    if peers_load_store().peers.contains_key(node) {
+        return "from peer store (peers.json)";
+    }
+    "from config namedPeers"
 }
 
-/// URLs declared in config `namedPeers` only (excludes the peer-store merge) —
-/// used by `hey_peer_source_hint` to tell which source actually won. Re-reads
-/// the merged config; cheap and only on the dry-run path.
-fn config_named_peer_urls() -> Vec<String> {
-    parse_named_peers(merged_config_value_for_env(&real_xdg_env()).get("namedPeers"))
-        .into_iter()
-        .map(|peer| peer.url)
-        .collect()
-}
-
-fn send_dry_run_output(command: &str, args: &SendArgs, result: &RouteResult, config: &HeyConfig) -> CliOutput {
+fn send_dry_run_output(command: &str, args: &SendArgs, result: &RouteResult, config: &HeyConfig, peer_source: Option<&str>) -> CliOutput {
     match result {
         RouteResult::Local { target } => CliOutput {
             code: 0,
@@ -445,7 +445,7 @@ fn send_dry_run_output(command: &str, args: &SendArgs, result: &RouteResult, con
             stdout: format!(
                 "dry-run: {command} {} -> peer {node} {target} via {peer_url}  [resolved {}]\n",
                 args.target,
-                hey_peer_source_hint(peer_url),
+                peer_source.unwrap_or("from config namedPeers"),
             ),
             stderr: String::new(),
         },

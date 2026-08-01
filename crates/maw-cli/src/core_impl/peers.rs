@@ -1111,19 +1111,68 @@ mod peers_tests {
     }
 
     #[test]
-    fn hey_peer_source_hint_names_the_peer_store_when_the_url_is_registered() {
-        // #681 dry-run provenance: the hint must say the peer store satisfied the
-        // route when the URL is in peers.json, else attribute it to config.
+    fn peer_source_label_is_name_based_config_wins_on_conflict() {
+        // #681 review: provenance is by NAME, decided at the resolve site and
+        // passed down — not reverse-guessed from URL. A node in config is
+        // config-sourced even if a store peer of the same name exists (config
+        // wins routing by name); a store-only node is store-sourced.
         let _guard = env_test_lock();
-        let _restore = EnvVarRestore::capture("PEERS_FILE");
-        let path = peers_probe_all_temp_store("source-hint");
-        std::fs::write(&path, r#"{"version":1,"peers":{"x":{"url":"http://store.test:3456/","addedAt":"1000"}}}"#).expect("seed");
-        std::env::set_var("PEERS_FILE", &path);
+        let _c1 = EnvVarRestore::capture("PEERS_FILE");
+        let _c2 = EnvVarRestore::capture("MAW_CONFIG_DIR");
+        let _c3 = EnvVarRestore::capture("MAW_HOME");
+        let store_path = peers_probe_all_temp_store("source-label");
+        std::fs::write(
+            &store_path,
+            r#"{"version":1,"peers":{"storeonly":{"url":"http://store.test:3456/","addedAt":"1000","authOk":true},"shared":{"url":"http://store-both.test:3456/","addedAt":"1000","authOk":true}}}"#,
+        )
+        .expect("seed store");
+        std::env::set_var("PEERS_FILE", &store_path);
+        let cfg_dir = std::env::temp_dir().join(format!("maw-src-cfg-{}-n", std::process::id()));
+        std::fs::create_dir_all(&cfg_dir).expect("dir");
+        std::fs::write(
+            cfg_dir.join("maw.config.json"),
+            // config claims "shared" under a DIFFERENT url than the store's — name wins, so config is the source
+            r#"{"namedPeers":[{"name":"shared","url":"http://config-different.test:3456/"}]}"#,
+        )
+        .expect("cfg");
+        std::env::set_var("MAW_CONFIG_DIR", &cfg_dir);
 
-        assert_eq!(hey_peer_source_hint("http://store.test:3456/"), "from peer store (peers.json)");
-        assert_eq!(hey_peer_source_hint("http://store.test:3456"), "from peer store (peers.json)", "trailing slash is normalized");
-        assert_eq!(hey_peer_source_hint("http://config-only.test:3456"), "from config namedPeers");
-        std::fs::remove_file(&path).ok();
+        assert_eq!(peer_source_label("storeonly"), "from peer store (peers.json)");
+        assert_eq!(peer_source_label("shared"), "from config namedPeers", "config wins by name even though the store also has 'shared'");
+        assert_eq!(peer_source_label("unknown"), "from config namedPeers");
+        std::fs::remove_file(&store_path).ok();
+        std::fs::remove_dir_all(&cfg_dir).ok();
+    }
+
+    #[test]
+    fn peers_stale_age_ms_parses_both_iso_and_epoch_ms_last_seen() {
+        // #678 regression: peers_stale_age_ms used to parse::<u64>() directly, so
+        // a legacy ISO last_seen dropped to None ("permanently stale"). It must
+        // normalize ISO via the shared dual-format parser, same as epoch-ms.
+        let _guard = env_test_lock();
+        let _r = EnvVarRestore::capture(PEERS_FAKE_NOW_ENV);
+        std::env::set_var(PEERS_FAKE_NOW_ENV, "1800000000000"); // ~2027, after both stamps
+
+        let iso = PeersPeerNative {
+            url: "http://x.test:3456/".to_owned(),
+            added_at: "2026-06-12T00:09:39.105Z".to_owned(),
+            last_seen: Some("2026-06-12T00:09:39.105Z".to_owned()),
+            ..PeersPeerNative::default()
+        };
+        let epoch = PeersPeerNative {
+            url: "http://y.test:3456/".to_owned(),
+            added_at: "1700000000000".to_owned(),
+            last_seen: Some("1700000000000".to_owned()),
+            ..PeersPeerNative::default()
+        };
+
+        let iso_age = peers_stale_age_ms(&iso).expect("ISO last_seen must yield a real age, not None");
+        let epoch_age = peers_stale_age_ms(&epoch).expect("epoch-ms last_seen must yield a real age");
+        assert!(iso_age > 0, "ISO age should be positive under a later now: {iso_age}");
+        assert!(epoch_age > 0, "epoch age should be positive: {epoch_age}");
+        // a garbage non-timestamp still yields None (no false age from junk)
+        let junk = PeersPeerNative { url: "http://z.test:3456/".to_owned(), added_at: "not-a-timestamp".to_owned(), last_seen: None, ..PeersPeerNative::default() };
+        assert_eq!(peers_stale_age_ms(&junk), None);
     }
 
     #[test]
