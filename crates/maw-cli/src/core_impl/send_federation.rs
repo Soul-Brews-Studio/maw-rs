@@ -107,7 +107,7 @@ async fn run_send_like_async_with_args(
     let result =
         route_result_prefer_pane_zero_for_ambiguous_agent(&send_args.target, result, &mut runner);
     if send_args.dry_run {
-        return send_dry_run_output(command, &send_args, &result);
+        return send_dry_run_output(command, &send_args, &result, &config);
     }
     if let Some(refusal) = send_route_gate(command, &send_args.target, &send_args.text, &result) {
         return refusal;
@@ -383,28 +383,41 @@ fn send_route_error(command: &str, query: &str, detail: &str, hint: Option<&str>
 
 
 /// Best-effort provenance label for a resolved peer URL used by `--dry-run`
-/// (#681: "say which store satisfied it"). Re-reads the peer store; if the URL is
-/// registered there the peer store is (at least) a source, otherwise the
-/// resolution came from config `namedPeers`/flat `peers`. Non-authoritative but
-/// enough to tell an operator whether a route exists because of the store merge.
+/// (#681: "say which store satisfied it"). Decides from the WINNING source, not
+/// raw store membership: config `namedPeers` wins on a name conflict, so a URL
+/// present in BOTH config and the store is config-sourced. Config is checked
+/// first, then the peer store.
 fn hey_peer_source_hint(peer_url: &str) -> &'static str {
     let normalized = |raw: &str| raw.trim().trim_end_matches('/').to_ascii_lowercase();
     let want = normalized(peer_url);
+    if config_named_peer_urls().iter().any(|url| normalized(url) == want) {
+        return "from config namedPeers";
+    }
     let in_store = peers_load_store().peers.values().any(|peer| normalized(&peer.url) == want);
     if in_store { "from peer store (peers.json)" } else { "from config namedPeers" }
 }
 
-fn send_dry_run_output(command: &str, args: &SendArgs, result: &RouteResult) -> CliOutput {
+/// URLs declared in config `namedPeers` only (excludes the peer-store merge) —
+/// used by `hey_peer_source_hint` to tell which source actually won. Re-reads
+/// the merged config; cheap and only on the dry-run path.
+fn config_named_peer_urls() -> Vec<String> {
+    parse_named_peers(merged_config_value_for_env(&real_xdg_env()).get("namedPeers"))
+        .into_iter()
+        .map(|peer| peer.url)
+        .collect()
+}
+
+fn send_dry_run_output(command: &str, args: &SendArgs, result: &RouteResult, config: &HeyConfig) -> CliOutput {
     match result {
         RouteResult::Local { target } => CliOutput {
             code: 0,
             stdout: format!("dry-run: {command} {} -> local {target}\n", args.target),
-            stderr: String::new(),
+            stderr: bare_name_warning_stderr(&args.target, config),
         },
         RouteResult::SelfNode { target } => CliOutput {
             code: 0,
             stdout: format!("dry-run: {command} {} -> self-node {target}\n", args.target),
-            stderr: String::new(),
+            stderr: bare_name_warning_stderr(&args.target, config),
         },
         RouteResult::Peer {
             peer_url,
@@ -425,6 +438,16 @@ fn send_dry_run_output(command: &str, args: &SendArgs, result: &RouteResult) -> 
             stderr: send_route_error(command, &args.target, detail, hint.as_deref()),
         },
     }
+}
+
+/// Render the #681 bare-name shadow warning (if any) as stderr so `--dry-run`
+/// surfaces the same ambiguity the real delivery path does — the dry-run return
+/// happens before `send_local_message_with_audit`, which is where the live path
+/// emits it, so without this a `hey <bare> --dry-run` would hide the shadow.
+fn bare_name_warning_stderr(query: &str, config: &HeyConfig) -> String {
+    bare_name_local_vs_peer_warning(query, config)
+        .map(|warning| format!("\x1b[33mwarning: {warning}\x1b[0m\n"))
+        .unwrap_or_default()
 }
 
 

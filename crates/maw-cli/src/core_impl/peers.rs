@@ -729,7 +729,11 @@ fn peers_stale_ttl_ms() -> u64 {
 
 fn peers_stale_age_ms(peer: &PeersPeerNative) -> Option<u64> {
     let stamp = peer.last_seen.as_ref().unwrap_or(&peer.added_at);
-    let then = stamp.parse::<u64>().ok()?;
+    // #678: peers.json holds BOTH epoch-ms (current writers) and ISO-8601
+    // (legacy records). A bare parse::<u64>() only reads epoch-ms and silently
+    // drops ISO timestamps (→ "permanently stale"); use the shared dual-format
+    // parser that `stale_age_ms` / `peers map` already use.
+    let then = maw_peer::parse_timestamp_ms(stamp)?;
     Some(peers_now_ms().saturating_sub(then))
 }
 
@@ -1031,6 +1035,45 @@ mod peers_tests {
         std::env::set_var("PEERS_FILE", "/dev/null/does-not-exist");
         let only_config = merge_peer_store_named_peers(vec![RouteNamedPeer { name: "c".to_owned(), url: "http://c.test:3456/".to_owned() }]);
         assert_eq!(only_config.len(), 1, "missing store leaves config namedPeers untouched");
+    }
+
+    #[test]
+    fn peer_probe_constants_surface_knows_unreachable() {
+        // #733 review: the new UNREACHABLE code must reach EVERY surface a
+        // consumer enumerates — the classify parser AND the constants JSON — not
+        // just the enum (the tmux_close-class "fixed the root, missed the
+        // surface" trap).
+        assert_eq!(parse_probe_error_code("UNREACHABLE"), Some(maw_peer::ProbeErrorCode::Unreachable));
+        let json = render_peer_probe_constants_json();
+        assert!(json.contains("\"UNREACHABLE\""), "constants codes list must include UNREACHABLE: {json}");
+        assert!(json.contains("\"UNREACHABLE\":7"), "constants exitCodes must map UNREACHABLE→7: {json}");
+    }
+
+    #[test]
+    fn merge_peer_store_skips_unhealthy_store_records() {
+        // #681 review health gate: a store peer whose last probe failed or whose
+        // auth was refused must NOT become a routable candidate — routing to a
+        // dead/untrusted endpoint is worse than not routing at all.
+        let _guard = env_test_lock();
+        let _restore = EnvVarRestore::capture("PEERS_FILE");
+        let path = peers_probe_all_temp_store("named-health");
+        std::fs::write(
+            &path,
+            r#"{"version":1,"peers":{
+                "healthy":{"url":"http://ok.test:3456/","addedAt":"1000"},
+                "dead":{"url":"http://dead.test:3456/","addedAt":"1000","lastError":{"code":"DNS"}},
+                "refused":{"url":"http://authfail.test:3456/","addedAt":"1000","authOk":false}
+            }}"#,
+        )
+        .expect("seed store");
+        std::env::set_var("PEERS_FILE", &path);
+
+        let merged = merge_peer_store_named_peers(Vec::new());
+        let names: Vec<&str> = merged.iter().map(|peer| peer.name.as_str()).collect();
+        assert!(names.contains(&"healthy"), "healthy store peer becomes routable");
+        assert!(!names.contains(&"dead"), "a peer whose last probe failed is not routable");
+        assert!(!names.contains(&"refused"), "a peer whose auth was refused is not routable");
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]

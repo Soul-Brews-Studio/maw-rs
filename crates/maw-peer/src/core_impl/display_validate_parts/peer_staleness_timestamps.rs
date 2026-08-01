@@ -44,7 +44,8 @@ pub fn stale_age_ms(peer: &PeerRecord, now_ms: u64) -> Option<u64> {
 /// string. `peers.json` stores BOTH forms — ISO (`"2026-06-02T13:54:44.148Z"`)
 /// from probes and epoch-ms (`"1784953978566"`) from other writers — so an
 /// epoch-ms peer must not be read as `None` ("permanently stale").
-fn parse_timestamp_ms(value: &str) -> Option<u64> {
+#[must_use]
+pub fn parse_timestamp_ms(value: &str) -> Option<u64> {
     let value = value.trim();
     // ISO timestamps always carry non-digit separators (`-`/`T`/`:`/`Z`);
     // an all-digit string is epoch-ms.

@@ -36,13 +36,14 @@ fn parse_probe_error_code(value: &str) -> Option<ProbeErrorCode> {
         "HTTP_5XX" => Some(ProbeErrorCode::Http5xx),
         "TLS" => Some(ProbeErrorCode::Tls),
         "BAD_BODY" => Some(ProbeErrorCode::BadBody),
+        "UNREACHABLE" => Some(ProbeErrorCode::Unreachable),
         "UNKNOWN" => Some(ProbeErrorCode::Unknown),
         _ => None,
     }
 }
 
 fn render_peer_probe_constants_json() -> String {
-    "{\"command\":\"peer-probe\",\"action\":\"constants\",\"codes\":[\"DNS\",\"REFUSED\",\"TIMEOUT\",\"HTTP_4XX\",\"HTTP_5XX\",\"TLS\",\"BAD_BODY\",\"UNKNOWN\"],\"exitCodes\":{\"DNS\":3,\"REFUSED\":4,\"TIMEOUT\":5,\"HTTP_4XX\":6,\"HTTP_5XX\":6,\"TLS\":2,\"BAD_BODY\":2,\"UNKNOWN\":2}}\n".to_owned()
+    "{\"command\":\"peer-probe\",\"action\":\"constants\",\"codes\":[\"DNS\",\"REFUSED\",\"TIMEOUT\",\"HTTP_4XX\",\"HTTP_5XX\",\"TLS\",\"BAD_BODY\",\"UNREACHABLE\",\"UNKNOWN\"],\"exitCodes\":{\"DNS\":3,\"REFUSED\":4,\"TIMEOUT\":5,\"HTTP_4XX\":6,\"HTTP_5XX\":6,\"TLS\":2,\"BAD_BODY\":2,\"UNREACHABLE\":7,\"UNKNOWN\":2}}\n".to_owned()
 }
 
 fn render_peer_probe_handshake_constants_json() -> String {

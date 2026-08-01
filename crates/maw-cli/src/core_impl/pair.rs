@@ -278,20 +278,56 @@ fn pair_render_generate(plan: &PairGeneratePlan, live: &PairGenerateLive) -> Str
 
 fn pair_render_accept(plan: &PairAcceptPlan, config: &PairConfig, live: &PairAcceptLive) -> String {
     let warning = pair_plain_http_warning(&plan.remote_url);
-    let local_url = format!("http://localhost:{}", config.port);
+    let (local_url, advertise_warn) = pair_advertise_url(config.port);
+    let advertise_line = advertise_warn.map(|w| format!("   ⚠ {w}\n")).unwrap_or_default();
     format!(
-        "🤝 pair accept live\n   remote: {}/api/pair/{}\n   code: {}\n   body: {{\"node\":{},\"url\":{}}}\n{}   peer: {} {}\n   federation token: {}\n   peers.json: {}\n   human consent required; no auto-approve surface is exposed\n",
+        "🤝 pair accept live\n   remote: {}/api/pair/{}\n   code: {}\n   body: {{\"node\":{},\"url\":{}}}\n{}{}   peer: {} {}\n   federation token: {}\n   peers.json: {}\n   human consent required; no auto-approve surface is exposed\n",
         plan.remote_url,
         plan.code_normalized,
         pair_pretty_code(&plan.code_normalized),
         json_string(&config.node),
         json_string(&local_url),
+        advertise_line,
         warning,
         live.remote_node,
         live.remote_url,
         if live.token_received { "received (redacted)" } else { "missing" },
         if live.peers_written { "atomic write ok" } else { "not written" }
     )
+}
+
+/// The URL we advertise as "how to reach me" during a pair handshake (#734).
+/// `MAW_BASE_URL` is the authoritative announced address; otherwise a real
+/// config `host` is used. Without either we fall back to `localhost`, which on a
+/// cross-host pair makes the remote's stored entry point at ITS OWN serve — the
+/// silent self-pair #734 reports — so the fallback carries a loud warning.
+fn pair_advertise_url(port: u16) -> (String, Option<&'static str>) {
+    if let Ok(base) = std::env::var("MAW_BASE_URL") {
+        let trimmed = base.trim();
+        if !trimmed.is_empty() {
+            return (trimmed.to_owned(), None);
+        }
+    }
+    if let Some(host) = pair_config_host() {
+        return (format!("http://{host}:{port}"), None);
+    }
+    (
+        format!("http://localhost:{port}"),
+        Some("pair advertises http://localhost — a cross-host remote will store this URL and route to ITSELF; set MAW_BASE_URL (or a reachable config `host`) to this node's URL"),
+    )
+}
+
+/// Config `host`, but only when it names a real reachable host (not the
+/// `"local"`/`0.0.0.0` defaults that only mean "bind everywhere").
+fn pair_config_host() -> Option<String> {
+    let host = merged_config_value_for_env(&real_xdg_env())
+        .get("host")?
+        .as_str()?
+        .trim()
+        .to_owned();
+    let reachable = !host.is_empty()
+        && !matches!(host.as_str(), "local" | "localhost" | "0.0.0.0" | "::" | "127.0.0.1");
+    reachable.then_some(host)
 }
 
 fn pair_system_generate_live(plan: &PairGeneratePlan) -> Result<PairGenerateLive, String> {
@@ -308,7 +344,7 @@ fn pair_system_generate_live(plan: &PairGeneratePlan) -> Result<PairGenerateLive
 }
 
 fn pair_system_accept_live(plan: &PairAcceptPlan, config: &PairConfig) -> Result<PairAcceptLive, String> {
-    let local_url = format!("http://localhost:{}", config.port);
+    let (local_url, _advertise_warn) = pair_advertise_url(config.port);
     let body = serde_json::json!({ "node": config.node, "url": local_url }).to_string();
     let url = format!("{}/api/pair/{}", plan.remote_url, plan.code_normalized);
     let response = pair_http_json("POST", &url, Some(body))?;
@@ -316,9 +352,10 @@ fn pair_system_accept_live(plan: &PairAcceptPlan, config: &PairConfig) -> Result
     let value = pair_parse_json(&response.body, "pair accept")?;
     let remote_node = pair_json_string(&value, "node").ok_or_else(|| "pair accept: missing node".to_owned())?;
     let remote_url = pair_json_string(&value, "url").ok_or_else(|| "pair accept: missing url".to_owned())?;
+    let remote_oracle = pair_json_string(&value, "oracle");
     let token_received = pair_json_string(&value, "federationToken").is_some();
     pair_validate_peer_identity(&remote_node, &remote_url)?;
-    pair_write_peer(&remote_node, &remote_url, config.oracle.as_deref())?;
+    pair_write_peer(&remote_node, &remote_url, remote_oracle.as_deref())?;
     Ok(PairAcceptLive { remote_node, remote_url, token_received, peers_written: true })
 }
 
@@ -366,14 +403,19 @@ fn pair_validate_peer_identity(node: &str, url: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn pair_write_peer(node: &str, url: &str, config_oracle: Option<&str>) -> Result<(), String> {
+fn pair_write_peer(node: &str, url: &str, remote_oracle: Option<&str>) -> Result<(), String> {
     let env = pair_peer_store_env();
-    pair_write_peer_to_env(&env, node, url, config_oracle)
+    pair_write_peer_to_env(&env, node, url, remote_oracle)
 }
 
-fn pair_write_peer_to_env(env: &maw_peer::PeerStoreEnv, node: &str, url: &str, config_oracle: Option<&str>) -> Result<(), String> {
+fn pair_write_peer_to_env(env: &maw_peer::PeerStoreEnv, node: &str, url: &str, remote_oracle: Option<&str>) -> Result<(), String> {
     let now = now_iso_utc();
-    let oracle = pair_sender_oracle(config_oracle);
+    // The written record describes the REMOTE peer. Its identity.oracle must come
+    // from the remote (the accept response's `oracle`, when the serve ships it),
+    // NOT the local sender oracle — writing our own oracle into the remote's
+    // entry impersonates it. At pair time the remote oracle is usually unknown
+    // (left empty); the first `maw peers probe` fills identity from /info (#734).
+    let oracle = remote_oracle.unwrap_or("").to_owned();
     maw_peer::mutate_peer_store(env, |store| {
         store.peers.insert(node.to_owned(), maw_peer::PeerRecord {
             url: url.to_owned(),
@@ -391,15 +433,6 @@ fn pair_write_peer_to_env(env: &maw_peer::PeerStoreEnv, node: &str, url: &str, c
         });
     }).map_err(|error| format!("pair peers.json write failed: {error}"))?;
     Ok(())
-}
-
-fn pair_sender_oracle(config_oracle: Option<&str>) -> String {
-    let session_window = std::env::var("MAW_SESSION_WINDOW").ok();
-    if session_window.as_deref().is_some_and(|value| !value.trim().is_empty()) {
-        return resolve_sender_oracle(session_window.as_deref(), None, config_oracle);
-    }
-    let tmux_window_name = current_tmux_window_name();
-    resolve_sender_oracle(None, tmux_window_name.as_deref(), config_oracle)
 }
 
 fn pair_peer_store_env() -> maw_peer::PeerStoreEnv {
@@ -547,17 +580,29 @@ mod pair_tests {
     }
 
     #[test]
-    fn pair_write_peer_uses_sender_window_oracle() {
+    fn pair_write_peer_records_remote_oracle_not_local_sender() {
+        // #734: the written record describes the REMOTE peer, so identity.oracle
+        // must be the remote's (from the accept response), never the local
+        // sender's oracle — even when MAW_SESSION_WINDOW names the local oracle.
         let _guard = env_test_lock();
         let _restore = EnvVarRestore::capture("MAW_SESSION_WINDOW");
         std::env::set_var("MAW_SESSION_WINDOW", "33-maw-rs:maw-rs");
         let root = std::env::temp_dir().join(format!("maw-rs-pair-oracle-{}", std::process::id()));
         let peers = root.join("state").join("peers.json");
         let env = maw_peer::PeerStoreEnv::with_vars(root.clone(), [("PEERS_FILE", peers.to_string_lossy().to_string())]);
-        pair_write_peer_to_env(&env, "peer-node", "https://peer.example", Some("config-oracle")).expect("write peer");
-        let raw = std::fs::read_to_string(&peers).expect("read peers");
-        let value: serde_json::Value = serde_json::from_str(&raw).expect("json");
-        assert_eq!(value["peers"]["peer-node"]["identity"]["oracle"], "maw-rs");
+        // remote ships its oracle → recorded verbatim
+        pair_write_peer_to_env(&env, "peer-node", "https://peer.example", Some("remote-ora")).expect("write peer");
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&peers).expect("read peers")).expect("json");
+        assert_eq!(value["peers"]["peer-node"]["identity"]["oracle"], "remote-ora");
+
+        // remote ships no oracle → unknown (empty), NOT the local "maw-rs"
+        std::fs::remove_file(&peers).ok();
+        pair_write_peer_to_env(&env, "peer-node", "https://peer.example", None).expect("write peer");
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&peers).expect("read peers")).expect("json");
+        assert_eq!(value["peers"]["peer-node"]["identity"]["oracle"], "");
+        assert_ne!(value["peers"]["peer-node"]["identity"]["oracle"], "maw-rs", "local sender oracle must not leak into the remote record");
         let _ = std::fs::remove_dir_all(root);
     }
 

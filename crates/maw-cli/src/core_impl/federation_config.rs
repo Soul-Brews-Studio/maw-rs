@@ -90,6 +90,14 @@ fn merge_peer_store_named_peers(mut config: Vec<RouteNamedPeer>) -> Vec<RouteNam
         if known.contains(&alias) || peer.url.trim().is_empty() {
             continue;
         }
+        // Health gate (#681 review): do not make a peer addressable just because
+        // it has an alias+URL. A record whose last probe failed (`last_error`) or
+        // whose auth was refused (`auth_ok == false`) would route the operator to
+        // a dead or untrusted endpoint — the merge must carry health, not just a
+        // bare URL, and only healthy store peers become routable candidates.
+        if peer.last_error.is_some() || peer.auth_ok == Some(false) {
+            continue;
+        }
         config.push(RouteNamedPeer { name: alias, url: peer.url });
     }
     config
