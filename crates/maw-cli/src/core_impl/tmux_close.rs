@@ -91,7 +91,7 @@ fn tmux_close_list_current_window_panes<R: maw_tmux::TmuxRunner>(runner: &mut R)
 }
 
 fn tmux_close_break_pane_detached<R: maw_tmux::TmuxRunner>(target: &str, runner: &mut R) -> Result<(), (i32, String)> {
-    let args = vec!["-d".to_owned(), "-t".to_owned(), target.to_owned()];
+    let args = vec!["-d".to_owned(), "-s".to_owned(), target.to_owned()];
     runner
         .run("break-pane", &args)
         .map_err(|error| (1, format!("tmux close: break-pane failed for '{target}': {}", error.message)))?;
@@ -199,7 +199,7 @@ mod tmux_close_tests281 {
         let mut runner = CloseFakeRunner::default();
         let out = tmux_close_with_runner(&strings(&["%42"]), &mut runner).expect("close");
         assert_eq!(out, "✓ closed %42 (hidden — still alive)\n");
-        assert_eq!(runner.calls, vec![("break-pane".to_owned(), strings(&["-d", "-t", "%42"]))]);
+        assert_eq!(runner.calls, vec![("break-pane".to_owned(), strings(&["-d", "-s", "%42"]))]);
     }
 
     #[test]
@@ -213,8 +213,8 @@ mod tmux_close_tests281 {
             runner.calls,
             vec![
                 ("list-panes".to_owned(), strings(&["-F", "#{pane_id}"])),
-                ("break-pane".to_owned(), strings(&["-d", "-t", "%1"])),
-                ("break-pane".to_owned(), strings(&["-d", "-t", "%3"])),
+                ("break-pane".to_owned(), strings(&["-d", "-s", "%1"])),
+                ("break-pane".to_owned(), strings(&["-d", "-s", "%3"])),
             ]
         );
     }
