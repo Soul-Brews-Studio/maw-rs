@@ -58,9 +58,7 @@ fn probe_classifier_matches_maw_js_error_buckets() {
         ProbeErrorCode::Unreachable
     );
     assert_eq!(
-        classify_probe_error(&ProbeFailureInput::Code(
-            "HostUnreachable".to_owned()
-        )),
+        classify_probe_error(&ProbeFailureInput::Code("HostUnreachable".to_owned())),
         ProbeErrorCode::Unreachable
     );
     assert_eq!(

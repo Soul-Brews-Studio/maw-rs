@@ -93,7 +93,13 @@ pub fn advertised_base_url(env: &MawXdgEnv, port: u16) -> (String, Option<&'stat
         .get("host")
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
-        .filter(|host| !host.is_empty() && !matches!(*host, "local" | "localhost" | "0.0.0.0" | "::" | "127.0.0.1"));
+        .filter(|host| {
+            !host.is_empty()
+                && !matches!(
+                    *host,
+                    "local" | "localhost" | "0.0.0.0" | "::" | "127.0.0.1"
+                )
+        });
     if let Some(host) = host {
         return (format!("http://{host}:{port}"), None);
     }

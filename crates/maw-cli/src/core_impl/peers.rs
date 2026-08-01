@@ -1111,11 +1111,10 @@ mod peers_tests {
     }
 
     #[test]
-    fn peer_source_label_is_name_based_config_wins_on_conflict() {
-        // #681 review: provenance is by NAME, decided at the resolve site and
-        // passed down — not reverse-guessed from URL. A node in config is
-        // config-sourced even if a store peer of the same name exists (config
-        // wins routing by name); a store-only node is store-sourced.
+    fn peer_source_snapshot_tracks_the_winning_name_without_rereading() {
+        // #681 review: provenance belongs to the same snapshot used for route
+        // resolution. A config name wins even if the store has the same name;
+        // a store-only name remains store-sourced.
         let _guard = env_test_lock();
         let _c1 = EnvVarRestore::capture("PEERS_FILE");
         let _c2 = EnvVarRestore::capture("MAW_CONFIG_DIR");
@@ -1137,9 +1136,14 @@ mod peers_tests {
         .expect("cfg");
         std::env::set_var("MAW_CONFIG_DIR", &cfg_dir);
 
-        assert_eq!(peer_source_label("storeonly"), "from peer store (peers.json)");
-        assert_eq!(peer_source_label("shared"), "from config namedPeers", "config wins by name even though the store also has 'shared'");
-        assert_eq!(peer_source_label("unknown"), "from config namedPeers");
+        let (_config, sources) = load_hey_config_with_peer_sources();
+        assert_eq!(sources.get("storeonly"), Some(&"from peer store (peers.json)"));
+        assert_eq!(
+            sources.get("shared"),
+            Some(&"from config namedPeers"),
+            "config wins by name even though the store also has 'shared'"
+        );
+        assert!(sources.get("unknown").is_none(), "an unresolved name has no fabricated source");
         std::fs::remove_file(&store_path).ok();
         std::fs::remove_dir_all(&cfg_dir).ok();
     }

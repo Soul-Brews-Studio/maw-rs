@@ -34,7 +34,11 @@ fn peer_probe_constants_text_and_json_surfaces_agree_on_code_set() {
         .split("\"codes\":[")
         .nth(1)
         .and_then(|tail| tail.split(']').next())
-        .map(|list| list.split(',').map(|token| token.trim_matches('"').to_owned()).collect())
+        .map(|list| {
+            list.split(',')
+                .map(|token| token.trim_matches('"').to_owned())
+                .collect()
+        })
         .unwrap_or_default();
     let text_codes: BTreeSet<String> = text
         .split("codes=")
@@ -43,9 +47,18 @@ fn peer_probe_constants_text_and_json_surfaces_agree_on_code_set() {
         .map(|list| list.split(',').map(str::to_owned).collect())
         .unwrap_or_default();
 
-    assert!(!json_codes.is_empty() && !text_codes.is_empty(), "parsed both surfaces");
-    assert_eq!(json_codes, text_codes, "text and JSON constants must list the same codes");
-    assert!(json_codes.contains("UNREACHABLE"), "UNREACHABLE must be present on both surfaces");
+    assert!(
+        !json_codes.is_empty() && !text_codes.is_empty(),
+        "parsed both surfaces"
+    );
+    assert_eq!(
+        json_codes, text_codes,
+        "text and JSON constants must list the same codes"
+    );
+    assert!(
+        json_codes.contains("UNREACHABLE"),
+        "UNREACHABLE must be present on both surfaces"
+    );
 }
 
 #[test]

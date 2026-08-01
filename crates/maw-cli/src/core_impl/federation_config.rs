@@ -6,6 +6,16 @@
 // a peer's auth state is probed rather than assumed.
 
 fn load_hey_config() -> HeyConfig {
+    load_hey_config_with_peer_sources().0
+}
+
+/// Load the routing snapshot plus the source that supplied each named peer.
+///
+/// The source map is deliberately built alongside the merged route config. A
+/// caller that has resolved a peer can therefore report the source from the
+/// same snapshot, rather than reopening mutable config/peer-store files after
+/// resolution (#681).
+fn load_hey_config_with_peer_sources() -> (HeyConfig, HashMap<String, &'static str>) {
     let env = real_xdg_env();
     let value = merged_config_value_for_env(&env);
     let node = value
@@ -27,33 +37,55 @@ fn load_hey_config() -> HeyConfig {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let named_peers = parse_named_peers(value.get("namedPeers"));
+    let config_named_peers = parse_named_peers(value.get("namedPeers"));
     // #681 (read-side): config `namedPeers` and the peer store (`peers.json`) are
     // two separate registries — `maw peers map` / `/fed.json` read the store while
     // the `hey` router read only config — so a peer could be registered, probed
     // green, and still unroutable. Fall back to the store so "green in the map"
     // implies "addressable by hey". Config wins on a name conflict (operator
     // intent); store aliases already named in config are skipped.
-    let named_peers = merge_peer_store_named_peers(named_peers);
+    let config_peer_names: std::collections::HashSet<String> = config_named_peers
+        .iter()
+        .map(|peer| peer.name.clone())
+        .collect();
+    let named_peers = merge_peer_store_named_peers(config_named_peers);
+    let peer_sources = named_peers
+        .iter()
+        .map(|peer| {
+            (
+                peer.name.clone(),
+                if config_peer_names.contains(&peer.name) {
+                    "from config namedPeers"
+                } else {
+                    "from peer store (peers.json)"
+                },
+            )
+        })
+        .collect();
     let agents = value
         .get("agents")
         .and_then(serde_json::Value::as_object)
         .map(|map| {
             map.iter()
-                .filter_map(|(key, value)| value.as_str().map(|node| (key.clone(), node.to_owned())))
+                .filter_map(|(key, value)| {
+                    value.as_str().map(|node| (key.clone(), node.to_owned()))
+                })
                 .collect::<HashMap<_, _>>()
         })
         .unwrap_or_default();
-    HeyConfig {
-        node: node.clone(),
-        oracle,
-        route: RouteConfig {
-            node,
-            named_peers,
-            peers,
-            agents,
+    (
+        HeyConfig {
+            node: node.clone(),
+            oracle,
+            route: RouteConfig {
+                node,
+                named_peers,
+                peers,
+                agents,
+            },
         },
-    }
+        peer_sources,
+    )
 }
 
 fn parse_named_peers(value: Option<&serde_json::Value>) -> Vec<RouteNamedPeer> {
@@ -85,7 +117,8 @@ fn parse_named_peers(value: Option<&serde_json::Value>) -> Vec<RouteNamedPeer> {
 /// `maw peers add` / `pair` (#681 read-side unification). Config wins on a name
 /// conflict; empty URLs and an unreadable store are skipped (best-effort).
 fn merge_peer_store_named_peers(mut config: Vec<RouteNamedPeer>) -> Vec<RouteNamedPeer> {
-    let known: std::collections::HashSet<String> = config.iter().map(|peer| peer.name.clone()).collect();
+    let known: std::collections::HashSet<String> =
+        config.iter().map(|peer| peer.name.clone()).collect();
     for (alias, peer) in peers_load_store().peers {
         if known.contains(&alias) || peer.url.trim().is_empty() {
             continue;
@@ -104,7 +137,10 @@ fn merge_peer_store_named_peers(mut config: Vec<RouteNamedPeer>) -> Vec<RouteNam
         if peer_route_block_reason(&peer).is_some() {
             continue;
         }
-        config.push(RouteNamedPeer { name: alias, url: peer.url });
+        config.push(RouteNamedPeer {
+            name: alias,
+            url: peer.url,
+        });
     }
     config
 }
@@ -257,7 +293,11 @@ fn real_xdg_env() -> MawXdgEnv {
         "MAW_TEST_MODE",
     ]
     .into_iter()
-    .filter_map(|name| std::env::var(name).ok().map(|value| (name.to_owned(), value)));
+    .filter_map(|name| {
+        std::env::var(name)
+            .ok()
+            .map(|value| (name.to_owned(), value))
+    });
     MawXdgEnv::with_vars(home, vars)
 }
 

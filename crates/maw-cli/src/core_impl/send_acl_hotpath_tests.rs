@@ -405,6 +405,52 @@ mod send_acl_hotpath_tests {
     }
 
     #[test]
+    fn dry_run_peer_provenance_follows_the_resolved_winner() {
+        // #681: carry the actual winner's provenance from load -> resolve ->
+        // output.  Delete the registries after loading: if rendering reopens
+        // either file, it cannot recreate the store-sourced label below.
+        let _guard = env_test_lock();
+        let _peers_file = EnvVarRestore::capture("PEERS_FILE");
+        let _config_dir = EnvVarRestore::capture("MAW_CONFIG_DIR");
+        let _maw_home = EnvVarRestore::capture("MAW_HOME");
+        let root = std::env::temp_dir().join(format!(
+            "maw-rs-dry-run-provenance-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("config")).expect("config dir");
+        let store_path = root.join("peers.json");
+        std::fs::write(
+            &store_path,
+            r#"{"version":1,"peers":{"storeonly":{"url":"http://store.test:3456","addedAt":"1000","authOk":true}}}"#,
+        )
+        .expect("store");
+        std::env::set_var("PEERS_FILE", &store_path);
+        std::env::set_var("MAW_CONFIG_DIR", root.join("config"));
+        std::env::remove_var("MAW_HOME");
+
+        let (config, sources) = load_hey_config_with_peer_sources();
+        let mut runner = SendFakeTmuxRunner::default();
+        let result = resolve_send_route_target("storeonly:0", &config.route, &[], false, &mut runner);
+        let args = parse_send_args("hey", &send_acl_vec(&["storeonly:0", "--dry-run", "test"]))
+            .expect("parse");
+        std::fs::remove_file(&store_path).expect("remove store after snapshot");
+
+        let output = send_dry_run_output(
+            "hey",
+            &args,
+            &result,
+            &config,
+            resolved_peer_source(&result, &sources),
+        );
+
+        assert_eq!(output.code, 0, "{output:?}");
+        assert!(output.stdout.contains("peer storeonly 0 via http://store.test:3456"));
+        assert!(output.stdout.contains("[resolved from peer store (peers.json)]"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
     fn hey_typed_inventory_routes_exact_and_asks_on_fuzzy() {
         let sessions = vec![send_route_session(
             "41-atlas",
