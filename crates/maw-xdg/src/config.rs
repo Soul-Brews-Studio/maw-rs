@@ -68,6 +68,41 @@ pub fn load_merged_config(env: &MawXdgEnv) -> MergedMawConfig {
     load_merged_config_in_dir(env, &cwd)
 }
 
+/// The URL a node advertises as "how to reach me" during pairing, resolved from
+/// a single source shared by client and server so the two sides cannot drift
+/// (the #734 bug was exactly the client advertising a real host while the serve
+/// still returned localhost).
+///
+/// Order: `MAW_BASE_URL` env → a real config `host` (not a bind-only default like
+/// `0.0.0.0`/`local`) → `http://localhost:{port}`, the last carrying a warning
+/// because on a cross-host pair the remote stores it and routes to ITSELF.
+///
+/// Returns `(url, warning)` where `warning` is `Some` only on the localhost
+/// fallback. `#[must_use]` on the url side is the caller's responsibility.
+#[must_use]
+pub fn advertised_base_url(env: &MawXdgEnv, port: u16) -> (String, Option<&'static str>) {
+    if let Ok(base) = std::env::var("MAW_BASE_URL") {
+        let trimmed = base.trim();
+        if !trimmed.is_empty() {
+            return (trimmed.to_owned(), None);
+        }
+    }
+    let merged = load_merged_config(env);
+    let host = merged
+        .config
+        .get("host")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|host| !host.is_empty() && !matches!(*host, "local" | "localhost" | "0.0.0.0" | "::" | "127.0.0.1"));
+    if let Some(host) = host {
+        return (format!("http://{host}:{port}"), None);
+    }
+    (
+        format!("http://localhost:{port}"),
+        Some("advertises http://localhost — a cross-host remote will store this URL and route to ITSELF; set MAW_BASE_URL (or a reachable config `host`) to this node's URL"),
+    )
+}
+
 #[must_use]
 pub fn load_merged_config_in_dir(env: &MawXdgEnv, cwd: &Path) -> MergedMawConfig {
     let mut sources = discover_config_layers(env, cwd);

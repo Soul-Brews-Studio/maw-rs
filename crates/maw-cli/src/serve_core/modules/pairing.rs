@@ -156,6 +156,7 @@ async fn pair_accept(
             "ok": result.ok,
             "error": result.error,
             "node": result.node,
+            "oracle": result.oracle,
             "url": result.url,
             "federationToken": result.federation_token,
         })),
@@ -202,8 +203,11 @@ fn pair_config_from_env() -> PairApiConfig {
         node,
         oracle,
         port,
-        base_url: std::env::var("MAW_BASE_URL")
-            .unwrap_or_else(|_| format!("http://localhost:{port}")),
+        // #734: shared resolver with the client — MAW_BASE_URL > a real config
+        // host > localhost. Previously this read MAW_BASE_URL or hardcoded
+        // localhost, ignoring config `host`, so the serve answered localhost even
+        // when the node had a reachable configured host.
+        base_url: maw_xdg::advertised_base_url(&pair_real_xdg_env(), port).0,
         federation_token: std::env::var("MAW_FEDERATION_TOKEN").unwrap_or_default(),
         pubkey: std::env::var("MAW_PUBKEY").unwrap_or_default(),
     }

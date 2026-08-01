@@ -1150,6 +1150,40 @@ mod peers_tests {
     }
 
     #[test]
+    fn pair_advertise_url_prefers_config_host_over_localhost() {
+        // #734 review: the advertise-URL resolver is shared by client AND serve
+        // (maw_xdg::advertised_base_url). Without MAW_BASE_URL, a reachable
+        // config `host` must be advertised instead of localhost — the exact drift
+        // the shared resolver exists to prevent.
+        let _guard = env_test_lock();
+        let _c1 = EnvVarRestore::capture("MAW_CONFIG_DIR");
+        let _c2 = EnvVarRestore::capture("MAW_BASE_URL");
+        let dir = std::env::temp_dir().join(format!("maw-adv-url-{}-h", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::env::remove_var("MAW_BASE_URL");
+
+        std::fs::write(dir.join("maw.config.json"), r#"{"host":"fleet-node.example"}"#).expect("cfg");
+        std::env::set_var("MAW_CONFIG_DIR", &dir);
+        let (url, warn) = pair_advertise_url(3457);
+        assert_eq!(url, "http://fleet-node.example:3457");
+        assert!(warn.is_none(), "a real config host is not a fallback");
+
+        // bind-only defaults are NOT reachable hosts → localhost + warn
+        std::fs::write(dir.join("maw.config.json"), r#"{"host":"0.0.0.0"}"#).expect("cfg");
+        let (url, warn) = pair_advertise_url(3457);
+        assert_eq!(url, "http://localhost:3457", "0.0.0.0 is bind-only");
+        assert!(warn.is_some(), "localhost fallback must warn");
+
+        // MAW_BASE_URL wins over config host
+        std::env::set_var("MAW_BASE_URL", "http://override.test:9000");
+        std::fs::write(dir.join("maw.config.json"), r#"{"host":"fleet-node.example"}"#).expect("cfg");
+        let (url, warn) = pair_advertise_url(3457);
+        assert_eq!(url, "http://override.test:9000");
+        assert!(warn.is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn peers_apply_probe_result_persists_the_auth_error_reason() {
         // #685: `auth_ok: false` with no reason is the same disease as the six
         // bugs behind #680 -- the peer record must persist WHY, so `peers info`

@@ -6,7 +6,8 @@ mod paths;
 mod types;
 
 pub use config::{
-    deep_merge_config, discover_config_layers, load_merged_config, load_merged_config_in_dir,
+    advertised_base_url, deep_merge_config, discover_config_layers, load_merged_config,
+    load_merged_config_in_dir,
 };
 pub use paths::{
     ensure_maw_core_paths, is_maw_xdg_enabled, is_valid_instance_name, maw_cache_dir,

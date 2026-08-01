@@ -304,6 +304,7 @@ pub fn pair_api_accept_plan(
                 ok: true,
                 error: None,
                 node: Some(config.node.clone()),
+                oracle: Some(config.oracle.clone()),
                 url: Some(config.base_url.clone()),
                 federation_token: Some(config.federation_token.clone()),
             }

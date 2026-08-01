@@ -594,6 +594,7 @@ fn pair_api_accept_error(status: u16, error: &str) -> PairApiAcceptResult {
         ok: false,
         error: Some(error.to_owned()),
         node: None,
+        oracle: None,
         url: None,
         federation_token: None,
     }

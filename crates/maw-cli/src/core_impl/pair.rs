@@ -297,37 +297,11 @@ fn pair_render_accept(plan: &PairAcceptPlan, config: &PairConfig, live: &PairAcc
 }
 
 /// The URL we advertise as "how to reach me" during a pair handshake (#734).
-/// `MAW_BASE_URL` is the authoritative announced address; otherwise a real
-/// config `host` is used. Without either we fall back to `localhost`, which on a
-/// cross-host pair makes the remote's stored entry point at ITS OWN serve — the
-/// silent self-pair #734 reports — so the fallback carries a loud warning.
+/// Delegates to the shared `maw_xdg::advertised_base_url` resolver so the client
+/// and the serve cannot drift (the prior bug: client advertised a real host via
+/// config while the serve still returned localhost).
 fn pair_advertise_url(port: u16) -> (String, Option<&'static str>) {
-    if let Ok(base) = std::env::var("MAW_BASE_URL") {
-        let trimmed = base.trim();
-        if !trimmed.is_empty() {
-            return (trimmed.to_owned(), None);
-        }
-    }
-    if let Some(host) = pair_config_host() {
-        return (format!("http://{host}:{port}"), None);
-    }
-    (
-        format!("http://localhost:{port}"),
-        Some("pair advertises http://localhost — a cross-host remote will store this URL and route to ITSELF; set MAW_BASE_URL (or a reachable config `host`) to this node's URL"),
-    )
-}
-
-/// Config `host`, but only when it names a real reachable host (not the
-/// `"local"`/`0.0.0.0` defaults that only mean "bind everywhere").
-fn pair_config_host() -> Option<String> {
-    let host = merged_config_value_for_env(&real_xdg_env())
-        .get("host")?
-        .as_str()?
-        .trim()
-        .to_owned();
-    let reachable = !host.is_empty()
-        && !matches!(host.as_str(), "local" | "localhost" | "0.0.0.0" | "::" | "127.0.0.1");
-    reachable.then_some(host)
+    maw_xdg::advertised_base_url(&real_xdg_env(), port)
 }
 
 fn pair_system_generate_live(plan: &PairGeneratePlan) -> Result<PairGenerateLive, String> {

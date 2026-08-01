@@ -310,6 +310,7 @@ pub struct PairApiAcceptResult {
     pub ok: bool,
     pub error: Option<String>,
     pub node: Option<String>,
+    pub oracle: Option<String>,
     pub url: Option<String>,
     pub federation_token: Option<String>,
 }
