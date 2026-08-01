@@ -48,6 +48,10 @@ cores ⇒ contention multiplier ≈ N. Instead:
    inspection).
 4. Promote/release still requires a full gate on the final `alpha` tip.
 
+## Worktree merge-base auto-detection
+
+`maw worktree clean` resolves its merge base from the **primary worktree**, not the caller's current worktree, so the primary worktree must track the repository's integration branch (for this repository, `origin/alpha`). If the primary worktree tracks an agent/fork branch instead, `clean` can correctly apply the wrong integration history to every auxiliary worktree; either switch the primary worktree back to the integration branch or pass an explicit `--base` when creating a worktree.
+
 ## Golden warm cache
 
 `scripts/gate-cache-refresh.sh` builds workspace test + clippy artifacts,
