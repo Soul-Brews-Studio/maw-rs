@@ -50,7 +50,7 @@ cores ⇒ contention multiplier ≈ N. Instead:
 
 ## Worktree merge-base auto-detection
 
-`maw worktree clean` resolves its merge base from the **primary worktree**, not the caller's current worktree, so the primary worktree must track the repository's integration branch (for this repository, `origin/alpha`). If the primary worktree tracks an agent/fork branch instead, `clean` can correctly apply the wrong integration history to every auxiliary worktree; either switch the primary worktree back to the integration branch or pass an explicit `--base` when creating a worktree.
+`maw worktree clean` resolves its merge base from the **primary worktree**, not the caller's current worktree, so the primary worktree must track the repository's integration branch (for this repository, `origin/alpha`). If the primary worktree tracks an agent/fork branch instead, `clean` can correctly apply the wrong integration history to every auxiliary worktree; switch the primary worktree back to the integration branch before cleaning.
 
 ## Golden warm cache
 
