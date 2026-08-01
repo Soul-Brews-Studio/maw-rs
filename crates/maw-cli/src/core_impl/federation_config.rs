@@ -28,6 +28,13 @@ fn load_hey_config() -> HeyConfig {
         })
         .unwrap_or_default();
     let named_peers = parse_named_peers(value.get("namedPeers"));
+    // #681 (read-side): config `namedPeers` and the peer store (`peers.json`) are
+    // two separate registries — `maw peers map` / `/fed.json` read the store while
+    // the `hey` router read only config — so a peer could be registered, probed
+    // green, and still unroutable. Fall back to the store so "green in the map"
+    // implies "addressable by hey". Config wins on a name conflict (operator
+    // intent); store aliases already named in config are skipped.
+    let named_peers = merge_peer_store_named_peers(named_peers);
     let agents = value
         .get("agents")
         .and_then(serde_json::Value::as_object)
@@ -71,6 +78,21 @@ fn parse_named_peers(value: Option<&serde_json::Value>) -> Vec<RouteNamedPeer> {
             .collect(),
         _ => Vec::new(),
     }
+}
+
+/// Append peer-store (`peers.json`) aliases that config `namedPeers` does not
+/// already cover, so `maw hey <alias>:...` can route to a peer added via
+/// `maw peers add` / `pair` (#681 read-side unification). Config wins on a name
+/// conflict; empty URLs and an unreadable store are skipped (best-effort).
+fn merge_peer_store_named_peers(mut config: Vec<RouteNamedPeer>) -> Vec<RouteNamedPeer> {
+    let known: std::collections::HashSet<String> = config.iter().map(|peer| peer.name.clone()).collect();
+    for (alias, peer) in peers_load_store().peers {
+        if known.contains(&alias) || peer.url.trim().is_empty() {
+            continue;
+        }
+        config.push(RouteNamedPeer { name: alias, url: peer.url });
+    }
+    config
 }
 
 fn load_peer_key() -> Result<String, String> {

@@ -382,6 +382,18 @@ fn send_route_error(command: &str, query: &str, detail: &str, hint: Option<&str>
 
 
 
+/// Best-effort provenance label for a resolved peer URL used by `--dry-run`
+/// (#681: "say which store satisfied it"). Re-reads the peer store; if the URL is
+/// registered there the peer store is (at least) a source, otherwise the
+/// resolution came from config `namedPeers`/flat `peers`. Non-authoritative but
+/// enough to tell an operator whether a route exists because of the store merge.
+fn hey_peer_source_hint(peer_url: &str) -> &'static str {
+    let normalized = |raw: &str| raw.trim().trim_end_matches('/').to_ascii_lowercase();
+    let want = normalized(peer_url);
+    let in_store = peers_load_store().peers.values().any(|peer| normalized(&peer.url) == want);
+    if in_store { "from peer store (peers.json)" } else { "from config namedPeers" }
+}
+
 fn send_dry_run_output(command: &str, args: &SendArgs, result: &RouteResult) -> CliOutput {
     match result {
         RouteResult::Local { target } => CliOutput {
@@ -401,8 +413,9 @@ fn send_dry_run_output(command: &str, args: &SendArgs, result: &RouteResult) -> 
         } => CliOutput {
             code: 0,
             stdout: format!(
-                "dry-run: {command} {} -> peer {node} {target} via {peer_url}\n",
-                args.target
+                "dry-run: {command} {} -> peer {node} {target} via {peer_url}  [resolved {}]\n",
+                args.target,
+                hey_peer_source_hint(peer_url),
             ),
             stderr: String::new(),
         },
@@ -460,6 +473,14 @@ fn send_local_message_with_audit(
     let warning = serve_non_agent_pane_warning(target)
         .map(|warning| format!("\x1b[33mwarning: {warning}\x1b[0m\n"))
         .unwrap_or_default();
+    // #681/#695 bare-name shadow: a bare oracle name that resolves to a LOCAL
+    // session while a same-named peer exists looks identical to a real local
+    // delivery, so a report-back silently self-addresses. Surface the ambiguity
+    // rather than let the success hide it (exit stays 0 — non-breaking).
+    let warning = bare_name_local_vs_peer_warning(query, config)
+        .map(|warning| format!("\x1b[33mwarning: {warning}\x1b[0m\n"))
+        .map(|extra| extra + &warning)
+        .unwrap_or(warning);
     CliOutput {
         code: 0,
         stdout: send_success_output(command, target, &outbound),
@@ -566,6 +587,24 @@ fn send_route_gate(command: &str, query: &str, text: &str, result: &RouteResult)
 /// the query string itself is the only signal available client-side.
 fn send_query_uses_explicit_local_prefix(query: &str) -> bool {
     query.split_once(':').is_some_and(|(node, _)| node == "local")
+}
+
+/// Detects a #681 bare-name shadow: a bare oracle name (no `node:`/`local:`/
+/// path form, not the `me` alias) that resolved to a local session while a
+/// same-named peer is registered (config `namedPeers` or the peer store, both of
+/// which feed `config.route.named_peers`). Such a delivery looks identical to a
+/// real local one, so a report-back silently self-addresses; warn so the
+/// ambiguity is visible. Exit stays 0 — non-breaking (#681 decision B).
+fn bare_name_local_vs_peer_warning(query: &str, config: &HeyConfig) -> Option<String> {
+    if query.contains(':') || query.contains('/') || is_self_target_alias(query) {
+        return None;
+    }
+    let conflict = config.route.named_peers.iter().any(|peer| peer.name == query);
+    conflict.then(|| {
+        format!(
+            "bare name '{query}' resolved to a LOCAL session, but a peer named '{query}' is also registered; use 'local:{query}' to confirm the local target, or node-qualify (e.g. '{query}:<session>') to reach the remote peer"
+        )
+    })
 }
 
 /// `RouteResult::SelfNode` fires only when a query used the full cross-node

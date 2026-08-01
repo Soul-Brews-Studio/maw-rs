@@ -993,6 +993,86 @@ mod peers_tests {
     }
 
     #[test]
+    fn merge_peer_store_named_peers_makes_store_aliases_routable_and_lets_config_win() {
+        // #681 read-side: config namedPeers and peers.json are two registries. A
+        // peer added via `maw peers add` lives in the store, so `maw hey` could
+        // not route to it. The store is merged in as a fallback (config wins on a
+        // name clash); an unreadable/missing store must not break routing.
+        let _guard = env_test_lock();
+        let _restore = EnvVarRestore::capture("PEERS_FILE");
+        let path = peers_probe_all_temp_store("named-fallback");
+        std::fs::write(
+            &path,
+            r#"{"version":1,"peers":{"storepeer":{"url":"http://store.test:3456/","addedAt":"1000"},"shared":{"url":"http://store-loses.test:3456/","addedAt":"1000"},"blank":{"url":"","addedAt":"1000"}}}"#,
+        )
+        .expect("seed store");
+        std::env::set_var("PEERS_FILE", &path);
+
+        let merged = merge_peer_store_named_peers(vec![RouteNamedPeer {
+            name: "shared".to_owned(),
+            url: "http://config-wins.test:3456/".to_owned(),
+        }]);
+
+        // store-only alias becomes routable
+        assert!(
+            merged.iter().any(|peer| peer.name == "storepeer" && peer.url == "http://store.test:3456/"),
+            "a store-only peer must become addressable by hey",
+        );
+        // config wins on conflict: exactly one "shared", with the config URL
+        let shareds: Vec<&RouteNamedPeer> = merged.iter().filter(|peer| peer.name == "shared").collect();
+        assert_eq!(shareds.len(), 1, "config wins; no duplicate store entry for a conflicting name");
+        assert_eq!(shareds[0].url, "http://config-wins.test:3456/");
+        // blank URL is skipped
+        assert!(merged.iter().all(|peer| peer.name != "blank"), "a peer with an empty URL is not routable");
+        std::fs::remove_file(&path).ok();
+
+        // a missing/unreadable store must not break the config list
+        let _restore_missing = EnvVarRestore::capture("PEERS_FILE");
+        std::env::set_var("PEERS_FILE", "/dev/null/does-not-exist");
+        let only_config = merge_peer_store_named_peers(vec![RouteNamedPeer { name: "c".to_owned(), url: "http://c.test:3456/".to_owned() }]);
+        assert_eq!(only_config.len(), 1, "missing store leaves config namedPeers untouched");
+    }
+
+    #[test]
+    fn bare_name_local_vs_peer_warning_only_when_a_same_named_peer_exists() {
+        // #681/#695: a bare name resolving local while a same-named peer exists is
+        // a silent self-address; the guard must fire only for a genuine bare name
+        // shadowed by a peer, never for explicit local:/node: forms or `me`.
+        let with_peer = HeyConfig {
+            route: RouteConfig {
+                named_peers: vec![RouteNamedPeer { name: "nova".to_owned(), url: "http://nova.test:3456".to_owned() }],
+                ..RouteConfig::default()
+            },
+            ..HeyConfig::default()
+        };
+        assert!(bare_name_local_vs_peer_warning("nova", &with_peer).is_some(), "bare name shadowed by a peer warns");
+
+        let no_peer = HeyConfig::default();
+        assert!(bare_name_local_vs_peer_warning("nova", &no_peer).is_none(), "no same-named peer => no warning");
+
+        // explicit forms must not warn even when the peer exists
+        assert!(bare_name_local_vs_peer_warning("nova:01-sess", &with_peer).is_none());
+        assert!(bare_name_local_vs_peer_warning("local:nova", &with_peer).is_none());
+        assert!(bare_name_local_vs_peer_warning("me", &with_peer).is_none());
+    }
+
+    #[test]
+    fn hey_peer_source_hint_names_the_peer_store_when_the_url_is_registered() {
+        // #681 dry-run provenance: the hint must say the peer store satisfied the
+        // route when the URL is in peers.json, else attribute it to config.
+        let _guard = env_test_lock();
+        let _restore = EnvVarRestore::capture("PEERS_FILE");
+        let path = peers_probe_all_temp_store("source-hint");
+        std::fs::write(&path, r#"{"version":1,"peers":{"x":{"url":"http://store.test:3456/","addedAt":"1000"}}}"#).expect("seed");
+        std::env::set_var("PEERS_FILE", &path);
+
+        assert_eq!(hey_peer_source_hint("http://store.test:3456/"), "from peer store (peers.json)");
+        assert_eq!(hey_peer_source_hint("http://store.test:3456"), "from peer store (peers.json)", "trailing slash is normalized");
+        assert_eq!(hey_peer_source_hint("http://config-only.test:3456"), "from config namedPeers");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
     fn peers_apply_probe_result_persists_the_auth_error_reason() {
         // #685: `auth_ok: false` with no reason is the same disease as the six
         // bugs behind #680 -- the peer record must persist WHY, so `peers info`
