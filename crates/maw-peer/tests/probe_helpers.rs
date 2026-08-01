@@ -47,6 +47,22 @@ fn probe_classifier_matches_maw_js_error_buckets() {
         classify_probe_error(&ProbeFailureInput::Code("WEIRD".to_owned())),
         ProbeErrorCode::Unknown
     );
+    // #733: EHOSTUNREACH/ENETUNREACH classify as Unreachable, not UNKNOWN —
+    // EHOSTUNREACH is the macOS Local Network (TCC) denial signature.
+    assert_eq!(
+        classify_probe_error(&ProbeFailureInput::Code("EHOSTUNREACH".to_owned())),
+        ProbeErrorCode::Unreachable
+    );
+    assert_eq!(
+        classify_probe_error(&ProbeFailureInput::Code("ENETUNREACH".to_owned())),
+        ProbeErrorCode::Unreachable
+    );
+    assert_eq!(
+        classify_probe_error(&ProbeFailureInput::Code(
+            "HostUnreachable".to_owned()
+        )),
+        ProbeErrorCode::Unreachable
+    );
     assert_eq!(
         classify_probe_error(&ProbeFailureInput::NonObject),
         ProbeErrorCode::Unknown
@@ -62,6 +78,7 @@ fn probe_codes_hints_and_hosts_cover_all_maw_js_buckets() {
         (ProbeErrorCode::Dns, "DNS", 3, "Host does not resolve"),
         (ProbeErrorCode::Refused, "REFUSED", 4, "port is closed"),
         (ProbeErrorCode::Timeout, "TIMEOUT", 5, "within 2s"),
+        (ProbeErrorCode::Unreachable, "UNREACHABLE", 7, "No route"),
         (ProbeErrorCode::Http4xx, "HTTP_4XX", 6, "client error"),
         (ProbeErrorCode::Http5xx, "HTTP_5XX", 6, "server error"),
         (ProbeErrorCode::Tls, "TLS", 2, "TLS handshake"),

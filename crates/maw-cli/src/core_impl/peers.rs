@@ -3,7 +3,7 @@ const DISPATCH_104: &[DispatcherEntry] = &[
     DispatcherEntry { command: "peer", handler: Handler::Sync(peers_run_command) },
 ];
 
-const PEERS_HELP: &str = "usage: maw peers <add|list|info|probe|probe-all|map|accept|remove|forget> [...]\n  add       <alias> <url> [--node <name>] [--ssh <target>] [--user <name>] [--allow-unreachable]\n            — register alias (auto-probes /info). Exits non-zero on handshake failure:\n              2=UNKNOWN/BAD_BODY/TLS  3=DNS  4=REFUSED  5=TIMEOUT  6=HTTP_4XX/5XX\n            --ssh sets the SSH config alias/target for cross-node attach; --user overrides SSH user.\n            --allow-unreachable keeps exit 0 even when the probe fails (CI/bootstrap).\n  list      [--discovered] [--all] [--json] [--limit N]\n            — tabular list of all peers. --discovered: LAN candidates from Scout (#1237).\n              --all: include already-paired (default hides). --limit: cap rows (default 50).\n  info      <alias>                         — JSON details for one peer (includes lastError if set)\n  probe     <alias>                         — re-run /info handshake; updates lastSeen / lastError (#565)\n  probe-all [--timeout <ms>] [--allow-unreachable]\n            — probe every peer in parallel; prints liveness table. Exit = worst PROBE_EXIT_CODE (#669).\n  accept    <node|zid-prefix> [--alias X] | --all (#1237)\n            — pair with a Scout-discovered peer. Shortest unambiguous prefix wins.\n              Refuses if pubkey already pins under a different alias (impersonation guard).\n  map       — federation map: node, oracle, up/down, resolved IP, and flags\n              (loopback-self = probe hit our own serve; dup-node = shared node name).\n  remove    <alias>                         — remove (idempotent)\n  forget    <alias>                         — clear cached pubkey so next contact re-TOFUs (#804 Step 2)\n\nstorage: maw state peers.json (v1; reads legacy ~/.maw/peers.json during migration)";
+const PEERS_HELP: &str = "usage: maw peers <add|list|info|probe|probe-all|map|accept|remove|forget> [...]\n  add       <alias> <url> [--node <name>] [--ssh <target>] [--user <name>] [--allow-unreachable]\n            — register alias (auto-probes /info). Exits non-zero on handshake failure:\n              2=UNKNOWN/BAD_BODY/TLS  3=DNS  4=REFUSED  5=TIMEOUT  6=HTTP_4XX/5XX  7=UNREACHABLE\n            --ssh sets the SSH config alias/target for cross-node attach; --user overrides SSH user.\n            --allow-unreachable keeps exit 0 even when the probe fails (CI/bootstrap).\n  list      [--discovered] [--all] [--json] [--limit N]\n            — tabular list of all peers. --discovered: LAN candidates from Scout (#1237).\n              --all: include already-paired (default hides). --limit: cap rows (default 50).\n  info      <alias>                         — JSON details for one peer (includes lastError if set)\n  probe     <alias>                         — re-run /info handshake; updates lastSeen / lastError (#565)\n  probe-all [--timeout <ms>] [--allow-unreachable]\n            — probe every peer in parallel; prints liveness table. Exit = worst PROBE_EXIT_CODE (#669).\n  accept    <node|zid-prefix> [--alias X] | --all (#1237)\n            — pair with a Scout-discovered peer. Shortest unambiguous prefix wins.\n              Refuses if pubkey already pins under a different alias (impersonation guard).\n  map       — federation map: node, oracle, up/down, resolved IP, and flags\n              (loopback-self = probe hit our own serve; dup-node = shared node name).\n  remove    <alias>                         — remove (idempotent)\n  forget    <alias>                         — clear cached pubkey so next contact re-TOFUs (#804 Step 2)\n\nstorage: maw state peers.json (v1; reads legacy ~/.maw/peers.json during migration)";
 const PEERS_DEFAULT_STALE_TTL_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 const PEERS_DEFAULT_PROBE_TIMEOUT_MS: u64 = 2_000;
 const PEERS_FAKE_NOW_ENV: &str = "MAW_RS_PEERS_FAKE_NOW";
@@ -408,27 +408,42 @@ fn peers_probe_info_url(url: &str) -> Result<String, String> {
 fn peers_reqwest_error(error: &reqwest::Error) -> maw_peer::ProbeInfoOutcome {
     let message = error.to_string();
     if error.is_timeout() { return maw_peer::ProbeInfoOutcome::FetchName { name: "TimeoutError".to_owned(), message }; }
-    if let Some(code) = peers_reqwest_error_code(error, &message) {
+    if let Some(code) = peers_reqwest_error_code(error) {
         return maw_peer::ProbeInfoOutcome::FetchCode { code: code.to_owned(), message };
     }
     maw_peer::ProbeInfoOutcome::FetchName { name: "Error".to_owned(), message }
 }
 
-fn peers_reqwest_error_code(error: &reqwest::Error, message: &str) -> Option<&'static str> {
-    let mut source = std::error::Error::source(error);
-    while let Some(cause) = source {
+/// Classify a reqwest probe error into an errno-style code by walking the full
+/// cause chain. `HostUnreachable` / `NetworkUnreachable` are matched as typed
+/// `io::ErrorKind`s (deterministic), and the substring fallback concatenates
+/// every cause's `Display` so it sees the *walked* chain — reqwest's top-level
+/// `Display` omits the underlying OS message (e.g. "No route to host"), which
+/// is the only clue that identifies a macOS Local Network (TCC) denial (#733).
+fn peers_reqwest_error_code(error: &reqwest::Error) -> Option<&'static str> {
+    let mut chain = String::new();
+    let mut cursor: Option<&(dyn std::error::Error + 'static)> = Some(error);
+    while let Some(cause) = cursor {
         if let Some(io) = cause.downcast_ref::<std::io::Error>() {
             match io.kind() {
                 std::io::ErrorKind::ConnectionRefused => return Some("ECONNREFUSED"),
                 std::io::ErrorKind::TimedOut => return Some("ETIMEDOUT"),
+                std::io::ErrorKind::HostUnreachable => return Some("EHOSTUNREACH"),
+                std::io::ErrorKind::NetworkUnreachable => return Some("ENETUNREACH"),
                 _ => {}
             }
         }
-        source = cause.source();
+        if !chain.is_empty() { chain.push_str(" :: "); }
+        // Append this cause's message to the walked chain for substring fallback.
+        let _ = std::fmt::Write::write_fmt(&mut chain, std::format_args!("{cause}"));
+        cursor = cause.source();
     }
-    let lower = message.to_ascii_lowercase();
+
+    let lower = chain.to_ascii_lowercase();
     if lower.contains("connection refused") { return Some("ECONNREFUSED"); }
-    if lower.contains("timed out") { return Some("ETIMEDOUT"); }
+    if lower.contains("timed out") || lower.contains("operation timed out") { return Some("ETIMEDOUT"); }
+    if lower.contains("no route to host") || lower.contains("host unreachable") { return Some("EHOSTUNREACH"); }
+    if lower.contains("network is unreachable") || lower.contains("network unreachable") { return Some("ENETUNREACH"); }
     if lower.contains("dns") || lower.contains("name or service") || lower.contains("failed to lookup") || lower.contains("nodename nor servname") { return Some("ENOTFOUND"); }
     if lower.contains("certificate") || lower.contains("tls") { return Some("CERT_HAS_EXPIRED"); }
     None

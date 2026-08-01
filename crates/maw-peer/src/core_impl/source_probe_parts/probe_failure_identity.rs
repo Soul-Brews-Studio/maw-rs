@@ -23,6 +23,8 @@ pub enum ProbeErrorCode {
     Tls,
     #[serde(rename = "BAD_BODY")]
     BadBody,
+    #[serde(rename = "UNREACHABLE")]
+    Unreachable,
     #[serde(rename = "UNKNOWN")]
     Unknown,
 }
@@ -38,6 +40,7 @@ impl ProbeErrorCode {
             Self::Http5xx => "HTTP_5XX",
             Self::Tls => "TLS",
             Self::BadBody => "BAD_BODY",
+            Self::Unreachable => "UNREACHABLE",
             Self::Unknown => "UNKNOWN",
         }
     }
@@ -90,6 +93,9 @@ fn classify_code(code: &str) -> ProbeErrorCode {
     match code {
         "ENOTFOUND" | "ENOTIMP" | "EAI_FAIL" | "EAI_AGAIN" | "EAI_NODATA" => ProbeErrorCode::Dns,
         "ECONNREFUSED" | "ConnectionRefused" => ProbeErrorCode::Refused,
+        "EHOSTUNREACH" | "ENETUNREACH" | "HostUnreachable" | "NetworkUnreachable" => {
+            ProbeErrorCode::Unreachable
+        }
         "ETIMEDOUT" | "UND_ERR_CONNECT_TIMEOUT" => ProbeErrorCode::Timeout,
         "UNABLE_TO_VERIFY_LEAF_SIGNATURE" => ProbeErrorCode::Tls,
         _ if code.starts_with("CERT_")
@@ -109,6 +115,7 @@ pub const fn probe_exit_code(code: ProbeErrorCode) -> i32 {
         ProbeErrorCode::Refused => 4,
         ProbeErrorCode::Timeout => 5,
         ProbeErrorCode::Http4xx | ProbeErrorCode::Http5xx => 6,
+        ProbeErrorCode::Unreachable => 7,
         ProbeErrorCode::Tls | ProbeErrorCode::BadBody | ProbeErrorCode::Unknown => 2,
     }
 }
@@ -119,6 +126,11 @@ pub const fn probe_hint(code: ProbeErrorCode) -> &'static str {
         ProbeErrorCode::Dns => "Host does not resolve. Check /etc/hosts, DNS, or VPN.",
         ProbeErrorCode::Refused => "Host resolves but port is closed. Is the peer process running?",
         ProbeErrorCode::Timeout => "Peer did not respond within 2s. Network path may be blocked.",
+        ProbeErrorCode::Unreachable => {
+            "No route to the peer (EHOSTUNREACH/ENETUNREACH). On macOS this is the Local Network \
+            (TCC) denial signature — it pretends there is no route rather than returning EPERM. \
+            Check VPN/WireGuard vs LAN routing, and System Settings > Privacy > Local Network."
+        }
         ProbeErrorCode::Tls => "TLS handshake failed. Check cert validity / chain.",
         ProbeErrorCode::Http4xx => "Peer responded with a client error. /info endpoint may be missing OR peer is running an old maw version — if you control the peer, try restarting it.",
         ProbeErrorCode::Http5xx => "Peer returned a server error. Server-side fault.",
