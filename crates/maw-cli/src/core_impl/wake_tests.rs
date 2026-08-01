@@ -1678,4 +1678,36 @@ mod wake_tests {
         assert!(command.contains("omx --direct"), "charter line should win, got {command}");
         assert!(!command.contains("should-not-win"), "commands map must not win, got {command}");
     }
+
+    /// #738 review (GB): `commands.<engine>-resume` is an explicit resume
+    /// contract and must survive a charter engine line — bypassed configs are
+    /// the #682 failure mode. The override is warned, not silent.
+    #[test]
+    fn wake_engine_resume_command_survives_charter_line_with_warning() {
+        let config = serde_json::json!({ "commands": { "omx-1-resume": "omx --resume-explicit" } });
+        let mut warnings = Vec::new();
+        let command = wake_engine_launch_command(
+            "omx-1",
+            std::path::Path::new("/tmp"),
+            &config,
+            true,
+            Some("CODEX_HOME=$PWD/.codex omx --direct"),
+            &mut warnings,
+        );
+        assert!(command.contains("--resume-explicit"), "resume contract should win, got {command}");
+        assert_eq!(warnings.len(), 1, "bypass must be warned: {warnings:?}");
+        assert!(warnings[0].contains("omx-1-resume"));
+        // Without a -resume key, resume derives from the charter's own binary.
+        let mut warnings = Vec::new();
+        let command = wake_engine_launch_command(
+            "omx-1",
+            std::path::Path::new("/tmp"),
+            &serde_json::json!({}),
+            true,
+            Some("omx --direct"),
+            &mut warnings,
+        );
+        assert!(command.starts_with("omx"), "charter binary should drive resume, got {command}");
+        assert!(command.contains("resume"), "family resume form expected, got {command}");
+    }
 }

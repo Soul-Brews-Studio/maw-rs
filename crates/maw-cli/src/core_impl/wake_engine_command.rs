@@ -132,19 +132,29 @@ fn wake_engine_launch_command(
     engine_command: Option<&str>,
     warnings: &mut Vec<String>,
 ) -> String {
-    // 0. `--engine-cmd` — a caller-supplied launch line (a team charter's
-    //    `engines:` entry, #738) outranks the whole `commands.*` map, including
-    //    `commands.<engine>-resume`: the charter is the more specific authority
-    //    for how THAT role starts. Resume then falls to the family-based form
-    //    below, derived from the charter's own binary.
+    // 0. `commands.<engine>-resume` stays first even against `--engine-cmd`
+    //    (#738 review): the `-resume` key is an operator's EXPLICIT resume
+    //    contract, while a charter `engines:` line only encodes cold start —
+    //    silently discarding the `-resume` command would be the same
+    //    config-that-looks-live-but-isn't failure #682 fixed. The bypass is
+    //    warned so neither side is overridden silently.
+    if resume {
+        if let Some(command) = wake_config_command(config, &format!("{engine}-resume")) {
+            if engine_command.is_some() {
+                warnings.push(format!(
+                    "wake: commands.{engine}-resume overrides the charter engine command for resume"
+                ));
+            }
+            return workon_prefix_zai_pool(config, command);
+        }
+    }
+    // 1. `--engine-cmd` — a caller-supplied launch line (a team charter's
+    //    `engines:` entry, #738) outranks the rest of the `commands.*` map for
+    //    cold start; without a `-resume` key, resume falls to the family-based
+    //    form below, derived from the charter's own binary.
     let command = if let Some(line) = engine_command {
         workon_prefix_zai_pool(config, line.to_owned())
     } else {
-        if resume {
-            if let Some(command) = wake_config_command(config, &format!("{engine}-resume")) {
-                return workon_prefix_zai_pool(config, command);
-            }
-        }
         wake_resolve_engine_command(engine, cwd)
     };
     if !resume {
