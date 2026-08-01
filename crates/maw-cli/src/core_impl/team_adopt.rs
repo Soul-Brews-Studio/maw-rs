@@ -318,6 +318,48 @@ mod team_adopt_tests381 {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// The pane an adopted member points at is not ours: it can die at any time after
+    /// the charter was written. A dead adopted member must still be releasable, must
+    /// still refuse `team remove`, and must never trigger a teardown of a pane that is
+    /// already gone.
+    #[test]
+    fn team_adopt_member_that_dies_later_still_releases_and_never_tears_down() {
+        let _guard = env_test_lock();
+        let root = adopt_root("died");
+        let charter = write_charter(&root, YAML_CHARTER, "alpha.yaml");
+        let remove_log = root.join("remove.log");
+        let spawn_log = root.join("spawn.log");
+        let _panes = EnvVarRestore::capture("MAW_RS_TEAM_TMUX_PANES");
+        let _remove = EnvVarRestore::capture("MAW_RS_TEAM_REMOVE_FAKE_LOG");
+        let _spawn = EnvVarRestore::capture("MAW_RS_TEAM_FAKE_SPAWN_LOG");
+        let _home = EnvVarRestore::capture("HOME");
+        std::env::set_var("MAW_RS_TEAM_REMOVE_FAKE_LOG", &remove_log);
+        std::env::set_var("MAW_RS_TEAM_FAKE_SPAWN_LOG", &spawn_log);
+        std::env::set_var("HOME", &root);
+
+        // Alive at adopt time.
+        std::env::set_var("MAW_RS_TEAM_TMUX_PANES", "alpha|chorus|claude|/nowhere|%9\n");
+        team_adopt(&argv(&["adopt", "alpha", "alpha:chorus", "--charter", &charter])).expect("adopt while live");
+        let body = std::fs::read_to_string(&charter).expect("read back");
+        assert!(body.contains("adopted: true"), "{body}");
+
+        // The pane dies afterwards: no panes left at all.
+        std::env::set_var("MAW_RS_TEAM_TMUX_PANES", "");
+        let parsed = team_parse_charter(&std::fs::read_to_string(&charter).expect("read")).expect("charter parses");
+        let refused = team_remove_reject_adopted(&parsed, "chorus").expect_err("remove still refuses a dead adopted member");
+        assert!(refused.contains("team release"), "{refused}");
+
+        // Release is charter-only, so a dead pane must not make it fail.
+        let out = team_release(&argv(&["release", "alpha", "chorus", "--charter", &charter])).expect("release after death");
+        assert!(out.contains("teardown: none"), "{out}");
+        let after = std::fs::read_to_string(&charter).expect("read back");
+        assert!(!after.contains("chorus"), "dead adopted member must be dropped: {after}");
+        assert!(after.contains("- role: builder"), "spawned member must survive: {after}");
+        assert!(!remove_log.exists(), "must not tear down a pane that is already gone");
+        assert!(!spawn_log.exists(), "must not respawn a dead adopted member");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn team_adopt_json_charter_keeps_shape_and_release_drops_without_teardown() {
         let _guard = env_test_lock();
