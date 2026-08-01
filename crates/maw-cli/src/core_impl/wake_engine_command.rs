@@ -109,7 +109,7 @@ fn wake_command(window: &str, cwd: &std::path::Path, options: &WakeOptionsNative
     let resume = options.resume || (defaults.resume && !options.fresh);
     let channels = options.channels || defaults.channels;
     let mut warnings = Vec::new();
-    let mut engine_command = wake_engine_launch_command(&engine, cwd, &config, resume, &mut warnings);
+    let mut engine_command = wake_engine_launch_command(&engine, cwd, &config, resume, options.engine_command.as_deref(), &mut warnings);
     if channels { wake_apply_channels(&mut engine_command, &engine, &config, resume, &mut warnings); }
     if let Some(prompt) = options.prompt.as_deref().or(defaults.prompt.as_deref()) { let _ = write!(engine_command, " {}", wake_shell_quote(prompt)); }
     (format!("MAW_SESSION_WINDOW={} {engine_command}", wake_shell_quote(window)), warnings)
@@ -129,14 +129,24 @@ fn wake_engine_launch_command(
     cwd: &std::path::Path,
     config: &serde_json::Value,
     resume: bool,
+    engine_command: Option<&str>,
     warnings: &mut Vec<String>,
 ) -> String {
-    if resume {
-        if let Some(command) = wake_config_command(config, &format!("{engine}-resume")) {
-            return workon_prefix_zai_pool(config, command);
+    // 0. `--engine-cmd` — a caller-supplied launch line (a team charter's
+    //    `engines:` entry, #738) outranks the whole `commands.*` map, including
+    //    `commands.<engine>-resume`: the charter is the more specific authority
+    //    for how THAT role starts. Resume then falls to the family-based form
+    //    below, derived from the charter's own binary.
+    let command = if let Some(line) = engine_command {
+        workon_prefix_zai_pool(config, line.to_owned())
+    } else {
+        if resume {
+            if let Some(command) = wake_config_command(config, &format!("{engine}-resume")) {
+                return workon_prefix_zai_pool(config, command);
+            }
         }
-    }
-    let command = wake_resolve_engine_command(engine, cwd);
+        wake_resolve_engine_command(engine, cwd)
+    };
     if !resume {
         return command;
     }

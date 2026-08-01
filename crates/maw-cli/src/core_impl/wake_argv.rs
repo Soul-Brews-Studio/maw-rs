@@ -26,6 +26,7 @@ fn wake_default_options() -> WakeOptionsNative {
     WakeOptionsNative {
         target: String::new(), task: None, wt: None, prompt: None, repo: None, issue: None, pr: None,
         incubate: None, parent: None, peer: None, layout: None, from: None, snapshot: None, engine: None,
+        engine_command: None,
         name: None, repo_path: None, on_ready: Vec::new(), all: false, all_local: false, attach: true, dry_run: false, fresh: false,
         from_snapshot: false, kill: false, list: false, main: false, new_window: false, no_attach: false,
         pick: false, resume: false, solo: false, split: false, bud: false, channels: false, wait: false, yes: false,
@@ -47,6 +48,7 @@ fn wake_parse_value_arg(argv: &[String], index: usize, options: &mut WakeOptions
         "--layout" => { options.layout = Some(wake_take_value(argv, index, "--layout", wake_validate_layout)?); 2 }
         "--snapshot" => { options.snapshot = Some(wake_take_value(argv, index, "--snapshot", wake_validate_target_value)?); 2 }
         "-e" | "--engine" => { options.engine = Some(wake_take_value(argv, index, arg, wake_validate_target_value)?); 2 }
+        "--engine-cmd" => { options.engine_command = Some(wake_take_value(argv, index, "--engine-cmd", wake_validate_command)?); 2 }
         "--name" => { options.name = Some(wake_take_value(argv, index, "--name", wake_validate_slug)?); 2 }
         "--repo-path" => { options.repo_path = Some(std::path::PathBuf::from(wake_take_value(argv, index, "--repo-path", wake_validate_target_value)?)); 2 }
         "--on-ready" => { options.on_ready.push(wake_take_text(argv, index, "--on-ready")?); 2 }
@@ -77,6 +79,7 @@ fn wake_equals_setters() -> Vec<(&'static str, WakeEqualsSetter)> {
         ("--parent=", |o, v| { wake_validate_target_value(v, "--parent")?; o.parent = Some(v.to_owned()); Ok(()) }),
         ("--peer=", |o, v| { wake_validate_target_value(v, "--peer")?; o.peer = Some(v.to_owned()); Ok(()) }),
         ("--from=", |o, v| { wake_validate_target_value(v, "--from")?; o.from = Some(v.to_owned()); Ok(()) }),
+        ("--engine-cmd=", |o, v| { wake_validate_command(v, "--engine-cmd")?; o.engine_command = Some(v.to_owned()); Ok(()) }),
         ("--layout=", |o, v| { wake_validate_layout(v, "--layout")?; o.layout = Some(v.to_owned()); Ok(()) }),
         ("--snapshot=", |o, v| { wake_validate_target_value(v, "--snapshot")?; o.snapshot = Some(v.to_owned()); Ok(()) }),
         ("--engine=", |o, v| { wake_validate_target_value(v, "--engine")?; o.engine = Some(v.to_owned()); Ok(()) }),
@@ -162,6 +165,7 @@ fn wake_help_value_flags() -> &'static [&'static str] {
         "--snapshot",
         "-e",
         "--engine",
+        "--engine-cmd",
         "--name",
         "--repo-path",
         "--on-ready",
@@ -170,6 +174,15 @@ fn wake_help_value_flags() -> &'static [&'static str] {
 
 fn wake_validate_target_value(value: &str, label: &str) -> Result<(), String> {
     if value.is_empty() || value.starts_with('-') { return Err(format!("wake: {label} must not start with '-'")); }
+    if value.contains('\0') || value.contains('\n') || value.contains('\r') { return Err(format!("wake: invalid {label}")); }
+    Ok(())
+}
+
+/// A launch line: spaces and shell-ish characters are the point, so only the
+/// separators that would let it break out of the single command are rejected.
+fn wake_validate_command(value: &str, label: &str) -> Result<(), String> {
+    if value.trim().is_empty() { return Err(format!("wake: {label} must not be empty")); }
+    if value.starts_with('-') { return Err(format!("wake: {label} must not start with '-'")); }
     if value.contains('\0') || value.contains('\n') || value.contains('\r') { return Err(format!("wake: invalid {label}")); }
     Ok(())
 }

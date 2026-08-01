@@ -17,6 +17,9 @@ struct WakeOptionsNative {
     from: Option<String>,
     snapshot: Option<String>,
     engine: Option<String>,
+    /// Full launch line supplied by the caller, winning over `commands.<engine>`
+    /// from merged config (#738 — a team charter's `engines:` block).
+    engine_command: Option<String>,
     name: Option<String>,
     repo_path: Option<std::path::PathBuf>,
     on_ready: Vec<String>,
