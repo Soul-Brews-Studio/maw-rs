@@ -90,17 +90,32 @@ fn merge_peer_store_named_peers(mut config: Vec<RouteNamedPeer>) -> Vec<RouteNam
         if known.contains(&alias) || peer.url.trim().is_empty() {
             continue;
         }
-        // Health gate (#681 review): do not make a peer addressable just because
-        // it has an alias+URL. A record whose last probe failed (`last_error`) or
-        // whose auth was refused (`auth_ok == false`) would route the operator to
-        // a dead or untrusted endpoint — the merge must carry health, not just a
-        // bare URL, and only healthy store peers become routable candidates.
-        if peer.last_error.is_some() || peer.auth_ok == Some(false) {
+        // Route gate (#681 review): allowlist — only a peer whose federation auth
+        // is confirmed (`auth_ok == Some(true)`) becomes a route candidate. An
+        // unverified peer (`auth_ok == None`, incl. nodes with no federation
+        // token/key configured) or a refused one (`Some(false)`) is blocked, with
+        // a named reason available for diagnostics via `peer_route_block_reason`.
+        if peer_route_block_reason(&peer).is_some() {
             continue;
         }
         config.push(RouteNamedPeer { name: alias, url: peer.url });
     }
     config
+}
+
+/// Why a store peer is NOT offered as a route candidate to `maw hey`. `None` =
+/// healthy to route (auth confirmed). Otherwise returns a short named reason so
+/// the gate never refuses silently (#681 review: "บอกเหตุผลตอนปัด").
+#[must_use]
+fn peer_route_block_reason(peer: &PeersPeerNative) -> Option<&'static str> {
+    if peer.last_error.is_some() {
+        return Some("last probe failed");
+    }
+    match peer.auth_ok {
+        None => Some("federation auth not verified"),
+        Some(false) => Some("federation auth refused"),
+        Some(true) => None,
+    }
 }
 
 fn load_peer_key() -> Result<String, String> {

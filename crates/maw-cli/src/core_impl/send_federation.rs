@@ -357,13 +357,30 @@ fn send_error_code(command: &str) -> i32 { if command == "hey" { 1 } else { 2 } 
 
 fn send_route_error(command: &str, query: &str, detail: &str, hint: Option<&str>) -> String {
     if command == "hey" {
+        let note = blocked_store_peer_note(query);
         if !query.is_empty() && !query.contains(':') && !query.contains('/') {
-            return format!("error: bare target '{query}' not found locally\n\n  same-node targets:\n    maw hey local:{query} \"...\"\n    or copy a TARGET from `maw ls -v`\n\n  cross-node targets:\n    maw hey <node>:{query} \"...\"\n    maw hey <node>:<session>:<window> \"...\"\n\n  bare names are local-only; run `maw locate {query}` to enumerate federation candidates\n");
+            return format!("error: bare target '{query}' not found locally\n\n  same-node targets:\n    maw hey local:{query} \"...\"\n    or copy a TARGET from `maw ls -v`\n\n  cross-node targets:\n    maw hey <node>:{query} \"...\"\n    maw hey <node>:<session>:<window> \"...\"\n\n  bare names are local-only; run `maw locate {query}` to enumerate federation candidates\n{note}");
         }
         let hint = hint.map_or_else(String::new, |hint| format!("hint:  {hint}\n"));
-        return format!("error: {detail}\n{hint}");
+        return format!("error: {detail}\n{hint}{note}");
     }
     hint.map_or_else(|| format!("{command}: {detail}\n"), |hint| format!("{command}: {detail}; {hint}\n"))
+}
+
+/// When `hey` cannot resolve a target whose node names a peer present in the
+/// store but blocked by the route gate, surface WHY — so an operator who sees
+/// the peer in `maw peers map`/`peers.json` but cannot route gets the reason
+/// instead of a bare "not found" (#681 review: บอกเหตุผลตอนปัด).
+fn blocked_store_peer_note(query: &str) -> String {
+    let node = query.split_once(':').map_or(query, |(node, _)| node);
+    let store = peers_load_store();
+    let Some(peer) = store.peers.get(node) else {
+        return String::new();
+    };
+    let Some(reason) = peer_route_block_reason(peer) else {
+        return String::new();
+    };
+    format!("note: '{node}' is in the peer store but not a route candidate ({reason}); run `maw peers probe {node}` to re-check\n")
 }
 
 
