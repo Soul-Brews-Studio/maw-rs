@@ -41,12 +41,34 @@ fn wake_default_engine(options: &WakeOptionsNative, cwd: &std::path::Path) -> St
     if let Some(engine) = defaults.engine {
         return engine;
     }
+    // `defaultEngine` is a maw-js-era top-level key that survived the port and
+    // is still set in real fleet configs (#682). It used to be read by nothing,
+    // so an operator who set `"defaultEngine": "claude"` silently got the
+    // built-in fallback instead. It is now honoured as an alias of
+    // `wake.engine`, sorting below it and above `commands.default` — an
+    // explicit engine name beats a command alias.
+    if let Some(engine) = wake_config_default_engine_alias(&config) {
+        return engine;
+    }
     config
         .get("commands")
         .and_then(|commands| commands.get("default"))
         .and_then(serde_json::Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .map_or_else(|| "codex".to_owned(), |_| "default".to_owned())
+}
+
+/// Legacy top-level `defaultEngine` (#682) — a non-empty string names the
+/// engine directly, exactly like `wake.engine`. Kept as a named helper so the
+/// alias is greppable from the issue and so `maw config` can report that the
+/// key is live rather than dead.
+fn wake_config_default_engine_alias(config: &serde_json::Value) -> Option<String> {
+    config
+        .get(CONFIG_LEGACY_DEFAULT_ENGINE_KEY)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
 }
 
 /// Committed wake-defaults block — the `wake` object in merged config:

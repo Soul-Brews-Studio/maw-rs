@@ -49,7 +49,17 @@ spelling transfers.
 - **Repo-portable resume**: a repo using `commands.default` resolves the
   engine alias `default`, so it can commit its own `default-resume` — the
   repo's resume form with no machine-specific engine name hardcoded.
-- Precedence: CLI `-e` first, then the merged config, then builtin.
+- Precedence, exactly: `-e <alias>` → `wake.engine` → `defaultEngine` →
+  `commands.default` → the built-in fallback.
+- **`defaultEngine`** (top level, no `wake` wrapper) is a maw-js-era key that
+  is still present in real fleet configs. Until #682 it was read by nothing:
+  an operator who set `{"defaultEngine": "claude"}` silently got the built-in
+  fallback instead. It is now honoured as an alias of `wake.engine` — it names
+  the engine directly, sorts just below `wake.engine`, and beats
+  `commands.default` (an explicit engine name outranks a command alias).
+  Prefer `wake.engine` in new configs; `maw config sources` and
+  `maw config explain defaultEngine` print a note whenever the legacy key is
+  in play, so it never again looks identical to a key that does nothing.
 
 ## The layer-weight rule (repo NN must beat the user's)
 
