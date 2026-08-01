@@ -15,6 +15,7 @@ fn team_remove(argv: &[String]) -> Result<String, String> {
     let updated = team_remove_charter_text(&charter_text, &opts.selector)?;
     let session = team_remove_session(&charter)?;
     let selected = team_remove_select(&charter, &opts.selector, &session)?;
+    team_remove_reject_adopted(&charter, &selected.role)?;
     let target = selected.pane.as_ref().map_or_else(|| selected.identity.clone(), |pane| pane.window.clone());
     team_t3_validate_token(&target, "remove target")?;
     let has_worktree = team_remove_has_worktree(&charter, &selected.role);
@@ -84,6 +85,15 @@ fn team_remove_select(charter: &TeamCharter122, selector: &str, session: &str) -
 
 fn team_remove_member_matches(member: &TeamCharterMember122, selector: &str, identity: &str, worktree: &str) -> bool {
     selector == member.role || selector == identity || selector == worktree || member.name.as_deref() == Some(selector) || member.cwd.as_deref() == Some(selector)
+}
+
+/// `team remove` tears the pane down with `maw done`. An adopted member's pane was
+/// never ours to spawn, so it must never be ours to kill — send the caller to `team release`.
+fn team_remove_reject_adopted(charter: &TeamCharter122, role: &str) -> Result<(), String> {
+    if charter.members.iter().any(|member| member.role == role && member.adopted) {
+        return Err(format!("team remove refuse adopted member '{role}': it was adopted, not spawned — use: maw team release {} {role}", charter.name));
+    }
+    Ok(())
 }
 
 fn team_remove_has_worktree(charter: &TeamCharter122, role: &str) -> bool {
