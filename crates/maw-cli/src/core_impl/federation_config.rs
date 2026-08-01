@@ -90,11 +90,17 @@ fn merge_peer_store_named_peers(mut config: Vec<RouteNamedPeer>) -> Vec<RouteNam
         if known.contains(&alias) || peer.url.trim().is_empty() {
             continue;
         }
-        // Route gate (#681 review): allowlist — only a peer whose federation auth
-        // is confirmed (`auth_ok == Some(true)`) becomes a route candidate. An
-        // unverified peer (`auth_ok == None`, incl. nodes with no federation
-        // token/key configured) or a refused one (`Some(false)`) is blocked, with
-        // a named reason available for diagnostics via `peer_route_block_reason`.
+        // Route gate (#681 review): block only EXPLICIT failure, not the absence
+        // of federation auth. Three states:
+        //   last_error.is_some()        → probe failed: refuse ("last probe failed")
+        //   auth_ok == Some(false)      → federation auth refused: refuse
+        //   auth_ok == None             → NO federation auth configured on this node
+        //                                 (federation_probe_auth returns None when there
+        //                                 is no peer key/token — peers.rs:306). This is
+        //                                 N/A, not "verified untrusted": blocking it
+        //                                 would make every peer in an unfederated fleet
+        //                                 unroutable, regressing #681 wholesale. So None
+        //                                 stays routable. See peer_route_block_reason.
         if peer_route_block_reason(&peer).is_some() {
             continue;
         }
@@ -104,17 +110,17 @@ fn merge_peer_store_named_peers(mut config: Vec<RouteNamedPeer>) -> Vec<RouteNam
 }
 
 /// Why a store peer is NOT offered as a route candidate to `maw hey`. `None` =
-/// healthy to route (auth confirmed). Otherwise returns a short named reason so
-/// the gate never refuses silently (#681 review: "บอกเหตุผลตอนปัด").
+/// routable. Returns a short named reason so the gate never refuses silently
+/// (#681 review: "บอกเหตุผลตอนปัด"). Note `auth_ok == None` is NOT a block —
+/// see `merge_peer_store_named_peers`.
 #[must_use]
 fn peer_route_block_reason(peer: &PeersPeerNative) -> Option<&'static str> {
     if peer.last_error.is_some() {
         return Some("last probe failed");
     }
     match peer.auth_ok {
-        None => Some("federation auth not verified"),
         Some(false) => Some("federation auth refused"),
-        Some(true) => None,
+        None | Some(true) => None,
     }
 }
 

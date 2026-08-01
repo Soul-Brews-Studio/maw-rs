@@ -1007,7 +1007,7 @@ mod peers_tests {
         let path = peers_probe_all_temp_store("named-fallback");
         std::fs::write(
             &path,
-            r#"{"version":1,"peers":{"storepeer":{"url":"http://store.test:3456/","addedAt":"1000","authOk":true},"shared":{"url":"http://store-loses.test:3456/","addedAt":"1000","authOk":true},"blank":{"url":"","addedAt":"1000"}}}"#,
+            r#"{"version":1,"peers":{"storepeer":{"url":"http://store.test:3456/","addedAt":"1000"},"shared":{"url":"http://store-loses.test:3456/","addedAt":"1000"},"blank":{"url":"","addedAt":"1000"}}}"#,
         )
         .expect("seed store");
         std::env::set_var("PEERS_FILE", &path);
@@ -1050,20 +1050,22 @@ mod peers_tests {
     }
 
     #[test]
-    fn merge_peer_store_skips_unhealthy_store_records() {
-        // #681 review health gate: a store peer whose last probe failed or whose
-        // auth was refused must NOT become a routable candidate — routing to a
-        // dead/untrusted endpoint is worse than not routing at all.
+    fn merge_peer_store_gate_blocks_only_explicit_failure_not_absent_auth() {
+        // #681 review (semantic lock): the route gate blocks only EXPLICIT
+        // failure. auth_ok == None is "no federation auth configured" (N/A), not
+        // "verified untrusted" — blocking it would make every peer in an
+        // unfederated fleet unroutable (regressing #681 wholesale). Only a failed
+        // probe (last_error) or an explicit auth refusal (Some(false)) blocks.
         let _guard = env_test_lock();
         let _restore = EnvVarRestore::capture("PEERS_FILE");
         let path = peers_probe_all_temp_store("named-health");
         std::fs::write(
             &path,
             r#"{"version":1,"peers":{
-                "healthy":{"url":"http://ok.test:3456/","addedAt":"1000","authOk":true},
+                "verified":{"url":"http://ok.test:3456/","addedAt":"1000","authOk":true},
+                "unverified":{"url":"http://noverify.test:3456/","addedAt":"1000"},
                 "dead":{"url":"http://dead.test:3456/","addedAt":"1000","lastError":{"code":"DNS"}},
-                "refused":{"url":"http://authfail.test:3456/","addedAt":"1000","authOk":false},
-                "unverified":{"url":"http://noverify.test:3456/","addedAt":"1000"}
+                "refused":{"url":"http://authfail.test:3456/","addedAt":"1000","authOk":false}
             }}"#,
         )
         .expect("seed store");
@@ -1071,17 +1073,17 @@ mod peers_tests {
 
         let merged = merge_peer_store_named_peers(Vec::new());
         let names: Vec<&str> = merged.iter().map(|peer| peer.name.as_str()).collect();
-        assert!(names.contains(&"healthy"), "only an auth-verified store peer becomes routable");
+        assert!(names.contains(&"verified"), "auth-verified peer is routable");
+        assert!(names.contains(&"unverified"), "auth_ok == None (no federation auth) stays routable");
         assert!(!names.contains(&"dead"), "a peer whose last probe failed is not routable");
         assert!(!names.contains(&"refused"), "a peer whose auth was refused is not routable");
-        assert!(!names.contains(&"unverified"), "a peer whose auth is unverified (None) is not routable");
 
-        // reasons are named, not a silent reject (#681 review)
+        // reasons are named for the two real blocks; None/Some(true) return None
         let reason = |alias: &str| peers_load_store().peers.get(alias).and_then(peer_route_block_reason);
         assert_eq!(reason("dead"), Some("last probe failed"));
         assert_eq!(reason("refused"), Some("federation auth refused"));
-        assert_eq!(reason("unverified"), Some("federation auth not verified"));
-        assert_eq!(reason("healthy"), None);
+        assert_eq!(reason("unverified"), None, "absent auth is not a block reason");
+        assert_eq!(reason("verified"), None);
         std::fs::remove_file(&path).ok();
     }
 
