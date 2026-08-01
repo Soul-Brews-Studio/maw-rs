@@ -360,6 +360,42 @@ mod team_adopt_tests381 {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// The bug this locks: `team_t3_classify` matched panes by window name only, so an adopted
+    /// member whose pane died read back as `missing` and `team up` spawned a brand new oracle
+    /// over it — and `team down` ran `maw done` on a live adopted pane we never started.
+    #[test]
+    fn team_up_and_down_never_touch_an_adopted_pane() {
+        let _guard = env_test_lock();
+        let root = adopt_root("upafterdeath");
+        let charter = write_charter(&root, YAML_CHARTER, "alpha.yaml");
+        let _panes = EnvVarRestore::capture("MAW_RS_TEAM_TMUX_PANES");
+        let _home = EnvVarRestore::capture("HOME");
+        std::env::set_var("HOME", &root);
+
+        std::env::set_var("MAW_RS_TEAM_TMUX_PANES", "alpha|chorus|claude|/nowhere|%11\n");
+        team_adopt(&argv(&["adopt", "alpha", "alpha:chorus", "--charter", &charter])).expect("adopt while live");
+        let parsed = team_parse_charter(&std::fs::read_to_string(&charter).expect("read")).expect("charter parses");
+        let opts = TeamT3Options124::default();
+
+        // Still live: team down must keep it instead of running `maw done` on someone else's pane.
+        let live = team_t3_classify(parsed.members.iter().find(|m| m.role == "chorus").expect("member"), &opts, "alpha", &team_t3_panes());
+        assert_eq!(live.state, "live");
+        let member = parsed.members.iter().find(|m| m.role == "chorus").expect("member");
+        assert_eq!(team_down_keep_reason(member, &live, &[], true).as_deref(), Some("adopted"), "team down --all must still keep an adopted pane");
+        let builder = parsed.members.iter().find(|m| m.role == "builder").expect("builder");
+        let builder_item = team_t3_classify(builder, &opts, "alpha", &team_t3_panes());
+        assert_eq!(team_down_keep_reason(builder, &builder_item, &[], true), None, "a member we spawned is still torn down normally");
+
+        // Pane dies afterwards: must not classify as missing/dead, must not wake or resume.
+        std::env::set_var("MAW_RS_TEAM_TMUX_PANES", "");
+        let gone = team_t3_classify(member, &opts, "alpha", &team_t3_panes());
+        assert_eq!(gone.state, TEAM_ADOPTED_GONE, "a dead adopted pane must not read back as missing");
+        assert_eq!(team_t3_up_action(&gone, &opts), TEAM_ADOPTED_GONE_ACTION, "team up must not fresh wake");
+        let forced = TeamT3Options124 { flags: TEAM_T3_FORCE, ..TeamT3Options124::default() };
+        assert_eq!(team_t3_up_action(&gone, &forced), TEAM_ADOPTED_GONE_ACTION, "--force must not fresh wake either");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn team_adopt_json_charter_keeps_shape_and_release_drops_without_teardown() {
         let _guard = env_test_lock();
