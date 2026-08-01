@@ -294,10 +294,22 @@ fn pad_end_chars(value: &str, width: usize) -> String {
     }
 }
 
+/// A plugin `cli:` verb that collides with a native dispatcher command can never
+/// run: native dispatch wins, and only the commands on the fallthrough allowlist
+/// reach a plugin at all. Saying so beside the surface is the difference between
+/// "installed and working" and "installed and permanently unreachable" (#743).
+fn plugin_ls_cli_shadowed_by_native(command: &str) -> bool {
+    !native_plugin_fallthrough_command(command) && native_dispatch_commands().contains(&command)
+}
+
 fn plugin_ls_surfaces(cli_command: Option<&str>, api_path: Option<&str>) -> String {
     let mut surfaces = Vec::new();
     if let Some(command) = cli_command {
-        surfaces.push(format!("cli:{command}"));
+        if plugin_ls_cli_shadowed_by_native(command) {
+            surfaces.push(format!("cli:{command} [SHADOWED by core]"));
+        } else {
+            surfaces.push(format!("cli:{command}"));
+        }
     }
     if let Some(api_path) = api_path {
         surfaces.push(format!("api:{api_path}"));
@@ -364,4 +376,35 @@ fn shorten_home(path: &Path) -> String {
         raw.strip_prefix(&home)
             .map_or(raw.clone(), |suffix| format!("~{suffix}"))
     })
+}
+
+#[cfg(test)]
+mod plugin_ls_shadow_tests {
+    use super::*;
+
+    /// #743: `team` is a native dispatcher command and is not on the fallthrough
+    /// allowlist, so the installed `team` plugin's `cli:team` can never be reached.
+    #[test]
+    fn native_owned_verb_is_marked_shadowed() {
+        assert!(plugin_ls_cli_shadowed_by_native("team"));
+        let surfaces = plugin_ls_surfaces(Some("team"), None);
+        assert_eq!(surfaces, "cli:team [SHADOWED by core]");
+    }
+
+    /// The two commands core deliberately lets fall through stay unmarked, as do
+    /// verbs core does not own at all.
+    #[test]
+    fn fallthrough_and_unowned_verbs_are_not_marked() {
+        for command in ["cross-team-queue", "squad"] {
+            assert!(!plugin_ls_cli_shadowed_by_native(command), "{command} falls through");
+            assert_eq!(plugin_ls_surfaces(Some(command), None), format!("cli:{command}"));
+        }
+        assert!(!plugin_ls_cli_shadowed_by_native("definitely-not-a-native-verb"));
+    }
+
+    #[test]
+    fn api_only_and_empty_surfaces_are_untouched() {
+        assert_eq!(plugin_ls_surfaces(None, Some("/x")), "api:/x");
+        assert_eq!(plugin_ls_surfaces(None, None), "—");
+    }
 }
