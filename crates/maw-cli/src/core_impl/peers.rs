@@ -110,8 +110,16 @@ fn peers_cmd_add(argv: &[String], positional: &[&str]) -> Result<CliOutput, Stri
     let ssh_user = peers_flag_value(argv, "--user").map(|value| peers_clean_optional(&value, "--user")).transpose()?;
     let mut store = peers_load_store();
     let overwrote = store.peers.contains_key(alias);
+    // On re-add (upsert) carry over the existing TOFU anchor so repointing a URL
+    // does not reset trust provenance: peers_apply_probe_result only bumps
+    // pubkey_first_seen when the probed key differs from the cached one (#678).
+    let existing = store.peers.get(alias).cloned();
+    let (prior_pubkey, prior_first_seen) = match &existing {
+        Some(prior) => (prior.pubkey.clone(), prior.pubkey_first_seen.clone()),
+        None => (None, None),
+    };
     let now = peers_now_iso();
-    let mut peer = PeersPeerNative { url: url.to_owned(), node, added_at: now.clone(), last_seen: None, ssh, ssh_user, ..PeersPeerNative::default() };
+    let mut peer = PeersPeerNative { url: url.to_owned(), node, added_at: now.clone(), last_seen: None, ssh, ssh_user, pubkey: prior_pubkey, pubkey_first_seen: prior_first_seen, ..PeersPeerNative::default() };
     let probe = if argv.iter().any(|arg| arg == "--allow-unreachable") {
         None
     } else {
@@ -725,6 +733,14 @@ fn peers_stale_age_ms(peer: &PeersPeerNative) -> Option<u64> {
     Some(peers_now_ms().saturating_sub(then))
 }
 
+/// Canonical "now" timestamp for the peer store, as a string.
+///
+/// The store's canonical representation is **epoch-milliseconds** (e.g.
+/// `"1784987579845"`), which is what every current writer emits. Legacy records
+/// may still hold ISO-8601 (`"2026-06-12T00:09:39.105Z"`); readers normalize via
+/// `maw_peer::stale_age_ms` / `parse_timestamp_ms`, which accept both forms, so
+/// the mixed-format history is migrated on read rather than rewritten in place
+/// (#678). New code must write epoch-ms through this function — do not emit ISO.
 fn peers_now_iso() -> String { peers_now_ms().to_string() }
 fn peers_now_ms() -> u64 { std::env::var(PEERS_FAKE_NOW_ENV).ok().and_then(|raw| raw.parse::<u64>().ok()).unwrap_or_else(|| SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))) }
 fn peers_ok(stdout: &str) -> CliOutput { CliOutput { code: 0, stdout: stdout.to_owned(), stderr: String::new() } }
@@ -924,6 +940,56 @@ mod peers_tests {
         peers_apply_probe_result(&mut peer, &probe, "1700000000000").unwrap();
         assert_eq!(peer.pubkey.as_deref(), Some("pub-545"));
         assert_eq!(peer.pubkey_first_seen.as_deref(), Some("1700000000000"));
+    }
+
+    #[test]
+    fn peers_apply_probe_result_keeps_first_seen_when_pubkey_is_unchanged() {
+        // #678: the field means "when we FIRST trusted this key". A probe that
+        // returns the same key must NOT bump it — only a key change does.
+        let mut peer = PeersPeerNative {
+            url: "http://peer.test:3456".to_owned(),
+            pubkey: Some("KEY-A".to_owned()),
+            pubkey_first_seen: Some("1111111111111".to_owned()),
+            ..PeersPeerNative::default()
+        };
+        let same = maw_peer::ProbePeerResult { pubkey: Some("KEY-A".to_owned()), node: Some("peer-node".to_owned()), ..maw_peer::ProbePeerResult::default() };
+        peers_apply_probe_result(&mut peer, &same, "9999999999999").unwrap();
+        assert_eq!(peer.pubkey.as_deref(), Some("KEY-A"));
+        assert_eq!(peer.pubkey_first_seen.as_deref(), Some("1111111111111"), "unchanged key must keep its original first-seen anchor");
+
+        let rotated = maw_peer::ProbePeerResult { pubkey: Some("KEY-B".to_owned()), node: Some("peer-node".to_owned()), ..maw_peer::ProbePeerResult::default() };
+        peers_apply_probe_result(&mut peer, &rotated, "9999999999999").unwrap();
+        assert_eq!(peer.pubkey.as_deref(), Some("KEY-B"));
+        assert_eq!(peer.pubkey_first_seen.as_deref(), Some("9999999999999"), "a rotated key re-anchors first-seen at the new contact");
+    }
+
+    #[test]
+    fn peers_cmd_add_upsert_preserves_pubkey_first_seen_when_url_is_repointed() {
+        // #678 measured bug: `maw peers add <alias> <newurl>` on an existing alias
+        // built a fresh record (pubkey=None) and reset pubkeyFirstSeen to now,
+        // erasing the TOFU anchor even though the key was byte-identical. Before
+        // the fix this drops first-seen to None on an --allow-unreachable re-add.
+        let _guard = env_test_lock();
+        let _restore_now = EnvVarRestore::capture(PEERS_FAKE_NOW_ENV);
+        let _restore_file = EnvVarRestore::capture("PEERS_FILE");
+        let path = peers_probe_all_temp_store("firstseen-preserve");
+        std::fs::write(
+            &path,
+            r#"{"version":1,"peers":{"m5":{"url":"http://old.tunnel:3456/","addedAt":"1000","pubkey":"KEY-A","pubkeyFirstSeen":"1111111111111"}}}"#,
+        )
+        .expect("seed store");
+        std::env::set_var("PEERS_FILE", &path);
+        std::env::set_var(PEERS_FAKE_NOW_ENV, "9999999999999");
+
+        let out = peers_run_command(&peers_args(&["add", "m5", "http://m5.wg:3456/", "--allow-unreachable"]));
+        assert_eq!(out.code, 0, "{}", out.stderr);
+
+        let reloaded = peers_load_store();
+        let peer = reloaded.peers.get("m5").expect("m5 present");
+        assert_eq!(peer.url, "http://m5.wg:3456/");
+        assert_eq!(peer.pubkey.as_deref(), Some("KEY-A"), "cached pubkey is carried across the URL repoint");
+        assert_eq!(peer.pubkey_first_seen.as_deref(), Some("1111111111111"), "repointing the URL must not reset the TOFU anchor (#678)");
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]
