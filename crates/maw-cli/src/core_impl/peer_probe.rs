@@ -235,7 +235,7 @@ fn run_peer_probe_constants_plan(argv: &[String]) -> CliOutput {
         stdout: if plan_json {
             render_peer_probe_constants_json()
         } else {
-            "peer-probe codes=DNS,REFUSED,TIMEOUT,HTTP_4XX,HTTP_5XX,TLS,BAD_BODY,UNKNOWN exitCodes=DNS:3,REFUSED:4,TIMEOUT:5,HTTP_4XX:6,HTTP_5XX:6,TLS:2,BAD_BODY:2,UNKNOWN:2\n".to_owned()
+            "peer-probe codes=DNS,REFUSED,TIMEOUT,HTTP_4XX,HTTP_5XX,TLS,BAD_BODY,UNREACHABLE,UNKNOWN exitCodes=DNS:3,REFUSED:4,TIMEOUT:5,HTTP_4XX:6,HTTP_5XX:6,TLS:2,BAD_BODY:2,UNREACHABLE:7,UNKNOWN:2\n".to_owned()
         },
         stderr: String::new(),
     }
