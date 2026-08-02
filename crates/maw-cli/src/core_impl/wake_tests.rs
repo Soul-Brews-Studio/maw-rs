@@ -87,6 +87,28 @@ mod wake_tests {
         assert_eq!(selected.name, "foo");
     }
 
+    #[test]
+    fn wake_primary_registry_window_keeps_first_fallback_without_oracle_or_stem_window() {
+        let window = |name: &str| NativeFleetWindow {
+            name: name.to_owned(),
+            repo: format!("acme/{name}-oracle"),
+            kind: None,
+        };
+        let entry = NativeFleetEntry {
+            file: "43-bar.json".to_owned(),
+            path: std::path::PathBuf::from("43-bar.json"),
+            session: NativeFleetSession {
+                name: "43-bar".to_owned(),
+                windows: vec![window("bar-agent1")],
+                ..NativeFleetSession::default()
+            },
+        };
+
+        let selected = wake_primary_registry_window(&entry, "bar").expect("first fallback");
+
+        assert_eq!(selected.name, "bar-agent1");
+    }
+
     #[derive(Debug, Default)]
     #[allow(clippy::struct_excessive_bools)]
     struct WakeMockTmux {
