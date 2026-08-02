@@ -720,7 +720,11 @@ fn team_load_charter_no_spawn(charter: &TeamCharter122) -> Result<String, String
     let created_at = team_now_millis();
     let members: Vec<_> = charter.members.iter().map(team_config_member_from_charter).collect();
     let config = TeamConfig122 { name: charter.name.clone(), description: charter.description.clone(), members, created_at, lead_session_id: None };
-    let manifest = serde_json::json!({"name":charter.name,"createdAt":created_at,"description":charter.description,"goal":charter.goal,"members":charter.members.iter().map(|m| m.role.clone()).collect::<Vec<_>>(),"source":"team-charter"});
+    let mut manifest = serde_json::json!({"name":charter.name,"createdAt":created_at,"description":charter.description,"goal":charter.goal,"members":charter.members.iter().map(|m| m.role.clone()).collect::<Vec<_>>(),"source":"team-charter"});
+    let member_engines = team_charter_member_engines(charter);
+    if !member_engines.is_empty() {
+        manifest["memberEngines"] = serde_json::json!(member_engines);
+    }
     team_write_json_atomic_0600(&paths.tool_config, &config)?;
     for member in &charter.members { team_write_json_atomic_0600(&paths.tool_dir.join("inboxes").join(format!("{}.json", member.role)), &serde_json::json!([]))?; }
     team_write_json_atomic_0600(&paths.vault_manifest, &manifest)?;
@@ -729,6 +733,21 @@ fn team_load_charter_no_spawn(charter: &TeamCharter122) -> Result<String, String
 
 fn team_config_member_from_charter(member: &TeamCharterMember122) -> TeamMember122 {
     TeamMember122 { name: member.role.clone(), model: member.model.clone(), backend_type: member.target.as_ref().filter(|t| t.as_str() != "auto").cloned(), ..Default::default() }
+}
+
+fn team_charter_member_engines(charter: &TeamCharter122) -> std::collections::BTreeMap<String, String> {
+    charter
+        .members
+        .iter()
+        .filter_map(|member| {
+            member
+                .engine
+                .as_deref()
+                .map(str::trim)
+                .filter(|engine| !engine.is_empty())
+                .map(|engine| (member.role.clone(), engine.to_owned()))
+        })
+        .collect()
 }
 
 fn team_format_load(charter: &TeamCharter122, artifacts: &[std::path::PathBuf]) -> String {
@@ -781,17 +800,19 @@ members:
         assert_eq!(charter.engines.get("omx-1").map(String::as_str), Some("CODEX_HOME=$PWD/.codex omx --direct"));
         assert_eq!(charter.members[0].worktree.as_deref(), Some("agents/coder"));
         assert!(charter.defaults_worktree);
+        assert!(team_charter_member_engines(&charter).is_empty());
     }
 
     #[test]
     fn team_charter_preserves_json_defaults_engines_and_coerces_worktree_true() {
         let charter = team_parse_charter(
-            r#"{"name":"alpha","defaults":{"worktree":true},"engines":{"omx-2":"CODEX_HOME=$PWD/.codex2 omx"},"members":[{"role":"reviewer","name":"agents/reviewer","worktree":true},{"role":"planner","worktree":false}]}"#,
+            r#"{"name":"alpha","defaults":{"worktree":true},"engines":{"omx-2":"CODEX_HOME=$PWD/.codex2 omx"},"members":[{"role":"reviewer","name":"agents/reviewer","engine":"codex","worktree":true},{"role":"planner","worktree":false}]}"#,
         )
         .expect("charter");
         assert_eq!(charter.defaults.get("worktree").map(String::as_str), Some("true"));
         assert_eq!(charter.engines.get("omx-2").map(String::as_str), Some("CODEX_HOME=$PWD/.codex2 omx"));
         assert_eq!(charter.members[0].worktree.as_deref(), Some("agents/reviewer"));
+        assert_eq!(team_charter_member_engines(&charter).get("reviewer").map(String::as_str), Some("codex"));
         assert_eq!(charter.members[1].worktree, None);
         assert!(charter.members[1].worktree_opt_out);
     }
