@@ -65,6 +65,28 @@ mod wake_tests {
         assert!(error.contains("ambiguous"), "{error}");
     }
 
+    #[test]
+    fn wake_primary_registry_window_keeps_bare_stem_fallback_without_oracle_window() {
+        let window = |name: &str| NativeFleetWindow {
+            name: name.to_owned(),
+            repo: format!("acme/{name}-oracle"),
+            kind: None,
+        };
+        let entry = NativeFleetEntry {
+            file: "42-foo.json".to_owned(),
+            path: std::path::PathBuf::from("42-foo.json"),
+            session: NativeFleetSession {
+                name: "42-foo".to_owned(),
+                windows: vec![window("foo-agent1"), window("foo")],
+                ..NativeFleetSession::default()
+            },
+        };
+
+        let selected = wake_primary_registry_window(&entry, "foo").expect("bare stem fallback");
+
+        assert_eq!(selected.name, "foo");
+    }
+
     #[derive(Debug, Default)]
     #[allow(clippy::struct_excessive_bools)]
     struct WakeMockTmux {
@@ -250,7 +272,7 @@ mod wake_tests {
     fn wake_post_wake_hooks_write_marker_env() {
         wake_with_fixture(|root| {
             let session = wake_session_name("neo", &[]);
-            let expected = format!("neo|{session}|neo");
+            let expected = format!("neo|{session}|neo-oracle");
             let cli_marker = root.join("cli-ready.txt");
             let cli_hook = format!(
                 "printf '%s|%s|%s' \"$MAW_ORACLE\" \"$MAW_SESSION\" \"$MAW_WINDOW\" > {}",
@@ -363,20 +385,20 @@ mod wake_tests {
             let mut tmux = WakeMockTmux::default();
             let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("fresh");
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
-            assert!(send.ends_with("MAW_SESSION_WINDOW=neo claude"), "{send}");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo-oracle claude"), "{send}");
             assert!(!send.contains("codex"), "{send}");
 
             let mut tmux = WakeMockTmux::default();
             let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach", "-e", "codex"]), &mut tmux).expect("explicit");
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
-            assert!(send.ends_with("MAW_SESSION_WINDOW=neo claude"), "{send}");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo-oracle claude"), "{send}");
 
             // --resume no longer hijacks the engine to codex (#615): the
             // repo's commands.default engine resumes with its own form.
             let mut tmux = WakeMockTmux::default();
             let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach", "--resume"]), &mut tmux).expect("resume");
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
-            assert!(send.ends_with("MAW_SESSION_WINDOW=neo claude --continue"), "{send}");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo-oracle claude --continue"), "{send}");
         });
     }
 
@@ -388,7 +410,7 @@ mod wake_tests {
             let mut tmux = WakeMockTmux::default();
             let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach", "--resume"]), &mut tmux).expect("resume");
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
-            assert!(send.ends_with("MAW_SESSION_WINDOW=neo codex resume"), "{send}");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo-oracle codex resume"), "{send}");
         });
     }
 
@@ -408,7 +430,7 @@ mod wake_tests {
             let mut tmux = WakeMockTmux::default();
             let (_code, stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("config resume entry");
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
-            assert!(send.ends_with("MAW_SESSION_WINDOW=neo OMX_AUTO_UPDATE=0 omx --direct resume --last"), "{send}");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo-oracle OMX_AUTO_UPDATE=0 omx --direct resume --last"), "{send}");
             assert!(!stdout.contains("warning:"), "{stdout}");
 
             // (c) codex-family fallback (no <engine>-resume entry): `resume`
@@ -423,7 +445,7 @@ mod wake_tests {
             let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("codex fallback");
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
             assert!(
-                send.ends_with("MAW_SESSION_WINDOW=neo codex resume --search --dangerously-bypass-approvals-and-sandbox"),
+                send.ends_with("MAW_SESSION_WINDOW=neo-oracle codex resume --search --dangerously-bypass-approvals-and-sandbox"),
                 "{send}"
             );
         });
@@ -446,7 +468,7 @@ mod wake_tests {
             let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("claude fallback");
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
             assert!(
-                send.ends_with("MAW_SESSION_WINDOW=neo ANTHROPIC_MODEL=claude-opus-4-8 command claude --dangerously-skip-permissions --continue"),
+                send.ends_with("MAW_SESSION_WINDOW=neo-oracle ANTHROPIC_MODEL=claude-opus-4-8 command claude --dangerously-skip-permissions --continue"),
                 "{send}"
             );
         });
@@ -466,7 +488,7 @@ mod wake_tests {
             let mut tmux = WakeMockTmux::default();
             let (_code, stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("unknown binary");
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
-            assert!(send.ends_with("MAW_SESSION_WINDOW=neo mystery-bin --flag resume"), "{send}");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo-oracle mystery-bin --flag resume"), "{send}");
             assert!(stdout.contains("warning:"), "{stdout}");
             assert!(stdout.contains("commands.mystery-resume"), "{stdout}");
         });
@@ -501,7 +523,7 @@ mod wake_tests {
             let (code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach", "-e", "omx-1"]), &mut tmux).expect("wake");
             assert_eq!(code, 0);
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
-            assert!(send.ends_with("MAW_SESSION_WINDOW=neo CODEX_HOME=$PWD/.codex omx --direct"), "{send}");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo-oracle CODEX_HOME=$PWD/.codex omx --direct"), "{send}");
         });
     }
 
@@ -523,7 +545,7 @@ mod wake_tests {
             let (code, stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("config defaults");
             assert_eq!(code, 0);
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
-            assert!(send.ends_with("MAW_SESSION_WINDOW=neo OMX_POOL=1 omx --direct 'read AGENTS.md first'"), "{send}");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo-oracle OMX_POOL=1 omx --direct 'read AGENTS.md first'"), "{send}");
             assert!(!send.contains("--channels"), "{send}");
             assert!(stdout.contains("warning:"), "{stdout}");
             assert!(stdout.contains("commands.omx-1-channels"), "{stdout}");
@@ -540,7 +562,7 @@ mod wake_tests {
             .expect("cli wins");
             assert_eq!(code, 0);
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
-            assert!(send.ends_with("MAW_SESSION_WINDOW=neo codex hi"), "{send}");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo-oracle codex hi"), "{send}");
             assert!(!send.contains("--channels"), "{send}");
 
             // claude-family engines still get the channels flag, and a
@@ -555,7 +577,7 @@ mod wake_tests {
             let (code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("claude channels");
             assert_eq!(code, 0);
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
-            assert!(send.ends_with("MAW_SESSION_WINDOW=neo claude --channels plugin:discord@claude-plugins-official"), "{send}");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo-oracle claude --channels plugin:discord@claude-plugins-official"), "{send}");
 
             std::fs::write(
                 repo.join(".maw/maw.config.40.json"),
@@ -566,7 +588,7 @@ mod wake_tests {
             let (code, stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("channels entry");
             assert_eq!(code, 0);
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
-            assert!(send.ends_with("MAW_SESSION_WINDOW=neo omx --direct --with-channels"), "{send}");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo-oracle omx --direct --with-channels"), "{send}");
             assert!(!stdout.contains("warning:"), "{stdout}");
         });
     }
@@ -584,13 +606,13 @@ mod wake_tests {
             let mut tmux = WakeMockTmux::default();
             let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("config resume");
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
-            assert!(send.ends_with("MAW_SESSION_WINDOW=neo claude --continue"), "{send}");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo-oracle claude --continue"), "{send}");
 
             // (f) --fresh opts out of the configured resume.
             let mut tmux = WakeMockTmux::default();
             let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach", "--fresh"]), &mut tmux).expect("fresh");
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
-            assert!(send.ends_with("MAW_SESSION_WINDOW=neo claude"), "{send}");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo-oracle claude"), "{send}");
             assert!(!send.contains(" resume"), "{send}");
             assert!(!send.contains("--continue"), "{send}");
 
@@ -598,7 +620,7 @@ mod wake_tests {
             let mut tmux = WakeMockTmux::default();
             let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach", "-e", "claude"]), &mut tmux).expect("explicit engine");
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
-            assert!(send.ends_with("MAW_SESSION_WINDOW=neo claude --continue"), "{send}");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo-oracle claude --continue"), "{send}");
         });
     }
 
@@ -624,7 +646,7 @@ mod wake_tests {
             assert_eq!(code, 0);
             // The process cwd is outside the repo — the hook can only come
             // from the repo-layer config resolved against repo_path.
-            assert_eq!(std::fs::read_to_string(&marker).expect("repo marker"), format!("neo|{session}|neo"));
+            assert_eq!(std::fs::read_to_string(&marker).expect("repo marker"), format!("neo|{session}|neo-oracle"));
         });
     }
 
@@ -787,7 +809,7 @@ mod wake_tests {
             let (code, stdout) = wake_run(&args, &mut tmux).expect("run");
             assert_eq!(code, 0);
             assert!(stdout.contains("Soul-Brews-Studio/maw-fleetpad"), "{stdout}");
-            assert!(stdout.contains("command: MAW_SESSION_WINDOW=maw-fleetpad codex"), "{stdout}");
+            assert!(stdout.contains("command: MAW_SESSION_WINDOW=maw-fleetpad-oracle codex"), "{stdout}");
             assert!(!stdout.contains("github.com/github.com"), "{stdout}");
             assert!(tmux.actions.is_empty());
         });
@@ -875,7 +897,7 @@ mod wake_tests {
             // prefix — no cd wrapper, no in-pane printf reporters. Failure
             // detection is #580's Rust-side pane poll.
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
-            assert!(send.ends_with("MAW_SESSION_WINDOW=coder-1 codex"), "{send}");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=coder-1-oracle codex"), "{send}");
             assert!(!send.contains("cd "), "{send}");
             assert!(!send.contains("maw wake:"), "{send}");
         });
@@ -1544,16 +1566,16 @@ mod wake_tests {
     fn wake_reused_shell_window_resends_instead_of_already_running() {
         wake_with_fixture(|_| {
             let session = wake_session_name("neo", &[]);
-            let mut tmux = wake_mock_tmux_with_existing_window(&session, "neo");
+            let mut tmux = wake_mock_tmux_with_existing_window(&session, "neo-oracle");
             tmux.pane_command_script = vec!["zsh".to_owned(), "claude".to_owned()];
 
             let (code, stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("run");
 
             assert_eq!(code, 0, "{stdout}");
             assert!(!stdout.contains('⚡'), "{stdout}");
-            assert!(stdout.contains("woke 'neo'"), "{stdout}");
+            assert!(stdout.contains("woke 'neo-oracle'"), "{stdout}");
             assert!(!tmux.actions.iter().any(|action| action.starts_with("new-window")), "{:?}", tmux.actions);
-            assert!(tmux.actions.iter().any(|action| action.starts_with(&format!("send {session}:neo "))), "{:?}", tmux.actions);
+            assert!(tmux.actions.iter().any(|action| action.starts_with(&format!("send {session}:neo-oracle "))), "{:?}", tmux.actions);
             assert_eq!(tmux.pre_send_polls, 0);
             assert_eq!(tmux.send_pane_polls, vec![1]);
             assert_eq!(tmux.pane_polls, 2);
@@ -1564,7 +1586,7 @@ mod wake_tests {
     fn wake_self_pane_reuse_queues_send_instead_of_already_running() {
         wake_with_fixture(|_| {
             let session = wake_session_name("neo", &[]);
-            let mut tmux = wake_mock_tmux_with_existing_window(&session, "neo");
+            let mut tmux = wake_mock_tmux_with_existing_window(&session, "neo-oracle");
             tmux.target_pane_id = Some("%42".to_owned());
             tmux.pane_command_script = vec!["maw".to_owned()];
             std::env::set_var("TMUX_PANE", "%42");
@@ -1573,8 +1595,8 @@ mod wake_tests {
 
             assert_eq!(code, 0, "{stdout}");
             assert!(!stdout.contains('⚡'), "{stdout}");
-            assert!(stdout.contains("woke 'neo'"), "{stdout}");
-            assert!(tmux.actions.iter().any(|action| action.starts_with(&format!("send {session}:neo "))), "{:?}", tmux.actions);
+            assert!(stdout.contains("woke 'neo-oracle'"), "{stdout}");
+            assert!(tmux.actions.iter().any(|action| action.starts_with(&format!("send {session}:neo-oracle "))), "{:?}", tmux.actions);
             assert_eq!(tmux.pane_polls, 0, "self-pane launcher must not be mistaken for a launched engine");
         });
     }
@@ -1583,7 +1605,7 @@ mod wake_tests {
     fn wake_reused_non_shell_window_keeps_already_running_without_send() {
         wake_with_fixture(|_| {
             let session = wake_session_name("neo", &[]);
-            let mut tmux = wake_mock_tmux_with_existing_window(&session, "neo");
+            let mut tmux = wake_mock_tmux_with_existing_window(&session, "neo-oracle");
 
             let (code, stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("run");
 
@@ -1599,7 +1621,7 @@ mod wake_tests {
     fn wake_reused_unreadable_window_keeps_already_running_without_send() {
         wake_with_fixture(|_| {
             let session = wake_session_name("neo", &[]);
-            let mut tmux = wake_mock_tmux_with_existing_window(&session, "neo");
+            let mut tmux = wake_mock_tmux_with_existing_window(&session, "neo-oracle");
             tmux.pane_command_error = true;
 
             let (code, stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("run");
@@ -1665,18 +1687,19 @@ mod wake_tests {
             assert_eq!(first["created_by"], "maw wake");
             assert_eq!(first["auto_registered"], true);
             assert_eq!(first["windows"].as_array().expect("windows").len(), 1);
-            assert_eq!(first["windows"][0]["name"], "neo");
+            assert_eq!(first["windows"][0]["name"], "neo-oracle");
             assert_eq!(first["windows"][0]["repo"], "acme/neo-oracle");
-            assert_eq!(first["windows"][0]["kind"], "project");
+            assert_eq!(first["windows"][0]["kind"], "oracle");
 
             let (code, stdout) = wake_run(&wake_strings(&["neo", "--task", "issue-90", "--no-attach"]), &mut tmux).expect("task wake");
             assert_eq!(code, 0, "{stdout}");
             let updated: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).expect("updated registry")).expect("json");
             let windows = updated["windows"].as_array().expect("windows");
             assert_eq!(windows.len(), 2);
-            assert!(windows.iter().any(|window| window["name"] == "neo"));
+            assert!(windows.iter().any(|window| window["name"] == "neo-oracle"));
             assert!(windows.iter().any(|window| window["name"] == "neo-issue-90"));
-            assert!(windows.iter().all(|window| window["kind"] == "project"));
+            assert!(windows.iter().any(|window| window["name"] == "neo-oracle" && window["kind"] == "oracle"));
+            assert!(windows.iter().any(|window| window["name"] == "neo-issue-90" && window["kind"] == "project"));
             assert_eq!(updated["created_at"], "2026-07-03T02:03:04.000Z");
         });
     }

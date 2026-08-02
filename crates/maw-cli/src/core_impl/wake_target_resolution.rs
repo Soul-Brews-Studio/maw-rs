@@ -187,7 +187,8 @@ fn wake_primary_registry_window<'a>(entry: &'a NativeFleetEntry, stem: &str) -> 
         .session
         .windows
         .iter()
-        .find(|window| window.name == stem)
+        .find(|window| window.name == format!("{stem}-oracle"))
+        .or_else(|| entry.session.windows.iter().find(|window| window.name == stem))
         .or_else(|| entry.session.windows.first())
 }
 
@@ -533,7 +534,7 @@ fn wake_window_name(options: &WakeOptionsNative, oracle: &str, matched_window: O
         // `--wt`/`--task` asks for a derived window, not the one that was
         // matched -- oracle-derived naming applies regardless of a match.
         Some(task) => format!("{oracle}-{task}"),
-        None => matched_window.map_or_else(|| oracle.to_owned(), str::to_owned),
+        None => matched_window.map_or_else(|| format!("{}-oracle", oracle.to_lowercase()), str::to_owned),
     }
 }
 
