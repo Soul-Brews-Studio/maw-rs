@@ -79,9 +79,9 @@ fn wake_oracle(options: &WakeOptionsNative) -> Result<String, String> {
     // node the caller actually named (#711 fix 5 follow-up).
     let raw = if raw.matches(':').count() == 1 { raw.rsplit(':').next().unwrap_or(raw) } else { raw };
     let raw = raw.strip_suffix(".git").unwrap_or(raw);
-    let oracle = raw.strip_suffix("-oracle").unwrap_or(raw).trim();
-    wake_validate_slug(oracle, "oracle")?;
-    Ok(oracle.to_owned())
+    let oracle = wake_oracle_from_name(raw).unwrap_or_default();
+    wake_validate_slug(&oracle, "oracle")?;
+    Ok(oracle)
 }
 
 fn wake_typed_resolution(
@@ -446,18 +446,27 @@ fn wake_push_repo_candidate(
 }
 
 fn wake_repo_name_matches(name: &str, oracle: &str) -> bool {
-    name == oracle || name == format!("{oracle}-oracle") || name.trim_end_matches("-oracle") == oracle
+    wake_oracle_from_name(name).as_deref() == Some(&oracle.to_lowercase())
 }
 
 fn wake_oracle_from_repo_slug(repo: &str) -> Option<String> {
     let name = repo.rsplit('/').next()?.trim();
-    (!name.is_empty()).then(|| name.strip_suffix("-oracle").unwrap_or(name).to_owned())
+    wake_oracle_from_name(name)
 }
 
 fn wake_oracle_from_repo_path(path: &std::path::Path) -> Option<String> {
     path.file_name()
         .and_then(std::ffi::OsStr::to_str)
-        .and_then(|name| (!name.is_empty()).then(|| name.strip_suffix("-oracle").unwrap_or(name).to_owned()))
+        .and_then(wake_oracle_from_name)
+}
+
+fn wake_oracle_from_name(name: &str) -> Option<String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return None;
+    }
+    let lower = name.to_lowercase();
+    Some(lower.strip_suffix("-oracle").unwrap_or(&lower).to_owned())
 }
 
 fn wake_registry_missing_repo_message(name: &str, repo: &str, path: &std::path::Path) -> String {
@@ -534,7 +543,7 @@ fn wake_window_name(options: &WakeOptionsNative, oracle: &str, matched_window: O
         // `--wt`/`--task` asks for a derived window, not the one that was
         // matched -- oracle-derived naming applies regardless of a match.
         Some(task) => format!("{oracle}-{task}"),
-        None => matched_window.map_or_else(|| format!("{}-oracle", oracle.to_lowercase()), str::to_owned),
+        None => matched_window.map_or_else(|| format!("{oracle}-oracle"), str::to_owned),
     }
 }
 

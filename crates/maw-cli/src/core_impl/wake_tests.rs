@@ -812,6 +812,43 @@ mod wake_tests {
     }
 
     #[test]
+    fn wake_mixed_case_oracle_repo_uses_single_lowercase_oracle_suffix_window() {
+        wake_with_fixture(|root| {
+            let repo = root.join("ghq/github.com/acme/Colophon-Oracle");
+            std::fs::create_dir_all(&repo).expect("repo");
+            std::fs::write(
+                root.join("config/maw.config.50.json"),
+                r#"{"commands":{"colophon-oracle":"claude --dangerously-skip-permissions","default":"default-engine"}}"#,
+            )
+            .expect("config");
+
+            assert_eq!(wake_oracle_from_repo_path(&repo).as_deref(), Some("colophon"));
+            assert_eq!(wake_oracle_from_repo_slug("github.com/acme/Colophon-Oracle").as_deref(), Some("colophon"));
+            assert!(wake_repo_name_matches("Colophon-Oracle", "colophon"));
+
+            let mut tmux = WakeMockTmux::default();
+            let (code, stdout) = wake_run(&wake_strings(&["Colophon-Oracle", "--dry-run"]), &mut tmux).expect("run");
+
+            assert_eq!(code, 0, "{stdout}");
+            assert!(stdout.contains("would wake window 'colophon-oracle'"), "{stdout}");
+            assert!(stdout.contains("command: MAW_SESSION_WINDOW=colophon-oracle claude --dangerously-skip-permissions"), "{stdout}");
+            assert!(!stdout.contains("colophon-oracle-oracle"), "{stdout}");
+            assert!(!stdout.contains("default-engine"), "{stdout}");
+            assert!(tmux.actions.is_empty());
+        });
+    }
+
+    #[test]
+    fn wake_lowercase_oracle_name_stays_unchanged_after_case_normalization() {
+        let options = wake_parse_args(&wake_strings(&["lucifer"])).expect("parse");
+
+        assert_eq!(wake_oracle(&options).as_deref(), Ok("lucifer"));
+        assert_eq!(wake_oracle_from_repo_slug("github.com/arnon2020/lucifer-oracle").as_deref(), Some("lucifer"));
+        assert!(wake_repo_name_matches("lucifer-oracle", "lucifer"));
+        assert_eq!(wake_window_name(&options, "lucifer", None), "lucifer-oracle");
+    }
+
+    #[test]
     fn wake_reuses_workon_github_url_resolver_without_double_prefix_or_peer_route() {
         wake_with_fixture(|root| {
             let repo = root.join("ghq/github.com/Soul-Brews-Studio/maw-fleetpad");
