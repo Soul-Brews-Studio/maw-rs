@@ -51,6 +51,7 @@ fn run_config(root: &Path, args: &[&str]) -> Output {
     let fake_bin = fake_maw_path(root);
     Command::new(bin())
         .args(args)
+        .current_dir(root)
         .env_clear()
         .env("PATH", fake_bin)
         .env("HOME", root.join("home"))
