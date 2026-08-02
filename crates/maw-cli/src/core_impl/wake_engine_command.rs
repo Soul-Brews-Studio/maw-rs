@@ -79,6 +79,11 @@ fn wake_resolve_command_from_config(
     if let Some(command) = wake_config_command(config, window_name) {
         return WakeCommandResolution { key: window_name.to_owned(), command };
     }
+    if let Some(key) = wake_oracle_command_key(window_name) {
+        if let Some(command) = wake_config_command(config, &key) {
+            return WakeCommandResolution { key, command };
+        }
+    }
     if let Some((key, command)) = wake_config_glob_command(config, window_name) {
         return WakeCommandResolution { key, command };
     }
@@ -90,6 +95,10 @@ fn wake_resolve_command_from_config(
         return WakeCommandResolution { key: "default".to_owned(), command };
     }
     WakeCommandResolution { key: builtin.to_owned(), command: builtin.to_owned() }
+}
+
+fn wake_oracle_command_key(window_name: &str) -> Option<String> {
+    wake_oracle_from_name(window_name).map(|oracle| format!("{oracle}-oracle"))
 }
 
 fn wake_config_glob_command(config: &serde_json::Value, name: &str) -> Option<(String, String)> {
