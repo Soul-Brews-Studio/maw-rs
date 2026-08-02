@@ -760,21 +760,8 @@ fn workon_list_sessions<R: maw_tmux::TmuxRunner>(runner: &mut R) -> Vec<String> 
 
 fn workon_build_command_in_dir(agent_name: &str, cwd: &std::path::Path, engine: Option<&str>) -> String {
     let config = merged_config_value_in_dir(cwd);
-    let commands = config.get("commands");
-    let command = if let Some(engine) = engine {
-        commands
-            .and_then(|commands| commands.get(engine))
-            .and_then(serde_json::Value::as_str)
-            .map_or_else(|| engine.to_owned(), str::to_owned)
-    } else {
-        commands
-            .and_then(|commands| {
-                commands.get(agent_name).and_then(serde_json::Value::as_str)
-                    .or_else(|| commands.get("default").and_then(serde_json::Value::as_str))
-            })
-            .map_or_else(|| "claude".to_owned(), str::to_owned)
-    };
-    workon_prefix_zai_pool(&config, command)
+    let resolution = wake_resolve_command_from_config(&config, agent_name, engine, None, "claude");
+    workon_prefix_zai_pool(&config, resolution.command)
 }
 
 /// Fleet token-pool spawn wiring (#293): when merged config names a fleet
@@ -1244,15 +1231,16 @@ mod workon_tests {
         std::fs::create_dir_all(root.join("config")).expect("config dir");
         std::fs::write(
             root.join("config/maw.config.50.json"),
-            r#"{"commands":{"omx":"CODEX_HOME=$PWD/.codex omx --direct","default":"claude --continue"}}"#,
+            r#"{"commands":{"agent*":"glob-agent","omx":"CODEX_HOME=$PWD/.codex omx --direct","default":"claude --continue"}}"#,
         )
         .expect("config");
 
         assert!(!root.join("config/maw.config.json").exists());
         assert_eq!(workon_build_command_in_dir("omx", &root, None), "CODEX_HOME=$PWD/.codex omx --direct");
+        assert_eq!(workon_build_command_in_dir("agent-1", &root, Some("codex")), "glob-agent");
         assert_eq!(workon_build_command_in_dir("unknown", &root, None), "claude --continue");
         assert_eq!(workon_build_command_in_dir("unknown", &root, Some("omx")), "CODEX_HOME=$PWD/.codex omx --direct");
-        assert_eq!(workon_build_command_in_dir("unknown", &root, Some("codex")), "codex");
+        assert_eq!(workon_build_command_in_dir("unknown", &root, Some("codex")), "claude --continue");
         let _ = std::fs::remove_dir_all(root);
     }
 }
