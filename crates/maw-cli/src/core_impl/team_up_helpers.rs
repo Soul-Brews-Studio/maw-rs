@@ -300,8 +300,8 @@ mod team_up_helpers_tests124 {
 
     #[test]
     fn team_t3_panes_falls_back_to_real_tmux_query_when_fake_env_is_absent() {
-        let _guard = env_test_lock();
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let _guard = env_test_lock();
         let seq = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!("maw-rs-team-up-helpers-{}-{seq}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);

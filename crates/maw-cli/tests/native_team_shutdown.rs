@@ -160,8 +160,14 @@ fn team_shutdown_no_force_keeps_state_when_members_survive() {
         "wait\tfake-no-real-30s\n",
         "fake clock should avoid real 30s and no kill without --force"
     );
-    assert!(root.join("home/.claude/teams/alpha").exists(), "leftovers kept when members survive");
-    assert!(root.join("maw-home/teams/alpha").exists(), "leftovers kept when members survive");
+    assert!(
+        root.join("home/.claude/teams/alpha").exists(),
+        "leftovers kept when members survive"
+    );
+    assert!(
+        root.join("maw-home/teams/alpha").exists(),
+        "leftovers kept when members survive"
+    );
 }
 
 #[test]

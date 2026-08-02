@@ -1,0 +1,235 @@
+use super::ServecoreModuleRegistration;
+use crate::serve_core::{ServecoreLifecycleModule, ServecoreSharedState};
+use axum::{
+    body::{to_bytes, Body},
+    extract::ConnectInfo,
+    http::{Request, StatusCode},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
+    routing::post,
+    Extension, Json, Router,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::{
+    net::SocketAddr,
+    sync::{Arc, LazyLock, Mutex},
+    time::{Duration, Instant},
+};
+type PeopleDedupeEntries = Vec<((String, String), Instant)>;
+static PEOPLE_DEDUPE: LazyLock<Mutex<PeopleDedupeEntries>> =
+    LazyLock::new(|| Mutex::new(Vec::new()));
+#[must_use]
+pub fn people_lifecycle_module() -> ServecoreLifecycleModule {
+    ServecoreLifecycleModule {
+        name: "people".to_owned(),
+        weight: 52,
+    }
+}
+#[must_use]
+pub fn people_registration<S>() -> ServecoreModuleRegistration<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    ServecoreModuleRegistration {
+        lifecycle: people_lifecycle_module(),
+        mount: people_mount,
+    }
+}
+pub fn people_mount<S>(router: Router<S>) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    router
+        .route("/api/people/analyze", post(people_analyze))
+        .layer(middleware::from_fn(people_loopback_layer))
+}
+async fn people_loopback_layer(req: Request<Body>, next: Next) -> Response {
+    if req.uri().path() != "/api/people/analyze" {
+        return next.run(req).await;
+    }
+    let allowed = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .is_some_and(|ConnectInfo(addr)| addr.ip().is_loopback());
+    if allowed {
+        return next.run(req).await;
+    }
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({"error":"forbidden","reason":"loopback only"})),
+    )
+        .into_response()
+}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PeopleAnalyzeRequest {
+    intent: String,
+    thread_id: String,
+    oracle: String,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+struct PeopleIntent {
+    thread_id: String,
+    oracle: String,
+    target: String,
+}
+async fn people_analyze(
+    Extension(state): Extension<Arc<ServecoreSharedState>>,
+    req: Request<Body>,
+) -> Response {
+    let Ok(body) = to_bytes(req.into_body(), 16 * 1024).await else {
+        return people_bad_request("body too large");
+    };
+    let payload = match serde_json::from_slice::<PeopleAnalyzeRequest>(&body) {
+        Ok(payload) => payload,
+        Err(error) => return people_bad_request(&format!("body must match contract: {error}")),
+    };
+    let intent = match people_intent_from_request(&state, payload) {
+        Ok(intent) => intent,
+        Err(error) => return people_bad_request(&error),
+    };
+    if !people_dedupe_accept(&intent) {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({"ok":false,"error":"duplicate","reason":"duplicate request within dedupe window"})),
+        )
+            .into_response();
+    }
+    Json(json!({"ok":true,"status":"accepted","intent":intent})).into_response()
+}
+
+fn people_intent_from_request(
+    state: &ServecoreSharedState,
+    request: PeopleAnalyzeRequest,
+) -> Result<PeopleIntent, String> {
+    if request.intent != "analyze_thread" {
+        return Err("intent must equal analyze_thread".to_owned());
+    }
+    if request.thread_id.is_empty() || !request.thread_id.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err("thread_id must be ASCII digits only".to_owned());
+    }
+    Ok(PeopleIntent {
+        target: people_resolve_oracle(state, &request.oracle)?,
+        thread_id: request.thread_id,
+        oracle: request.oracle,
+    })
+}
+fn people_resolve_oracle(state: &ServecoreSharedState, oracle: &str) -> Result<String, String> {
+    let needle = people_normalize_oracle(oracle);
+    state
+        .servecore_agents_panes()
+        .into_iter()
+        .find(|pane| {
+            pane.target.to_ascii_lowercase().contains("oracle")
+                && people_normalize_oracle(&pane.target) == needle
+        })
+        .map(|pane| pane.target)
+        .ok_or_else(|| format!("oracle '{oracle}' is not live"))
+}
+
+fn people_normalize_oracle(value: &str) -> String {
+    let value = value.trim();
+    let value = value.split_once(':').map_or(value, |(_, rest)| {
+        rest.rsplit_once('.').map_or(rest, |(window, _)| window)
+    });
+    let value = value.to_ascii_lowercase();
+    let value = value.strip_suffix("-oracle").unwrap_or(&value);
+    value
+        .split_once('-')
+        .filter(|(prefix, suffix)| {
+            !suffix.is_empty() && prefix.bytes().all(|byte| byte.is_ascii_digit())
+        })
+        .map_or_else(|| value.to_owned(), |(_, suffix)| suffix.to_owned())
+}
+
+fn people_dedupe_accept(intent: &PeopleIntent) -> bool {
+    let now = Instant::now();
+    let mut guard = PEOPLE_DEDUPE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    guard.retain(|(_, seen)| now.duration_since(*seen) < Duration::from_secs(5));
+    let key = (intent.thread_id.clone(), intent.oracle.clone());
+    if guard.iter().any(|(seen, _)| seen == &key) {
+        return false;
+    }
+    guard.push((key, now));
+    true
+}
+
+fn people_bad_request(reason: &str) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({"ok":false,"error":"bad_request","reason":reason})),
+    )
+        .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::serve_core::{servecore_with_shared_state, ServecoreAgentPane};
+    use tower::ServiceExt;
+
+    fn req(intent: &str, thread_id: &str, oracle: &str) -> PeopleAnalyzeRequest {
+        PeopleAnalyzeRequest {
+            intent: intent.to_owned(),
+            thread_id: thread_id.to_owned(),
+            oracle: oracle.to_owned(),
+        }
+    }
+
+    fn state() -> ServecoreSharedState {
+        ServecoreSharedState::default().servecore_with_agents_snapshot(vec![ServecoreAgentPane {
+            id: "%7".to_owned(),
+            command: "2.1.219".to_owned(),
+            target: "17-people:people-oracle.0".to_owned(),
+            title: "people-oracle".to_owned(),
+            cwd: None,
+            pid: Some(7),
+            last_activity: None,
+        }])
+    }
+
+    #[test]
+    fn people_contract_validation_dedupe_and_typed_intent() {
+        let state = state();
+        assert!(serde_json::from_str::<PeopleAnalyzeRequest>(
+            r#"{"intent":"analyze_thread","thread_id":"1","oracle":"people","extra":true}"#,
+        )
+        .is_err());
+        assert_eq!(
+            people_intent_from_request(&state, req("talk", "1", "people")).unwrap_err(),
+            "intent must equal analyze_thread"
+        );
+        assert_eq!(
+            people_intent_from_request(&state, req("analyze_thread", "1x", "people")).unwrap_err(),
+            "thread_id must be ASCII digits only"
+        );
+        let err =
+            people_intent_from_request(&state, req("analyze_thread", "1", "missing")).unwrap_err();
+        assert!(err.contains("is not live"));
+        let dupe = people_intent_from_request(&state, req("analyze_thread", "765", "people"))
+            .expect("intent");
+        assert!(people_dedupe_accept(&dupe) && !people_dedupe_accept(&dupe));
+        let intent = people_intent_from_request(&state, req("analyze_thread", "123", "people"))
+            .expect("intent");
+        assert_eq!(intent.thread_id, "123");
+        assert_eq!(intent.oracle, "people");
+        assert_eq!(intent.target, "17-people:people-oracle.0");
+    }
+
+    #[tokio::test]
+    async fn people_analyze_rejects_non_loopback_origin() {
+        let app = servecore_with_shared_state(people_mount(Router::new()), state());
+        let mut req = Request::post("/api/people/analyze")
+            .body(Body::empty())
+            .expect("request");
+        req.extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([198, 51, 100, 10], 49_152))));
+        let response = app.oneshot(req).await.expect("response");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+}
