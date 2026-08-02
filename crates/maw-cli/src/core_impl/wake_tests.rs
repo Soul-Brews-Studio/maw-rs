@@ -308,6 +308,51 @@ mod wake_tests {
     }
 
     #[test]
+    fn wake_command_resolution_matches_per_agent_exact_glob_and_fallback_precedence() {
+        wake_with_fixture(|root| {
+            let dir = active_config_dir();
+            std::fs::create_dir_all(&dir).expect("config dir");
+            let write_config = |json: &str| std::fs::write(dir.join("maw.config.50.json"), json).expect("write config");
+            let resolved = |window: &str, argv: &[&str]| {
+                let options = wake_parse_args(&wake_strings(argv)).expect("parse wake args");
+                wake_command(window, root, &options).0
+            };
+
+            write_config(
+                r#"{"commands":{"beacon*":"glob-haiku","beacon-oracle":"exact-haiku","default":"default-sonnet"}}"#,
+            );
+            assert_eq!(
+                resolved("beacon-oracle", &["beacon-oracle"]),
+                "MAW_SESSION_WINDOW=beacon-oracle exact-haiku"
+            );
+
+            write_config(r#"{"commands":{"researcher*":"glob-haiku","default":"default-sonnet"}}"#);
+            assert_eq!(resolved("researcher", &["researcher"]), "MAW_SESSION_WINDOW=researcher glob-haiku");
+            assert_eq!(
+                resolved("researcher", &["researcher", "-e", "claude"]),
+                "MAW_SESSION_WINDOW=researcher glob-haiku"
+            );
+
+            write_config(r#"{"commands":{"default":"default-sonnet"}}"#);
+            assert_eq!(resolved("unknown", &["unknown"]), "MAW_SESSION_WINDOW=unknown default-sonnet");
+
+            write_config(
+                r#"{"commands":{"beacon-oracle":"name-haiku","omx":"engine-haiku","default":"default-sonnet"}}"#,
+            );
+            assert_eq!(
+                resolved("beacon-oracle", &["beacon-oracle", "-e", "omx"]),
+                "MAW_SESSION_WINDOW=beacon-oracle engine-haiku"
+            );
+
+            write_config(
+                r#"{"commands":{"beacon-oracle":"name-haiku","omx":"wake-engine-haiku","default":"default-sonnet"},"wake":{"engine":"omx"}}"#,
+            );
+            assert_eq!(resolved("beacon-oracle", &["beacon-oracle"]), "MAW_SESSION_WINDOW=beacon-oracle name-haiku");
+            assert_eq!(resolved("unknown", &["unknown"]), "MAW_SESSION_WINDOW=unknown wake-engine-haiku");
+        });
+    }
+
+    #[test]
     fn wake_fresh_default_uses_config_default_and_resume_follows_the_resolved_engine() {
         wake_with_fixture(|_| {
             let dir = active_config_dir();
@@ -324,7 +369,7 @@ mod wake_tests {
             let mut tmux = WakeMockTmux::default();
             let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach", "-e", "codex"]), &mut tmux).expect("explicit");
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
-            assert!(send.ends_with("MAW_SESSION_WINDOW=neo codex"), "{send}");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo claude"), "{send}");
 
             // --resume no longer hijacks the engine to codex (#615): the
             // repo's commands.default engine resumes with its own form.
@@ -371,7 +416,7 @@ mod wake_tests {
             // appended after the flags.
             std::fs::write(
                 repo.join(".maw/maw.config.40.json"),
-                r#"{"commands":{"codex":"codex --search --dangerously-bypass-approvals-and-sandbox"},"wake":{"resume":true}}"#,
+                r#"{"commands":{"codex":"codex --search --dangerously-bypass-approvals-and-sandbox"},"wake":{"engine":"codex","resume":true}}"#,
             )
             .expect("repo config codex");
             let mut tmux = WakeMockTmux::default();
@@ -467,7 +512,7 @@ mod wake_tests {
             std::fs::create_dir_all(repo.join(".maw")).expect("repo .maw");
             std::fs::write(
                 repo.join(".maw/maw.config.40.json"),
-                r#"{"commands":{"omx-1":"OMX_POOL=1 omx --direct"},"wake":{"engine":"omx-1","channels":true,"prompt":"read AGENTS.md first"}}"#,
+                r#"{"commands":{"codex":"codex","omx-1":"OMX_POOL=1 omx --direct"},"wake":{"engine":"omx-1","channels":true,"prompt":"read AGENTS.md first"}}"#,
             )
             .expect("repo config");
 
@@ -483,9 +528,10 @@ mod wake_tests {
             assert!(stdout.contains("warning:"), "{stdout}");
             assert!(stdout.contains("commands.omx-1-channels"), "{stdout}");
 
-            // Explicit CLI flags beat the config defaults (`--channels` has no
-            // negative flag, so the config value still applies there) — codex
-            // is not claude-family either, so no claude flag.
+            // Explicit CLI flags beat the config defaults when they name a
+            // configured command (`--channels` has no negative flag, so the
+            // config value still applies there) — codex is not claude-family
+            // either, so no claude flag.
             let mut tmux = WakeMockTmux::default();
             let (code, _stdout) = wake_run(
                 &wake_strings(&["neo", "--no-attach", "-e", "codex", "--prompt", "hi"]),
@@ -741,6 +787,7 @@ mod wake_tests {
             let (code, stdout) = wake_run(&args, &mut tmux).expect("run");
             assert_eq!(code, 0);
             assert!(stdout.contains("Soul-Brews-Studio/maw-fleetpad"), "{stdout}");
+            assert!(stdout.contains("command: MAW_SESSION_WINDOW=maw-fleetpad codex"), "{stdout}");
             assert!(!stdout.contains("github.com/github.com"), "{stdout}");
             assert!(tmux.actions.is_empty());
         });

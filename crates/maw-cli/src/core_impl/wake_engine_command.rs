@@ -6,13 +6,14 @@
 // appended. This works out the final string, and what to warn about when the
 // shape is one it cannot fully verify.
 
-/// Resolve an engine alias through merged maw config `commands` (matches
-/// `workon` + maw-js): custom engines like `omx-1` expand to their full shell
-/// command; real binaries (codex/claude) fall through to the literal name.
-/// Fixes the fleet codex-team recipe (omx-N) that previously ran a bare `omx-1`.
-/// Config is resolved dir-aware against the resolved repo path (like `workon`),
-/// so committed `.maw/maw.config.<NN>.json` layers apply regardless of the
-/// invoking shell's cwd (#600).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WakeCommandResolution {
+    key: String,
+    command: String,
+}
+
+/// Resolve an engine alias through merged maw config `commands`.
+#[cfg(test)]
 fn wake_resolve_engine_command(engine: &str, cwd: &std::path::Path) -> String {
     let config = merged_config_value_in_dir(cwd);
     let command = config
@@ -25,28 +26,6 @@ fn wake_resolve_engine_command(engine: &str, cwd: &std::path::Path) -> String {
         })
         .unwrap_or_else(|| engine.to_owned());
     workon_prefix_zai_pool(&config, command)
-}
-
-fn wake_default_engine(options: &WakeOptionsNative, cwd: &std::path::Path) -> String {
-    if let Some(engine) = &options.engine {
-        return engine.clone();
-    }
-    let config = merged_config_value_in_dir(cwd);
-    let defaults = wake_config_defaults(&config);
-    // Resume no longer pins codex (#615): `--resume`/`wake.resume` resume the
-    // engine that resolution below picks (wake.engine → commands.default →
-    // built-in codex), so a repo committed to claude resumes claude. A bare
-    // `maw wake X --resume` with no engine config still lands on codex via
-    // the final fallback, preserving the historical behavior where it mattered.
-    if let Some(engine) = defaults.engine {
-        return engine;
-    }
-    config
-        .get("commands")
-        .and_then(|commands| commands.get("default"))
-        .and_then(serde_json::Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .map_or_else(|| "codex".to_owned(), |_| "default".to_owned())
 }
 
 /// Committed wake-defaults block — the `wake` object in merged config:
@@ -85,6 +64,55 @@ fn wake_config_defaults(config: &serde_json::Value) -> WakeConfigDefaults {
     }
 }
 
+fn wake_resolve_command_from_config(
+    config: &serde_json::Value,
+    window_name: &str,
+    engine: Option<&str>,
+    wake_engine: Option<&str>,
+    builtin: &str,
+) -> WakeCommandResolution {
+    if let Some(engine) = engine {
+        if let Some(command) = wake_config_command(config, engine) {
+            return WakeCommandResolution { key: engine.to_owned(), command };
+        }
+    }
+    if let Some(command) = wake_config_command(config, window_name) {
+        return WakeCommandResolution { key: window_name.to_owned(), command };
+    }
+    if let Some((key, command)) = wake_config_glob_command(config, window_name) {
+        return WakeCommandResolution { key, command };
+    }
+    if let Some(engine) = wake_engine {
+        let command = wake_config_command(config, engine).unwrap_or_else(|| engine.to_owned());
+        return WakeCommandResolution { key: engine.to_owned(), command };
+    }
+    if let Some(command) = wake_config_command(config, "default") {
+        return WakeCommandResolution { key: "default".to_owned(), command };
+    }
+    WakeCommandResolution { key: builtin.to_owned(), command: builtin.to_owned() }
+}
+
+fn wake_config_glob_command(config: &serde_json::Value, name: &str) -> Option<(String, String)> {
+    config.get("commands").and_then(serde_json::Value::as_object).and_then(|commands| {
+        commands.iter().find_map(|(pattern, value)| {
+            if pattern == "default" || pattern == name || !wake_match_command_glob(pattern, name) {
+                return None;
+            }
+            value
+                .as_str()
+                .map(str::trim)
+                .filter(|command| !command.is_empty())
+                .map(|command| (pattern.to_owned(), command.to_owned()))
+        })
+    })
+}
+
+fn wake_match_command_glob(pattern: &str, name: &str) -> bool {
+    pattern == name
+        || pattern.strip_prefix('*').is_some_and(|suffix| name.ends_with(suffix))
+        || pattern.strip_suffix('*').is_some_and(|prefix| name.starts_with(prefix))
+}
+
 /// Build the in-pane launch line: `MAW_SESSION_WINDOW=<window> <engine>` —
 /// work-parity (#601), bare engine and NOT `exec`, so the shell survives
 /// engine exit.
@@ -100,7 +128,14 @@ fn wake_config_defaults(config: &serde_json::Value) -> WakeConfigDefaults {
 fn wake_command(window: &str, cwd: &std::path::Path, options: &WakeOptionsNative) -> (String, Vec<String>) {
     let config = merged_config_value_in_dir(cwd);
     let defaults = wake_config_defaults(&config);
-    let engine = wake_default_engine(options, cwd);
+    let resolution = wake_resolve_command_from_config(
+        &config,
+        window,
+        options.engine.as_deref(),
+        defaults.engine.as_deref(),
+        "codex",
+    );
+    let engine = resolution.key;
     // Wake-defaults precedence: explicit CLI flag > repo-layer config > user
     // config > built-in. `resume`/`channels` are presence-false CLI booleans —
     // `false` means "flag not passed", so a config default fills in only then
@@ -109,7 +144,7 @@ fn wake_command(window: &str, cwd: &std::path::Path, options: &WakeOptionsNative
     let resume = options.resume || (defaults.resume && !options.fresh);
     let channels = options.channels || defaults.channels;
     let mut warnings = Vec::new();
-    let mut engine_command = wake_engine_launch_command(&engine, cwd, &config, resume, &mut warnings);
+    let mut engine_command = wake_engine_launch_command(&engine, resolution.command, &config, resume, &mut warnings);
     if channels { wake_apply_channels(&mut engine_command, &engine, &config, resume, &mut warnings); }
     if let Some(prompt) = options.prompt.as_deref().or(defaults.prompt.as_deref()) { let _ = write!(engine_command, " {}", wake_shell_quote(prompt)); }
     (format!("MAW_SESSION_WINDOW={} {engine_command}", wake_shell_quote(window)), warnings)
@@ -126,7 +161,7 @@ fn wake_command(window: &str, cwd: &std::path::Path, options: &WakeOptionsNative
 ///    so it is no longer silent.
 fn wake_engine_launch_command(
     engine: &str,
-    cwd: &std::path::Path,
+    command: String,
     config: &serde_json::Value,
     resume: bool,
     warnings: &mut Vec<String>,
@@ -136,7 +171,7 @@ fn wake_engine_launch_command(
             return workon_prefix_zai_pool(config, command);
         }
     }
-    let command = wake_resolve_engine_command(engine, cwd);
+    let command = workon_prefix_zai_pool(config, command);
     if !resume {
         return command;
     }

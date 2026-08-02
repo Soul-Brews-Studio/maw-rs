@@ -537,6 +537,7 @@ fn wake_render_dry_run(options: &WakeOptionsNative, resolved: &WakeResolvedNativ
     let _ = writeln!(out, "\x1b[36m→\x1b[0m found \x1b[1m{}\x1b[0m ({})", resolved.oracle, resolved.repo_path.display());
     out.push_str("\x1b[90mdry-run — no tmux sessions/windows will be changed\x1b[0m\n");
     let _ = writeln!(out, "\x1b[32m+\x1b[0m would wake window '{}' in session '{}'", resolved.window, resolved.session);
+    let _ = writeln!(out, "  command: {}", resolved.command);
     if options.task.is_some() || options.wt.is_some() {
         let _ = writeln!(out, "\x1b[33m⚡\x1b[0m would wake worktree/task: {}", options.wt.as_deref().or(options.task.as_deref()).unwrap_or_default());
     }
@@ -743,4 +744,3 @@ fn wake_registry_windows(
     }
     windows
 }
-
