@@ -15,6 +15,7 @@ const AGENTSTATUS_POLL_INTERVAL_MAX_MS: u64 = 30_000;
 const AGENTSTATUS_READY_MS: u64 = 15_000;
 const AGENTSTATUS_BUSY_HEARTBEAT_MS: u64 = 30_000;
 const AGENTSTATUS_REAL_FEED_TTL_MS: u64 = 60_000;
+const AGENTSTATUS_FEED_HISTORY_MAX_AGE_MS: u64 = 60_000;
 const AGENTSTATUS_REAL_FEED_PRUNE_MS: u64 = 3_600_000;
 const AGENTSTATUS_FEED_CAP: usize = 100;
 
@@ -258,6 +259,10 @@ pub(crate) fn agentstatus_poll_global(sessions: &[AgentStatusSession]) -> AgentS
 
 pub(crate) fn agentstatus_feed_history_and_cursor() -> (Vec<AgentStatusFeedEvent>, u64) {
     let now_ms = agentstatus_now_millis();
+    agentstatus_feed_history_and_cursor_at(now_ms)
+}
+
+fn agentstatus_feed_history_and_cursor_at(now_ms: u64) -> (Vec<AgentStatusFeedEvent>, u64) {
     let lock = AGENTSTATUS_GLOBAL.get_or_init(|| Mutex::new(AgentStatusGlobal::default()));
     let global = lock
         .lock()
@@ -265,7 +270,7 @@ pub(crate) fn agentstatus_feed_history_and_cursor() -> (Vec<AgentStatusFeedEvent
     (
         global
             .feed
-            .agentstatus_history_since(now_ms, AGENTSTATUS_REAL_FEED_TTL_MS),
+            .agentstatus_history_since(now_ms, AGENTSTATUS_FEED_HISTORY_MAX_AGE_MS),
         global.feed.agentstatus_cursor(),
     )
 }
@@ -324,7 +329,7 @@ pub(crate) fn agentstatus_is_agent_command(cmd: &str, configured_bins: &[String]
     configured_bins.iter().any(|bin| {
         bin.split_whitespace()
             .next()
-            .is_some_and(|first| lower == first.to_ascii_lowercase())
+            .is_some_and(|first| first != "default" && lower == first.to_ascii_lowercase())
     })
 }
 
@@ -477,9 +482,8 @@ fn agentstatus_configured_bins() -> Vec<String> {
         .and_then(Value::as_object)
         .map(|commands| {
             commands
-                .iter()
-                .filter(|(key, _value)| key.as_str() != "default")
-                .filter_map(|(_key, value)| value.as_str().map(str::to_owned))
+                .values()
+                .filter_map(|value| value.as_str().map(str::to_owned))
                 .collect()
         })
         .unwrap_or_default()
@@ -744,6 +748,15 @@ mod tests {
     }
 
     #[test]
+    fn agentstatus_is_agent_command_uses_first_word_from_config_values() {
+        let configured = vec!["gemini --foo".to_owned(), "default --bar".to_owned()];
+
+        assert!(agentstatus_is_agent_command("gemini", &configured));
+        assert!(!agentstatus_is_agent_command("geminix", &configured));
+        assert!(!agentstatus_is_agent_command("default", &configured));
+    }
+
+    #[test]
     fn agentstatus_crashed_requires_a_previous_agent_run() {
         let sessions = vec![agentstatus_test_session(
             "142-athena",
@@ -815,24 +828,39 @@ mod tests {
 
     #[test]
     fn agentstatus_feed_history_drops_entries_older_than_sixty_seconds() {
-        let mut ring = AgentStatusFeedRing::default();
-        ring.agentstatus_push(agentstatus_feed_event(
-            "athena-oracle",
+        agentstatus_reset_global();
+        let lock = AGENTSTATUS_GLOBAL.get_or_init(|| Mutex::new(AgentStatusGlobal::default()));
+        let mut global = lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        global.feed.agentstatus_push(agentstatus_feed_event(
+            "just-outside",
             "142-athena",
             AgentStatusKind::Busy,
-            1_000,
+            59_999,
         ));
-        ring.agentstatus_push(agentstatus_feed_event(
-            "athena-oracle",
+        global.feed.agentstatus_push(agentstatus_feed_event(
+            "on-boundary",
             "142-athena",
             AgentStatusKind::Ready,
-            62_000,
+            60_000,
         ));
+        global.feed.agentstatus_push(agentstatus_feed_event(
+            "just-inside",
+            "142-athena",
+            AgentStatusKind::Crashed,
+            60_001,
+        ));
+        drop(global);
 
-        let history = ring.agentstatus_history_since(62_000, AGENTSTATUS_REAL_FEED_TTL_MS);
+        // Feed history keeps events whose age is <= 60_000 ms.
+        let (history, _cursor) = agentstatus_feed_history_and_cursor_at(120_000);
 
-        assert_eq!(history.len(), 1);
-        assert_eq!(history[0].event, "Stop");
+        let oracles = history
+            .into_iter()
+            .map(|event| event.oracle)
+            .collect::<Vec<_>>();
+        assert_eq!(oracles, vec!["on-boundary", "just-inside"]);
     }
 
     #[test]
@@ -852,7 +880,7 @@ mod tests {
             .captures
             .insert("142-athena:1".to_owned(), "working".to_owned());
 
-        detector.agentstatus_detect(&sessions, &mut source, &[], 2_000, &mut feed);
+        detector.agentstatus_detect(&sessions, &mut source, &[], 60_999, &mut feed);
 
         assert!(feed.agentstatus_history().is_empty());
     }
