@@ -428,6 +428,28 @@ fn send_local_message(
     send_local_message_with_audit(command, tmux, target, target, text, config, sender_oracle, from, &[])
 }
 
+/// Delivers the typed people-analysis intent through the same local pane
+/// messaging primitive used by `maw hey`.
+pub(crate) fn deliver_people_analyze_intent(target: &str, text: &str) -> Result<(), String> {
+    let config = load_hey_config();
+    let sender_oracle = resolve_hey_sender_oracle_for_from(&config, None);
+    let mut tmux = TmuxClient::local();
+    let output = send_local_message(
+        "people-analyze",
+        &mut tmux,
+        target,
+        text,
+        &config,
+        &sender_oracle,
+        None,
+    );
+    if output.code == 0 {
+        Ok(())
+    } else {
+        Err(output.stderr.trim().to_owned())
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn send_local_message_with_audit(
     command: &str,
@@ -713,7 +735,6 @@ fn send_record_success(
         sink.record(&record);
     }
 }
-
 
 
 

@@ -79,6 +79,14 @@ async fn people_analyze(
     Extension(state): Extension<Arc<ServecoreSharedState>>,
     req: Request<Body>,
 ) -> Response {
+    people_analyze_with_delivery(state, req, crate::deliver_people_analyze_intent).await
+}
+
+async fn people_analyze_with_delivery(
+    state: Arc<ServecoreSharedState>,
+    req: Request<Body>,
+    deliver: impl FnOnce(&str, &str) -> Result<(), String>,
+) -> Response {
     let Ok(body) = to_bytes(req.into_body(), 16 * 1024).await else {
         return people_bad_request("body too large");
     };
@@ -97,7 +105,42 @@ async fn people_analyze(
         )
             .into_response();
     }
+    if let Err(error) = people_deliver(&intent, deliver) {
+        return people_delivery_failed(&error);
+    }
     Json(json!({"ok":true,"status":"accepted","intent":intent})).into_response()
+}
+
+const PEOPLE_ANALYZE_TEMPLATE: &str =
+    "analyze thread {thread_id}: run People core conversation-scoped analysis";
+
+fn people_delivery_text(thread_id: &str) -> String {
+    PEOPLE_ANALYZE_TEMPLATE.replace("{thread_id}", thread_id)
+}
+
+fn people_deliver(
+    intent: &PeopleIntent,
+    deliver: impl FnOnce(&str, &str) -> Result<(), String>,
+) -> Result<(), String> {
+    let result = deliver(&intent.target, &people_delivery_text(&intent.thread_id));
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs());
+    eprintln!(
+        "people_analyze_delivery thread_id={} target={} timestamp={timestamp} outcome={}",
+        intent.thread_id,
+        intent.target,
+        if result.is_ok() { "success" } else { "failure" },
+    );
+    result
+}
+
+fn people_delivery_failed(reason: &str) -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({"ok":false,"error":"delivery_failed","reason":reason})),
+    )
+        .into_response()
 }
 
 fn people_intent_from_request(
@@ -171,6 +214,7 @@ fn people_bad_request(reason: &str) -> Response {
 mod tests {
     use super::*;
     use crate::serve_core::{servecore_with_shared_state, ServecoreAgentPane};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use tower::ServiceExt;
 
     fn req(intent: &str, thread_id: &str, oracle: &str) -> PeopleAnalyzeRequest {
@@ -191,6 +235,20 @@ mod tests {
             pid: Some(7),
             last_activity: None,
         }])
+    }
+
+    fn analyze_request(thread_id: &str, oracle: &str) -> Request<Body> {
+        Request::post("/api/people/analyze")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({"intent":"analyze_thread","thread_id":thread_id,"oracle":oracle})
+                    .to_string(),
+            ))
+            .expect("request")
+    }
+
+    fn reset_dedupe() {
+        PEOPLE_DEDUPE.lock().expect("dedupe lock").clear();
     }
 
     #[test]
@@ -231,5 +289,86 @@ mod tests {
             .insert(ConnectInfo(SocketAddr::from(([198, 51, 100, 10], 49_152))));
         let response = app.oneshot(req).await.expect("response");
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn people_analyze_delivers_one_fixed_intent_to_resolved_target() {
+        reset_dedupe();
+        let delivered = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&delivered);
+        let response = people_analyze_with_delivery(
+            Arc::new(state()),
+            analyze_request("768", "people"),
+            move |target, text| {
+                captured
+                    .lock()
+                    .expect("delivery lock")
+                    .push((target.to_owned(), text.to_owned()));
+                Ok(())
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            *delivered.lock().expect("delivery lock"),
+            vec![(
+                "17-people:people-oracle.0".to_owned(),
+                "analyze thread 768: run People core conversation-scoped analysis".to_owned(),
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn people_analyze_dedupe_prevents_second_delivery() {
+        reset_dedupe();
+        let deliveries = Arc::new(AtomicUsize::new(0));
+        for expected in [StatusCode::OK, StatusCode::CONFLICT] {
+            let deliveries = Arc::clone(&deliveries);
+            let response = people_analyze_with_delivery(
+                Arc::new(state()),
+                analyze_request("769", "people"),
+                move |_, _| {
+                    deliveries.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                },
+            )
+            .await;
+            assert_eq!(response.status(), expected);
+        }
+        assert_eq!(deliveries.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn people_analyze_reports_dead_target_delivery_failure() {
+        reset_dedupe();
+        let response = people_analyze_with_delivery(
+            Arc::new(state()),
+            analyze_request("770", "people"),
+            |_, _| Err("target pane no longer exists".to_owned()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn people_delivery_call_receives_only_fixed_template_and_thread_id() {
+        let intent = PeopleIntent {
+            thread_id: "771".to_owned(),
+            oracle: "$(not-delivered)".to_owned(),
+            target: "17-people:people-oracle.0".to_owned(),
+        };
+        let mut delivered = None;
+        people_deliver(&intent, |target, text| {
+            delivered = Some((target.to_owned(), text.to_owned()));
+            Ok(())
+        })
+        .expect("delivery");
+        assert_eq!(
+            delivered,
+            Some((
+                "17-people:people-oracle.0".to_owned(),
+                "analyze thread 771: run People core conversation-scoped analysis".to_owned(),
+            ))
+        );
     }
 }
