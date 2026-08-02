@@ -379,8 +379,9 @@ mod wake_tests {
             write_config(r#"{"commands":{"foo":"exact-foo","foo-oracle":"oracle-foo","default":"default-sonnet"}}"#);
             assert_eq!(resolved("foo", &["foo"]), "MAW_SESSION_WINDOW=foo exact-foo");
 
-            write_config(r#"{"commands":{"agent*":"glob-haiku","default":"default-sonnet"}}"#);
-            assert_eq!(resolved("agent1", &["agent1"]), "MAW_SESSION_WINDOW=agent1 glob-haiku");
+            write_config(r#"{"commands":{"agent*":"glob-haiku","agent1-oracle":"oracle-haiku","default":"default-sonnet"}}"#);
+            assert_eq!(resolved("agent1", &["agent1"]), "MAW_SESSION_WINDOW=agent1 oracle-haiku");
+            assert_eq!(resolved("agent2", &["agent2"]), "MAW_SESSION_WINDOW=agent2 glob-haiku");
 
             write_config(r#"{"commands":{"researcher*":"glob-haiku","default":"default-sonnet"}}"#);
             assert_eq!(resolved("researcher", &["researcher"]), "MAW_SESSION_WINDOW=researcher glob-haiku");
