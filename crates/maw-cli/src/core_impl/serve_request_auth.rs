@@ -322,11 +322,11 @@ fn object_from_identities(value: &Value, key_hint: Option<&str>) -> Vec<String> 
         if let Some(from) = map.get("identity").and_then(identity_from_object) {
             identities.push(from);
         }
-        if let (Some(oracle), Some(node)) = (
-            map.get("oracle").and_then(Value::as_str),
-            map.get("node").and_then(Value::as_str),
-        ) {
-            if let Some(from) = normalize_from_identity(&format!("{}:{}", oracle.trim(), node.trim())) {
+        // Top-level oracle+node: oracle may be absent or empty (see
+        // normalize_from_identity comment); only node is required.
+        let top_oracle = map.get("oracle").and_then(Value::as_str).unwrap_or("").trim().to_owned();
+        if let Some(node) = map.get("node").and_then(Value::as_str).map(str::trim) {
+            if let Some(from) = normalize_from_identity(&format!("{top_oracle}:{node}")) {
                 identities.push(from);
             }
         }
@@ -338,7 +338,9 @@ fn object_from_identities(value: &Value, key_hint: Option<&str>) -> Vec<String> 
 
 fn identity_from_object(value: &Value) -> Option<String> {
     let map = value.as_object()?;
-    let oracle = map.get("oracle").and_then(Value::as_str)?.trim();
+    // oracle may be absent or empty (see normalize_from_identity comment);
+    // only node is required here.
+    let oracle = map.get("oracle").and_then(Value::as_str).unwrap_or("").trim();
     let node = map.get("node").and_then(Value::as_str)?.trim();
     normalize_from_identity(&format!("{oracle}:{node}"))
 }
@@ -348,8 +350,7 @@ fn normalize_from_identity(value: &str) -> Option<String> {
     let (oracle, node) = value.split_once(':')?;
     let oracle = oracle.trim();
     let node = node.trim();
-    if oracle.is_empty()
-        || node.is_empty()
+    if node.is_empty()
         || oracle.starts_with('-')
         || node.starts_with('-')
         || oracle.bytes().any(|byte| byte.is_ascii_control())
@@ -357,6 +358,14 @@ fn normalize_from_identity(value: &str) -> Option<String> {
     {
         return None;
     }
+    // An empty oracle is acceptable — the node name + pubkey are sufficient
+    // to identify a peer. This was a regression after #677 removed the
+    // fabricated "mawjs" default: nodes that never configured an oracle
+    // (e.g. maclab, white) became impossible to authenticate because their
+    // pubkey entries were silently dropped by the old `oracle.is_empty()`
+    // guard here. The node-only fallback in resolve_request_cached_pubkey
+    // handles the lookup, but only if the entry is created in the first
+    // place — which requires this function to accept an empty oracle.
     Some(format!("{oracle}:{node}"))
 }
 
