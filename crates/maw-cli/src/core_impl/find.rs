@@ -91,7 +91,7 @@ fn find_error(message: &str) -> CliOutput {
 
 fn find_native_render(args: &FindArgs) -> String {
     let kw = args.keyword.to_lowercase();
-    let repos_root = find_ghq_root().join("github.com");
+    let repos_root = ghq_root().join("github.com");
     let fleet = find_load_fleet();
     let oracle_matches = find_oracle_matches(&repos_root, &kw, args.oracle.as_deref());
     let fleet_matches = find_fleet_matches(&fleet, &kw, args.oracle.as_deref());
@@ -363,22 +363,6 @@ fn find_native_render_summary(out: &mut String, oracle_count: usize, fleet_count
 
 fn find_oracle_name(session_name: &str) -> &str {
     session_name.trim_start_matches(|ch: char| ch.is_ascii_digit() || ch == '-')
-}
-
-fn find_ghq_root() -> std::path::PathBuf {
-    std::env::var_os("GHQ_ROOT").map_or_else(
-        || {
-            std::env::var_os("HOME")
-                .map_or_else(|| std::path::PathBuf::from(".").join("Code"), |home| std::path::PathBuf::from(home).join("Code"))
-        },
-        |value| {
-            let mut path = std::path::PathBuf::from(value);
-            if path.file_name().and_then(std::ffi::OsStr::to_str) == Some("github.com") {
-                path.pop();
-            }
-            path
-        },
-    )
 }
 
 fn find_load_fleet() -> Vec<NativeFleetSession> {

@@ -293,18 +293,13 @@ fn fleet_load_state_with(runtime: &mut impl FleetRuntime) -> Result<FleetState, 
 }
 
 fn fleet_repos_root(runtime: &mut impl FleetRuntime) -> std::path::PathBuf {
-    if let Some(root) = std::env::var_os("GHQ_ROOT") {
-        return fleet_normalize_repos_root(std::path::PathBuf::from(root));
-    }
-    if let Ok(stdout) = runtime.fleet_run_command("ghq", &["root".to_owned()]) {
-        let root = stdout.trim();
-        if !root.is_empty() {
-            return fleet_normalize_repos_root(std::path::PathBuf::from(root));
-        }
-    }
-    fleet_normalize_repos_root(std::env::var_os("HOME").map_or_else(
-        || std::path::PathBuf::from(".").join("Code"),
-        |home| std::path::PathBuf::from(home).join("Code"),
+    fleet_normalize_repos_root(ghq_root_resolve_with_commands(
+        std::env::var_os("GHQ_ROOT"),
+        |program, args| {
+            let args = args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
+            runtime.fleet_run_command(program, &args).ok()
+        },
+        std::env::var_os("HOME"),
     ))
 }
 

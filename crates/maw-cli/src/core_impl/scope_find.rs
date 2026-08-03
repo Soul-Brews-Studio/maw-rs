@@ -511,37 +511,52 @@ fn current_xdg_env() -> MawXdgEnv {
 }
 
 fn ghq_root() -> std::path::PathBuf {
-    ghq_root_resolve(std::env::var_os("GHQ_ROOT"), ghq_root_from_git_config, std::env::var_os("HOME"))
+    ghq_root_resolve_with_commands(
+        std::env::var_os("GHQ_ROOT"),
+        |program, args| {
+            let output = std::process::Command::new(program).args(args).output().ok()?;
+            output.status.success().then(|| String::from_utf8(output.stdout).ok()).flatten()
+        },
+        std::env::var_os("HOME"),
+    )
 }
 
-// Resolution order mirrors ghq itself: $GHQ_ROOT env → `git config ghq.root` → ~/Code.
-// Without the git-config step, `maw wake <name>` only works in shells that happen to
-// export GHQ_ROOT (e.g. inside a direnv tree) while `ghq` resolves everywhere (#134).
+// Resolution order mirrors ghq itself: $GHQ_ROOT → git config ghq.root → `ghq root` → ~/ghq.
+// Keep this in one resolver: scope/find/locate/oracle and fleet must agree on the repo root.
+#[cfg(test)]
 fn ghq_root_resolve(
     env_root: Option<std::ffi::OsString>,
-    git_config_root: impl FnOnce() -> Option<String>,
+    mut git_config_root: impl FnMut() -> Option<String>,
+    home: Option<std::ffi::OsString>,
+) -> std::path::PathBuf {
+    ghq_root_resolve_with_commands(
+        env_root,
+        |program, _args| if program == "git" { git_config_root() } else { None },
+        home,
+    )
+}
+
+fn ghq_root_resolve_with_commands(
+    env_root: Option<std::ffi::OsString>,
+    mut run_command: impl FnMut(&str, &[&str]) -> Option<String>,
     home: Option<std::ffi::OsString>,
 ) -> std::path::PathBuf {
     if let Some(value) = env_root {
         return ghq_root_strip_host(std::path::PathBuf::from(value));
     }
-    if let Some(value) = git_config_root() {
+    if let Some(value) = run_command("git", &["config", "--get", "ghq.root"]) {
         let expanded = ghq_root_expand_tilde(value.trim(), home.as_deref());
         if !expanded.as_os_str().is_empty() {
             return ghq_root_strip_host(expanded);
         }
     }
-    home.map_or_else(|| std::path::PathBuf::from(".").join("Code"), |home| std::path::PathBuf::from(home).join("Code"))
-}
-
-fn ghq_root_from_git_config() -> Option<String> {
-    let output = std::process::Command::new("git").args(["config", "--get", "ghq.root"]).output().ok()?;
-    if !output.status.success() {
-        return None;
+    if let Some(value) = run_command("ghq", &["root"]) {
+        let expanded = ghq_root_expand_tilde(value.trim(), home.as_deref());
+        if !expanded.as_os_str().is_empty() {
+            return ghq_root_strip_host(expanded);
+        }
     }
-    let value = String::from_utf8(output.stdout).ok()?;
-    let trimmed = value.trim();
-    if trimmed.is_empty() { None } else { Some(trimmed.to_owned()) }
+    home.map_or_else(|| std::path::PathBuf::from(".").join("ghq"), |home| std::path::PathBuf::from(home).join("ghq"))
 }
 
 fn ghq_root_expand_tilde(value: &str, home: Option<&std::ffi::OsStr>) -> std::path::PathBuf {
@@ -1104,7 +1119,7 @@ fn now_iso_utc() -> String {
 
 #[cfg(test)]
 mod scopefind_ghq_root_tests {
-    use super::{ghq_root_expand_tilde, ghq_root_resolve};
+    use super::{ghq_root_expand_tilde, ghq_root_resolve, ghq_root_resolve_with_commands};
     use std::ffi::OsString;
     use std::path::PathBuf;
 
@@ -1146,21 +1161,29 @@ mod scopefind_ghq_root_tests {
     }
 
     #[test]
-    fn empty_git_config_falls_back_to_home_code() {
+    fn empty_git_config_falls_back_to_home_ghq() {
         let root = ghq_root_resolve(None, || Some("   ".to_owned()), os("/Users/nat"));
-        assert_eq!(root, PathBuf::from("/Users/nat/Code"));
+        assert_eq!(root, PathBuf::from("/Users/nat/ghq"));
     }
 
     #[test]
-    fn no_sources_falls_back_to_home_code() {
+    fn no_sources_falls_back_to_home_ghq() {
         let root = ghq_root_resolve(None, || None, os("/Users/nat"));
-        assert_eq!(root, PathBuf::from("/Users/nat/Code"));
+        assert_eq!(root, PathBuf::from("/Users/nat/ghq"));
     }
 
     #[test]
-    fn no_home_falls_back_to_relative_code() {
+    fn no_home_falls_back_to_relative_ghq() {
         let root = ghq_root_resolve(None, || None, None);
-        assert_eq!(root, PathBuf::from(".").join("Code"));
+        assert_eq!(root, PathBuf::from(".").join("ghq"));
+    }
+
+    #[test]
+    fn ghq_command_is_used_before_home_fallback() {
+        let root = ghq_root_resolve_with_commands(None, |program, args| {
+            (program == "ghq" && args == ["root"]).then(|| "/opt/ghq\n".to_owned())
+        }, os("/Users/nat"));
+        assert_eq!(root, PathBuf::from("/opt/ghq"));
     }
 
     #[test]
