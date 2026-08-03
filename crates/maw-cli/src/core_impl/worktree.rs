@@ -718,6 +718,7 @@ mod worktree_tests {
                     name: window.to_owned(),
                     repo: repo.to_owned(),
                     kind: None,
+                    kind_source: None,
                 }],
                 ..NativeFleetSession::default()
             },

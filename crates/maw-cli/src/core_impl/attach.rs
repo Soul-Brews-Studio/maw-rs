@@ -977,6 +977,7 @@ mod attach_tests {
                     name: "smoke".to_owned(),
                     repo: "Soul-Brews-Studio/maw-rs".to_owned(),
                     kind: None,
+                    kind_source: None,
                 }],
                 ..NativeFleetSession::default()
             },

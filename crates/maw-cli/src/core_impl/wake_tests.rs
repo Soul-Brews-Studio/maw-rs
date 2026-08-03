@@ -17,6 +17,7 @@ mod wake_tests {
             name: name.to_owned(),
             repo: "switchaphon/rpro-ent-oracle".to_owned(),
             kind: None,
+            kind_source: None,
         };
         NativeFleetEntry {
             file: "05-rpro-ent.json".to_owned(),

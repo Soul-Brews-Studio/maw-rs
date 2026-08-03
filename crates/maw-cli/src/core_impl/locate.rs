@@ -23,6 +23,10 @@ struct LocateResult {
     site: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     site_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repo_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repo_confidence: Option<String>,
     has_psi: bool,
     session_name: Option<String>,
     window_count: usize,
@@ -107,6 +111,12 @@ impl LocateGithubRunner for LocateSystemGithub {
     fn locate_gh_repo_names(&mut self, org: &str) -> Result<Vec<String>, String> {
         locate_gh_repo_list_with_timeout(org, locate_github_timeout())
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LocateRepoResolution {
+    path: String,
+    classification: NativeRepoClassification,
 }
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
@@ -331,7 +341,10 @@ fn locate_gather_info(
 ) -> Result<LocateResult, String> {
     locate_validate_name(oracle)?;
     let aliases = locate_enrichment_names(oracle);
-    let repo_path = aliases.iter().find_map(|alias| locate_find_oracle_repo_path(alias));
+    let repo = aliases.iter().find_map(|alias| locate_find_oracle_repo(alias));
+    let repo_path = repo.as_ref().map(|repo| repo.path.clone());
+    let repo_source = repo.as_ref().map(|repo| repo.classification.source.label().to_owned());
+    let repo_confidence = repo.as_ref().map(|repo| repo.classification.source.confidence().to_owned());
     let (session_name, window_count) = aliases
         .iter()
         .find_map(|alias| locate_resolve_session(alias, sessions))
@@ -397,6 +410,8 @@ fn locate_gather_info(
         repo_path: result_repo_path,
         site,
         site_source,
+        repo_source,
+        repo_confidence,
         has_psi: if has_psi {
             true
         } else {
@@ -465,10 +480,19 @@ fn locate_ghq_find(suffix: &str) -> Option<String> {
         .map(path_string)
 }
 
+/// Path-only view kept for callers that do not need the classification
+/// (`notify`, `send_federation`, `agents`).
 fn locate_find_oracle_repo_path(oracle: &str) -> Option<String> {
-    locate_declared_oracle_repo_path(oracle)
-    .or_else(|| locate_ghq_find_oracle_suffix(oracle))
-    .or_else(|| locate_ghq_find(&format!("/{oracle}")).filter(|path| native_repo_path_is_oracle(std::path::Path::new(path), oracle)))
+    locate_find_oracle_repo(oracle).map(|repo| repo.path)
+}
+
+fn locate_find_oracle_repo(oracle: &str) -> Option<LocateRepoResolution> {
+    locate_declared_oracle_repo(oracle)
+        // #750: a bare repo now resolves through an explicit declaration or the
+        // ψ/ + CLAUDE.md heuristic. The legacy suffix stays last so existing
+        // fleet names remain additive-compatible.
+        .or_else(|| locate_ghq_find(&format!("/{oracle}")).and_then(|path| locate_classify_repo_path(&path, oracle)))
+        .or_else(|| locate_ghq_find_oracle_suffix(oracle))
 }
 
 // Keep raw/stem ordering for stable output fields and filesystem/config enrichment.
@@ -482,28 +506,32 @@ fn locate_enrichment_names(oracle: &str) -> Vec<String> {
     aliases
 }
 
-fn locate_declared_oracle_repo_path(oracle: &str) -> Option<String> {
+fn locate_declared_oracle_repo(oracle: &str) -> Option<LocateRepoResolution> {
     for entry in fleet_load_entries().into_iter().filter(fleet_entry_is_session) {
         for window in &entry.session.windows {
-            if window.kind != Some(NativeRepoKind::Oracle) {
-                continue;
-            }
-            let Some(name) = native_fleet_window_oracle_name(window) else { continue; };
-            if name != oracle {
-                continue;
-            }
             let Some(path) = native_fleet_repo_path(&window.repo) else { continue; };
             if path.exists() {
-                return Some(path_string(path));
+                let path = path_string(path);
+                if let Some(repo) = locate_classify_repo_path(&path, &window.name) {
+                    let Some(name) = native_fleet_window_oracle_name(window) else { continue; };
+                    if name == oracle {
+                        return Some(repo);
+                    }
+                }
             }
         }
     }
     None
 }
 
-fn locate_ghq_find_oracle_suffix(oracle: &str) -> Option<String> {
+fn locate_ghq_find_oracle_suffix(oracle: &str) -> Option<LocateRepoResolution> {
     let path = locate_ghq_find(&format!("/{oracle}-oracle"))?;
-    native_repo_path_is_oracle(std::path::Path::new(&path), &format!("{oracle}-oracle")).then_some(path)
+    locate_classify_repo_path(&path, &format!("{oracle}-oracle"))
+}
+
+fn locate_classify_repo_path(path: &str, fallback_name: &str) -> Option<LocateRepoResolution> {
+    let classification = native_repo_classification_for_path(std::path::Path::new(path), fallback_name)?;
+    (classification.kind == NativeRepoKind::Oracle).then_some(LocateRepoResolution { path: path.to_owned(), classification })
 }
 
 fn locate_resolve_session<'a>(oracle: &str, sessions: &'a [TmuxSession]) -> Option<&'a TmuxSession> {
@@ -915,6 +943,10 @@ fn locate_render_text(oracle: &str, info: &LocateResult) -> String {
     let mut out = format!("\n📍 {oracle}\n");
     if let Some(repo_path) = &info.repo_path {
         let _ = writeln!(out, "   repo:     {repo_path}");
+        if let Some(source) = &info.repo_source {
+            let confidence = info.repo_confidence.as_deref().unwrap_or("unknown");
+            let _ = writeln!(out, "   repo_source: {source} ({confidence})");
+        }
         let _ = writeln!(out, "   ψ/:       {}", if info.has_psi { "present" } else { "missing" });
     }
     if let Some(session_name) = &info.session_name {
@@ -1267,11 +1299,18 @@ mod locate_tests {
         let env = LocateHermeticEnv::new("kind");
         let foo = env.ghq.join("github.com/acme/foo");
         let bar = env.ghq.join("github.com/acme/bar-oracle");
+        let conflict = env.ghq.join("github.com/acme/conflict");
         std::fs::create_dir_all(&foo).expect("foo");
         std::fs::create_dir_all(&bar).expect("bar");
+        std::fs::create_dir_all(conflict.join(".maw")).expect("conflict marker");
+        locate_write(&conflict.join(".maw/role"), "oracle\n");
+        locate_write(
+            &env.xdg_state.join("maw/fleet/01-marker.json"),
+            r#"{"name":"01-marker","windows":[{"name":"conflict","repo":"acme/conflict"}]}"#,
+        );
         locate_write(
             &env.maw_config_path(&["fleet", "kind.json"]),
-            r#"{"name":"kind","windows":[{"name":"foo","repo":"acme/foo","kind":"oracle"},{"name":"bar-oracle","repo":"acme/bar-oracle","kind":"project"}]}"#,
+            r#"{"name":"kind","windows":[{"name":"foo","repo":"acme/foo","kind":"oracle"},{"name":"bar-oracle","repo":"acme/bar-oracle","kind":"project"},{"name":"conflict","repo":"acme/conflict","kind":"project"}]}"#,
         );
         let opts = LocateOptions { path: true, json: false, no_remote: false };
 
@@ -1280,6 +1319,51 @@ mod locate_tests {
             format!("{}\n", foo.display())
         );
         assert!(locate_cmd_with_sessions("bar", &opts, &[], &mut LocateFakeGithub::default()).expect_err("bar project").contains("no oracle"));
+        assert!(
+            locate_cmd_with_sessions("conflict", &opts, &[], &mut LocateFakeGithub::default())
+                .expect_err("conflict project")
+                .contains("no oracle")
+        );
+    }
+
+    #[test]
+    fn locate_reports_classification_source_and_rejects_unmarked_repo() {
+        let _guard = env_test_lock();
+        let env = LocateHermeticEnv::new("classification");
+        let kind = env.ghq.join("github.com/acme/kindbare");
+        let marker = env.ghq.join("github.com/acme/markerbare");
+        let inferred = env.ghq.join("github.com/acme/inferredbare");
+        let suffix = env.ghq.join("github.com/acme/suffix-oracle");
+        let plain = env.ghq.join("github.com/acme/plain");
+        std::fs::create_dir_all(&kind).expect("kind repo");
+        std::fs::create_dir_all(marker.join(".maw")).expect("marker repo");
+        locate_write(&marker.join(".maw/role"), "oracle\n");
+        std::fs::create_dir_all(inferred.join("ψ")).expect("inferred repo");
+        locate_write(&inferred.join("CLAUDE.md"), "# Oracle\n");
+        std::fs::create_dir_all(&suffix).expect("suffix repo");
+        std::fs::create_dir_all(&plain).expect("plain repo");
+        locate_write(
+            &env.maw_config_path(&["fleet", "classification.json"]),
+            r#"{"name":"classification","windows":[{"name":"kindbare","repo":"acme/kindbare","kind":"oracle"}]}"#,
+        );
+
+        let expected = [
+            ("kindbare", "window.kind", "declared"),
+            ("markerbare", ".maw/role", "declared"),
+            ("inferredbare", "ψ/ + CLAUDE.md", "inferred"),
+            ("suffix", "*-oracle", "legacy-guess"),
+        ];
+        for (name, source, confidence) in expected {
+            let info = locate_gather_info(name, false, &[], LocateGithubLayer::skipped("test")).expect("classification info");
+            assert_eq!(info.repo_source.as_deref(), Some(source), "source for {name}");
+            assert_eq!(info.repo_confidence.as_deref(), Some(confidence), "confidence for {name}");
+            assert!(info.repo_path.is_some(), "repo path for {name}");
+        }
+
+        let plain_info = locate_gather_info("plain", false, &[], LocateGithubLayer::skipped("test")).expect("plain info");
+        assert!(plain_info.repo_path.is_none());
+        assert!(plain_info.repo_source.is_none());
+        assert!(plain_info.repo_confidence.is_none());
     }
 
     #[test]

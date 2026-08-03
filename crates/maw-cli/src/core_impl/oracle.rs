@@ -341,8 +341,18 @@ fn oracle_discover_one(name: &str, tmux: &mut OracleTmux) -> Option<OracleEntry>
 
 fn oracle_find_filesystem(name: &str) -> Option<OracleEntry> {
     let repos_root = ghq_root().join("github.com");
-    let Ok(orgs) = std::fs::read_dir(repos_root) else { return None; };
-    for org in orgs.flatten().filter(|entry| entry.path().is_dir()) { let org_name = org.file_name().to_string_lossy().to_string(); let path = org.path().join(format!("{name}-oracle")); if path.is_dir() { return oracle_entry_from_repo(&org_name, &path); } }
+    for suffix in ["", "-oracle"] {
+        let Ok(orgs) = std::fs::read_dir(&repos_root) else { return None; };
+        for org in orgs.flatten().filter(|entry| entry.path().is_dir()) {
+            let org_name = org.file_name().to_string_lossy().to_string();
+            let path = org.path().join(format!("{name}{suffix}"));
+            if path.is_dir() {
+                if let Some(entry) = oracle_entry_from_repo(&org_name, &path) {
+                    return Some(entry);
+                }
+            }
+        }
+    }
     None
 }
 
@@ -601,8 +611,8 @@ mod oracle_tests {
             session: NativeFleetSession {
                 name: "99-kind".to_owned(),
                 windows: vec![
-                    NativeFleetWindow { name: "foo".to_owned(), repo: "acme/foo".to_owned(), kind: Some(NativeRepoKind::Oracle) },
-                    NativeFleetWindow { name: "bar-oracle".to_owned(), repo: "acme/bar-oracle".to_owned(), kind: Some(NativeRepoKind::Project) },
+                    NativeFleetWindow { name: "foo".to_owned(), repo: "acme/foo".to_owned(), kind: Some(NativeRepoKind::Oracle), kind_source: None },
+                    NativeFleetWindow { name: "bar-oracle".to_owned(), repo: "acme/bar-oracle".to_owned(), kind: Some(NativeRepoKind::Project), kind_source: None },
                 ],
                 ..NativeFleetSession::default()
             },
@@ -683,5 +693,32 @@ mod oracle_tests {
         assert_eq!(entry.repo, "3e-infra-oracle");
         assert_eq!(entry.local_path, repo.display().to_string());
         assert!(entry.has_psi);
+    }
+
+    /// #750: filesystem discovery must find a bare-named oracle by its brain,
+    /// keep the legacy `-oracle` suffix working, and still reject a plain repo.
+    #[test]
+    fn oracle_filesystem_discovery_supports_bare_inferred_and_suffix_fallback() {
+        let _guard = env_test_lock();
+        let _home = EnvVarRestore::capture("HOME");
+        let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
+        let _state = EnvVarRestore::capture("MAW_STATE_DIR");
+        let _ghq = EnvVarRestore::capture("GHQ_ROOT");
+        let root = oracle_temp_root("filesystem-discovery");
+        let bare = root.join("ghq/github.com/acme/bare");
+        let suffix = root.join("ghq/github.com/acme/legacy-oracle");
+        let plain = root.join("ghq/github.com/acme/plain");
+        std::fs::create_dir_all(bare.join("ψ")).expect("bare oracle");
+        std::fs::write(bare.join("CLAUDE.md"), "oracle\n").expect("claude");
+        std::fs::create_dir_all(&suffix).expect("suffix oracle");
+        std::fs::create_dir_all(&plain).expect("plain repo");
+        std::env::set_var("HOME", root.join("home"));
+        std::env::set_var("MAW_CONFIG_DIR", root.join("config"));
+        std::env::set_var("MAW_STATE_DIR", root.join("state"));
+        std::env::set_var("GHQ_ROOT", root.join("ghq/github.com"));
+
+        assert_eq!(oracle_find_filesystem("bare").map(|entry| entry.name), Some("bare".to_owned()));
+        assert_eq!(oracle_find_filesystem("legacy").map(|entry| entry.name), Some("legacy".to_owned()));
+        assert!(oracle_find_filesystem("plain").is_none());
     }
 }

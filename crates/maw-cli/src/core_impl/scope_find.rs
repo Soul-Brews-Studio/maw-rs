@@ -39,6 +39,8 @@ struct NativeFleetWindow {
     repo: String,
     #[serde(default)]
     kind: Option<NativeRepoKind>,
+    #[serde(skip)]
+    kind_source: Option<NativeRepoClassificationSource>,
 }
 
 #[derive(Debug, Clone, Copy, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
@@ -46,6 +48,39 @@ struct NativeFleetWindow {
 enum NativeRepoKind {
     Oracle,
     Project,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeRepoClassificationSource {
+    WindowKind,
+    RoleMarker,
+    PsiClaude,
+    LegacySuffix,
+}
+
+impl NativeRepoClassificationSource {
+    fn label(self) -> &'static str {
+        match self {
+            Self::WindowKind => "window.kind",
+            Self::RoleMarker => ".maw/role",
+            Self::PsiClaude => "ψ/ + CLAUDE.md",
+            Self::LegacySuffix => "*-oracle",
+        }
+    }
+
+    fn confidence(self) -> &'static str {
+        match self {
+            Self::WindowKind | Self::RoleMarker => "declared",
+            Self::PsiClaude => "inferred",
+            Self::LegacySuffix => "legacy-guess",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NativeRepoClassification {
+    kind: NativeRepoKind,
+    source: NativeRepoClassificationSource,
 }
 
 #[allow(dead_code)]
@@ -770,8 +805,11 @@ fn load_native_fleet() -> Vec<NativeFleetSession> {
 
 fn native_fleet_apply_role_markers(session: &mut NativeFleetSession) {
     for window in &mut session.windows {
-        if window.kind.is_none() {
-            window.kind = native_repo_marker_kind_for_slug(&window.repo);
+        if window.kind.is_some() {
+            window.kind_source = Some(NativeRepoClassificationSource::WindowKind);
+        } else if let Some(kind) = native_repo_marker_kind_for_slug(&window.repo) {
+            window.kind = Some(kind);
+            window.kind_source = Some(NativeRepoClassificationSource::RoleMarker);
         }
     }
 }
@@ -803,16 +841,37 @@ fn native_fleet_repo_path(repo: &str) -> Option<std::path::PathBuf> {
     Some(ghq_root().join("github.com").join(repo))
 }
 
-fn native_repo_kind_for_path(path: &std::path::Path) -> Option<NativeRepoKind> {
+fn native_repo_declared_kind_for_path(path: &std::path::Path) -> Option<NativeRepoClassification> {
     let slugs = native_repo_slugs_for_path(path);
-    for entry in fleet_load_entries().into_iter().filter(fleet_entry_is_session) {
-        for window in &entry.session.windows {
-            if window.kind.is_some() && native_fleet_window_matches_slugs(window, &slugs) {
-                return window.kind;
+    let entries = fleet_load_entries().into_iter().filter(fleet_entry_is_session).collect::<Vec<_>>();
+    // A marker may be projected into `window.kind` while loading fleet data.
+    // Resolve all declared JSON kinds first so an explicit project in a later
+    // fleet file cannot be shadowed by an earlier marker-derived oracle.
+    for source in [NativeRepoClassificationSource::WindowKind, NativeRepoClassificationSource::RoleMarker] {
+        for entry in &entries {
+            for window in &entry.session.windows {
+                let window_source = window.kind_source.unwrap_or(NativeRepoClassificationSource::WindowKind);
+                if window_source == source && window.kind.is_some() && native_fleet_window_matches_slugs(window, &slugs) {
+                    return Some(NativeRepoClassification { kind: window.kind?, source: window_source });
+                }
             }
         }
     }
-    native_repo_marker_kind(path)
+    native_repo_marker_kind(path).map(|kind| NativeRepoClassification { kind, source: NativeRepoClassificationSource::RoleMarker })
+}
+
+fn native_repo_has_psi_and_claude(path: &std::path::Path) -> bool {
+    path.join("ψ").is_dir() && path.join("CLAUDE.md").is_file()
+}
+
+fn native_repo_classification_for_path(path: &std::path::Path, fallback_name: &str) -> Option<NativeRepoClassification> {
+    if let Some(classification) = native_repo_declared_kind_for_path(path) {
+        return Some(classification);
+    }
+    if native_repo_has_psi_and_claude(path) {
+        return Some(NativeRepoClassification { kind: NativeRepoKind::Oracle, source: NativeRepoClassificationSource::PsiClaude });
+    }
+    fallback_name.ends_with("-oracle").then_some(NativeRepoClassification { kind: NativeRepoKind::Oracle, source: NativeRepoClassificationSource::LegacySuffix })
 }
 
 fn native_repo_slugs_for_path(path: &std::path::Path) -> BTreeSet<String> {
@@ -851,19 +910,21 @@ fn native_fleet_window_matches_slugs(window: &NativeFleetWindow, slugs: &BTreeSe
 }
 
 fn native_repo_path_is_oracle(path: &std::path::Path, fallback_name: &str) -> bool {
-    match native_repo_kind_for_path(path) {
-        Some(NativeRepoKind::Oracle) => true,
-        Some(NativeRepoKind::Project) => false,
-        None => fallback_name.ends_with("-oracle"),
-    }
+    native_repo_classification_for_path(path, fallback_name).is_some_and(|classification| classification.kind == NativeRepoKind::Oracle)
 }
 
 fn native_fleet_window_is_oracle(window: &NativeFleetWindow) -> bool {
-    match window.kind {
-        Some(NativeRepoKind::Oracle) => true,
-        Some(NativeRepoKind::Project) => false,
-        None => window.name.ends_with("-oracle"),
+    // An explicit JSON kind is authoritative for this window. Marker-derived
+    // kinds must go through the central path classifier so a later explicit
+    // kind in another fleet file can still win globally.
+    if matches!(window.kind_source, Some(NativeRepoClassificationSource::WindowKind) | None) {
+        if let Some(kind) = window.kind {
+            return kind == NativeRepoKind::Oracle;
+        }
     }
+    native_fleet_repo_path(&window.repo)
+        .and_then(|path| native_repo_classification_for_path(&path, &window.name))
+        .map_or_else(|| window.kind == Some(NativeRepoKind::Oracle), |classification| classification.kind == NativeRepoKind::Oracle)
 }
 
 fn native_fleet_window_oracle_name(window: &NativeFleetWindow) -> Option<String> {
@@ -1096,6 +1157,7 @@ mod native_fleet_loader_tests {
             name: "47-3e-infra-oracle".to_owned(),
             repo: "laris-co/3e-infra-oracle".to_owned(),
             kind: Some(NativeRepoKind::Oracle),
+            kind_source: None,
         };
         assert_eq!(native_fleet_window_oracle_name(&window), Some("3e-infra".to_owned()));
 
@@ -1103,8 +1165,33 @@ mod native_fleet_loader_tests {
             name: "3e-infra".to_owned(),
             repo: "laris-co/3e-infra-oracle".to_owned(),
             kind: Some(NativeRepoKind::Oracle),
+            kind_source: None,
         };
         assert_eq!(native_fleet_window_oracle_name(&fallback), Some("3e-infra".to_owned()));
+    }
+
+    /// #750: an explicit `kind` in a later fleet file must win over an earlier
+    /// window whose kind was only projected from a `.maw/role` marker.
+    #[test]
+    fn native_repo_declared_kind_prefers_explicit_window_over_earlier_role_marker() {
+        let root = fleet_loader_temp_root("kind-precedence");
+        let repo = root.join("ghq/github.com/acme/conflict");
+        fleet_loader_write(&repo.join(".maw/role"), "oracle\n");
+        fleet_loader_write(
+            &root.join("state/fleet/01-marker.json"),
+            r#"{"name":"01-marker","windows":[{"name":"conflict","repo":"acme/conflict"}]}"#,
+        );
+        fleet_loader_write(
+            &root.join("config/fleet/02-explicit.json"),
+            r#"{"name":"02-explicit","windows":[{"name":"conflict","repo":"acme/conflict","kind":"project"}]}"#,
+        );
+
+        fleet_loader_env(&root, || {
+            assert_eq!(
+                native_repo_declared_kind_for_path(&repo),
+                Some(NativeRepoClassification { kind: NativeRepoKind::Project, source: NativeRepoClassificationSource::WindowKind }),
+            );
+        });
     }
 }
 
