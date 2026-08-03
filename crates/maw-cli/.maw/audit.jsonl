@@ -1,0 +1,17 @@
+{"args":["codex","--dry-run"],"binary":"maw-rs","cmd":"more","ts":"2026-08-03T05:08:42.658Z","version":"26.7.30-alpha.2017-1-g5446898-dirty"}
+{"args":["codex","3","--dry-run"],"binary":"maw-rs","cmd":"more","ts":"2026-08-03T05:08:42.658Z","version":"26.7.30-alpha.2017-1-g5446898-dirty"}
+{"args":["status"],"binary":"maw-rs","cmd":"more","ts":"2026-08-03T05:08:42.661Z","version":"26.7.30-alpha.2017-1-g5446898-dirty"}
+{"args":["codex","0"],"binary":"maw-rs","cmd":"more","ts":"2026-08-03T05:08:42.661Z","version":"26.7.30-alpha.2017-1-g5446898-dirty"}
+{"args":["codex","2","--session","team-a","--dry-run","-e","omx"],"binary":"maw-rs","cmd":"more","ts":"2026-08-03T05:08:42.668Z","version":"26.7.30-alpha.2017-1-g5446898-dirty"}
+{"args":["codex","-1"],"binary":"maw-rs","cmd":"more","ts":"2026-08-03T05:08:42.669Z","version":"26.7.30-alpha.2017-1-g5446898-dirty"}
+{"args":["codex","abc"],"binary":"maw-rs","cmd":"more","ts":"2026-08-03T05:08:42.677Z","version":"26.7.30-alpha.2017-1-g5446898-dirty"}
+{"args":[],"binary":"maw-rs","cmd":"--version","ts":"2026-08-03T05:08:57.991Z","version":"26.7.30-alpha.2017-1-g5446898-dirty"}
+{"args":[],"binary":"maw-rs","cmd":"-v","ts":"2026-08-03T05:08:57.996Z","version":"26.7.30-alpha.2017-1-g5446898-dirty"}
+{"args":[],"binary":"maw-rs","cmd":"version","ts":"2026-08-03T05:08:58.000Z","version":"26.7.30-alpha.2017-1-g5446898-dirty"}
+{"args":["paths","--home","/home/tester","--plan-json"],"binary":"maw-rs","cmd":"xdg","ts":"2026-08-03T05:09:01.715Z","version":"26.7.30-alpha.2017-1-g5446898-dirty"}
+{"args":["validate-instance","--name","dev","--plan-json"],"binary":"maw-rs","cmd":"xdg","ts":"2026-08-03T05:09:01.715Z","version":"26.7.30-alpha.2017-1-g5446898-dirty"}
+{"args":["paths","--plan-json"],"binary":"maw-rs","cmd":"xdg","ts":"2026-08-03T05:09:01.715Z","version":"26.7.30-alpha.2017-1-g5446898-dirty"}
+{"args":["paths","--env","MAW_XDG"],"binary":"maw-rs","cmd":"xdg","ts":"2026-08-03T05:09:01.715Z","version":"26.7.30-alpha.2017-1-g5446898-dirty"}
+{"args":["core-paths","--home","/tmp/maw-rs-cli-xdg-home-82709-1785733741715491085-0","--plan-json"],"binary":"maw-rs","cmd":"xdg","ts":"2026-08-03T05:09:01.715Z","version":"26.7.30-alpha.2017-1-g5446898-dirty"}
+{"args":["validate-instance","--name","prod","--plan-json"],"binary":"maw-rs","cmd":"xdg","ts":"2026-08-03T05:09:01.716Z","version":"26.7.30-alpha.2017-1-g5446898-dirty"}
+{"args":["paths","--home","/home/tester","--env","MAW_XDG=yes","--env","XDG_DATA_HOME=/xdg-data","--env","XDG_STATE_HOME=/xdg-state","--env","XDG_CACHE_HOME=/xdg-cache","--env","XDG_CONFIG_HOME=/xdg-config","--plan-json"],"binary":"maw-rs","cmd":"xdg","ts":"2026-08-03T05:09:01.716Z","version":"26.7.30-alpha.2017-1-g5446898-dirty"}
