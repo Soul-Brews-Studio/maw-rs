@@ -1333,6 +1333,7 @@ mod locate_tests {
         let kind = env.ghq.join("github.com/acme/kindbare");
         let marker = env.ghq.join("github.com/acme/markerbare");
         let inferred = env.ghq.join("github.com/acme/inferredbare");
+        let agents = env.ghq.join("github.com/acme/agentsbare");
         let suffix = env.ghq.join("github.com/acme/suffix-oracle");
         let plain = env.ghq.join("github.com/acme/plain");
         std::fs::create_dir_all(&kind).expect("kind repo");
@@ -1340,6 +1341,8 @@ mod locate_tests {
         locate_write(&marker.join(".maw/role"), "oracle\n");
         std::fs::create_dir_all(inferred.join("ψ")).expect("inferred repo");
         locate_write(&inferred.join("CLAUDE.md"), "# Oracle\n");
+        std::fs::create_dir_all(agents.join("ψ")).expect("agents repo");
+        locate_write(&agents.join("AGENTS.md"), "# Oracle\n");
         std::fs::create_dir_all(&suffix).expect("suffix repo");
         std::fs::create_dir_all(&plain).expect("plain repo");
         locate_write(
@@ -1351,6 +1354,7 @@ mod locate_tests {
             ("kindbare", "window.kind", "declared"),
             ("markerbare", ".maw/role", "declared"),
             ("inferredbare", "ψ/ + CLAUDE.md", "inferred"),
+            ("agentsbare", "ψ/ + CLAUDE.md", "inferred"),
             ("suffix", "*-oracle", "legacy-guess"),
         ];
         for (name, source, confidence) in expected {

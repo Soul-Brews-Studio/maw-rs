@@ -860,8 +860,12 @@ fn native_repo_declared_kind_for_path(path: &std::path::Path) -> Option<NativeRe
     native_repo_marker_kind(path).map(|kind| NativeRepoClassification { kind, source: NativeRepoClassificationSource::RoleMarker })
 }
 
+/// A brain plus a charter. `AGENTS.md` counts as the charter too: it is the
+/// cross-tool convention, and an oracle that carries only `AGENTS.md` is still
+/// an oracle. Every brain repo on this box today has `CLAUDE.md`, so this is
+/// insurance for the next one rather than a fix for a live miss.
 fn native_repo_has_psi_and_claude(path: &std::path::Path) -> bool {
-    path.join("ψ").is_dir() && path.join("CLAUDE.md").is_file()
+    path.join("ψ").is_dir() && (path.join("CLAUDE.md").is_file() || path.join("AGENTS.md").is_file())
 }
 
 fn native_repo_classification_for_path(path: &std::path::Path, fallback_name: &str) -> Option<NativeRepoClassification> {
