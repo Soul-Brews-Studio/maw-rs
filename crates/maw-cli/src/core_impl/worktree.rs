@@ -5,7 +5,7 @@ const DISPATCH_145: &[DispatcherEntry] = &[DispatcherEntry {
 
 const WORKTREE_USAGE: &str =
     "usage: maw worktree <ls|clean> [--dry-run] or maw worktree add <name> [--base <ref>]";
-const WORKTREE_MERGE_TARGET: &str = "origin/alpha";
+const WORKTREE_FALLBACK_MERGE_TARGET: &str = "origin/alpha";
 const WORKTREE_TMUX_PANE_FORMAT: &str = "#{session_name}:#{window_name}|||#{pane_current_path}";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,6 +52,12 @@ struct WorktreeLiveRef {
     path: std::path::PathBuf,
     label: String,
     kind: WorktreeLiveKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WorktreeMergeTarget {
+    reference: String,
+    resolved: bool,
 }
 
 trait WorktreeRuntime {
@@ -171,7 +177,7 @@ fn worktree_parse_args(argv: &[String]) -> Result<WorktreeOptions<'_>, (i32, Str
     };
     let mut dry_run = false;
     let mut name = None;
-    let mut base = WORKTREE_MERGE_TARGET;
+    let mut base = WORKTREE_FALLBACK_MERGE_TARGET;
     let mut index = 1;
     while index < argv.len() {
         let arg = &argv[index];
@@ -255,10 +261,11 @@ fn worktree_collect_statuses(
         return Ok(Vec::new());
     };
     let live_refs = worktree_live_refs(runtime, &main_path)?;
+    let merge_target = worktree_resolve_merge_target(runtime, &main_path);
     Ok(records
         .into_iter()
         .map(|record| WorktreeStatus {
-            merged: worktree_branch_merged(runtime, &main_path, record.branch.as_deref()),
+            merged: worktree_branch_merged(runtime, &main_path, record.branch.as_deref(), &merge_target),
             dirty: worktree_is_dirty(runtime, &record.path),
             live: worktree_find_live(&record.path, &live_refs),
             path: record.path,
@@ -311,12 +318,32 @@ fn worktree_branch_merged(
     runtime: &mut impl WorktreeRuntime,
     main_path: &std::path::Path,
     branch: Option<&str>,
+    merge_target: &WorktreeMergeTarget,
 ) -> bool {
-    branch.is_some_and(|branch| {
-        runtime
-            .worktree_git(main_path, &["merge-base", "--is-ancestor", branch, WORKTREE_MERGE_TARGET])
-            .is_ok()
-    })
+    merge_target.resolved
+        && branch.is_some_and(|branch| {
+            runtime
+                .worktree_git(main_path, &["merge-base", "--is-ancestor", branch, &merge_target.reference])
+                .is_ok()
+        })
+}
+
+fn worktree_resolve_merge_target(
+    runtime: &mut impl WorktreeRuntime,
+    main_path: &std::path::Path,
+) -> WorktreeMergeTarget {
+    let target = runtime
+        .worktree_git(main_path, &["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"])
+        .ok()
+        .map(|target| target.trim().to_owned())
+        .filter(|target| !target.is_empty());
+    match target {
+        Some(reference) => WorktreeMergeTarget { reference, resolved: true },
+        None => WorktreeMergeTarget {
+            reference: WORKTREE_FALLBACK_MERGE_TARGET.to_owned(),
+            resolved: false,
+        },
+    }
 }
 
 fn worktree_is_dirty(runtime: &mut impl WorktreeRuntime, path: &std::path::Path) -> bool {
@@ -585,6 +612,7 @@ mod worktree_tests {
     struct FakeWorktreeRuntime {
         cwd: std::path::PathBuf,
         worktrees: String,
+        merge_target: Result<String, String>,
         dirty_paths: BTreeSet<std::path::PathBuf>,
         merged_branches: BTreeSet<String>,
         existing_branch_refs: BTreeSet<String>,
@@ -601,6 +629,7 @@ mod worktree_tests {
             Self {
                 cwd: std::path::PathBuf::from("/repo"),
                 worktrees: String::new(),
+                merge_target: Ok("origin/alpha".to_owned()),
                 dirty_paths: BTreeSet::new(),
                 merged_branches: BTreeSet::new(),
                 existing_branch_refs: BTreeSet::new(),
@@ -637,7 +666,12 @@ mod worktree_tests {
                         Ok(String::new())
                     }
                 }
-                ["merge-base", "--is-ancestor", branch, "origin/alpha"] => {
+                ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"] => {
+                    self.merge_target.clone()
+                }
+                ["merge-base", "--is-ancestor", branch, target]
+                    if self.merge_target.as_deref() == Ok(*target) =>
+                {
                     if self.merged_branches.contains(*branch) {
                         Ok(String::new())
                     } else {
@@ -945,6 +979,33 @@ mod worktree_tests {
             command_calls(&runtime, "worktree")
                 .iter()
                 .all(|args| args != &strings(&["worktree", "remove", "/repo/agents/fresh"]))
+        );
+    }
+
+    #[test]
+    fn merged_check_follows_repo_default_branch_instead_of_hardcoded_alpha() {
+        let mut runtime = runtime_with_two_worktrees("/repo/agents/done", "agents/done");
+        runtime.merge_target = Ok("origin/trunk".to_owned());
+
+        let output = worktree_run_with(&strings(&["clean"]), &mut runtime).expect("clean output");
+
+        assert!(output.stdout.contains("removed /repo/agents/done"));
+        assert!(command_calls(&runtime, "merge-base").iter().any(|args| args
+            == &strings(&["merge-base", "--is-ancestor", "agents/done", "origin/trunk"])));
+    }
+
+    #[test]
+    fn clean_skips_when_default_branch_cannot_be_resolved() {
+        let mut runtime = runtime_with_two_worktrees("/repo/agents/done", "agents/done");
+        runtime.merge_target = Err("no origin/HEAD".to_owned());
+
+        let output = worktree_run_with(&strings(&["clean"]), &mut runtime).expect("clean output");
+
+        assert!(output.stdout.contains("skip /repo/agents/done (unmerged)"));
+        assert!(
+            command_calls(&runtime, "worktree")
+                .iter()
+                .all(|args| args != &strings(&["worktree", "remove", "/repo/agents/done"]))
         );
     }
 
