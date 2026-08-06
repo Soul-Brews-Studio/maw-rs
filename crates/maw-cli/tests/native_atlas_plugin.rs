@@ -157,6 +157,7 @@ fn atlas_namespace_is_owned_by_plugin_not_native_discord_inv() {
         .env("PATH", &bin_dir)
         .env("MAW_PLUGINS_DIR", &plugins_dir)
         .env("ATLAS_BUN_ARGS", &bun_args)
+        .env("MAW_DEV_TIER_BANNER", "1")
         .env_remove("MAW_RS_ATLAS_FAKE_DISCORD")
         .output()
         .expect("run atlas legacy");
