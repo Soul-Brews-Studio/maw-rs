@@ -347,11 +347,16 @@ fn dispatch_cli_plugin_warns_when_bun_dev_plugin_exits_silently() {
     remove_dir_all(root).expect("cleanup");
 }
 
+/// #780: the banner is OFF by DEFAULT — i.e. with the var UNSET, not merely when
+/// it is explicitly "0". Removing the var rather than setting it falsy is the whole
+/// point: a `set_var("0")` test would still pass if someone reintroduced a TTY (or
+/// any other) fallback for the unset case, so it would not guard the #778 regression
+/// this default exists to prevent.
 #[test]
-fn dispatch_cli_plugin_suppresses_bun_dev_banner_when_forced_off() {
+fn dispatch_cli_plugin_omits_bun_dev_banner_by_default() {
     let _guard = env_lock().lock().expect("env lock");
     let _restore = EnvRestore::capture();
-    std::env::set_var("MAW_DEV_TIER_BANNER", "0");
+    std::env::remove_var("MAW_DEV_TIER_BANNER");
     let root = temp_dir("bun-dev-banner-off");
     let bin_dir = root.join("bin");
     let plugins_dir = root.join("plugins");
