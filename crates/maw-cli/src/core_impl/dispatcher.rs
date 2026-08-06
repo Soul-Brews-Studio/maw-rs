@@ -975,10 +975,26 @@ mod ts_plugin_dispatch_decision_tests {
         std::fs::remove_dir_all(caller_dir).expect("cleanup caller");
         std::fs::remove_dir_all(shim_dir).expect("cleanup bun");
     }
+
+    #[test]
+    fn bun_dev_banner_decision_matrix() {
+        assert!(bun_dev_banner_decision(true, None));
+        assert!(!bun_dev_banner_decision(false, None));
+        assert!(!bun_dev_banner_decision(true, Some("0")));
+        assert!(bun_dev_banner_decision(false, Some("1")));
+        assert!(!bun_dev_banner_decision(true, Some("off")));
+        assert!(bun_dev_banner_decision(false, Some("ON")));
+        assert!(bun_dev_banner_decision(true, Some("bogus")));
+        assert!(!bun_dev_banner_decision(false, Some("")));
+    }
 }
 
 fn dispatch_bun_dev_plugin(plugin: &LoadedPlugin, ctx: &InvokeContext) -> CliOutput {
-    let banner = bun_dev_banner(&plugin.manifest.name);
+    let banner = if bun_dev_banner_wanted() {
+        bun_dev_banner(&plugin.manifest.name)
+    } else {
+        String::new()
+    };
     let Some(entry_path) = &plugin.entry_path else {
         return CliOutput {
             code: 2,
@@ -1039,6 +1055,21 @@ fn bun_dev_banner(plugin_name: &str) -> String {
     format!(
         "⚠ [dev-tier: bun] {plugin_name} — TS runs unsandboxed; ship tier = WASM (maw plugin build)\n"
     )
+}
+
+fn bun_dev_banner_wanted() -> bool {
+    bun_dev_banner_decision(
+        std::io::IsTerminal::is_terminal(&std::io::stderr()),
+        std::env::var("MAW_DEV_TIER_BANNER").ok().as_deref(),
+    )
+}
+
+fn bun_dev_banner_decision(stderr_is_tty: bool, override_env: Option<&str>) -> bool {
+    match override_env.map(|raw| raw.trim().to_ascii_lowercase()) {
+        Some(v) if matches!(v.as_str(), "0" | "false" | "no" | "off") => false,
+        Some(v) if matches!(v.as_str(), "1" | "true" | "yes" | "on") => true,
+        _ => stderr_is_tty,
+    }
 }
 
 fn plugin_cli_args<'a>(plugin: &LoadedPlugin, argv: &'a [String]) -> Option<&'a [String]> {
