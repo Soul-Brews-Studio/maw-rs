@@ -797,6 +797,55 @@ mod serve_tests {
             && entry.pubkey == "node-key-bigboy-vps-401"));
     }
 
+    // #789: `maw trust add <sender> <target> --peer-key <key>` (trust.rs)
+    // reported "trusted" and persisted a pubkey, but `load_inbound_peer_pubkeys`
+    // never read that store, so the trusted peer still 401'd on `/api/send`.
+    // Round-trips through the real CLI writer (`trust_store_add`) rather than
+    // hand-rolling JSON, so this also proves the shape `maw trust add` writes
+    // is the shape inbound auth now reads.
+    #[test]
+    fn serve_load_inbound_peer_pubkeys_reads_trust_store_as_a_pubkey_source() {
+        let _guard = env_test_lock();
+        let _home = EnvVarRestore::capture("HOME");
+        let _xdg_config = EnvVarRestore::capture("XDG_CONFIG_HOME");
+        let _xdg_state = EnvVarRestore::capture("XDG_STATE_HOME");
+        let _maw_state = EnvVarRestore::capture("MAW_STATE_DIR");
+        let _maw_home = EnvVarRestore::capture("MAW_HOME");
+        let _maw_xdg = EnvVarRestore::capture("MAW_XDG");
+        let root = std::env::temp_dir().join(format!(
+            "maw-rs-serve-trust-inbound-{}-{}",
+            std::process::id(),
+            random_hex(4)
+        ));
+        let state_dir = root.join("state");
+        std::fs::create_dir_all(&state_dir).expect("state dir");
+        std::env::set_var("HOME", root.join("home"));
+        std::env::set_var("XDG_CONFIG_HOME", root.join("config"));
+        std::env::set_var("XDG_STATE_HOME", &state_dir);
+        std::env::set_var("MAW_STATE_DIR", &state_dir);
+        std::env::remove_var("MAW_HOME");
+        std::env::remove_var("MAW_XDG");
+
+        let trust_path = trust_store_path();
+        assert_eq!(trust_path, state_dir.join("trust-store.json"));
+        trust_store_add(
+            &trust_path,
+            "hermes-agent:black",
+            "m5",
+            "trust-store-peer-key-789",
+            1_782_277_200_000,
+        )
+        .expect("trust add");
+
+        let entries = load_inbound_peer_pubkeys();
+        assert!(
+            entries.iter().any(|entry| entry.from == "hermes-agent:black"
+                && entry.node == "black"
+                && entry.pubkey == "trust-store-peer-key-789"),
+            "trust-store.json entry did not surface as an inbound pubkey source: {entries:?}"
+        );
+    }
+
     #[tokio::test]
     async fn serve_o6_node_fallback_accepts_unseeded_oracle_on_known_node() {
         let node_key = "node-key-bigboy-vps-399";
@@ -1052,6 +1101,81 @@ mod serve_tests {
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{payload}");
         assert_eq!(payload["decision"], "refuse-ambiguous-peer-key");
         assert!(delivery.sends().is_empty());
+    }
+
+    // #798: the node-only fallback used to trust "whoever holds this node's
+    // signing key" for ANY claimed oracle name, regardless of whether that
+    // name had ever been registered. `refuse-ambiguous-peer-key` above only
+    // fired when two registered entries carried DIFFERENT pubkeys -- it did
+    // nothing when two DIFFERENT oracles legitimately shared the SAME node
+    // key, which is exactly the shape that let a third, never-registered
+    // oracle name walk in on that shared key. These two tests prove the
+    // decision this fix actually encodes: once a node has more than one
+    // known oracle, the fallback stops trusting new names on that key, while
+    // the oracles that ARE already registered keep working via the ordinary
+    // exact-match path (unaffected -- it never went through the fallback).
+    #[tokio::test]
+    async fn serve_o6_node_fallback_rejects_unregistered_oracle_once_node_has_two_registered() {
+        let node_key = "node-key-bigboy-vps-shared";
+        let delivery = Arc::new(FakeServeDelivery::with_capture_agent());
+        let app = serve_test_app_with_o6_keys_and_delivery(
+            vec![
+                serve_test_peer_pubkey("nova:bigboy-vps", node_key),
+                serve_test_peer_pubkey("seed:bigboy-vps", node_key),
+            ],
+            1_782_277_200,
+            Some(NON_LOOPBACK_TEST_PEER),
+            delivery.clone(),
+        );
+        let body = r#"{"target":"capture-agent","text":"spoofed third oracle"}"#;
+        let response = app
+            .oneshot(signed_json_request(
+                "POST",
+                "/api/send",
+                body,
+                node_key,
+                "mallory:bigboy-vps",
+                1_782_277_200,
+            ))
+            .await
+            .expect("unregistered oracle response");
+        let status = response.status();
+        let payload = response_json(response).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{payload}");
+        assert_eq!(payload["decision"], "refuse-ambiguous-peer-key");
+        assert!(delivery.sends().is_empty());
+    }
+
+    #[tokio::test]
+    async fn serve_o6_node_fallback_still_accepts_each_registered_oracle_when_node_has_two() {
+        let node_key = "node-key-bigboy-vps-shared";
+        let delivery = Arc::new(FakeServeDelivery::with_capture_agent());
+        let app = serve_test_app_with_o6_keys_and_delivery(
+            vec![
+                serve_test_peer_pubkey("nova:bigboy-vps", node_key),
+                serve_test_peer_pubkey("seed:bigboy-vps", node_key),
+            ],
+            1_782_277_200,
+            Some(NON_LOOPBACK_TEST_PEER),
+            delivery.clone(),
+        );
+        let body = r#"{"target":"capture-agent","text":"registered oracle still works"}"#;
+        let response = app
+            .oneshot(signed_json_request(
+                "POST",
+                "/api/send",
+                body,
+                node_key,
+                "nova:bigboy-vps",
+                1_782_277_200,
+            ))
+            .await
+            .expect("registered oracle response");
+        let status = response.status();
+        let payload = response_json(response).await;
+        assert_eq!(status, StatusCode::OK, "{payload}");
+        assert_eq!(payload["state"], "delivered");
+        assert!(!delivery.sends().is_empty());
     }
 
     #[tokio::test]
