@@ -876,7 +876,10 @@ mod serve_tests {
         let sends = delivery.sends();
         assert_eq!(sends.len(), 1);
         assert_eq!(sends[0].0, "capture-agent:0");
-        assert_eq!(sends[0].1, "[alloy:bigboy-vps] hello node fallback");
+        // #795: the receiving node's x-maw-from header ("alloy:bigboy-vps",
+        // wire order oracle:node) must render human node:oracle, matching a
+        // local delivery's tag order.
+        assert_eq!(sends[0].1, "[bigboy-vps:alloy] hello node fallback");
     }
 
     #[tokio::test]
@@ -946,14 +949,14 @@ mod serve_tests {
             sends[0],
             (
                 "capture-agent:0".to_owned(),
-                "[alloy:bigboy-vps] codex-2 DONE #87 full suite green".to_owned()
+                "[bigboy-vps:alloy] codex-2 DONE #87 full suite green".to_owned()
             )
         );
         assert_eq!(
             sends[1],
             (
                 "capture-agent:0".to_owned(),
-                "[alloy:bigboy-vps] another turn between duplicate emissions".to_owned()
+                "[bigboy-vps:alloy] another turn between duplicate emissions".to_owned()
             )
         );
     }
@@ -1008,7 +1011,7 @@ mod serve_tests {
         let sends = delivery.sends();
         assert_eq!(sends.len(), 1);
         assert_eq!(sends[0].0, "capture-agent:0");
-        assert_eq!(sends[0].1, "[alloy:bigboy-vps] hello nested identity");
+        assert_eq!(sends[0].1, "[bigboy-vps:alloy] hello nested identity");
     }
 
     #[tokio::test]
