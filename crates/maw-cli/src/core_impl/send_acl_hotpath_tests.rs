@@ -402,6 +402,19 @@ mod send_acl_hotpath_tests {
         assert_eq!(output.stdout, "dry-run: hey me -> local 188-maw-rs:1\n");
     }
 
+    // #686: hey's success line named the target string as typed, so a
+    // collision across nodes ("33-maw-rs" resolvable on m5 AND on two
+    // different peers) could not be told apart from the confirmation alone —
+    // it took a receiver-side `lastActivity` comparison to prove which node
+    // actually received it. The node must be visible in the line itself.
+    #[test]
+    fn peer_success_line_names_the_node_it_resolved_to() {
+        assert_eq!(send_peer_success_target("blackmachine", "33-maw-rs:0"), "blackmachine:33-maw-rs:0");
+        // Callers that never track a node (notify/forward/talk_to today)
+        // keep the bare target unchanged rather than gaining a bogus prefix.
+        assert_eq!(send_peer_success_target("", "33-maw-rs:0"), "33-maw-rs:0");
+    }
+
     #[test]
     fn hey_typed_inventory_routes_exact_and_asks_on_fuzzy() {
         let sessions = vec![send_route_session(
