@@ -3,7 +3,7 @@ const DISPATCH_104: &[DispatcherEntry] = &[
     DispatcherEntry { command: "peer", handler: Handler::Sync(peers_run_command) },
 ];
 
-const PEERS_HELP: &str = "usage: maw peers <add|list|info|probe|probe-all|map|accept|remove|forget> [...]\n  add       <alias> <url> [--node <name>] [--ssh <target>] [--user <name>] [--allow-unreachable]\n            — register alias (auto-probes /info). Exits non-zero on handshake failure:\n              2=UNKNOWN/BAD_BODY/TLS  3=DNS  4=REFUSED  5=TIMEOUT  6=HTTP_4XX/5XX\n            --ssh sets the SSH config alias/target for cross-node attach; --user overrides SSH user.\n            --allow-unreachable keeps exit 0 even when the probe fails (CI/bootstrap).\n  list      [--discovered] [--all] [--json] [--limit N]\n            — tabular list of all peers. --discovered: LAN candidates from Scout (#1237).\n              --all: include already-paired (default hides). --limit: cap rows (default 50).\n  info      <alias>                         — JSON details for one peer (includes lastError if set)\n  probe     <alias>                         — re-run /info handshake; updates lastSeen / lastError (#565)\n  probe-all [--timeout <ms>] [--allow-unreachable]\n            — probe every peer in parallel; prints liveness table. Exit = worst PROBE_EXIT_CODE (#669).\n  accept    <node|zid-prefix> [--alias X] | --all (#1237)\n            — pair with a Scout-discovered peer. Shortest unambiguous prefix wins.\n              Refuses if pubkey already pins under a different alias (impersonation guard).\n  map       — federation map: node, oracle, up/down, resolved IP, and flags\n              (loopback-self = probe hit our own serve; dup-node = shared node name).\n  remove    <alias>                         — remove (idempotent)\n  forget    <alias>                         — clear cached pubkey so next contact re-TOFUs (#804 Step 2)\n\nstorage: maw state peers.json (v1; reads legacy ~/.maw/peers.json during migration)";
+const PEERS_HELP: &str = "usage: maw peers <add|list|info|probe|probe-all|map|accept|remove|forget> [...]\n  add       <alias> <url> [--node <name>] [--oracle <name>] [--ssh <target>] [--user <name>] [--allow-unreachable]\n            — register alias (auto-probes /info and /api/identity). Exits non-zero on handshake failure:\n              2=UNKNOWN/BAD_BODY/TLS  3=DNS  4=REFUSED  5=TIMEOUT  6=HTTP_4XX/5XX\n            --ssh sets the SSH config alias/target for cross-node attach; --user overrides SSH user.\n            --oracle sets identity.oracle explicitly (overrides the auto-probed value; needed when the\n              peer is unreachable at add time or predates the /api/identity probe — #794).\n            --allow-unreachable keeps exit 0 even when the probe fails (CI/bootstrap).\n  list      [--discovered] [--all] [--json] [--limit N]\n            — tabular list of all peers. --discovered: LAN candidates from Scout (#1237).\n              --all: include already-paired (default hides). --limit: cap rows (default 50).\n  info      <alias>                         — JSON details for one peer (includes lastError if set)\n  probe     <alias>                         — re-run /info handshake; updates lastSeen / lastError (#565)\n  probe-all [--timeout <ms>] [--allow-unreachable]\n            — probe every peer in parallel; prints liveness table. Exit = worst PROBE_EXIT_CODE (#669).\n  accept    <node|zid-prefix> [--alias X] | --all (#1237)\n            — pair with a Scout-discovered peer. Shortest unambiguous prefix wins.\n              Refuses if pubkey already pins under a different alias (impersonation guard).\n  map       — federation map: node, oracle, up/down, resolved IP, and flags\n              (loopback-self = probe hit our own serve; dup-node = shared node name).\n  remove    <alias>                         — remove (idempotent)\n  forget    <alias>                         — clear cached pubkey so next contact re-TOFUs (#804 Step 2)\n\nstorage: maw state peers.json (v1; reads legacy ~/.maw/peers.json during migration)";
 const PEERS_DEFAULT_STALE_TTL_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 const PEERS_DEFAULT_PROBE_TIMEOUT_MS: u64 = 2_000;
 const PEERS_FAKE_NOW_ENV: &str = "MAW_RS_PEERS_FAKE_NOW";
@@ -88,11 +88,11 @@ fn peers_validate_argv(argv: &[String]) -> Result<(), String> {
 }
 
 fn peers_known_flag(arg: &str) -> bool {
-    matches!(arg, "--node" | "--ssh" | "--user" | "--allow-unreachable" | "--timeout" | "--alias" | "--discovered" | "--all" | "--json" | "--limit" | "--help" | "-h") || arg.starts_with("--node=") || arg.starts_with("--ssh=") || arg.starts_with("--user=") || arg.starts_with("--timeout=") || arg.starts_with("--alias=") || arg.starts_with("--limit=")
+    matches!(arg, "--node" | "--oracle" | "--ssh" | "--user" | "--allow-unreachable" | "--timeout" | "--alias" | "--discovered" | "--all" | "--json" | "--limit" | "--help" | "-h") || arg.starts_with("--node=") || arg.starts_with("--oracle=") || arg.starts_with("--ssh=") || arg.starts_with("--user=") || arg.starts_with("--timeout=") || arg.starts_with("--alias=") || arg.starts_with("--limit=")
 }
 
-fn peers_flag_needs_value(arg: &str) -> bool { matches!(arg, "--node" | "--ssh" | "--user" | "--timeout" | "--alias" | "--limit") }
-fn peers_flag_with_inline_value(arg: &str) -> bool { ["--node=", "--ssh=", "--user=", "--timeout=", "--alias=", "--limit="].iter().any(|prefix| arg.starts_with(prefix)) }
+fn peers_flag_needs_value(arg: &str) -> bool { matches!(arg, "--node" | "--oracle" | "--ssh" | "--user" | "--timeout" | "--alias" | "--limit") }
+fn peers_flag_with_inline_value(arg: &str) -> bool { ["--node=", "--oracle=", "--ssh=", "--user=", "--timeout=", "--alias=", "--limit="].iter().any(|prefix| arg.starts_with(prefix)) }
 
 fn peers_validate_value(flag: &str, value: &str) -> Result<(), String> {
     if value.is_empty() || value.starts_with('-') || value.chars().any(char::is_control) { return Err(format!("{flag} requires a safe value")); }
@@ -100,18 +100,39 @@ fn peers_validate_value(flag: &str, value: &str) -> Result<(), String> {
 }
 
 fn peers_cmd_add(argv: &[String], positional: &[&str]) -> Result<CliOutput, String> {
-    let alias = *positional.get(1).ok_or("usage: maw peers add <alias> <url> [--node <name>] [--ssh <target>] [--user <name>] [--allow-unreachable]")?;
-    let url = *positional.get(2).ok_or("usage: maw peers add <alias> <url> [--node <name>] [--ssh <target>] [--user <name>] [--allow-unreachable]")?;
+    let alias = *positional.get(1).ok_or("usage: maw peers add <alias> <url> [--node <name>] [--oracle <name>] [--ssh <target>] [--user <name>] [--allow-unreachable]")?;
+    let url = *positional.get(2).ok_or("usage: maw peers add <alias> <url> [--node <name>] [--oracle <name>] [--ssh <target>] [--user <name>] [--allow-unreachable]")?;
     peers_validate_alias(alias)?;
     peers_validate_url(url)?;
     let node = peers_flag_value(argv, "--node");
     if let Some(node) = &node { peers_validate_node(node)?; }
+    let oracle = peers_flag_value(argv, "--oracle");
+    if let Some(oracle) = &oracle { peers_validate_oracle(oracle)?; }
     let ssh = peers_flag_value(argv, "--ssh").map(|value| peers_clean_optional(&value, "--ssh")).transpose()?;
     let ssh_user = peers_flag_value(argv, "--user").map(|value| peers_clean_optional(&value, "--user")).transpose()?;
     let mut store = peers_load_store();
-    let overwrote = store.peers.contains_key(alias);
+    // #678: seed pubkey/pubkeyFirstSeen (and any previously-probed identity)
+    // from the EXISTING entry, not a bare `PeersPeerNative::default()`. Before
+    // this, every `peers add` — including a plain re-add that only repoints
+    // the URL — started from a fresh struct with `pubkey: None`, so
+    // `peers_apply_probe_result`'s "only bump pubkeyFirstSeen when the key
+    // changed" check always saw `None != Some(current_key)` and reset the
+    // TOFU anchor on every single re-add, even when the key hadn't moved.
+    let existing = store.peers.get(alias).cloned();
+    let overwrote = existing.is_some();
     let now = peers_now_iso();
-    let mut peer = PeersPeerNative { url: url.to_owned(), node, added_at: now.clone(), last_seen: None, ssh, ssh_user, ..PeersPeerNative::default() };
+    let mut peer = PeersPeerNative {
+        url: url.to_owned(),
+        node,
+        added_at: now.clone(),
+        last_seen: None,
+        ssh,
+        ssh_user,
+        pubkey: existing.as_ref().and_then(|entry| entry.pubkey.clone()),
+        pubkey_first_seen: existing.as_ref().and_then(|entry| entry.pubkey_first_seen.clone()),
+        identity: existing.as_ref().and_then(|entry| entry.identity.clone()),
+        ..PeersPeerNative::default()
+    };
     let probe = if argv.iter().any(|arg| arg == "--allow-unreachable") {
         None
     } else {
@@ -119,6 +140,12 @@ fn peers_cmd_add(argv: &[String], positional: &[&str]) -> Result<CliOutput, Stri
         peers_apply_probe_result(&mut peer, &probe, &now)?;
         Some(probe)
     };
+    // #794: `--oracle` is an explicit override applied last, so it always
+    // wins over whatever (if anything) the /api/identity auto-probe found —
+    // and it's the only way to set identity.oracle at all when the peer is
+    // unreachable at add time (--allow-unreachable skips the probe
+    // entirely) or the probe fails/predates /api/identity.
+    if let Some(oracle) = &oracle { peers_set_identity_oracle(&mut peer, oracle); }
     store.peers.insert(alias.to_owned(), peer.clone());
     peers_save_store(&store)?;
     let mut stdout = String::new();
@@ -131,6 +158,29 @@ fn peers_cmd_add(argv: &[String], positional: &[&str]) -> Result<CliOutput, Stri
         return Ok(peers_ok(&stdout));
     }
     Ok(CliOutput { code, stdout, stderr: peers_probe_stderr(alias, &peer.url, &probe) })
+}
+
+fn peers_validate_oracle(oracle: &str) -> Result<(), String> { peers_validate_alias(oracle).map_err(|_| format!("invalid --oracle \"{oracle}\"")) }
+
+/// Sets `identity.oracle` (and backfills `identity.node` from `peer.node`
+/// when the identity object doesn't already carry one) so the resulting
+/// shape matches what `serve.rs`'s `identity_from_object` needs to pin a
+/// sender's pubkey under `oracle:node` (#794) — an `identity` with an empty
+/// or missing `oracle` can never satisfy that lookup, which is exactly what
+/// left signed cross-node `hey` permanently 401ing after the documented
+/// `peers add` workaround.
+fn peers_set_identity_oracle(peer: &mut PeersPeerNative, oracle: &str) {
+    let mut map = match peer.identity.take() {
+        Some(serde_json::Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
+    };
+    map.insert("oracle".to_owned(), serde_json::Value::String(oracle.to_owned()));
+    if !map.contains_key("node") {
+        if let Some(node) = &peer.node {
+            map.insert("node".to_owned(), serde_json::Value::String(node.clone()));
+        }
+    }
+    peer.identity = Some(serde_json::Value::Object(map));
 }
 
 fn peers_cmd_list(argv: &[String]) -> Result<CliOutput, String> {
@@ -638,10 +688,15 @@ fn peers_cmd_map() -> CliOutput {
     peers_ok(&format!("{}\n", peers_format_map(&rows)))
 }
 
+// #759: this used to `remove_file` the writer's `peers.json.tmp` as a side
+// effect of a plain read, racing `peers_save_store`'s atomic
+// write-tmp-then-rename below — a concurrent writer's in-flight tmp file
+// could vanish out from under it between its `fs::write` and `fs::rename`,
+// making the rename fail. A stray leftover `.tmp` from a crash is harmless
+// on its own (the next successful save overwrites it before renaming), so a
+// read has no reason to touch it at all. Reads must be read-only.
 fn peers_load_store() -> PeersStoreNative {
     let path = peers_path();
-    let tmp = path.with_extension("json.tmp");
-    let _ = std::fs::remove_file(tmp);
     let Ok(raw) = std::fs::read_to_string(&path) else { return PeersStoreNative { version: 1, peers: std::collections::BTreeMap::new() }; };
     serde_json::from_str(&raw).unwrap_or_default()
 }
@@ -952,5 +1007,136 @@ mod peers_tests {
         let value = serde_json::json!({ "node": "m5", "oracle": "arra", "pubkey": "78ebf563", "version": "v26.7.16", "uptime": 1 });
         assert_eq!(peers_probe_identity_body(&value), maw_peer::ProbeRemoteIdentity::Body { pubkey: Some("78ebf563".to_owned()), oracle: Some("arra".to_owned()), node: Some("m5".to_owned()) });
         assert_eq!(peers_probe_identity_body(&serde_json::json!({})), maw_peer::ProbeRemoteIdentity::Body { pubkey: None, oracle: None, node: None });
+    }
+
+    fn peers_env_root(label: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("maw-rs-peers-{label}-{}-{}", std::process::id(), random_hex(4)))
+    }
+
+    // #678 (part 1): re-adding an alias used to build the new peer record
+    // from a bare `PeersPeerNative::default()`, ignoring whatever was
+    // already stored — so `pubkey`/`pubkeyFirstSeen` always started `None`
+    // and the TOFU anchor reset on every re-add, even a plain "repoint the
+    // URL" one where the pinned key never changed. Reverting `peers_cmd_add`
+    // to seed `peer` from `PeersPeerNative::default()` instead of `existing`
+    // turns this red.
+    #[test]
+    fn peers_add_preserves_pubkey_first_seen_on_unchanged_readd() {
+        let _guard = env_test_lock();
+        let _restore = EnvVarRestore::capture("PEERS_FILE");
+        let root = peers_env_root("678");
+        std::fs::create_dir_all(&root).expect("root");
+        let peers_path = root.join("peers.json");
+        std::env::set_var("PEERS_FILE", &peers_path);
+        std::fs::write(
+            &peers_path,
+            r#"{"version":1,"peers":{"neo":{"url":"http://neo.example:3456","node":"neo-node","addedAt":"1700000000000","pubkey":"pub-existing","pubkeyFirstSeen":"1600000000000"}}}"#,
+        )
+        .expect("seed store");
+
+        let out = peers_run_command(&peers_args(&["add", "neo", "http://neo.example:9999", "--allow-unreachable"]));
+        assert_eq!(out.code, 0, "{}", out.stderr);
+
+        let store: PeersStoreNative = serde_json::from_str(&std::fs::read_to_string(&peers_path).expect("read")).expect("json");
+        let peer = store.peers.get("neo").expect("peer present");
+        assert_eq!(peer.url, "http://neo.example:9999", "url should update to the newly-given address");
+        assert_eq!(peer.pubkey.as_deref(), Some("pub-existing"), "pubkey must survive a plain re-add");
+        assert_eq!(
+            peer.pubkey_first_seen.as_deref(),
+            Some("1600000000000"),
+            "pubkeyFirstSeen must not reset when the pinned key is unchanged"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    // #678 (part 1, changed-key case): when the probed key genuinely
+    // differs from what's stored, pubkeyFirstSeen SHOULD move — proving the
+    // fix doesn't just freeze the field forever. Composed the same way
+    // `peers_cmd_add` seeds+applies: seed from `existing`, then run the
+    // already-covered `peers_apply_probe_result` comparison on top.
+    #[test]
+    fn peers_add_updates_pubkey_first_seen_when_key_actually_changes() {
+        let existing = PeersPeerNative {
+            url: "http://old.example:3456".to_owned(),
+            pubkey: Some("pub-old".to_owned()),
+            pubkey_first_seen: Some("1600000000000".to_owned()),
+            ..PeersPeerNative::default()
+        };
+        let mut peer = PeersPeerNative {
+            url: "http://new.example:3456".to_owned(),
+            pubkey: existing.pubkey.clone(),
+            pubkey_first_seen: existing.pubkey_first_seen.clone(),
+            ..PeersPeerNative::default()
+        };
+        let probe = peers_probe_plan_with_identity(Some(maw_peer::ProbeRemoteIdentity::Body {
+            pubkey: Some("pub-new".to_owned()),
+            oracle: Some("oracle-x".to_owned()),
+            node: Some("peer-node".to_owned()),
+        }));
+        peers_apply_probe_result(&mut peer, &probe, "1700000999999").unwrap();
+        assert_eq!(peer.pubkey.as_deref(), Some("pub-new"));
+        assert_eq!(peer.pubkey_first_seen.as_deref(), Some("1700000999999"));
+    }
+
+    // #794: `maw peers add` used to only populate node/url/pubkey from the
+    // plain /info probe, never identity.oracle — leaving peer entries added
+    // via the documented manual workaround permanently unable to satisfy
+    // `identity_from_object`'s oracle:node lookup (401
+    // refuse-missing-peer-key on signed cross-node `hey`, even after a
+    // `maw serve` restart). Reverting the `--oracle` handling out of
+    // `peers_cmd_add` turns this red: `identity` stays absent because
+    // `--allow-unreachable` skips the /api/identity auto-probe too.
+    #[test]
+    fn peers_add_sets_identity_oracle_from_flag() {
+        let _guard = env_test_lock();
+        let _restore = EnvVarRestore::capture("PEERS_FILE");
+        let root = peers_env_root("794");
+        std::fs::create_dir_all(&root).expect("root");
+        let peers_path = root.join("peers.json");
+        std::env::set_var("PEERS_FILE", &peers_path);
+
+        let out = peers_run_command(&peers_args(&[
+            "add", "black", "https://black.example:3456", "--node", "black", "--oracle", "artifacts-oracle", "--allow-unreachable",
+        ]));
+        assert_eq!(out.code, 0, "{}", out.stderr);
+
+        let store: PeersStoreNative = serde_json::from_str(&std::fs::read_to_string(&peers_path).expect("read")).expect("json");
+        let peer = store.peers.get("black").expect("peer present");
+        let identity = peer.identity.as_ref().expect("identity set");
+        assert_eq!(identity["oracle"], "artifacts-oracle");
+        assert_eq!(identity["node"], "black");
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn peers_add_rejects_unsafe_oracle_flag() {
+        let out = peers_run_command(&peers_args(&["add", "black", "https://black.example:3456", "--oracle", "not safe", "--allow-unreachable"]));
+        assert_ne!(out.code, 0);
+        assert!(out.stderr.contains("requires a safe value") || out.stderr.contains("invalid --oracle"), "{}", out.stderr);
+    }
+
+    // #759: a plain read used to `remove_file` the writer's `peers.json.tmp`
+    // as a side effect — racing `peers_save_store`'s
+    // write-tmp-then-rename. Reverting `peers_load_store` to re-add the
+    // `remove_file` call turns this red.
+    #[test]
+    fn peers_load_store_does_not_delete_writer_tmp_file() {
+        let _guard = env_test_lock();
+        let _restore = EnvVarRestore::capture("PEERS_FILE");
+        let root = peers_env_root("759");
+        std::fs::create_dir_all(&root).expect("root");
+        let peers_path = root.join("peers.json");
+        std::env::set_var("PEERS_FILE", &peers_path);
+        std::fs::write(&peers_path, r#"{"version":1,"peers":{}}"#).expect("seed store");
+        let tmp_path = peers_path.with_extension("json.tmp");
+        std::fs::write(&tmp_path, "in-flight writer content").expect("seed tmp");
+
+        let _store = peers_load_store();
+
+        assert!(tmp_path.exists(), "reading the peer store must never delete a concurrent writer's .tmp file");
+
+        let _ = std::fs::remove_dir_all(root);
     }
 }

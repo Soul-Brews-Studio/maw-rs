@@ -32,6 +32,9 @@ struct PairAcceptPlan {
 struct PairGenerateLive {
     code_pretty: String,
     status_polled: bool,
+    peers_written: bool,
+    remote_node: Option<String>,
+    remote_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,7 +54,7 @@ struct PairConfig {
 
 trait PairHost {
     fn pair_config(&mut self) -> PairConfig;
-    fn pair_generate_live(&mut self, plan: &PairGeneratePlan) -> Result<PairGenerateLive, String>;
+    fn pair_generate_live(&mut self, plan: &PairGeneratePlan, config: &PairConfig) -> Result<PairGenerateLive, String>;
     fn pair_accept_live(&mut self, plan: &PairAcceptPlan, config: &PairConfig) -> Result<PairAcceptLive, String>;
 }
 
@@ -63,17 +66,36 @@ impl PairHost for PairSystemHost {
         PairConfig {
             node: config.node.unwrap_or_else(|| "local".to_owned()),
             oracle: config.oracle,
-            port: 3456,
+            port: pair_resolve_local_port(),
         }
     }
 
-    fn pair_generate_live(&mut self, plan: &PairGeneratePlan) -> Result<PairGenerateLive, String> {
-        pair_system_generate_live(plan)
+    fn pair_generate_live(&mut self, plan: &PairGeneratePlan, config: &PairConfig) -> Result<PairGenerateLive, String> {
+        pair_system_generate_live(plan, config)
     }
 
     fn pair_accept_live(&mut self, plan: &PairAcceptPlan, config: &PairConfig) -> Result<PairAcceptLive, String> {
         pair_system_accept_live(plan, config)
     }
+}
+
+// #734 (client side): `PairConfig.port` used to be hardcoded to 3456 here
+// regardless of the real serve port in maw.config.json, even though
+// node/oracle already resolved through `load_hey_config()` two lines above.
+// That wrong port leaked into two places: the default `--at` target for
+// `maw pair generate` (explaining the issue's "pair generate without --at
+// fails with HTTP 404" side-note when serve runs on a non-default port),
+// and the self-identifying `url` this side POSTs in its own accept body —
+// which #793 wires into the *other* side's peers.json entry, so a wrong
+// port here would poison the responder's record too. Same
+// env-override-then-config-then-default pattern as `pairing.rs`'s
+// `pair_config_from_env()`.
+fn pair_resolve_local_port() -> u16 {
+    std::env::var("MAW_PORT")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .or_else(load_hey_config_port)
+        .unwrap_or(3456)
 }
 
 fn pair_run_command(argv: &[String]) -> CliOutput {
@@ -93,7 +115,8 @@ fn pair_run(argv: &[String], host: &mut impl PairHost) -> Result<String, String>
     match pair_parse(argv, host)? {
         PairAction::Help => Ok(pair_help()),
         PairAction::Generate(plan) => {
-            let live = host.pair_generate_live(&plan)?;
+            let config = host.pair_config();
+            let live = host.pair_generate_live(&plan, &config)?;
             Ok(pair_render_generate(&plan, &live))
         }
         PairAction::Accept(plan) => {
@@ -264,11 +287,16 @@ fn pair_positional_summary(argv: &[String]) -> String {
 
 fn pair_render_generate(plan: &PairGeneratePlan, live: &PairGenerateLive) -> String {
     let ttl_ms = plan.expires_sec * 1000;
+    let peer_line = match (&live.remote_node, &live.remote_url) {
+        (Some(node), Some(url)) => format!("   peer: {node} {url}\n"),
+        _ => String::new(),
+    };
     format!(
-        "🤝 pair generate live\n   local server: {}\n   code: {}\n   ttlMs: {ttl_ms}\n   status poll: {}\n   waits for explicit remote accept; no auto-approve surface is exposed\n   token: <redacted>\n",
+        "🤝 pair generate live\n   local server: {}\n   code: {}\n   ttlMs: {ttl_ms}\n   status poll: {}\n{peer_line}   peers.json: {}\n   waits for explicit remote accept; no auto-approve surface is exposed\n   token: <redacted>\n",
         plan.local_url,
         live.code_pretty,
-        if live.status_polled { "ok" } else { "skipped" }
+        if live.status_polled { "ok" } else { "skipped" },
+        if live.peers_written { "atomic write ok" } else { "not written" }
     )
 }
 
@@ -290,7 +318,20 @@ fn pair_render_accept(plan: &PairAcceptPlan, config: &PairConfig, live: &PairAcc
     )
 }
 
-fn pair_system_generate_live(plan: &PairGeneratePlan) -> Result<PairGenerateLive, String> {
+// #793: the responder ("generate") side of a pair handshake used to issue a
+// single immediate status poll, discard the body, and never loop — so
+// nothing ever finalized *this* side's peers.json entry, no matter how long
+// the remote took to accept. `maw pair generate`'s own help text already
+// promised "waits for explicit remote accept"; this makes that literally
+// true: poll `/api/pair/status/:code` until the server reports
+// `consumed: true` (at which point it carries `remoteNode`/`remoteUrl` —
+// the accepting side's own self-identification, see
+// `pair_system_accept_live`'s request body below) or `plan.expires_sec`
+// elapses, whichever comes first, then write that peer — mirroring what the
+// accept side already does for the node it just paired with.
+const PAIR_GENERATE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+fn pair_system_generate_live(plan: &PairGeneratePlan, config: &PairConfig) -> Result<PairGenerateLive, String> {
     let body = serde_json::json!({ "ttlMs": plan.expires_sec.saturating_mul(1_000) }).to_string();
     let response = pair_http_json("POST", &format!("{}/api/pair/generate", plan.local_url), Some(body))?;
     if !(200..300).contains(&response.status) { return Err(format!("pair generate failed: HTTP {}", response.status)); }
@@ -298,9 +339,69 @@ fn pair_system_generate_live(plan: &PairGeneratePlan) -> Result<PairGenerateLive
     let code = pair_json_string(&value, "code").ok_or_else(|| "pair generate: missing code".to_owned())?;
     let normalized = pair_normalize_code(&code);
     if !pair_is_valid_code(&normalized) { return Err("pair generate: invalid code returned".to_owned()); }
-    let status_url = format!("{}/api/pair/status/{}", plan.local_url, normalized);
-    let status_polled = pair_http_json("GET", &status_url, None).is_ok();
-    Ok(PairGenerateLive { code_pretty: pair_pretty_code(&normalized), status_polled })
+    pair_system_generate_wait_and_write(plan, &normalized, config)
+}
+
+/// Polls `/api/pair/status/:code` for an already-minted code until the
+/// remote accepts (`consumed: true`) or `plan.expires_sec` elapses, writing
+/// the responder's own peers.json entry on success. Split out from
+/// `pair_system_generate_live` so tests can drive this half deterministically
+/// against a known code instead of racing a randomly-minted one.
+fn pair_system_generate_wait_and_write(
+    plan: &PairGeneratePlan,
+    normalized_code: &str,
+    config: &PairConfig,
+) -> Result<PairGenerateLive, String> {
+    let status_url = format!("{}/api/pair/status/{}", plan.local_url, normalized_code);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(plan.expires_sec);
+    let mut status_polled = false;
+    loop {
+        if let Ok(response) = pair_http_json("GET", &status_url, None) {
+            if (200..300).contains(&response.status) {
+                status_polled = true;
+                if let Ok(value) = pair_parse_json(&response.body, "pair status") {
+                    if value.get("consumed").and_then(serde_json::Value::as_bool) == Some(true) {
+                        return pair_system_generate_finalize(normalized_code, &value, config, status_polled);
+                    }
+                }
+            }
+        }
+        if std::time::Instant::now() >= deadline { break; }
+        std::thread::sleep(PAIR_GENERATE_POLL_INTERVAL);
+    }
+    Ok(PairGenerateLive {
+        code_pretty: pair_pretty_code(normalized_code),
+        status_polled,
+        peers_written: false,
+        remote_node: None,
+        remote_url: None,
+    })
+}
+
+fn pair_system_generate_finalize(
+    normalized_code: &str,
+    status: &serde_json::Value,
+    config: &PairConfig,
+    status_polled: bool,
+) -> Result<PairGenerateLive, String> {
+    let code_pretty = pair_pretty_code(normalized_code);
+    let (Some(remote_node), Some(remote_url)) = (
+        pair_json_string(status, "remoteNode"),
+        pair_json_string(status, "remoteUrl"),
+    ) else {
+        // Consumed but the server didn't carry the acceptor's identity —
+        // nothing safe to write; report the poll succeeded without a peer.
+        return Ok(PairGenerateLive { code_pretty, status_polled, peers_written: false, remote_node: None, remote_url: None });
+    };
+    pair_validate_peer_identity(&remote_node, &remote_url)?;
+    pair_write_peer(&remote_node, &remote_url, config.oracle.as_deref())?;
+    Ok(PairGenerateLive {
+        code_pretty,
+        status_polled,
+        peers_written: true,
+        remote_node: Some(remote_node),
+        remote_url: Some(remote_url),
+    })
 }
 
 fn pair_system_accept_live(plan: &PairAcceptPlan, config: &PairConfig) -> Result<PairAcceptLive, String> {
@@ -434,8 +535,14 @@ mod pair_tests {
             PairConfig { node: "fake-node".to_owned(), oracle: Some("fake-oracle".to_owned()), port: 5002 }
         }
 
-        fn pair_generate_live(&mut self, _plan: &PairGeneratePlan) -> Result<PairGenerateLive, String> {
-            Ok(PairGenerateLive { code_pretty: "W4K-7F3".to_owned(), status_polled: true })
+        fn pair_generate_live(&mut self, _plan: &PairGeneratePlan, _config: &PairConfig) -> Result<PairGenerateLive, String> {
+            Ok(PairGenerateLive {
+                code_pretty: "W4K-7F3".to_owned(),
+                status_polled: true,
+                peers_written: true,
+                remote_node: Some("peer-node".to_owned()),
+                remote_url: Some("https://peer.example".to_owned()),
+            })
         }
 
         fn pair_accept_live(&mut self, _plan: &PairAcceptPlan, _config: &PairConfig) -> Result<PairAcceptLive, String> {
@@ -522,6 +629,155 @@ mod pair_tests {
         assert!(pair_output(&["https://peer", "BAD000"]).stderr.contains("invalid code shape"));
     }
 
+    // #734 (client side): `PairSystemHost::pair_config().port` used to be
+    // hardcoded to 3456, so a real serve running on a non-default port fed
+    // the wrong port into `maw pair generate`'s default `--at` target and
+    // into the self-identifying URL this side posts in its own accept body.
+    // Reverting `pair_resolve_local_port()` back to a bare `3456` literal
+    // turns this red.
+    #[test]
+    fn pair_config_uses_configured_port_not_hardcoded_default() {
+        let _guard = env_test_lock();
+        let _home = EnvVarRestore::capture("HOME");
+        let _xdg = EnvVarRestore::capture("XDG_CONFIG_HOME");
+        let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
+        let _maw_home = EnvVarRestore::capture("MAW_HOME");
+        let _port = EnvVarRestore::capture("MAW_PORT");
+        let root = std::env::temp_dir().join(format!(
+            "maw-rs-pair-config-port-{}-{}",
+            std::process::id(),
+            random_hex(4)
+        ));
+        std::fs::create_dir_all(root.join("config")).expect("config dir");
+        std::fs::write(
+            root.join("config/maw.config.json"),
+            r#"{"node":"fleet","port":3457}"#,
+        )
+        .expect("config write");
+        std::env::set_var("HOME", root.join("home"));
+        std::env::set_var("XDG_CONFIG_HOME", root.join("xdg-config"));
+        std::env::set_var("MAW_CONFIG_DIR", root.join("config"));
+        std::env::remove_var("MAW_HOME");
+        std::env::remove_var("MAW_PORT");
+
+        let mut host = PairSystemHost;
+        let config = host.pair_config();
+        assert_eq!(config.node, "fleet");
+        assert_eq!(
+            config.port, 3457,
+            "pair_config() must read the configured serve port, not the hardcoded default"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn pair_render_generate_omits_peer_line_when_nothing_was_written() {
+        let plan = PairGeneratePlan { local_url: "http://localhost:5002".to_owned(), expires_sec: 60 };
+        let live = PairGenerateLive {
+            code_pretty: "W4K-7F3".to_owned(),
+            status_polled: true,
+            peers_written: false,
+            remote_node: None,
+            remote_url: None,
+        };
+        let rendered = pair_render_generate(&plan, &live);
+        assert!(!rendered.contains("peer:"));
+        assert!(rendered.contains("peers.json: not written"));
+    }
+
+    // #793 regression: `pair_system_generate_live` used to issue exactly one
+    // immediate status poll, discard the body, and never loop or write a
+    // peer — so the responder ("generate") side of a real pair handshake
+    // never got a peers.json entry no matter how long it waited or whether
+    // the remote actually accepted. This drives the real poll-and-write
+    // helper against a real pairing server with a simulated concurrent
+    // remote accept and proves the responder's own peers.json entry lands.
+    // Reverting `pair_system_generate_wait_and_write` to the old
+    // single-shot `.is_ok()` poll (no loop, no `pair_write_peer` call)
+    // turns this red: `live.peers_written` stays false and no peers.json
+    // is written under `root`.
+    #[test]
+    fn pair_generate_writes_responder_peer_after_simulated_remote_accept() {
+        let _guard = env_test_lock();
+        let _peers_file = EnvVarRestore::capture("PEERS_FILE");
+        let _home = EnvVarRestore::capture("HOME");
+        let _maw_home = EnvVarRestore::capture("MAW_HOME");
+        let _xdg_state = EnvVarRestore::capture("XDG_STATE_HOME");
+        let root = std::env::temp_dir().join(format!(
+            "maw-rs-pair-generate-793-{}-{}",
+            std::process::id(),
+            random_hex(4)
+        ));
+        let peers_path = root.join("state").join("peers.json");
+        std::fs::create_dir_all(root.join("state")).expect("state dir");
+        std::env::set_var("HOME", &root);
+        std::env::set_var("PEERS_FILE", &peers_path);
+        std::env::remove_var("MAW_HOME");
+        std::env::remove_var("XDG_STATE_HOME");
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        listener.set_nonblocking(true).expect("nonblocking");
+        // Intentionally never joined: the server loop runs forever, same as
+        // `pairing.rs`'s own `pair_spawn()` test helper (which forgets its
+        // shutdown sender) — the process exit reaps it.
+        let _server_thread = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Runtime::new().expect("server runtime");
+            runtime.block_on(async move {
+                let tokio_listener = tokio::net::TcpListener::from_std(listener).expect("tokio listener");
+                let app = crate::serve_core::servecore_apply_pipeline(
+                    crate::serve_core::modules::pairing::pair_mount(axum::Router::new()),
+                );
+                axum::serve(tokio_listener, app).await.expect("pair test server");
+            });
+        });
+
+        let local_url = format!("http://{addr}");
+        let generate_response = pair_http_json(
+            "POST",
+            &format!("{local_url}/api/pair/generate"),
+            Some(serde_json::json!({ "ttlMs": 5_000 }).to_string()),
+        )
+        .expect("generate request");
+        assert_eq!(generate_response.status, 201, "{}", generate_response.body);
+        let generated: serde_json::Value =
+            serde_json::from_str(&generate_response.body).expect("generate json");
+        let code = generated["code"].as_str().expect("code present").to_owned();
+        let normalized = pair_normalize_code(&code);
+
+        let accept_url = format!("{local_url}/api/pair/{normalized}");
+        let acceptor = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            pair_http_json(
+                "POST",
+                &accept_url,
+                Some(
+                    serde_json::json!({ "node": "acceptor-node", "url": "https://acceptor.example" })
+                        .to_string(),
+                ),
+            )
+        });
+
+        let plan = PairGeneratePlan { local_url: local_url.clone(), expires_sec: 5 };
+        let config = PairConfig { node: "responder-node".to_owned(), oracle: Some("responder-oracle".to_owned()), port: addr.port() };
+
+        let live = pair_system_generate_wait_and_write(&plan, &normalized, &config).expect("wait and write");
+
+        let accept_response = acceptor.join().expect("acceptor thread").expect("accept request");
+        assert_eq!(accept_response.status, 200, "{}", accept_response.body);
+
+        assert!(live.status_polled);
+        assert!(live.peers_written, "expected the responder side to write a peer entry after the remote accepted");
+        assert_eq!(live.remote_node.as_deref(), Some("acceptor-node"));
+        assert_eq!(live.remote_url.as_deref(), Some("https://acceptor.example"));
+
+        let raw = std::fs::read_to_string(&peers_path).expect("read peers.json");
+        let value: serde_json::Value = serde_json::from_str(&raw).expect("peers json");
+        assert_eq!(value["peers"]["acceptor-node"]["url"], "https://acceptor.example");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn pair_write_peer_uses_atomic_peer_store_path() {
