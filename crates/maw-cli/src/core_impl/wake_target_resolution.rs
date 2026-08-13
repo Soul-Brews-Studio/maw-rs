@@ -81,6 +81,28 @@ fn wake_oracle(options: &WakeOptionsNative) -> Result<String, String> {
     let raw = raw.strip_suffix(".git").unwrap_or(raw);
     let oracle = raw.strip_suffix("-oracle").unwrap_or(raw).trim();
     wake_validate_slug(oracle, "oracle")?;
+    // #785 (sub-bug A): tmux's own `new-session -s <name>` silently
+    // substitutes any literal '.' in a session name with '_' -- no error,
+    // no warning (verified directly against tmux 3.4: `new-session -s
+    // "60-a.b"` returns 0 but the session tmux actually creates is named
+    // "60-a_b"). `wake_session_name`/`wake_window_name` embed `oracle`
+    // straight into the tmux session/window name they create, so a dotted
+    // identity makes maw-rs believe it created a session that tmux quietly
+    // named something else -- every lookup that follows (by the ORIGINAL
+    // dotted name) then fails, e.g. `can't find session: 60-a.b`. Reject
+    // before any tmux call runs, naming the identity as the caller actually
+    // typed it (`options.target`), not this already-stripped `oracle`
+    // variable. `"."` alone is the current-directory shorthand
+    // (`wake_should_bypass_typed_resolution`), not a real identity -- it
+    // never reaches a literal '.' in the constructed session/window name in
+    // practice (repo-path resolution takes over), so it's exempt.
+    if oracle != "." && oracle.contains('.') {
+        return Err(format!(
+            "wake: oracle identity '{}' contains '.', which tmux silently renames in session names (e.g. 'a.b' becomes 'a_b') -- use a name without '.' \
+             or pass --name to override it",
+            options.target
+        ));
+    }
     Ok(oracle.to_owned())
 }
 
@@ -245,11 +267,45 @@ fn wake_resolve_repo_target(oracle: &str, fleet_entries: &[NativeFleetEntry]) ->
                 matched_window: None,
             })
         }
-        maw_matcher::ResolveTypedResult::Ambiguous { candidates } => Err(format!(
-            "wake: ambiguous fuzzy repo for {oracle}: {}",
-            candidates.into_iter().map(|candidate| candidate.candidate.name).collect::<Vec<_>>().join(", ")
-        )),
+        maw_matcher::ResolveTypedResult::Ambiguous { candidates: ambiguous } => {
+            Err(format!("wake: ambiguous fuzzy repo for {oracle}: {}", wake_ambiguous_repo_labels(candidates, ambiguous).join(", ")))
+        }
         maw_matcher::ResolveTypedResult::None => Err(wake_repo_not_found_message(oracle, &typed)),
+    }
+}
+
+// Two repos can share a basename across orgs (e.g. `Soul-Brews-Studio/odin-oracle`
+// vs `laris-co/odin-oracle`, #799) -- which is exactly the case `ResolveMatch`
+// equality (kind+name+aliases, no path) can't tell apart, so a naive
+// find-by-equality would map every ambiguous entry back to the same
+// candidate and print the same label twice. `resolve_typed_target` builds its
+// `Ambiguous` list by scanning the input candidates in order and pushing
+// matches as it goes, so this list and `candidates` share relative order for
+// same-name entries too -- consuming one candidate per ambiguous entry (by
+// position, removed once used) pairs each entry with the right repo instead
+// of the first lookalike.
+fn wake_ambiguous_repo_labels(candidates: Vec<WakeTypedRepoCandidate>, ambiguous: Vec<maw_matcher::ResolveMatch>) -> Vec<String> {
+    let mut remaining = candidates;
+    ambiguous
+        .into_iter()
+        .map(|matched| {
+            let Some(index) = remaining.iter().position(|candidate| candidate.candidate == matched.candidate) else {
+                return matched.candidate.name;
+            };
+            wake_org_repo_label(&remaining.remove(index).path, &matched.candidate.name)
+        })
+        .collect()
+}
+
+// `org/repo` from a ghq-style path (`<ghq-root>/github.com/<org>/<repo>`) --
+// falls back to the bare name if the path is too shallow to have both.
+fn wake_org_repo_label(path: &std::path::Path, fallback_name: &str) -> String {
+    let mut components = path.components().rev();
+    let repo = components.next().and_then(|component| component.as_os_str().to_str());
+    let org = components.next().and_then(|component| component.as_os_str().to_str());
+    match (org, repo) {
+        (Some(org), Some(repo)) => format!("{org}/{repo}"),
+        _ => fallback_name.to_owned(),
     }
 }
 

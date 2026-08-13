@@ -732,15 +732,43 @@ fn wake_registry_windows(
         .into_iter()
         .find(|session| session.name == resolved.session)
         .map_or_else(Vec::new, |session| fleet_registry_windows_from_tmux(&session.windows, None));
-    if !windows.iter().any(|window| window.name == resolved.window) {
-        if let Some(repo) = fleet_repo_slug_from_path(&resolved.repo_path, None) {
-            windows.push(FleetWindowSummary {
-                name: resolved.window.clone(),
-                repo,
-                kind: Some(fleet_kind_from_window_name(&resolved.window)),
-            });
+    // Every window `wake` is actually touching here -- the one it just
+    // created and any sibling already registered against the same repo (a
+    // fan-out, or a `--task`/`--wt` follow-up window on the same repo path)
+    // -- gets its kind derived from what the repo on disk actually looks
+    // like, not `fleet_kind_from_window_name`'s name-only guess. That guess
+    // is what `fleet_registry_windows_from_tmux`'s live-scan uses, and the
+    // window name here is oracle-derived with any `-oracle` suffix already
+    // stripped (`wake_oracle`) -- so it always came back "project", and
+    // recomputing it that way on every wake call would keep re-breaking a
+    // sibling window each time a *different* window on the same repo is the
+    // one being freshly touched (#783). Windows on other repos are untouched.
+    let kind = Some(wake_registration_kind(&resolved.repo_path, &resolved.window));
+    if let Some(repo) = fleet_repo_slug_from_path(&resolved.repo_path, None) {
+        let repo_key = fleet_repo_canonical_key(&repo);
+        for window in &mut windows {
+            if fleet_repo_canonical_key(&window.repo) == repo_key {
+                window.kind = kind;
+            }
+        }
+        if !windows.iter().any(|window| window.name == resolved.window) {
+            windows.push(FleetWindowSummary { name: resolved.window.clone(), repo, kind });
         }
     }
     windows
+}
+
+// #783: the window name alone (`resolved.window`) is oracle-derived and has
+// already had any `-oracle` suffix stripped by `wake_oracle` -- so
+// `fleet_kind_from_window_name` (built for scanning *live tmux* window
+// names, which do carry the raw suffix) always missed it here and every
+// freshly auto-registered oracle got hardcoded `kind:"project"`, which
+// permanently defeats `maw locate`'s disk layer for it (#750 is the same
+// short-circuit downstream). Ask what the repo on disk actually looks like
+// instead: its own directory name (not the stripped window name) for the
+// `-oracle` suffix, or the ψ/+CLAUDE.md shape every bud/awaken produces.
+fn wake_registration_kind(repo_path: &std::path::Path, window_name: &str) -> NativeRepoKind {
+    let repo_name = repo_path.file_name().and_then(std::ffi::OsStr::to_str).unwrap_or(window_name);
+    if native_repo_shape_looks_like_oracle(repo_path, repo_name) { NativeRepoKind::Oracle } else { NativeRepoKind::Project }
 }
 
