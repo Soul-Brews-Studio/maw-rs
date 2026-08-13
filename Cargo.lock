@@ -1601,6 +1601,7 @@ dependencies = [
 [[package]]
 name = "maw-discord"
 version = "0.1.0-alpha.1"
+source = "git+https://github.com/Soul-Brews-Studio/maw-discord?rev=962de69edfad8bba1f7115497bef6fdb6f5fbbfc#962de69edfad8bba1f7115497bef6fdb6f5fbbfc"
 dependencies = [
  "reqwest",
  "serde",
