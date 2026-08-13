@@ -466,8 +466,7 @@ fn send_local_message_with_audit(
         Ok(signature) => signature,
         Err(message) => return CliOutput { code: send_error_code(command), stdout: String::new(), stderr: format!("{command}: {message}\n") },
     };
-    let display_from = send_display_from(from);
-    let outbound = format_local_hey_message(text, config, sender_oracle, display_from.as_deref());
+    let outbound = format_local_hey_message(text, config, sender_oracle, from);
     if let Err(error) = tmux.send_text(target, &outbound) {
         return CliOutput {
             code: 1,
@@ -674,8 +673,7 @@ async fn send_peer_message(
     };
     match client.send_peer(&request).await {
         Ok(response) => {
-            let display_from = send_display_from(args.from.as_deref());
-            let outbound = format_local_hey_message(&args.text, config, sender_oracle, display_from.as_deref());
+            let outbound = format_local_hey_message(&args.text, config, sender_oracle, args.from.as_deref());
             send_record_success(command, audit_args, config, sender_oracle, args.from.as_deref(), &args.target, &outbound, &format!("peer:{node}"), signature.as_ref());
             // #709: the receiving serve may have delivered into a pane that
             // is not agent-shaped -- surface that here too, not just on the
