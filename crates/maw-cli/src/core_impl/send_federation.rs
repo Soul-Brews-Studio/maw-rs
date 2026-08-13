@@ -104,6 +104,13 @@ async fn run_send_like_async_with_args(
         std::env::var_os("TMUX").is_some(),
         &mut runner,
     );
+    // #681: a target namedPeers doesn't know but ~/.maw/peers.json does
+    // should still route, not fail as "unknown node".
+    let result = if command == "hey" {
+        hey_peers_json_fallback_route(&routing_target, &config.route, &sessions, result)
+    } else {
+        result
+    };
     let result =
         route_result_prefer_pane_zero_for_ambiguous_agent(&send_args.target, result, &mut runner);
     if send_args.dry_run {
@@ -112,6 +119,12 @@ async fn run_send_like_async_with_args(
     if let Some(refusal) = send_route_gate(command, &send_args.target, &send_args.text, &result) {
         return refusal;
     }
+    // #790: surface it when the query's node/session part also names a
+    // federation peer, so a local-only result (success or error) is never
+    // silently misread as evidence the remote host was reached.
+    let collision_note = (command == "hey")
+        .then(|| hey_local_peer_collision_note(&routing_target, &sessions, &config.route))
+        .flatten();
     match result {
         RouteResult::Local { target } | RouteResult::SelfNode { target } if send_args.inbox == Some(true) => {
             send_local_inbox_only(
@@ -124,17 +137,29 @@ async fn run_send_like_async_with_args(
                 send_args.from.as_deref(),
             )
         }
-        RouteResult::Local { target } | RouteResult::SelfNode { target } => send_local_message_with_audit(
-            command,
-            &mut tmux,
-            &target,
-            &send_args.target,
-            &send_args.text,
-            &config,
-            &sender_oracle,
-            send_args.from.as_deref(),
-            &audit_args,
-        ),
+        RouteResult::Local { target } | RouteResult::SelfNode { target } => {
+            // #709: warn (don't block — we can't always be sure) when the
+            // resolved pane doesn't look like an agent, so a restructured
+            // session doesn't silently swallow a message into a bash prompt.
+            let agent_note = (command == "hey")
+                .then(|| warn_if_local_target_pane_is_not_agent(&target, &mut runner))
+                .flatten();
+            let mut output = send_local_message_with_audit(
+                command,
+                &mut tmux,
+                &target,
+                &send_args.target,
+                &send_args.text,
+                &config,
+                &sender_oracle,
+                send_args.from.as_deref(),
+                &audit_args,
+            );
+            for note in [collision_note.as_deref(), agent_note.as_deref()].into_iter().flatten() {
+                output.stderr = format!("{note}{}", output.stderr);
+            }
+            output
+        }
         RouteResult::Peer {
             peer_url,
             target,
@@ -153,11 +178,13 @@ async fn run_send_like_async_with_args(
             )
             .await
         }
-        RouteResult::Error { detail, hint, .. } => CliOutput {
-            code: send_error_code(command),
-            stdout: String::new(),
-            stderr: send_route_error(command, &send_args.target, &detail, hint.as_deref()),
-        },
+        RouteResult::Error { detail, hint, .. } => {
+            let mut stderr = send_route_error(command, &send_args.target, &detail, hint.as_deref());
+            if let Some(note) = &collision_note {
+                stderr = format!("{note}{stderr}");
+            }
+            CliOutput { code: send_error_code(command), stdout: String::new(), stderr }
+        }
     }
 }
 
@@ -545,6 +572,16 @@ fn send_success_output(command: &str, target: &str, outbound: &str) -> String {
     if command == "hey" { format!("delivered → {target}: {outbound}\n") } else { format!("delivered {target}\n") }
 }
 
+// #686: a cross-node delivery confirmation that only echoes the bare
+// session:window target is indistinguishable from a local delivery on a
+// fleet where session names collide across nodes — it took a receiver-side
+// `lastActivity` comparison to prove a message actually left the machine.
+// Prefix with the node it actually resolved to so a collision is visible in
+// the success line itself, not only in a separate warning.
+fn send_peer_success_target(node: &str, target: &str) -> String {
+    if node.is_empty() { target.to_owned() } else { format!("{node}:{target}") }
+}
+
 /// An empty message body must never reach delivery (#695): a caller with no
 /// text to send gets a refusal here, not a `[node:sender]` tag arriving in a
 /// pane with nothing after it — which is indistinguishable from a real
@@ -691,7 +728,7 @@ async fn send_peer_message(
                 stdout: format!(
                     "{} {}\n",
                     response.state.as_deref().unwrap_or("queued"),
-                    response.target.as_deref().unwrap_or(target)
+                    send_peer_success_target(node, response.target.as_deref().unwrap_or(target))
                 ),
                 stderr,
             }

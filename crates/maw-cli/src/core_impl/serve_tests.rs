@@ -1340,6 +1340,44 @@ mod serve_tests {
         );
     }
 
+    // #788: `maw locate <oracle> --path` finds a repo purely by scanning the
+    // ghq root for a `<oracle>-oracle` directory — no fleet config or
+    // registry-cache entry required. `receiver_inbox_repo_candidates` had no
+    // equivalent scan, so `maw hey --inbox <oracle>` reported the receiver as
+    // unroutable on the exact same name `maw locate` resolves fine. The two
+    // resolvers must agree.
+    #[test]
+    fn receiver_inbox_falls_back_to_the_same_resolver_maw_locate_uses() {
+        let env = ServeInboxManifestEnv::new("locate-fallback");
+        let repo = env.ghq.join("github.com").join("tonkmac").join("widget-oracle");
+        std::fs::create_dir_all(repo.join("ψ")).expect("bare ghq-scanned repo");
+        // Deliberately no add_fleet_repo / write_local_scanned_oracles_json —
+        // none of receiver_inbox_repo_candidates' existing sources (psi_root,
+        // live-target cwd, fleet manifest) can see this repo.
+        let config = HeyConfig { node: None, oracle: None, route: RouteConfig::default() };
+
+        let result = persist_receiver_inbox(
+            ReceiverInboxInput {
+                query: "widget",
+                target: None,
+                to: Some("widget"),
+                from: "bigboy-vps:alloy",
+                message: "hello widget inbox",
+                config: &config,
+            },
+            1_782_623_880_000,
+            None,
+        );
+
+        let ReceiverInboxResult::Ok(ok) = result else {
+            panic!("expected the ghq-scan fallback to resolve the repo: {result:?}");
+        };
+        assert_eq!(ok.oracle, "widget");
+        assert_eq!(ok.inbox_dir, repo.join("ψ").join("inbox"));
+        let written = std::fs::read_to_string(ok.path).expect("inbox body");
+        assert!(written.contains("to: widget\n"));
+    }
+
     #[test]
     fn receiver_inbox_manifest_phase_a_keeps_numbered_oracle_name_match() {
         let env = ServeInboxManifestEnv::new("phase-a");
