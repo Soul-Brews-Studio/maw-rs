@@ -65,6 +65,30 @@ mod wake_tests {
         assert!(error.contains("ambiguous"), "{error}");
     }
 
+    #[test]
+    fn wake_ambiguous_fuzzy_repo_prints_org_repo_not_the_same_name_twice() {
+        // #799: two genuinely different repos sharing a basename across orgs
+        // (real case: Soul-Brews-Studio/odin-oracle vs laris-co/odin-oracle)
+        // used to print the IDENTICAL basename for both candidates -- proving
+        // nothing and giving the caller no spelling that would actually
+        // disambiguate. The error must carry enough path to tell them apart.
+        wake_with_fixture(|root| {
+            std::fs::create_dir_all(root.join("ghq/github.com/Soul-Brews-Studio/odin-oracle")).expect("repo a");
+            std::fs::create_dir_all(root.join("ghq/github.com/laris-co/odin-oracle")).expect("repo b");
+            let error = wake_resolve_repo_target("odin", &[]).expect_err("two repos sharing a basename must stay ambiguous");
+            assert!(error.contains("ambiguous"), "{error}");
+            assert!(error.contains("Soul-Brews-Studio/odin-oracle"), "{error}");
+            assert!(error.contains("laris-co/odin-oracle"), "{error}");
+            // The old bug printed the bare name twice -- assert the message
+            // isn't just "odin-oracle, odin-oracle" (both entries collapsed
+            // to the same, non-disambiguating string).
+            let after_colon = error.rsplit(": ").next().unwrap_or_default();
+            let parts = after_colon.split(", ").collect::<Vec<_>>();
+            assert_eq!(parts.len(), 2, "{error}");
+            assert_ne!(parts[0], parts[1], "{error}");
+        });
+    }
+
     #[derive(Debug, Default)]
     #[allow(clippy::struct_excessive_bools)]
     struct WakeMockTmux {
@@ -855,6 +879,29 @@ mod wake_tests {
     }
 
     #[test]
+    fn wake_dotted_identity_is_rejected_at_parse_time_naming_what_the_caller_typed() {
+        // #785 sub-bug A repro: `maw wake "a.b" --repo-path ... --no-attach`
+        // used to fail *after* creating a session -- tmux silently renames
+        // any '.' in a session name to '_' on creation (verified directly
+        // against tmux 3.4), so maw-rs went on to look up the session by its
+        // original dotted name and got "can't find session: 60-a.b". Reject
+        // before any tmux action runs at all, and name the identity the
+        // caller actually typed.
+        wake_with_fixture(|root| {
+            let repo = root.join("workspace/dotted-repro");
+            std::fs::create_dir_all(&repo).expect("repo dir");
+            let repo_arg = repo.display().to_string();
+            let mut tmux = WakeMockTmux::default();
+            let err = wake_run(&wake_strings(&["a.b", "--repo-path", &repo_arg, "--no-attach"]), &mut tmux)
+                .expect_err("dotted identity must be rejected");
+            assert!(err.contains("a.b"), "{err}");
+            assert!(err.contains('.'), "{err}");
+            assert!(tmux.actions.is_empty(), "{:?}", tmux.actions);
+            assert!(tmux.sessions.is_empty(), "{:?}", tmux.sessions);
+        });
+    }
+
+    #[test]
     fn wake_reuses_registry_session_name_after_reboot() {
         wake_with_fixture(|root| {
             let session = "99-mother";
@@ -1620,7 +1667,11 @@ mod wake_tests {
             assert_eq!(first["windows"].as_array().expect("windows").len(), 1);
             assert_eq!(first["windows"][0]["name"], "neo");
             assert_eq!(first["windows"][0]["repo"], "acme/neo-oracle");
-            assert_eq!(first["windows"][0]["kind"], "project");
+            // #783: the repo on disk is `neo-oracle` -- oracle-shaped by its
+            // own `-oracle` suffix -- so auto-registration must record
+            // kind:"oracle", not the old hardcoded "project" that permanently
+            // broke `maw locate`'s disk layer for every repo woken this way.
+            assert_eq!(first["windows"][0]["kind"], "oracle");
 
             let (code, stdout) = wake_run(&wake_strings(&["neo", "--task", "issue-90", "--no-attach"]), &mut tmux).expect("task wake");
             assert_eq!(code, 0, "{stdout}");
@@ -1629,9 +1680,45 @@ mod wake_tests {
             assert_eq!(windows.len(), 2);
             assert!(windows.iter().any(|window| window["name"] == "neo"));
             assert!(windows.iter().any(|window| window["name"] == "neo-issue-90"));
-            assert!(windows.iter().all(|window| window["kind"] == "project"));
+            assert!(windows.iter().all(|window| window["kind"] == "oracle"), "{windows:?}");
             assert_eq!(updated["created_at"], "2026-07-03T02:03:04.000Z");
         });
+    }
+
+    #[test]
+    fn wake_registration_kind_infers_oracle_shape_from_repo_not_window_name() {
+        // #783 root cause: by the time `wake_registration_kind` runs, the
+        // window name has already had its `-oracle` suffix stripped
+        // (`wake_oracle`) -- checking the window name instead of the actual
+        // repo directory is exactly how every auto-registered oracle ended
+        // up hardcoded to kind:"project" regardless of the repo it woke.
+        let root = wake_temp_root("kind-oracle-suffix");
+        let repo_path = root.join("acme-oracle");
+        std::fs::create_dir_all(&repo_path).expect("repo");
+        assert_eq!(wake_registration_kind(&repo_path, "acme"), NativeRepoKind::Oracle);
+    }
+
+    #[test]
+    fn wake_registration_kind_detects_bare_name_oracle_via_psi_and_claude_md() {
+        // #750: a bare-name oracle (no `-oracle` suffix, e.g. peer report's
+        // `spore`) with the ψ/+CLAUDE.md shape every bud/awaken produces
+        // must still register as oracle, not just suffix-named repos.
+        let root = wake_temp_root("kind-oracle-shape");
+        let repo_path = root.join("spore");
+        std::fs::create_dir_all(repo_path.join("ψ")).expect("psi dir");
+        std::fs::write(repo_path.join("CLAUDE.md"), "# spore\n").expect("claude md");
+        assert_eq!(wake_registration_kind(&repo_path, "spore"), NativeRepoKind::Oracle);
+    }
+
+    #[test]
+    fn wake_registration_kind_stays_project_for_a_genuinely_plain_repo() {
+        // A repo with neither an `-oracle` suffix nor the ψ/+CLAUDE.md shape
+        // must still register as kind:"project" -- the fix broadens the
+        // signal, it doesn't tag everything as an oracle.
+        let root = wake_temp_root("kind-project");
+        let repo_path = root.join("some-tool");
+        std::fs::create_dir_all(&repo_path).expect("repo");
+        assert_eq!(wake_registration_kind(&repo_path, "some-tool"), NativeRepoKind::Project);
     }
 
     #[test]

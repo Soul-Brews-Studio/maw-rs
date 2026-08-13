@@ -839,8 +839,20 @@ fn native_repo_path_is_oracle(path: &std::path::Path, fallback_name: &str) -> bo
     match native_repo_kind_for_path(path) {
         Some(NativeRepoKind::Oracle) => true,
         Some(NativeRepoKind::Project) => false,
-        None => fallback_name.ends_with("-oracle"),
+        None => native_repo_shape_looks_like_oracle(path, fallback_name),
     }
+}
+
+// A repo that carries no explicit signal -- no fleet-registered `kind`, no
+// `.maw/role` marker file (and nothing in this codebase ever writes that
+// file, #750: the marker layer is dead code) -- still has a shape: an
+// `-oracle` suffix on its name, or the `ψ/` + `CLAUDE.md` pair every
+// `bud`/`awaken` produces. `has_psi` (oracle.rs, locate.rs) already treats
+// `ψ/` as the canonical "this is an oracle repo" signal elsewhere in this
+// codebase; requiring `CLAUDE.md` too keeps a bare `ψ/` directory made for
+// unrelated reasons from false-positiving.
+fn native_repo_shape_looks_like_oracle(path: &std::path::Path, fallback_name: &str) -> bool {
+    fallback_name.ends_with("-oracle") || (path.join("ψ").is_dir() && path.join("CLAUDE.md").is_file())
 }
 
 fn native_fleet_window_is_oracle(window: &NativeFleetWindow) -> bool {

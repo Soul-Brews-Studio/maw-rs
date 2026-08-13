@@ -34,10 +34,22 @@ fn typed_picker_plan(
         maw_matcher::ResolveTypedResult::Ambiguous { candidates } => {
             let best = candidates.iter().map(|item| priority(item.candidate.kind)).min().unwrap_or(u8::MAX);
             let preferred = candidates.into_iter().filter(|item| priority(item.candidate.kind) == best).collect::<Vec<_>>();
-            if preferred.len() == 1 && preferred[0].rank != maw_matcher::ResolveMatchRank::Fuzzy {
-                return TypedPickerPlan::Target(preferred[0].candidate.name.clone());
+            if preferred.len() == 1 {
+                if preferred[0].rank != maw_matcher::ResolveMatchRank::Fuzzy {
+                    return TypedPickerPlan::Target(preferred[0].candidate.name.clone());
+                }
+                // #782: after the priority filter above narrows the tie down
+                // to exactly one candidate, printing "matches multiple
+                // targets" over a list of one is a straight count mismatch --
+                // it isn't ambiguous anymore, it just isn't exact (rank is
+                // Fuzzy, so it still surfaces for confirmation rather than
+                // auto-resolving). Use the same wording the no-match branch
+                // uses for "closest match, not exact" so the message agrees
+                // with what's actually printed below it.
+                ("was not found exactly", preferred)
+            } else {
+                ("matches multiple targets", preferred)
             }
-            ("matches multiple targets", preferred)
         }
         maw_matcher::ResolveTypedResult::None => ("was not found exactly", deadend_closest_matches(target, candidates)),
     };

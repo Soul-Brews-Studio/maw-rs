@@ -233,6 +233,112 @@ fn team_t4_down_refuses_no_session_before_teardown() {
 }
 
 #[test]
+fn team_t4_down_finds_a_window_wake_named_with_the_oracle_suffix() {
+    // #785 sub-bug B: `maw team up` can end up creating (or attaching to)
+    // a window literally named `<role>-oracle` for a member whose charter
+    // role/name is the bare `<role>` -- the resolved repo/window ends up
+    // carrying the suffix even though nothing in the charter asked for it.
+    // `team down` must still find and close that window without a manual
+    // `tmux rename-window` first; both up's classification and down's
+    // target-finding share `team_t3_classify`, so fixing the shared match
+    // predicate closes the round trip for both directions at once.
+    let root = temp_dir("oracle-suffix-window");
+    fs::create_dir_all(root.join("ψ/teams")).expect("teams");
+    fs::create_dir_all(root.join("home/.claude/teams/dashteam/inboxes")).expect("inboxes");
+    // A `lead` member is kept automatically -- included only so killing
+    // `worker-a` doesn't also read as "would kill the last window in the
+    // session" and route through the unrelated teardown-guard branch.
+    fs::write(
+        root.join("ψ/teams/dashteam.yaml"),
+        r"name: dashteam
+session: dashteam
+description: Dash test
+goal: Ship T785b
+members:
+  - role: lead
+    name: lead
+    engine: claude
+    cwd: agents/lead
+  - role: worker-a
+    name: worker-a
+    engine: codex
+    cwd: agents/worker-a
+",
+    )
+    .expect("charter");
+    fs::write(
+        root.join("home/.claude/teams/dashteam/config.json"),
+        r#"{"name":"dashteam","members":[{"name":"lead"},{"name":"worker-a"}],"createdAt":1}"#,
+    )
+    .expect("config");
+
+    let log = root.join("fake/down.log");
+    let output = run_with_panes(
+        &["team", "down", "dashteam"],
+        &root,
+        "dashteam|lead|claude|/repo/agents/lead|%0\ndashteam|worker-a-oracle|codex|/repo/agents/worker-a|%1",
+        Some(&log),
+    );
+    assert!(
+        output.status.success(),
+        "stderr={} stdout={}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout");
+    assert!(
+        stdout.contains("worker-a\tlive\tmaw done worker-a-oracle"),
+        "{stdout}"
+    );
+    assert_eq!(
+        fs::read_to_string(&log).expect("fake log"),
+        "archive\tworker-a\ndone\tdashteam:worker-a-oracle\n"
+    );
+}
+
+#[test]
+fn team_t4_down_does_not_report_a_false_clean_teardown_over_a_live_engine_it_does_not_recognize() {
+    // #785 sub-bug C: the liveness check used to be an allowlist of known
+    // engine binary names (claude/codex/omx/node/bun) -- any engine outside
+    // that closed list (verified real case: `opencode`) was silently
+    // classified "dead" and `team down` reported a clean rc=0 table while
+    // the pane was genuinely still running. An unrecognized-but-real
+    // process must still be treated as live and actually torn down, not
+    // silently skipped behind a false-positive "clean" table -- an unknown
+    // state reported as success is worse than an error.
+    let root = temp_dir("unknown-engine-live");
+    seed(&root);
+    let log = root.join("fake/down.log");
+    let output = run_with_panes(
+        &["team", "down", "alpha"],
+        &root,
+        "alpha|lead|claude|/repo/agents/lead|%0\nalpha|builder|opencode|/repo/agents/builder|%1\nalpha|reviewer|opencode|/repo/agents/reviewer|%2",
+        Some(&log),
+    );
+    assert!(
+        output.status.success(),
+        "stderr={} stdout={}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout");
+    assert!(
+        stdout.contains("builder\tlive\tmaw done builder"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("reviewer\tlive\tmaw done reviewer"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("\tdead\t"), "{stdout}");
+    assert_eq!(
+        fs::read_to_string(&log).expect("fake log"),
+        "archive\tbuilder\ndone\talpha:builder\narchive\treviewer\ndone\talpha:reviewer\n",
+        "an unrecognized-but-live engine must actually be torn down, not silently skipped"
+    );
+}
+
+#[test]
 fn team_t4_down_guard_window_and_keep_parity() {
     let root = temp_dir("guard-window");
     seed(&root);
