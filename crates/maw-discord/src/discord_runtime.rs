@@ -147,12 +147,39 @@ pub struct DiscordEnv {
     pub hostname: String,
 }
 
+/// `ghq`'s own canonical root config — `git config --get ghq.root`, the
+/// standard way `ghq` itself is configured. `$GHQ_ROOT` is an alternate,
+/// less common override; when it's unset this must NOT silently fall back
+/// to `$HOME`, or hybrid `.discord/` resolution (`find_hybrid_discord`,
+/// which scans under `ghq_root` for a directory named `<bot>`) breaks for
+/// every host that configured ghq the standard way instead of exporting
+/// the env var.
+fn git_config_ghq_root() -> Option<PathBuf> {
+    let output = Command::new("git")
+        .args(["config", "--get", "ghq.root"])
+        .output()
+        .ok()?;
+    parse_git_config_ghq_root_output(output.status.success(), &output.stdout)
+}
+
+/// Split out from `git_config_ghq_root` so the parsing/trimming logic is
+/// testable without shelling out — `git config` behavior itself depends on
+/// the environment's config, which a unit test shouldn't assume.
+fn parse_git_config_ghq_root_output(success: bool, stdout: &[u8]) -> Option<PathBuf> {
+    if !success {
+        return None;
+    }
+    let root = String::from_utf8_lossy(stdout).trim().to_owned();
+    (!root.is_empty()).then(|| PathBuf::from(root))
+}
+
 impl DiscordEnv {
     #[must_use]
     pub fn from_process() -> Self {
         let home = env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from);
         let ghq_root = env::var_os("GHQ_ROOT")
             .map(PathBuf::from)
+            .or_else(git_config_ghq_root)
             .unwrap_or_else(|| home.clone());
         let hostname = env::var("HOSTNAME")
             .ok()
@@ -235,4 +262,33 @@ pub(super) fn default_true() -> bool {
 
 pub(super) fn default_dm_policy() -> String {
     "allowlist".to_owned()
+}
+
+#[cfg(test)]
+mod ghq_root_fallback_tests {
+    use super::parse_git_config_ghq_root_output;
+    use std::path::PathBuf;
+
+    #[test]
+    fn success_with_value_returns_trimmed_path() {
+        assert_eq!(
+            parse_git_config_ghq_root_output(true, b"/opt/Code\n"),
+            Some(PathBuf::from("/opt/Code"))
+        );
+    }
+
+    #[test]
+    fn success_with_empty_output_returns_none() {
+        // `git config --get` can exit 0 with empty stdout in some edge cases
+        // (e.g. a key set to an empty string) — must not become PathBuf::from("").
+        assert_eq!(parse_git_config_ghq_root_output(true, b"\n"), None);
+    }
+
+    #[test]
+    fn nonzero_exit_returns_none() {
+        // git exits 1 when the key isn't set at all — this is the common case
+        // (no ghq.root configured), must fall through to the next fallback,
+        // not error out.
+        assert_eq!(parse_git_config_ghq_root_output(false, b""), None);
+    }
 }
