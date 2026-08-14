@@ -1283,6 +1283,28 @@ mod locate_tests {
     }
 
     #[test]
+    fn locate_bare_name_oracle_resolves_via_psi_and_claude_md_shape() {
+        // #750: `locate_find_oracle_repo_path`'s bare-name (no `-oracle`
+        // suffix) fallback is gated by `native_repo_path_is_oracle`, whose
+        // only positive signal for a repo with no fleet-registered
+        // kind:Oracle window was a `.maw/role` marker file that nothing in
+        // this codebase -- not even `maw bud` -- ever writes. A real
+        // no-suffix oracle repo (verified real case: peer oracle `spore`)
+        // must still resolve via the ψ/+CLAUDE.md shape every bud/awaken
+        // actually produces, without needing that dead marker file.
+        let _guard = env_test_lock();
+        let env = LocateHermeticEnv::new("bare-name-shape");
+        let repo = env.ghq.join("github.com/acme/spore");
+        std::fs::create_dir_all(repo.join("ψ")).expect("psi dir");
+        std::fs::write(repo.join("CLAUDE.md"), "# spore\n").expect("claude md");
+        let opts = LocateOptions { path: true, json: false, no_remote: false };
+        assert_eq!(
+            locate_cmd_with_sessions("spore", &opts, &[], &mut LocateFakeGithub::default()).expect("bare-name oracle path"),
+            format!("{}\n", repo.display())
+        );
+    }
+
+    #[test]
     fn locate_rejects_option_injection_targets() {
         assert!(locate_parse_args(&["--json".to_owned(), "-bad".to_owned()]).is_err());
         assert!(locate_parse_args(&["../bad".to_owned()]).is_err());
@@ -1355,10 +1377,13 @@ mod locate_tests {
         assert_eq!(locate_picker_target("81-track", &options, &[]).expect("exact"), "81-track");
 
         match typed_picker_plan("trac", &locate_typed_candidates(&[]), locate_kind_priority, locate_picker_row) {
-            TypedPickerPlan::Pick { rows, .. } => {
+            TypedPickerPlan::Pick { context, rows } => {
                 assert_eq!(rows.len(), 1);
                 assert_eq!(rows[0].matched.candidate.name, "track");
                 assert_eq!(rows[0].action, "maw locate track");
+                // #782: exactly one row is printed here -- the message must
+                // not claim "matches multiple targets" over a list of one.
+                assert_eq!(context, "was not found exactly", "single fuzzy candidate must not be reported as ambiguous");
             }
             plan @ TypedPickerPlan::Target(_) => panic!("expected fuzzy picker, got {plan:?}"),
         }

@@ -49,6 +49,18 @@ fn load_hey_config() -> HeyConfig {
     }
 }
 
+/// Minimal cross-tree accessor for `load_hey_config()`'s node/oracle fields.
+///
+/// `HeyConfig` itself stays private to `core_impl` (its `route` field pulls in
+/// `RouteConfig`/`RouteNamedPeer` internals that have no business leaking
+/// out); `serve_core::modules::pairing` only ever needs these two strings
+/// (#734), so this tuple accessor is the minimal `pub(crate)` surface rather
+/// than widening the whole struct.
+pub(crate) fn hey_config_node_oracle() -> (Option<String>, Option<String>) {
+    let config = load_hey_config();
+    (config.node, config.oracle)
+}
+
 fn parse_named_peers(value: Option<&serde_json::Value>) -> Vec<RouteNamedPeer> {
     match value {
         Some(serde_json::Value::Array(items)) => items

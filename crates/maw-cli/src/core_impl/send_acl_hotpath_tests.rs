@@ -402,6 +402,19 @@ mod send_acl_hotpath_tests {
         assert_eq!(output.stdout, "dry-run: hey me -> local 188-maw-rs:1\n");
     }
 
+    // #686: hey's success line named the target string as typed, so a
+    // collision across nodes ("33-maw-rs" resolvable on m5 AND on two
+    // different peers) could not be told apart from the confirmation alone —
+    // it took a receiver-side `lastActivity` comparison to prove which node
+    // actually received it. The node must be visible in the line itself.
+    #[test]
+    fn peer_success_line_names_the_node_it_resolved_to() {
+        assert_eq!(send_peer_success_target("blackmachine", "33-maw-rs:0"), "blackmachine:33-maw-rs:0");
+        // Callers that never track a node (notify/forward/talk_to today)
+        // keep the bare target unchanged rather than gaining a bogus prefix.
+        assert_eq!(send_peer_success_target("", "33-maw-rs:0"), "33-maw-rs:0");
+    }
+
     #[test]
     fn hey_typed_inventory_routes_exact_and_asks_on_fuzzy() {
         let sessions = vec![send_route_session(
@@ -490,9 +503,10 @@ mod send_acl_hotpath_tests {
             ..SendFakeTmuxRunner::default()
         };
 
-        let sender = resolve_hey_sender_oracle_with(&config, std::env::var("TMUX_PANE").ok().as_deref(), true, &mut runner);
+        let (sender, warnings) = resolve_hey_sender_oracle_with(&config, std::env::var("TMUX_PANE").ok().as_deref(), true, &mut runner);
 
         assert_eq!(sender, "agora");
+        assert!(warnings.is_empty(), "a resolved pane name needs no fallback warning: {warnings:?}");
         assert_eq!(format_local_hey_message("hello", &config, &sender, None), "[m5:agora] hello");
         assert_eq!(resolve_hey_wire_from(None, &config, &sender).as_deref(), Ok("agora:m5"));
         assert_eq!(send_normalized_from(&config, &sender, None).as_deref(), Some("m5:agora"));
@@ -502,8 +516,9 @@ mod send_acl_hotpath_tests {
             focused_window: Some(Ok("nh\n".to_owned())),
             ..SendFakeTmuxRunner::default()
         };
-        let sender = resolve_hey_sender_oracle_with(&config, None, true, &mut fallback);
+        let (sender, warnings) = resolve_hey_sender_oracle_with(&config, None, true, &mut fallback);
         assert_eq!(sender, "pane/nh");
+        assert!(warnings.is_empty(), "no cwd marker and no MAW_SESSION_WINDOW: nothing to warn about: {warnings:?}");
         assert_eq!(send_normalized_from(&config, &sender, None).as_deref(), Some("m5:pane/nh"));
         assert_eq!(fallback.calls, vec![("display-message".to_owned(), send_acl_vec(&["-p", "#{window_name}"]))]);
     }
@@ -527,9 +542,10 @@ mod send_acl_hotpath_tests {
             ..SendFakeTmuxRunner::default()
         };
 
-        let sender = resolve_hey_sender_oracle_with(&config, None, false, &mut runner);
+        let (sender, warnings) = resolve_hey_sender_oracle_with(&config, None, false, &mut runner);
 
         assert_eq!(sender, "pane/unknown");
+        assert!(warnings.is_empty(), "no cwd marker and no MAW_SESSION_WINDOW: nothing to warn about: {warnings:?}");
         assert!(runner.calls.is_empty(), "headless sender must never query tmux: {:?}", runner.calls);
         assert_eq!(send_normalized_from(&config, &sender, None).as_deref(), Some("m5:pane/unknown"));
     }
@@ -555,25 +571,97 @@ mod send_acl_hotpath_tests {
             ..SendFakeTmuxRunner::default()
         };
 
-        let sender = resolve_hey_sender_oracle_with(&config, None, false, &mut runner);
+        let (sender, warnings) = resolve_hey_sender_oracle_with(&config, None, false, &mut runner);
 
         assert_eq!(sender, "job/maw-rs");
+        assert!(warnings.is_empty(), "no cwd marker and no MAW_SESSION_WINDOW: nothing to warn about: {warnings:?}");
         assert!(runner.calls.is_empty(), "headless sender must never query tmux: {:?}", runner.calls);
         assert_eq!(format_local_hey_message("hello", &config, &sender, None), "[m5:job/maw-rs] hello");
         assert_eq!(send_normalized_from(&config, &sender, None).as_deref(), Some("m5:job/maw-rs"));
     }
 
+    // #786: a background job's cwd has no discoverable oracle marker (no
+    // CLAUDE.md up the tree) but MAW_SESSION_WINDOW is set -- baked into the
+    // job's env at spawn time from whatever pane launched it. The resolver
+    // must still fall back to it (unchanged behavior: the sender is still
+    // resolved, not left blank) but must now say so, instead of silently
+    // signing every future message as the launching pane's oracle.
     #[test]
-    fn send_local_display_normalizes_explicit_wire_from() {
+    fn resolve_hey_sender_oracle_with_warns_on_silent_session_window_fallback() {
+        let _lock = env_test_lock();
+        let (root, _restores) = send_audit_test_env("sender-session-window-fallback");
+        let _pane = EnvVarRestore::capture("TMUX_PANE");
+        let _session = EnvVarRestore::capture("MAW_SESSION_WINDOW");
+        std::env::remove_var("TMUX_PANE");
+        std::env::set_var("MAW_SESSION_WINDOW", "ccc");
+        let plain = root.join("no-marker-repo");
+        std::fs::create_dir_all(&plain).unwrap();
+        let _cwd = SendCwdRestore::enter(&plain);
+        let config = HeyConfig { node: Some("m5".to_owned()), oracle: None, route: RouteConfig::default() };
+        let mut runner = SendFakeTmuxRunner::default();
+
+        let (sender, warnings) = resolve_hey_sender_oracle_with(&config, None, false, &mut runner);
+
+        // Unchanged behavior: still falls back to MAW_SESSION_WINDOW.
+        assert_eq!(sender, "ccc");
+        // New behavior: the silent fallback is no longer silent.
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].contains("MAW_SESSION_WINDOW") && warnings[0].contains("ccc") && warnings[0].contains("no oracle marker"),
+            "{}",
+            warnings[0]
+        );
+    }
+
+    // #786 (second suggested fix): cwd resolves to one oracle AND
+    // MAW_SESSION_WINDOW resolves to a genuinely different one -- a
+    // background job started from one pane but running against a different
+    // repo. cwd still wins (unchanged precedence) but the disagreement must
+    // be surfaced rather than silently preferred.
+    #[test]
+    fn resolve_hey_sender_oracle_with_warns_on_cwd_and_session_window_conflict() {
+        let _lock = env_test_lock();
+        let (root, _restores) = send_audit_test_env("sender-conflict");
+        let _pane = EnvVarRestore::capture("TMUX_PANE");
+        let _session = EnvVarRestore::capture("MAW_SESSION_WINDOW");
+        std::env::remove_var("TMUX_PANE");
+        std::env::set_var("MAW_SESSION_WINDOW", "ccc");
+        let repo = root.join("mahamodo-engine");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::write(repo.join("CLAUDE.md"), "# mahamodo-oracle\n").unwrap();
+        let _cwd = SendCwdRestore::enter(&repo);
+        let config = HeyConfig { node: Some("m5".to_owned()), oracle: None, route: RouteConfig::default() };
+        let mut runner = SendFakeTmuxRunner::default();
+
+        let (sender, warnings) = resolve_hey_sender_oracle_with(&config, None, false, &mut runner);
+
+        // cwd still wins -- unchanged precedence.
+        assert_eq!(sender, "mahamodo");
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].contains("conflict") && warnings[0].contains("mahamodo") && warnings[0].contains("ccc"),
+            "{}",
+            warnings[0]
+        );
+    }
+
+    // #795 acceptance criterion (issue's own wording): a local delivery and a
+    // federated delivery of the SAME sender identity must produce the
+    // IDENTICAL displayed tag. `from` is WIRE-shaped (`oracle:node`) exactly
+    // as it arrives over the wire -- see send_message_signature's `expected`
+    // and serve.rs's raw `x-maw-from` passthrough into this same function --
+    // never pre-converted by the caller. Before the fix the Some branch
+    // passed the wire string straight through, so local ([node:oracle]) and
+    // federated ([oracle:node]) diverged for the same sender.
+    #[test]
+    fn format_local_hey_message_local_and_federated_tags_match_for_same_sender() {
         let config = HeyConfig { node: Some("m5".to_owned()), oracle: None, route: RouteConfig::default() };
 
-        assert_eq!(send_display_from(Some("atlas:m5")).as_deref(), Some("m5:atlas"));
-        assert_eq!(
-            format_local_hey_message("hello", &config, "atlas", send_display_from(Some("atlas:m5")).as_deref()),
-            "[m5:atlas] hello"
-        );
-        assert_eq!(send_display_from(Some("not-wire-shaped")).as_deref(), Some("not-wire-shaped"));
-        assert_eq!(send_display_from(None), None);
+        let local_tag = format_local_hey_message("hello", &config, "atlas", None);
+        let federated_tag = format_local_hey_message("hello", &config, "atlas", Some("atlas:m5"));
+
+        assert_eq!(local_tag, federated_tag);
+        assert_eq!(local_tag, "[m5:atlas] hello");
     }
 
     #[test]

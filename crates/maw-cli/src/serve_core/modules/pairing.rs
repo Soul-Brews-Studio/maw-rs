@@ -173,21 +173,67 @@ impl PairServeState {
     }
 }
 
+// #734: this used to build the server's advertised identity purely from raw
+// env vars, defaulting to node="local"/port=3456/oracle="mawjs" whenever
+// they were unset — the common case, since real fleet configs live in
+// maw.config.json, not env vars. Two real nodes that both left env vars
+// unset would silently advertise the identical placeholder identity and
+// "pair to self". `load_hey_config()`/`load_hey_config_port()` (the same
+// merged-config resolution `serve_core_state()` already uses for the live
+// serve identity) are now the primary source; MAW_NODE/MAW_ORACLE/MAW_PORT
+// stay as an explicit override on top, and the hardcoded defaults are only
+// reached when neither config nor env has a value at all.
 fn pair_config_from_env() -> PairApiConfig {
-    let node = std::env::var("MAW_NODE").unwrap_or_else(|_| "local".to_owned());
-    let port = std::env::var("MAW_PORT")
-        .ok()
-        .and_then(|v| v.parse().ok())
+    let (config_node, config_oracle) = crate::core_impl::hey_config_node_oracle();
+    let config_port = crate::core_impl::load_hey_config_port();
+    pair_config_resolve(
+        env_non_empty("MAW_NODE"),
+        env_non_empty("MAW_ORACLE"),
+        std::env::var("MAW_PORT").ok(),
+        env_non_empty("MAW_BASE_URL"),
+        config_node,
+        config_oracle,
+        config_port,
+    )
+}
+
+/// Pure port of `pair_config_from_env()`'s resolution order — env override,
+/// then real merged config, then last-resort placeholder — kept dependency-
+/// free so the precedence itself is unit-testable without touching process
+/// env or the filesystem (see the `pair_config_resolve_*` tests below).
+fn pair_config_resolve(
+    env_node: Option<String>,
+    env_oracle: Option<String>,
+    env_port: Option<String>,
+    env_base_url: Option<String>,
+    config_node: Option<String>,
+    config_oracle: Option<String>,
+    config_port: Option<u16>,
+) -> PairApiConfig {
+    let node = env_node
+        .or(config_node)
+        .unwrap_or_else(|| "local".to_owned());
+    let oracle = env_oracle
+        .or(config_oracle)
+        .unwrap_or_else(|| "mawjs".to_owned());
+    let port = env_port
+        .and_then(|value| value.parse().ok())
+        .or(config_port)
         .unwrap_or(3456);
     PairApiConfig {
         node,
-        oracle: std::env::var("MAW_ORACLE").unwrap_or_else(|_| "mawjs".to_owned()),
+        oracle,
         port,
-        base_url: std::env::var("MAW_BASE_URL")
-            .unwrap_or_else(|_| format!("http://localhost:{port}")),
+        base_url: env_base_url.unwrap_or_else(|| format!("http://localhost:{port}")),
         federation_token: std::env::var("MAW_FEDERATION_TOKEN").unwrap_or_default(),
         pubkey: std::env::var("MAW_PUBKEY").unwrap_or_default(),
     }
+}
+
+fn env_non_empty(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
 }
 
 fn pair_secure_code() -> String {
@@ -311,5 +357,62 @@ mod tests {
             .expect("consumed json");
         assert_eq!(consumed["consumed"], true);
         assert_eq!(consumed["remoteNode"], "remote");
+    }
+
+    // #734 regression: `pair_config_from_env()` used to build the server's
+    // advertised pair identity purely from raw env vars, defaulting to
+    // node="local"/port=3456/oracle="mawjs" whenever they were unset — the
+    // common case, since real fleet configs live in maw.config.json. Two
+    // real nodes that both left env vars unset would advertise the same
+    // placeholder identity and silently "pair to self". These tests drive
+    // the resolution logic directly (no process env / filesystem) so the
+    // precedence is provable without racing other tests' env mutation.
+    #[test]
+    fn pair_config_resolve_prefers_real_config_over_placeholder_defaults() {
+        // Reverting the fix to `config_node.unwrap_or(...)` /
+        // `config_oracle.unwrap_or(...)` / `config_port.unwrap_or(...)` (i.e.
+        // dropping the config_* args entirely, matching the old env-only
+        // behavior) turns this red: node/oracle/port fall back to
+        // "local"/"mawjs"/3456 even though a real config supplied "fleet",
+        // "dobby", and 3457.
+        let config = pair_config_resolve(
+            None,
+            None,
+            None,
+            None,
+            Some("fleet".to_owned()),
+            Some("dobby".to_owned()),
+            Some(3457),
+        );
+        assert_eq!(config.node, "fleet");
+        assert_eq!(config.oracle, "dobby");
+        assert_eq!(config.port, 3457);
+        assert_eq!(config.base_url, "http://localhost:3457");
+    }
+
+    #[test]
+    fn pair_config_resolve_lets_explicit_env_override_real_config() {
+        let config = pair_config_resolve(
+            Some("env-node".to_owned()),
+            Some("env-oracle".to_owned()),
+            Some("9111".to_owned()),
+            Some("https://env-base.example".to_owned()),
+            Some("config-node".to_owned()),
+            Some("config-oracle".to_owned()),
+            Some(3457),
+        );
+        assert_eq!(config.node, "env-node");
+        assert_eq!(config.oracle, "env-oracle");
+        assert_eq!(config.port, 9111);
+        assert_eq!(config.base_url, "https://env-base.example");
+    }
+
+    #[test]
+    fn pair_config_resolve_falls_back_to_placeholder_when_genuinely_unconfigured() {
+        let config = pair_config_resolve(None, None, None, None, None, None, None);
+        assert_eq!(config.node, "local");
+        assert_eq!(config.oracle, "mawjs");
+        assert_eq!(config.port, 3456);
+        assert_eq!(config.base_url, "http://localhost:3456");
     }
 }

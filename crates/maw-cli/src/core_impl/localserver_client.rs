@@ -169,7 +169,7 @@ fn localserver_port_label() -> String {
     resolve_localserver_base_url().rsplit(':').next().unwrap_or("?").to_owned()
 }
 
-fn load_hey_config_port() -> Option<u16> {
+pub(crate) fn load_hey_config_port() -> Option<u16> {
     let env = real_xdg_env();
     let value = merged_config_value_for_env(&env);
     value.get("port").and_then(|port| port.as_u64().and_then(|n| u16::try_from(n).ok()).or_else(|| port.as_str()?.parse::<u16>().ok()))
