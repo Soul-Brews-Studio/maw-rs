@@ -70,7 +70,11 @@ Layered Cargo workspace:
   were extracted to the external
   [Soul-Brews-Studio/maw-crates](https://github.com/Soul-Brews-Studio/maw-crates)
   repo (2026-07-16, repo split phase 3 batch) and are consumed by `maw-cli`
-  as rev-pinned Cargo git dependencies, like `maw-calver`.
+  as rev-pinned Cargo git dependencies, like `maw-calver`. `maw-discord`
+  (Discord bot connectivity, zero internal `maw-*` deps) was extracted the
+  same way to
+  [Soul-Brews-Studio/maw-discord](https://github.com/Soul-Brews-Studio/maw-discord)
+  (2026-08-13, repo split).
 - **Mid crates** — compose the leaf crates (e.g. `maw-peer`, `maw-tmux`,
   `maw-worktree`).
 - **Top crate** — `maw-cli`, the binary, depends on the rest of the workspace.
