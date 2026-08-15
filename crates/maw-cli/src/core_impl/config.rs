@@ -156,9 +156,14 @@ fn config_explain(argv: &[String], json: bool) -> Result<String, String> {
                 })
             })
             .collect();
-        return serde_json::to_string_pretty(&serde_json::json!({ "key": key, "finalValue": final_value, "entries": rows }))
-            .map(|body| format!("{body}\n"))
-            .map_err(|error| format!("maw config: failed to render JSON: {error}"));
+        return serde_json::to_string_pretty(&serde_json::json!({
+            "key": key,
+            "finalValue": final_value,
+            "entries": rows,
+            "notes": config_explain_key_notes(key),
+        }))
+        .map(|body| format!("{body}\n"))
+        .map_err(|error| format!("maw config: failed to render JSON: {error}"));
     }
     let mut out = String::new();
     let _ = writeln!(out, "key: {key}");
@@ -180,7 +185,23 @@ fn config_explain(argv: &[String], json: bool) -> Result<String, String> {
     let final_json = serde_json::to_string(&final_value)
         .map_err(|error| format!("maw config: failed to render value: {error}"))?;
     let _ = writeln!(out, "FINAL {final_json}");
+    for note in config_explain_key_notes(key) {
+        let _ = writeln!(out, "{note}");
+    }
     Ok(out)
+}
+
+/// Advisory lines that apply to the key being explained — currently the legacy
+/// alias table (#682), so `maw config explain defaultEngine` states which key
+/// engine resolution actually consults instead of showing a bare value.
+fn config_explain_key_notes(key: &str) -> Vec<String> {
+    CONFIG_LEGACY_ALIASES
+        .iter()
+        .filter(|(alias, _)| *alias == key)
+        .map(|(alias, canonical)| {
+            format!("note: `{alias}` is a legacy maw-js key — maw-rs honours it as an alias of {canonical}; see maw-rs#682")
+        })
+        .collect()
 }
 
 
@@ -257,8 +278,34 @@ fn config_load_layers() -> Result<ConfigLoadedLayers, String> {
             }
         }
     }
-    let warnings = config_shadow_warnings(&provenance);
+    let mut warnings = config_shadow_warnings(&provenance);
+    warnings.extend(config_legacy_alias_warnings(&merged));
     Ok(ConfigLoadedLayers { config: merged, sources, provenance, warnings })
+}
+
+/// Legacy maw-js-era top-level key naming the default engine (#682). Still
+/// present in real fleet configs; honoured by `wake_config_default_engine_alias`
+/// in `wake_engine_command.rs`, and reported here so `sources`/`explain` say
+/// which key actually wins instead of leaving the operator to guess.
+const CONFIG_LEGACY_DEFAULT_ENGINE_KEY: &str = "defaultEngine";
+
+/// Top-level keys maw-rs reads only as an alias of a canonical key. A config
+/// carrying one is not broken, but it is not the key that documentation or
+/// `maw config explain` points at, so `sources` names the mapping (#682).
+const CONFIG_LEGACY_ALIASES: &[(&str, &str)] = &[(
+    CONFIG_LEGACY_DEFAULT_ENGINE_KEY,
+    "wake.engine (engine resolution order: -e > wake.engine > defaultEngine > commands.default > built-in)",
+)];
+
+/// One advisory line per legacy alias key present in the merged config (#682).
+fn config_legacy_alias_warnings(config: &serde_json::Value) -> Vec<String> {
+    CONFIG_LEGACY_ALIASES
+        .iter()
+        .filter(|(key, _)| config.get(*key).is_some())
+        .map(|(key, canonical)| {
+            format!("note: `{key}` is a legacy maw-js key — maw-rs honours it as an alias of {canonical}; see maw-rs#682")
+        })
+        .collect()
 }
 
 const CONFIG_SHADOW_KEY_CAP: usize = 6;

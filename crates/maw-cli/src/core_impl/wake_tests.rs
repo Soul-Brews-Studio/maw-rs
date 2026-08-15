@@ -360,6 +360,59 @@ mod wake_tests {
     }
 
     #[test]
+    fn wake_legacy_default_engine_key_is_honoured_between_wake_engine_and_commands_default() {
+        // #682: `defaultEngine` is set in real fleet configs and used to be read
+        // by nothing, so the operator silently got the built-in codex fallback.
+        wake_with_fixture(|_| {
+            let dir = active_config_dir();
+            std::fs::create_dir_all(&dir).expect("config dir");
+
+            // (a) alone, it selects the engine instead of falling back to codex.
+            std::fs::write(dir.join("maw.config.50.json"), r#"{"defaultEngine":"claude"}"#).expect("write config");
+            let mut tmux = WakeMockTmux::default();
+            let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("defaultEngine");
+            let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo claude"), "{send}");
+            assert!(!send.contains("codex"), "{send}");
+
+            // (b) it outranks commands.default — an explicit engine name beats a
+            // command alias — and stays below wake.engine.
+            std::fs::write(
+                dir.join("maw.config.50.json"),
+                r#"{"defaultEngine":"claude","commands":{"default":"codex"}}"#,
+            )
+            .expect("write config");
+            let mut tmux = WakeMockTmux::default();
+            let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("alias beats commands.default");
+            let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo claude"), "{send}");
+
+            std::fs::write(
+                dir.join("maw.config.50.json"),
+                r#"{"defaultEngine":"claude","wake":{"engine":"gemini"}}"#,
+            )
+            .expect("write config");
+            let mut tmux = WakeMockTmux::default();
+            let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("wake.engine wins");
+            let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo gemini"), "{send}");
+
+            // (c) explicit -e still beats everything, and a blank alias is ignored
+            // rather than resolving to an empty engine.
+            let mut tmux = WakeMockTmux::default();
+            let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach", "-e", "codex"]), &mut tmux).expect("explicit -e");
+            let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo codex"), "{send}");
+
+            std::fs::write(dir.join("maw.config.50.json"), r#"{"defaultEngine":"   "}"#).expect("write config");
+            let mut tmux = WakeMockTmux::default();
+            let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("blank alias");
+            let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo codex"), "{send}");
+        });
+    }
+
+    #[test]
     fn wake_resume_without_engine_config_still_lands_on_codex_with_subcommand_first() {
         wake_with_fixture(|_| {
             // No commands/wake config at all: the final fallback engine stays
