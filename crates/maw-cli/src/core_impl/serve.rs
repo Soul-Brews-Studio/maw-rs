@@ -1145,6 +1145,11 @@ async fn api_feed_post(
     if let Some(response) = verify_protected_request(&state, peer, &method, &uri, &headers, &body) {
         response
     } else {
+        if let Some(oracle) =
+            crate::serve_core::modules::agent_status::agentstatus_oracle_from_feed_payload(&body)
+        {
+            crate::serve_core::modules::agent_status::agentstatus_mark_real_feed_event(&oracle);
+        }
         Json(json!({"ok": true})).into_response()
     }
 }
@@ -1719,4 +1724,3 @@ struct SessionsQuery {
 struct CaptureQuery {
     target: Option<String>,
 }
-
