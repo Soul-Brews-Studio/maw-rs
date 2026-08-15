@@ -131,7 +131,7 @@ fn wake_command(window: &str, cwd: &std::path::Path, options: &WakeOptionsNative
     let resume = options.resume || (defaults.resume && !options.fresh);
     let channels = options.channels || defaults.channels;
     let mut warnings = Vec::new();
-    let mut engine_command = wake_engine_launch_command(&engine, cwd, &config, resume, &mut warnings);
+    let mut engine_command = wake_engine_launch_command(&engine, cwd, &config, resume, options.engine_command.as_deref(), &mut warnings);
     if channels { wake_apply_channels(&mut engine_command, &engine, &config, resume, &mut warnings); }
     if let Some(prompt) = options.prompt.as_deref().or(defaults.prompt.as_deref()) { let _ = write!(engine_command, " {}", wake_shell_quote(prompt)); }
     (format!("MAW_SESSION_WINDOW={} {engine_command}", wake_shell_quote(window)), warnings)
@@ -151,14 +151,34 @@ fn wake_engine_launch_command(
     cwd: &std::path::Path,
     config: &serde_json::Value,
     resume: bool,
+    engine_command: Option<&str>,
     warnings: &mut Vec<String>,
 ) -> String {
+    // 0. `commands.<engine>-resume` stays first even against `--engine-cmd`
+    //    (#738 review): the `-resume` key is an operator's EXPLICIT resume
+    //    contract, while a charter `engines:` line only encodes cold start —
+    //    silently discarding the `-resume` command would be the same
+    //    config-that-looks-live-but-isn't failure #682 fixed. The bypass is
+    //    warned so neither side is overridden silently.
     if resume {
         if let Some(command) = wake_config_command(config, &format!("{engine}-resume")) {
+            if engine_command.is_some() {
+                warnings.push(format!(
+                    "wake: commands.{engine}-resume overrides the charter engine command for resume"
+                ));
+            }
             return workon_prefix_zai_pool(config, command);
         }
     }
-    let command = wake_resolve_engine_command(engine, cwd);
+    // 1. `--engine-cmd` — a caller-supplied launch line (a team charter's
+    //    `engines:` entry, #738) outranks the rest of the `commands.*` map for
+    //    cold start; without a `-resume` key, resume falls to the family-based
+    //    form below, derived from the charter's own binary.
+    let command = if let Some(line) = engine_command {
+        workon_prefix_zai_pool(config, line.to_owned())
+    } else {
+        wake_resolve_engine_command(engine, cwd)
+    };
     if !resume {
         return command;
     }

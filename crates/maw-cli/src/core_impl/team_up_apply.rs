@@ -47,7 +47,7 @@ fn team_t5b_exec_bring(team: &str, opts: &TeamT3Options124) -> Result<String, St
     let mut actions = Vec::new();
     for oracle in team_message_targets(team) {
         team_t5b_validate_member(&oracle)?;
-        let item = TeamRosterItem124 { role: oracle.clone(), identity: oracle.clone(), engine: opts.engine.clone().unwrap_or_else(|| "claude".to_owned()), worktree: oracle.clone(), worktree_opt_out: false, state: "missing".to_owned(), action: String::new(), pane: None };
+        let item = TeamRosterItem124 { role: oracle.clone(), identity: oracle.clone(), engine: opts.engine.clone().unwrap_or_else(|| "claude".to_owned()), engine_command: None, worktree: oracle.clone(), worktree_opt_out: false, state: "missing".to_owned(), action: String::new(), pane: None };
         team_t5b_wake_window(&mut runner, &item, opts, &session)?;
         actions.push(format!("{oracle}\tmissing\twake"));
     }
@@ -147,6 +147,11 @@ fn team_t5b_maw_wake_args(item: &TeamRosterItem124, opts: &TeamT3Options124, ses
     let engine = opts.engine.clone().unwrap_or_else(|| item.engine.clone());
     team_t5b_validate_member(&engine)?;
     let mut args = vec!["wake".to_owned(), item.identity.clone(), "--no-attach".to_owned(), "--session".to_owned(), session.to_owned(), "-e".to_owned(), engine];
+    // #738: a charter-declared engine line beats the repo/user `commands` map.
+    if let Some(command) = &item.engine_command {
+        team_t5b_validate_engine_command(command)?;
+        args.extend(["--engine-cmd".to_owned(), command.clone()]);
+    }
     if !item.worktree_opt_out {
         let repo = team_t5b_bound_worktree(&item.worktree)?;
         args.extend(["--repo-path".to_owned(), repo.display().to_string()]);
@@ -208,6 +213,13 @@ fn team_t5b_validate_item(item: &TeamRosterItem124) -> Result<(), String> {
     Ok(())
 }
 
+fn team_t5b_validate_engine_command(value: &str) -> Result<(), String> {
+    if value.trim().is_empty() { return Err("team: charter engine command is empty".to_owned()); }
+    if value.starts_with('-') { return Err(format!("invalid charter engine command '{value}': leading dash rejected")); }
+    if value.contains('\0') || value.contains('\n') || value.contains('\r') { return Err(format!("invalid charter engine command '{value}': control character rejected")); }
+    Ok(())
+}
+
 fn team_t5b_validate_member(value: &str) -> Result<(), String> {
     if value.is_empty() { return Err("team member is empty".to_owned()); }
     if value.starts_with('-') { return Err(format!("invalid team member '{value}': leading dash rejected")); }
@@ -246,9 +258,50 @@ mod team_t5b_tests {
 
     #[test]
     fn team_t5b_worktree_opt_out_omits_repo_path_and_validation() {
-        let item = TeamRosterItem124 { role: "lead".to_owned(), identity: "lead-window".to_owned(), engine: "claude".to_owned(), worktree: "false".to_owned(), worktree_opt_out: true, state: "missing".to_owned(), action: String::new(), pane: None };
+        let item = TeamRosterItem124 { role: "lead".to_owned(), identity: "lead-window".to_owned(), engine: "claude".to_owned(), engine_command: None, worktree: "false".to_owned(), worktree_opt_out: true, state: "missing".to_owned(), action: String::new(), pane: None };
         let args = team_t5b_maw_wake_args(&item, &TeamT3Options124::default(), "alpha").expect("wake args");
         assert_eq!(args, team_t5b_strings(&["wake", "lead-window", "--no-attach", "--session", "alpha", "-e", "claude"]));
         assert!(team_t5b_validate_item(&item).is_ok());
+    }
+
+    /// #738: a charter `engines:` entry has to reach the spawned `maw wake`, or the
+    /// block is documentation only and the worktree's own `commands` map wins instead.
+    #[test]
+    fn team_t5b_charter_engine_command_is_forwarded_to_wake() {
+        let item = TeamRosterItem124 {
+            role: "lead".to_owned(),
+            identity: "lead-window".to_owned(),
+            engine: "omx-1".to_owned(),
+            engine_command: Some("CODEX_HOME=$PWD/.codex omx --direct".to_owned()),
+            worktree: "false".to_owned(),
+            worktree_opt_out: true,
+            state: "missing".to_owned(),
+            action: String::new(),
+            pane: None,
+        };
+        let args = team_t5b_maw_wake_args(&item, &TeamT3Options124::default(), "alpha").expect("wake args");
+        assert_eq!(
+            args,
+            team_t5b_strings(&[
+                "wake",
+                "lead-window",
+                "--no-attach",
+                "--session",
+                "alpha",
+                "-e",
+                "omx-1",
+                "--engine-cmd",
+                "CODEX_HOME=$PWD/.codex omx --direct",
+            ])
+        );
+    }
+
+    #[test]
+    fn team_t5b_charter_engine_command_rejects_hostile_values() {
+        assert!(team_t5b_validate_engine_command("claude --continue").is_ok());
+        assert!(team_t5b_validate_engine_command("   ").is_err());
+        assert!(team_t5b_validate_engine_command("--sneaky").is_err());
+        assert!(team_t5b_validate_engine_command("claude\nrm -rf /").is_err());
+        assert!(team_t5b_validate_engine_command("claude\0").is_err());
     }
 }

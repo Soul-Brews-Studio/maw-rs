@@ -12,6 +12,9 @@ struct TeamRosterItem124 {
     role: String,
     identity: String,
     engine: String,
+    /// Launch line declared by the charter's `engines:` block for this member's
+    /// engine, if any (#738). `None` = fall back to the config `commands` map.
+    engine_command: Option<String>,
     worktree: String,
     worktree_opt_out: bool,
     state: String,
@@ -224,6 +227,7 @@ where
     let panes = team_t3_panes();
     charter.members.iter().map(|member| {
         let mut item = team_t3_classify(member, opts, session, &panes);
+        item.engine_command = charter.engines.get(&item.engine).cloned();
         item.action = action(&item, opts);
         item
     }).collect()
@@ -235,12 +239,12 @@ fn team_t3_classify(member: &TeamCharterMember122, opts: &TeamT3Options124, sess
     let engine = opts.engine.clone().or_else(|| member.engine.clone()).or_else(|| member.model.clone()).unwrap_or_else(|| "claude".to_owned());
     let worktree = member.worktree.clone().or_else(|| member.cwd.clone()).unwrap_or_else(|| identity.clone());
     let worktree_opt_out = member.worktree_opt_out;
-    if !opts.only.is_empty() && !team_t3_matches_selectors(member, &opts.only, &identity, &worktree) { return TeamRosterItem124 { role, identity, engine, worktree, worktree_opt_out, state: "skipped".to_owned(), action: String::new(), pane: None }; }
-    if !opts.members.is_empty() && !opts.members.iter().any(|item| item == &member.role) { return TeamRosterItem124 { role, identity, engine, worktree, worktree_opt_out, state: "skipped".to_owned(), action: String::new(), pane: None }; }
+    if !opts.only.is_empty() && !team_t3_matches_selectors(member, &opts.only, &identity, &worktree) { return TeamRosterItem124 { role, identity, engine, engine_command: None, worktree, worktree_opt_out, state: "skipped".to_owned(), action: String::new(), pane: None }; }
+    if !opts.members.is_empty() && !opts.members.iter().any(|item| item == &member.role) { return TeamRosterItem124 { role, identity, engine, engine_command: None, worktree, worktree_opt_out, state: "skipped".to_owned(), action: String::new(), pane: None }; }
     let candidates = team_t3_window_candidates(member, &identity, &worktree);
     let pane = panes.iter().find(|pane| pane.session == session && candidates.iter().any(|candidate| team_t3_window_matches_candidate(&pane.window, candidate))).cloned();
     let state = pane.as_ref().map_or("missing", |p| if team_t3_is_live_command(&p.command) { "live" } else { "dead" }).to_owned();
-    TeamRosterItem124 { role, identity, engine, worktree, worktree_opt_out, state, action: String::new(), pane }
+    TeamRosterItem124 { role, identity, engine, engine_command: None, worktree, worktree_opt_out, state, action: String::new(), pane }
 }
 
 // #785 sub-bug B: `team up` and `team down` both classify panes through this
