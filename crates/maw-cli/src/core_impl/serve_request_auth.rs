@@ -393,9 +393,29 @@ fn normalize_from_identity(value: &str) -> Option<String> {
 fn node_from_normalized_identity(value: &str) -> Option<String> {
     value
         .split_once(':')
-        .map(|(_, node)| node)
+        .map(|(_, node)| strip_peer_node_user_prefix(node))
         .filter(|node| !node.is_empty())
         .map(ToOwned::to_owned)
+}
+
+// #805: `/api/identity` reports a compound "user@host" node whenever the
+// daemon's port != 3456 (serve_identity.rs's port-based `user@` inference) or
+// an explicit nodeUser/serviceUser is configured, while a signed request's
+// `x-maw-from` always carries the BARE node -- sender_identity.rs's signing
+// path only ever reads config.node, with zero knowledge of that inference.
+// Keeping the compound form as-is is intentional for /api/identity's own
+// payload (it is real, displayed information -- see
+// serveidentity_payload_matches_identity_route_shape_without_real_secret and
+// serveidentity_explicit_user_precedence_matches_js) and for whatever else
+// consumes it (e.g. `maw peers map`), so it is NOT stripped there. Auth
+// MATCHING is the wrong place to lose that display value but the right place
+// to stop caring about it: both a pinned peer's node (extracted here from
+// peers.json's `identity.node`) and an incoming request's claimed node
+// (also extracted here, from its `x-maw-from` header) are normalized to the
+// bare host before comparison, so a peer pinned via a non-default-port probe
+// can still authenticate a request signed with the bare node, and vice versa.
+fn strip_peer_node_user_prefix(node: &str) -> &str {
+    node.split_once('@').map_or(node, |(_, host)| host)
 }
 
 fn node_from_identity(value: &str) -> Option<String> {
