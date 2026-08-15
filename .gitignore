@@ -9,6 +9,10 @@ examples/**/dist/
 ψ/*
 !ψ/teams/
 ψ/
+# ψ is a symlink to the maw-rs-oracle vault repo, not a directory in this
+# repo — a trailing-slash pattern only matches real directories, so the
+# symlink itself needs its own bare (no-slash) pattern to stay ignored.
+ψ
 
 # codex coder runtime homes (worktree-local CODEX_HOME)
 .codex/
