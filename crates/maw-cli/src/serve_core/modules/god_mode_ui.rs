@@ -4,10 +4,11 @@ use super::agent_status::{
 };
 use super::ServecoreModuleRegistration;
 use crate::serve_core::{
-    process_engine::serveengine_tmux_capture, servecore_ws_connection_guard,
-    servecore_ws_connection_limit_reached, servecore_ws_handle_frame, servecore_ws_send,
-    servecore_ws_send_text_frames, servecore_ws_target, ServecoreAgentPane,
-    ServecoreLifecycleModule, ServecoreSharedState, ServecoreWsKind,
+    process_engine::{serveengine_tmux_capture, serveengine_tmux_capture_lines},
+    servecore_ws_connection_guard, servecore_ws_connection_limit_reached,
+    servecore_ws_handle_frame, servecore_ws_send, servecore_ws_send_text_frames,
+    servecore_ws_target, ServecoreAgentPane, ServecoreLifecycleModule, ServecoreSharedState,
+    ServecoreWsKind,
 };
 use axum::{
     body::{to_bytes, Body},
@@ -21,7 +22,7 @@ use maw_tmux::{TmuxSession, TmuxWindow};
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
     sync::Arc,
@@ -30,6 +31,7 @@ use std::{
 
 const GODUI_TEAM_RECENT_MS: u64 = 2 * 60 * 60 * 1_000;
 const GODUI_POST_BODY_LIMIT: usize = 64 * 1024;
+const GODUI_PREVIEW_LINES: u32 = 15;
 
 #[must_use]
 pub fn godui_lifecycle_module() -> ServecoreLifecycleModule {
@@ -136,6 +138,7 @@ async fn godui_ws_upgrade(
         .into_response()
 }
 
+#[allow(clippy::too_many_lines)]
 async fn godui_ws_stream(
     mut socket: WebSocket,
     state: Arc<ServecoreSharedState>,
@@ -169,7 +172,13 @@ async fn godui_ws_stream(
         tokio::time::Instant::now() + config.capture_interval,
         config.capture_interval,
     );
+    let mut previews_tick = tokio::time::interval_at(
+        tokio::time::Instant::now() + config.previews_interval,
+        config.previews_interval,
+    );
     let mut subscribed_target = target.clone();
+    let mut preview_targets = BTreeSet::new();
+    let mut last_previews = BTreeMap::new();
     let idle_timer = tokio::time::sleep(config.idle_timeout);
     tokio::pin!(idle_timer);
     loop {
@@ -182,6 +191,14 @@ async fn godui_ws_stream(
             }
             _ = capture_tick.tick() => {
                 if let Some(frame) = subscribed_target.as_deref().and_then(godui_ws_capture_frame) {
+                    if servecore_ws_send(&mut socket, Message::Text(frame), config.send_timeout).await.is_err() {
+                        break;
+                    }
+                    idle_timer.as_mut().reset(tokio::time::Instant::now() + config.idle_timeout);
+                }
+            }
+            _ = previews_tick.tick() => {
+                if let Some(frame) = godui_ws_previews_frame(&preview_targets, &mut last_previews, godui_ws_preview_capture) {
                     if servecore_ws_send(&mut socket, Message::Text(frame), config.send_timeout).await.is_err() {
                         break;
                     }
@@ -207,6 +224,14 @@ async fn godui_ws_stream(
                         let frame_target = if let Message::Text(text) = &frame {
                             if let Some(selected) = godui_ws_selected_target(text) {
                                 subscribed_target = Some(selected);
+                            }
+                            if let Some(targets) = godui_ws_preview_targets(text) {
+                                godui_ws_replace_preview_targets(
+                                    &mut preview_targets,
+                                    &mut last_previews,
+                                    targets,
+                                );
+                                continue;
                             }
                             godui_ws_message_target(text).or_else(|| subscribed_target.clone()).or_else(|| target.clone())
                         } else {
@@ -369,11 +394,64 @@ fn godui_ws_value_target(value: &Value) -> Option<String> {
         .flatten()
 }
 
+fn godui_ws_preview_targets(text: &str) -> Option<BTreeSet<String>> {
+    let value = serde_json::from_str::<Value>(text).ok()?;
+    (value.get("type").and_then(Value::as_str) == Some("subscribe-previews")).then(|| {
+        value
+            .get("targets")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .filter_map(|target| {
+                super::websocket_routes::ws_validate_target(Some(target))
+                    .ok()
+                    .flatten()
+            })
+            .collect()
+    })
+}
+
+fn godui_ws_replace_preview_targets(
+    current: &mut BTreeSet<String>,
+    last_previews: &mut BTreeMap<String, String>,
+    next: BTreeSet<String>,
+) {
+    *current = next;
+    last_previews.retain(|target, _| current.contains(target));
+}
+
 fn godui_ws_capture_frame(target: &str) -> Option<String> {
     let content = serveengine_tmux_capture(target).ok()?;
     Some(godui_ws_json_text(
         &json!({"type":"capture","target":target,"content":content}),
     ))
+}
+
+fn godui_ws_preview_capture(target: &str) -> Option<String> {
+    serveengine_tmux_capture_lines(target, Some(GODUI_PREVIEW_LINES)).ok()
+}
+
+fn godui_ws_previews_frame<F>(
+    targets: &BTreeSet<String>,
+    last_previews: &mut BTreeMap<String, String>,
+    mut capture: F,
+) -> Option<String>
+where
+    F: FnMut(&str) -> Option<String>,
+{
+    let mut data = Map::new();
+    for target in targets {
+        let Some(content) = capture(target) else {
+            continue;
+        };
+        if last_previews.get(target) == Some(&content) {
+            continue;
+        }
+        last_previews.insert(target.clone(), content.clone());
+        data.insert(target.clone(), Value::String(content));
+    }
+    (!data.is_empty()).then(|| godui_ws_json_text(&json!({"type":"previews","data":data})))
 }
 
 async fn godui_store_json_body(req: Request<Body>, path: &Path) -> Response {
@@ -867,6 +945,68 @@ mod tests {
         assert_eq!(value["type"], "capture");
         assert_eq!(value["target"], "demo:1");
         assert_eq!(value["content"], "pane ansi");
+    }
+
+    #[test]
+    fn godui_ws_previews_frame_sends_only_changed_targets() {
+        let targets = BTreeSet::from(["demo:1".to_owned(), "demo:2".to_owned()]);
+        let mut last_previews = BTreeMap::new();
+        let frame = godui_ws_previews_frame(&targets, &mut last_previews, |target| {
+            Some(format!("{target} pane \u{1b}[31mansi\u{1b}[0m"))
+        })
+        .expect("initial preview frame");
+        let value = serde_json::from_str::<Value>(&frame).expect("json");
+        assert_eq!(value["type"], "previews");
+        assert_eq!(
+            value["data"]["demo:1"],
+            "demo:1 pane \u{1b}[31mansi\u{1b}[0m"
+        );
+        assert_eq!(
+            value["data"]["demo:2"],
+            "demo:2 pane \u{1b}[31mansi\u{1b}[0m"
+        );
+
+        assert!(
+            godui_ws_previews_frame(&targets, &mut last_previews, |target| {
+                Some(format!("{target} pane \u{1b}[31mansi\u{1b}[0m"))
+            })
+            .is_none()
+        );
+
+        let changed = godui_ws_previews_frame(&targets, &mut last_previews, |target| {
+            Some(if target == "demo:2" {
+                "demo:2 updated".to_owned()
+            } else {
+                format!("{target} pane \u{1b}[31mansi\u{1b}[0m")
+            })
+        })
+        .expect("changed preview frame");
+        let changed = serde_json::from_str::<Value>(&changed).expect("json");
+        assert!(changed["data"].get("demo:1").is_none());
+        assert_eq!(changed["data"]["demo:2"], "demo:2 updated");
+    }
+
+    #[test]
+    fn godui_ws_subscribe_previews_replaces_targets_and_prunes_last_sent() {
+        let mut targets = godui_ws_preview_targets(
+            r#"{"type":"subscribe-previews","targets":["demo:1","demo:2"]}"#,
+        )
+        .expect("preview targets");
+        let mut last_previews = BTreeMap::from([
+            ("demo:1".to_owned(), "old 1".to_owned()),
+            ("demo:2".to_owned(), "old 2".to_owned()),
+        ]);
+
+        let next =
+            godui_ws_preview_targets(r#"{"type":"subscribe-previews","targets":["demo:2"]}"#)
+                .expect("replacement targets");
+        godui_ws_replace_preview_targets(&mut targets, &mut last_previews, next);
+
+        assert_eq!(targets, BTreeSet::from(["demo:2".to_owned()]));
+        assert_eq!(
+            last_previews,
+            BTreeMap::from([("demo:2".to_owned(), "old 2".to_owned())])
+        );
     }
 
     #[tokio::test]
