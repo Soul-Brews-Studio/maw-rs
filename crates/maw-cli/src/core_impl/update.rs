@@ -299,11 +299,32 @@ fn update_prove_and_finalize(
     }
 }
 
+/// `ETXTBSY` — the kernel refuses to `execve` a file some process still holds
+/// open for writing. We have just written this binary, and while our own write
+/// fd is closed, any thread that forked in that window leaked it into a child
+/// that has not `execve`d yet (`O_CLOEXEC` closes at exec, not at fork). The
+/// window is microseconds wide, but losing the race here would roll back a
+/// perfectly good new binary, so retry briefly before believing it.
+const UPDATE_ETXTBSY: i32 = 26;
+
 fn update_spawn_version_proof(binary: &std::path::Path) -> Result<String, String> {
-    let output = std::process::Command::new(binary)
-        .arg("version")
-        .output()
-        .map_err(|error| format!("new binary failed to spawn (`{} version`): {error}", binary.display()))?;
+    let mut attempt = 0_u32;
+    let output = loop {
+        match std::process::Command::new(binary).arg("version").output() {
+            Err(error) if error.raw_os_error() == Some(UPDATE_ETXTBSY) && attempt < 5 => {
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_millis(5 * u64::from(attempt)));
+            }
+            other => {
+                break other.map_err(|error| {
+                    format!(
+                        "new binary failed to spawn (`{} version`): {error}",
+                        binary.display()
+                    )
+                })?
+            }
+        }
+    };
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).trim_end().to_owned())
     } else {

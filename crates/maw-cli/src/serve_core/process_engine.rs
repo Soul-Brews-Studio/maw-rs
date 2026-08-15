@@ -600,6 +600,35 @@ mod tests {
         }
     }
 
+    /// Run a script this same process just wrote, retrying on `ETXTBSY`.
+    ///
+    /// `fs::write` holds a write fd on the script. The fd is `O_CLOEXEC`, but
+    /// `O_CLOEXEC` only closes at `execve` — not at `fork`. Any other test
+    /// thread that spawns a child inside that window leaks the write fd into a
+    /// child that has not `execve`d yet, so the kernel still sees an open
+    /// writer and our `execve` fails with `ETXTBSY` ("Text file busy").
+    /// The window is microseconds wide, which is why this only ever showed up
+    /// as a rare flake under a full parallel `cargo test` run.
+    fn run_freshly_written(
+        bin: &Path,
+        argv: &[String],
+        cwd: &Path,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        const ETXTBSY: &str = "os error 26";
+        let mut attempt = 0_u32;
+        loop {
+            let result = serveengine_run_with_timeout(bin, argv, cwd, timeout);
+            match &result {
+                Err(error) if error.contains(ETXTBSY) && attempt < 5 => {
+                    attempt += 1;
+                    std::thread::sleep(Duration::from_millis(5 * u64::from(attempt)));
+                }
+                _ => return result,
+            }
+        }
+    }
+
     fn temp_dir(name: &str) -> PathBuf {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -665,7 +694,7 @@ printf '{{"cwd":"%s","argv":["%s","%s","%s","%s"]}}' "$(pwd)" "$1" "$2" "$3" "$4
         )
         .expect("script");
         fs::set_permissions(&bin, fs::Permissions::from_mode(0o700)).expect("chmod");
-        serveengine_run_with_timeout(
+        run_freshly_written(
             &bin,
             &[
                 "workon".to_owned(),
@@ -689,8 +718,8 @@ printf '{{"cwd":"%s","argv":["%s","%s","%s","%s"]}}' "$(pwd)" "$1" "$2" "$3" "$4
         let bin = root.join("maw-sleep");
         fs::write(&bin, "#!/bin/sh\n/bin/sleep 2\n").expect("script");
         fs::set_permissions(&bin, fs::Permissions::from_mode(0o700)).expect("chmod");
-        let err = serveengine_run_with_timeout(&bin, &[], &root, Duration::from_millis(10))
-            .expect_err("timeout");
+        let err =
+            run_freshly_written(&bin, &[], &root, Duration::from_millis(10)).expect_err("timeout");
         assert_eq!(err, "serve-orchestration: workon timed out");
     }
 
