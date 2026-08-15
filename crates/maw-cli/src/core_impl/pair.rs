@@ -47,7 +47,14 @@ struct PairAcceptLive {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PairConfig {
-    node: String,
+    /// `None` when the node is unconfigured. Deliberately not defaulted:
+    /// this value is published to the REMOTE, which stores it as our
+    /// `identity.node` and then indexes our pubkey under it. A fabricated
+    /// node is therefore not a local cosmetic default — it silently
+    /// poisons the peer's auth table, and every signed request we send
+    /// afterwards is refused with `refuse-missing-peer-key`. Same
+    /// principle as #687: emit nothing rather than a plausible guess.
+    node: Option<String>,
     oracle: Option<String>,
     port: u16,
 }
@@ -64,7 +71,7 @@ impl PairHost for PairSystemHost {
     fn pair_config(&mut self) -> PairConfig {
         let config = load_hey_config();
         PairConfig {
-            node: config.node.unwrap_or_else(|| "local".to_owned()),
+            node: config.node.filter(|node| !node.trim().is_empty()),
             oracle: config.oracle,
             port: pair_resolve_local_port(),
         }
@@ -308,7 +315,7 @@ fn pair_render_accept(plan: &PairAcceptPlan, config: &PairConfig, live: &PairAcc
         plan.remote_url,
         plan.code_normalized,
         pair_pretty_code(&plan.code_normalized),
-        json_string(&config.node),
+        json_string(config.node.as_deref().unwrap_or("")),
         json_string(&local_url),
         warning,
         live.remote_node,
@@ -405,8 +412,7 @@ fn pair_system_generate_finalize(
 }
 
 fn pair_system_accept_live(plan: &PairAcceptPlan, config: &PairConfig) -> Result<PairAcceptLive, String> {
-    let local_url = format!("http://localhost:{}", config.port);
-    let body = serde_json::json!({ "node": config.node, "url": local_url }).to_string();
+    let body = pair_accept_body(config)?;
     let url = format!("{}/api/pair/{}", plan.remote_url, plan.code_normalized);
     let response = pair_http_json("POST", &url, Some(body))?;
     if !(200..300).contains(&response.status) { return Err(format!("pair accept failed: HTTP {}", response.status)); }
@@ -417,6 +423,36 @@ fn pair_system_accept_live(plan: &PairAcceptPlan, config: &PairConfig) -> Result
     pair_validate_peer_identity(&remote_node, &remote_url)?;
     pair_write_peer(&remote_node, &remote_url, config.oracle.as_deref())?;
     Ok(PairAcceptLive { remote_node, remote_url, token_received, peers_written: true })
+}
+
+/// Build the accept body we publish to the remote — the payload that
+/// becomes our entry in *their* peer store.
+///
+/// # Errors
+///
+/// Refuses when `node` is unconfigured. Pairing without a node used to
+/// send the literal `"local"`, which the remote stored as our
+/// `identity.node`; their pubkey table then indexed us under a node
+/// nobody uses, so every signed request we sent came back `401
+/// refuse-missing-peer-key` — surviving re-pairing and serve restarts on
+/// both sides, because re-writing the same placeholder changes nothing.
+/// Proven cross-host on the black<->m5 link (#734, #794): correcting this
+/// one field by hand turned a permanent 401 into a delivered message.
+fn pair_accept_body(config: &PairConfig) -> Result<String, String> {
+    let node = config
+        .node
+        .as_deref()
+        .map(str::trim)
+        .filter(|node| !node.is_empty())
+        .ok_or_else(|| {
+            "pair accept: this node has no `node` name configured, and pairing would \
+             publish a placeholder the peer stores as our identity — every signed \
+             request would then be refused. Set `node` in maw.config.json (check with \
+             `maw config explain`) and pair again."
+                .to_owned()
+        })?;
+    let local_url = format!("http://localhost:{}", config.port);
+    Ok(serde_json::json!({ "node": node, "url": local_url }).to_string())
 }
 
 fn pair_http_json(method: &str, url: &str, body: Option<String>) -> Result<maw_transport::HttpResponse, String> {
@@ -525,6 +561,41 @@ fn pair_help() -> String {
 }
 
 #[cfg(test)]
+mod pair_accept_body_tests {
+    use super::{pair_accept_body, PairConfig};
+
+    fn config(node: Option<&str>, port: u16) -> PairConfig {
+        PairConfig { node: node.map(str::to_owned), oracle: None, port }
+    }
+
+    #[test]
+    fn accept_body_carries_the_configured_node_and_port() {
+        let body = pair_accept_body(&config(Some("black"), 3458)).expect("body");
+        assert!(body.contains(r#""node":"black""#), "{body}");
+        assert!(body.contains(r#""url":"http://localhost:3458""#), "{body}");
+    }
+
+    /// #734: the placeholder was published to the peer, who stored it as
+    /// our `identity.node`. Refusing is the only safe answer — a wrong
+    /// node here costs the *other* machine a permanent 401 that survives
+    /// re-pairing.
+    #[test]
+    fn accept_refuses_rather_than_publishing_a_placeholder_node() {
+        for missing in [None, Some(""), Some("   ")] {
+            let error = pair_accept_body(&config(missing, 3458)).expect_err("must refuse");
+            assert!(error.contains("no `node` name configured"), "{error}");
+            assert!(!error.contains("local"), "must not suggest the old placeholder: {error}");
+        }
+    }
+
+    #[test]
+    fn accept_body_never_contains_the_old_local_placeholder() {
+        let body = pair_accept_body(&config(Some("black"), 3458)).expect("body");
+        assert!(!body.contains(r#""node":"local""#), "{body}");
+    }
+}
+
+#[cfg(test)]
 mod pair_tests {
     use super::*;
 
@@ -532,7 +603,7 @@ mod pair_tests {
 
     impl PairHost for PairFakeHost {
         fn pair_config(&mut self) -> PairConfig {
-            PairConfig { node: "fake-node".to_owned(), oracle: Some("fake-oracle".to_owned()), port: 5002 }
+            PairConfig { node: Some("fake-node".to_owned()), oracle: Some("fake-oracle".to_owned()), port: 5002 }
         }
 
         fn pair_generate_live(&mut self, _plan: &PairGeneratePlan, _config: &PairConfig) -> Result<PairGenerateLive, String> {
@@ -662,7 +733,7 @@ mod pair_tests {
 
         let mut host = PairSystemHost;
         let config = host.pair_config();
-        assert_eq!(config.node, "fleet");
+        assert_eq!(config.node.as_deref(), Some("fleet"));
         assert_eq!(
             config.port, 3457,
             "pair_config() must read the configured serve port, not the hardcoded default"
@@ -760,7 +831,7 @@ mod pair_tests {
         });
 
         let plan = PairGeneratePlan { local_url: local_url.clone(), expires_sec: 5 };
-        let config = PairConfig { node: "responder-node".to_owned(), oracle: Some("responder-oracle".to_owned()), port: addr.port() };
+        let config = PairConfig { node: Some("responder-node".to_owned()), oracle: Some("responder-oracle".to_owned()), port: addr.port() };
 
         let live = pair_system_generate_wait_and_write(&plan, &normalized, &config).expect("wait and write");
 
