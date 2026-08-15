@@ -664,12 +664,15 @@ mod wake_tests {
         wake_with_fixture(|_| {
             let mut tmux = WakeMockTmux { pane_command_script: vec!["zsh".to_owned()], ..WakeMockTmux::default() };
             let err = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect_err("shell-stuck pane must fail");
-            assert!(err.contains("wake: engine did not start in"), "{err}");
+            // #751: "not started yet", not "did not start" — callers tear teams down
+            // on this message, and a pane still in the shell may still be booting.
+            assert!(err.contains("wake: engine has not started yet in"), "{err}");
+            assert!(err.contains("may still be booting under load"), "{err}");
             assert!(err.contains("pane still running 'zsh'"), "{err}");
             assert!(err.contains("— sent: "), "{err}");
-            // Poll budget is bounded: initial check + one per backoff step.
+            // Poll budget is bounded: initial check + one per backoff step + the #751 grace look.
             assert_eq!(tmux.pre_send_polls, 1);
-            assert_eq!(tmux.post_send_polls, WAKE_LAUNCH_CONFIRM_BACKOFF_MS.len() + 1);
+            assert_eq!(tmux.post_send_polls, WAKE_LAUNCH_CONFIRM_BACKOFF_MS.len() + 2);
         });
     }
 
@@ -769,7 +772,7 @@ mod wake_tests {
         // trust-prompt capture path is never entered.
         let mut tmux = WakeMockTmux { pane_command_script: vec!["zsh".to_owned()], ..WakeMockTmux::default() };
         let err = wake_confirm_engine_launch(&mut tmux, "neo:main", "claude").expect_err("shell-stuck pane must fail");
-        assert!(err.contains("wake: engine did not start in"), "{err}");
+        assert!(err.contains("wake: engine has not started yet in"), "{err}");
         assert_eq!(tmux.pane_captures, 0);
     }
 
