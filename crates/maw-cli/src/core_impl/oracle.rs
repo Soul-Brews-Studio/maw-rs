@@ -134,8 +134,14 @@ fn oracle_parse_scan_options(argv: &[String], start: usize) -> Result<OracleScan
 }
 
 fn oracle_list(opts: &OracleListOptions, tmux: &mut OracleTmux) -> Result<String, String> {
-    let registry = if opts.scan { oracle_scan_registry() } else { oracle_read_registry() };
-    if opts.scan { oracle_write_registry(&registry)?; }
+    let registry = if opts.scan {
+        let previous = oracle_read_registry();
+        let registry = oracle_merge_scan_registry(oracle_scan_registry()?, &previous);
+        oracle_write_registry(&registry)?;
+        registry
+    } else {
+        oracle_read_registry()
+    };
     let awake = tmux.oracle_awake_oracles();
     let mut entries = oracle_enriched_entries(&registry, &awake);
     if opts.awake { entries.retain(|entry| awake.contains_key(&entry.name)); }
@@ -147,7 +153,8 @@ fn oracle_list(opts: &OracleListOptions, tmux: &mut OracleTmux) -> Result<String
 
 fn oracle_scan(opts: &OracleScanOptions) -> Result<String, String> {
     if opts.stale { return Ok(oracle_stale(opts.json)); }
-    let registry = oracle_scan_registry();
+    let previous = oracle_read_registry();
+    let registry = oracle_merge_scan_registry(oracle_scan_registry()?, &previous);
     oracle_write_registry(&registry)?;
     if opts.json { return serde_json::to_string_pretty(&registry).map(|value| format!("{value}\n")).map_err(|error| error.to_string()); }
     Ok(format!("\n  \x1b[32m✓\x1b[0m {} oracles locally (cache written)\n\n", registry.oracles.len()))
@@ -158,7 +165,9 @@ fn oracle_scan_with_progress(opts: &OracleScanOptions) -> Result<(String, String
         return Ok((oracle_stale(opts.json), String::new()));
     }
     let emit_progress = !opts.json && !opts.quiet && std::io::IsTerminal::is_terminal(&std::io::stdout());
-    let (registry, mut stderr) = oracle_scan_registry_with_progress(opts.verbose, emit_progress);
+    let previous = oracle_read_registry();
+    let (registry, mut stderr) = oracle_scan_registry_with_progress(opts.verbose, emit_progress)?;
+    let registry = oracle_merge_scan_registry(registry, &previous);
     oracle_write_registry(&registry)?;
     if opts.json { return serde_json::to_string_pretty(&registry).map(|value| (format!("{value}\n"), stderr)).map_err(|error| error.to_string()); }
     if opts.all && emit_progress {
@@ -268,15 +277,16 @@ fn oracle_enriched_entries(registry: &OracleRegistry, awake: &BTreeMap<String, S
     by_name.into_values().collect()
 }
 
-fn oracle_scan_registry() -> OracleRegistry {
-    oracle_scan_registry_with_progress(false, false).0
+fn oracle_scan_registry() -> Result<OracleRegistry, String> {
+    oracle_scan_registry_with_progress(false, false).map(|(registry, _progress)| registry)
 }
 
-fn oracle_scan_registry_with_progress(verbose: bool, show_progress: bool) -> (OracleRegistry, String) {
+fn oracle_scan_registry_with_progress(verbose: bool, show_progress: bool) -> Result<(OracleRegistry, String), String> {
     let mut entries = Vec::<OracleEntry>::new();
     let mut progress = String::new();
-    let repos_root = ghq_root().join("github.com");
-    let Ok(orgs) = std::fs::read_dir(&repos_root) else { return (OracleRegistry { schema: 1, local_scanned_at: oracle_now_string(), ghq_root: ghq_root().display().to_string(), oracles: entries, retired: Vec::new() }, progress); };
+    let root = ghq_root();
+    let repos_root = root.join("github.com");
+    let orgs = std::fs::read_dir(&repos_root).map_err(|error| format!("oracle scan: failed to read ghq github root {}: {error}", repos_root.display()))?;
     let mut candidates = Vec::<(String, std::path::PathBuf)>::new();
     for org_entry in orgs.flatten().filter(|entry| entry.path().is_dir()) {
         let org = org_entry.file_name().to_string_lossy().to_string();
@@ -303,7 +313,21 @@ fn oracle_scan_registry_with_progress(verbose: bool, show_progress: bool) -> (Or
         }
     }
     entries.sort_by(|a, b| a.name.cmp(&b.name));
-    (OracleRegistry { schema: 1, local_scanned_at: oracle_now_string(), ghq_root: ghq_root().display().to_string(), oracles: entries, retired: Vec::new() }, progress)
+    Ok((OracleRegistry { schema: 1, local_scanned_at: oracle_now_string(), ghq_root: root.display().to_string(), oracles: entries, retired: Vec::new() }, progress))
+}
+
+fn oracle_merge_scan_registry(mut scanned: OracleRegistry, previous: &OracleRegistry) -> OracleRegistry {
+    let previous_by_name = previous.oracles.iter().map(|entry| (entry.name.as_str(), entry)).collect::<BTreeMap<_, _>>();
+    for entry in &mut scanned.oracles {
+        if let Some(previous) = previous_by_name.get(entry.name.as_str()) {
+            entry.budded_from = previous.budded_from.clone();
+            entry.budded_at = previous.budded_at.clone();
+            entry.federation_node = previous.federation_node.clone();
+            entry.nickname = previous.nickname.clone();
+        }
+    }
+    scanned.retired.clone_from(&previous.retired);
+    scanned
 }
 
 fn oracle_entry_from_repo(org: &str, path: &std::path::Path) -> Option<OracleEntry> {
@@ -470,6 +494,25 @@ mod oracle_tests {
         std::fs::create_dir_all(&root).expect("temp root");
         root
     }
+    fn oracle_test_env(root: &std::path::Path, ghq_root: &std::path::Path) -> Vec<EnvVarRestore> {
+        let guards = ["HOME", "MAW_HOME", "MAW_CONFIG_DIR", "MAW_STATE_DIR", "MAW_CACHE_DIR", "GHQ_ROOT"].map(EnvVarRestore::capture).into_iter().collect();
+        std::env::set_var("HOME", root.join("home"));
+        std::env::remove_var("MAW_HOME");
+        std::env::set_var("MAW_CONFIG_DIR", root.join("config"));
+        std::env::set_var("MAW_STATE_DIR", root.join("state"));
+        std::env::set_var("MAW_CACHE_DIR", root.join("cache"));
+        std::env::set_var("GHQ_ROOT", ghq_root);
+        guards
+    }
+    fn oracle_test_entry(name: &str) -> OracleEntry {
+        OracleEntry { org: "acme".to_owned(), repo: format!("{name}-oracle"), name: name.to_owned(), local_path: format!("/old/{name}-oracle"), has_psi: true, detected_at: "1".to_owned(), ..OracleEntry::default() }
+    }
+    fn oracle_test_retired() -> Vec<serde_json::Value> {
+        ["argus-codex", "beacon", "cipher-codex-2", "cipher-codex-3", "cipher-codex-4", "cipher-codex-5", "sentinel", "ui-designer", "ux-designer"]
+            .into_iter()
+            .map(|name| serde_json::json!({"name":name}))
+            .collect()
+    }
     #[test]
     fn oracle_parser_blocks_leading_dash_values() { assert!(oracle_parse_list_options(&oracle_strings(&["ls", "--org", "-bad"]), 1).is_err()); assert!(oracle_parse_scan_options(&oracle_strings(&["scan", "--remote"]), 1).is_err()); }
     #[test]
@@ -505,11 +548,11 @@ mod oracle_tests {
         std::env::set_var("MAW_CACHE_DIR", root.join("cache"));
         std::env::set_var("GHQ_ROOT", root.join("ghq"));
 
-        let (_registry, progress) = oracle_scan_registry_with_progress(false, true);
+        let (_registry, progress) = oracle_scan_registry_with_progress(false, true).expect("scan");
         assert!(progress.contains("scanning neo-oracle"));
         assert!(progress.contains("scanning sol-oracle"));
 
-        let (_, verbose_progress) = oracle_scan_registry_with_progress(true, true);
+        let (_, verbose_progress) = oracle_scan_registry_with_progress(true, true).expect("verbose scan");
         assert!(verbose_progress.contains("path="));
         assert!(verbose_progress.contains("flags="));
         assert!(verbose_progress.contains("ψ/"));
@@ -518,6 +561,79 @@ mod oracle_tests {
     fn oracle_registry_roundtrip_defaults() { let value = serde_json::from_str::<OracleRegistry>(r#"{"oracles":[{"org":"o","repo":"neo-oracle","name":"neo"}]}"#).unwrap(); assert_eq!(value.schema, 1); assert_eq!(value.oracles[0].name, "neo"); }
     #[test]
     fn oracle_format_row_marks_fleet_and_psi() { let entry = OracleEntry { org: "org".to_owned(), repo: "neo-oracle".to_owned(), name: "neo".to_owned(), has_psi: true, has_fleet_config: true, ..OracleEntry::default() }; assert!(oracle_format_row(&entry, true, false).contains("fleet+awake")); }
+
+    #[test]
+    fn oracle_scan_failure_keeps_existing_registry_byte_identical() {
+        let _guard = env_test_lock();
+        let root = oracle_temp_root("scan-failure");
+        let _env = oracle_test_env(&root, &root.join("missing-ghq"));
+        let registry = OracleRegistry { schema: 1, local_scanned_at: "old".to_owned(), ghq_root: "old-ghq".to_owned(), oracles: vec![oracle_test_entry("neo")], retired: oracle_test_retired() };
+        oracle_write_registry(&registry).expect("seed registry");
+        let before = std::fs::read_to_string(oracle_registry_path()).expect("registry before");
+
+        let error = oracle_scan(&OracleScanOptions::default()).expect_err("scan should fail");
+
+        assert!(error.contains("failed to read ghq github root"), "{error}");
+        assert!(error.contains("missing-ghq/github.com"), "{error}");
+        assert_eq!(std::fs::read_to_string(oracle_registry_path()).expect("registry after"), before);
+    }
+
+    #[test]
+    fn oracle_scan_merges_retired_while_replacing_oracles() {
+        let _guard = env_test_lock();
+        let root = oracle_temp_root("scan-retired");
+        let _env = oracle_test_env(&root, &root.join("ghq"));
+        std::fs::create_dir_all(root.join("ghq/github.com/acme/neo-oracle/ψ")).expect("neo");
+        let registry = OracleRegistry {
+            schema: 1,
+            oracles: vec![oracle_test_entry("neo"), oracle_test_entry("deleted")],
+            retired: oracle_test_retired(),
+            ..OracleRegistry::default()
+        };
+        oracle_write_registry(&registry).expect("seed registry");
+
+        oracle_scan(&OracleScanOptions::default()).expect("scan");
+        let scanned = oracle_read_registry();
+
+        assert_eq!(scanned.oracles.iter().map(|entry| entry.name.as_str()).collect::<Vec<_>>(), vec!["neo"]);
+        assert_eq!(scanned.retired, oracle_test_retired());
+    }
+
+    #[test]
+    fn oracle_scan_writes_fresh_registry_without_prior_cache() {
+        let _guard = env_test_lock();
+        let root = oracle_temp_root("scan-fresh");
+        let _env = oracle_test_env(&root, &root.join("ghq"));
+        std::fs::create_dir_all(root.join("ghq/github.com/acme/fresh-oracle/ψ")).expect("fresh");
+
+        oracle_scan(&OracleScanOptions::default()).expect("fresh scan");
+        let scanned = oracle_read_registry();
+
+        assert_eq!(scanned.oracles.iter().map(|entry| entry.name.as_str()).collect::<Vec<_>>(), vec!["fresh"]);
+        assert!(scanned.retired.is_empty());
+    }
+
+    #[test]
+    fn oracle_scan_carries_forward_scan_unknown_fields_for_survivors() {
+        let _guard = env_test_lock();
+        let root = oracle_temp_root("scan-fields");
+        let _env = oracle_test_env(&root, &root.join("ghq"));
+        std::fs::create_dir_all(root.join("ghq/github.com/acme/neo-oracle/ψ")).expect("neo");
+        let mut entry = oracle_test_entry("neo");
+        entry.budded_from = Some("atlas".to_owned());
+        entry.budded_at = Some("2026-08-03T00:00:00Z".to_owned());
+        entry.federation_node = Some("edge-a".to_owned());
+        entry.nickname = Some("Neo Prime".to_owned());
+        oracle_write_registry(&OracleRegistry { schema: 1, oracles: vec![entry], ..OracleRegistry::default() }).expect("seed registry");
+
+        oracle_scan(&OracleScanOptions::default()).expect("scan");
+        let entry = oracle_read_registry().oracles.into_iter().find(|entry| entry.name == "neo").expect("neo");
+
+        assert_eq!(entry.budded_from.as_deref(), Some("atlas"));
+        assert_eq!(entry.budded_at.as_deref(), Some("2026-08-03T00:00:00Z"));
+        assert_eq!(entry.federation_node.as_deref(), Some("edge-a"));
+        assert_eq!(entry.nickname.as_deref(), Some("Neo Prime"));
+    }
 
     #[test]
     fn oracle_repo_scan_uses_declared_kind_before_suffix() {
@@ -588,7 +704,7 @@ mod oracle_tests {
         std::env::set_var("MAW_CACHE_DIR", root.join("cache"));
         std::env::set_var("GHQ_ROOT", root.join("ghq/github.com"));
 
-        let (registry, progress) = oracle_scan_registry_with_progress(true, true);
+        let (registry, progress) = oracle_scan_registry_with_progress(true, true).expect("scan");
         let entry = registry.oracles.into_iter().find(|entry| entry.name == "3e-infra").expect("3e-infra entry");
         assert_eq!(entry.org, "laris-co");
         assert_eq!(entry.repo, "3e-infra-oracle");
