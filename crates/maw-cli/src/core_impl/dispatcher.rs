@@ -26,7 +26,6 @@ use maw_bind::{resolve_bind_host, BindConfig, BindHostResult};
 use maw_bring::{parse_bring_args, ParsedBringArgs};
 use maw_calver::{compute_version, Channel, ComputeArgs, DateParts};
 use maw_feed::{active_oracles_at, describe_activity, parse_line, FeedEvent};
-use maw_discord::run_discord_command;
 use maw_fuzzy::{distance as fuzzy_distance, fuzzy_match};
 use maw_identity::{canonical_node_identity, canonical_session_name, CanonicalSessionNameInput};
 use maw_matcher::{
@@ -255,7 +254,6 @@ const DISPATCH_01: &[DispatcherEntry] = &[
     DispatcherEntry { command: "-v", handler: Handler::Sync(version_handler) },
     DispatcherEntry { command: "version", handler: Handler::Sync(version_handler) },
     DispatcherEntry { command: "auto-wake", handler: Handler::Sync(run_auto_wake_plan) },
-    DispatcherEntry { command: "discord", handler: Handler::Async(run_discord_async) },
     #[cfg(test)]
     DispatcherEntry { command: "__async-dispatch-test", handler: Handler::Async(run_async_dispatch_test) },
 ];
@@ -656,17 +654,6 @@ fn run_async_handler_blocking(handler: AsyncHandler, args: &[String]) -> CliOutp
         }
     };
     runtime.block_on(handler(args.to_vec()))
-}
-
-fn run_discord_async(args: Vec<String>) -> Pin<Box<dyn Future<Output = CliOutput> + Send>> {
-    Box::pin(async move {
-        let output = run_discord_command(args).await;
-        CliOutput {
-            code: output.code,
-            stdout: output.stdout,
-            stderr: output.stderr,
-        }
-    })
 }
 
 #[cfg(test)]
