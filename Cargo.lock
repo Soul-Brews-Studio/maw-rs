@@ -1639,6 +1639,7 @@ dependencies = [
  "base64",
  "extism",
  "libc",
+ "maw-policy",
  "maw-tmux",
  "maw-transport",
  "maw-xdg",

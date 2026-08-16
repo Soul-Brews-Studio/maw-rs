@@ -218,7 +218,7 @@ impl<'a> PluginLsRow<'a> {
         Self {
             name: &manifest.name,
             version: &manifest.version,
-            tier: plugin_ls_effective_tier(manifest),
+            tier: maw_plugin_manifest::effective_tier(manifest),
             surfaces: plugin_ls_surfaces(cli_command.as_deref(), api_path),
             dir: shorten_home(&plugin.dir),
             disabled: plugin.disabled,
@@ -332,22 +332,6 @@ fn plugin_ls_cli_command(plugin: &LoadedPlugin) -> Option<String> {
         },
         |cli| Some(cli.command.clone()),
     )
-}
-
-fn plugin_ls_effective_tier(manifest: &PluginManifest) -> PluginTier {
-    manifest
-        .tier
-        .unwrap_or_else(|| plugin_ls_weight_to_tier(manifest.weight.unwrap_or(50)))
-}
-
-fn plugin_ls_weight_to_tier(weight: u64) -> PluginTier {
-    if weight < 10 {
-        PluginTier::Core
-    } else if weight < 50 {
-        PluginTier::Standard
-    } else {
-        PluginTier::Extra
-    }
 }
 
 fn plugin_tier_order(tier: PluginTier) -> u8 {

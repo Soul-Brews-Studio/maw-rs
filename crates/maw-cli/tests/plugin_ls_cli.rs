@@ -150,3 +150,151 @@ fn plugin_ls_rejects_unknown_args() {
     assert!(output.stderr.contains("plugin ls: unknown argument --json"));
     assert!(output.stderr.contains("usage: maw-rs plugin ls"));
 }
+
+/// Strip SGR escapes so a rendered `plugin ls -v` row can be tokenised.
+fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\x1b' {
+            out.push(ch);
+            continue;
+        }
+        for escaped in chars.by_ref() {
+            if escaped == 'm' {
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// `plugin ls -v` row shape: `<name> <version> <icon> <tier> <surfaces> <dir>`.
+fn ls_verbose_tier(stdout: &str, name: &str) -> String {
+    let plain = strip_ansi(stdout);
+    let row = plain
+        .lines()
+        .find(|line| line.split_whitespace().next() == Some(name))
+        .unwrap_or_else(|| panic!("no `plugin ls -v` row for {name} in:\n{plain}"));
+    let fields = row.split_whitespace().collect::<Vec<_>>();
+    assert_eq!(fields[2], "●", "unexpected row shape for {name}: {row}");
+    fields[3].to_owned()
+}
+
+/// `plugin info` text shape: a `  tier: <tier>` line.
+fn info_tier(stdout: &str) -> String {
+    stdout
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("tier: "))
+        .unwrap_or_else(|| panic!("no tier line in `plugin info`:\n{stdout}"))
+        .to_owned()
+}
+
+/// #792: `plugin info` hardcoded `core` for a tier-less manifest while `plugin ls -v`
+/// derived the tier from `weight`, so the same plugin read `core` in one command and
+/// `extra` in the other. Both must now report the shared effective tier.
+#[test]
+fn plugin_info_and_ls_verbose_agree_on_tier_when_the_manifest_omits_it() {
+    let root = temp_plugin_root("omitted-tier");
+    // The issue's repro: `"weight": 50`, no `"tier"` key at all.
+    write_plugin(
+        &root,
+        "atlas",
+        r#"{
+          "name": "atlas",
+          "version": "1.0.0",
+          "sdk": "*",
+          "entry": "index.ts",
+          "weight": 50,
+          "cli": { "command": "atlas" }
+        }"#,
+    );
+    // No `"tier"` and no `"weight"` — the default weight still decides.
+    write_plugin(
+        &root,
+        "bare",
+        r#"{
+          "name": "bare",
+          "version": "1.0.0",
+          "sdk": "*",
+          "entry": "index.ts",
+          "cli": { "command": "bare" }
+        }"#,
+    );
+    // No `"tier"`, low weight — lands in core through the same resolver.
+    write_plugin(
+        &root,
+        "kernel",
+        r#"{
+          "name": "kernel",
+          "version": "1.0.0",
+          "sdk": "*",
+          "entry": "index.ts",
+          "weight": 3,
+          "cli": { "command": "kernel" }
+        }"#,
+    );
+    // Explicit tier still wins over a contradicting weight.
+    write_plugin(
+        &root,
+        "pinned",
+        r#"{
+          "name": "pinned",
+          "version": "1.0.0",
+          "sdk": "*",
+          "entry": "index.ts",
+          "tier": "standard",
+          "weight": 90,
+          "cli": { "command": "pinned" }
+        }"#,
+    );
+
+    let listed = run(&[
+        "plugin".to_owned(),
+        "ls".to_owned(),
+        "-v".to_owned(),
+        "--scan-dir".to_owned(),
+        root.display().to_string(),
+    ]);
+    assert_eq!(listed.code, 0, "{}", listed.stderr);
+
+    for (name, expected) in [
+        ("atlas", "extra"),
+        ("bare", "extra"),
+        ("kernel", "core"),
+        ("pinned", "standard"),
+    ] {
+        let from_ls = ls_verbose_tier(&listed.stdout, name);
+
+        let text = run(&[
+            "plugin".to_owned(),
+            "info".to_owned(),
+            name.to_owned(),
+            "--scan-dir".to_owned(),
+            root.display().to_string(),
+        ]);
+        assert_eq!(text.code, 0, "{}", text.stderr);
+        let from_info = info_tier(&text.stdout);
+
+        let json = run(&[
+            "plugin".to_owned(),
+            "info".to_owned(),
+            name.to_owned(),
+            "--json".to_owned(),
+            "--scan-dir".to_owned(),
+            root.display().to_string(),
+        ]);
+        assert_eq!(json.code, 0, "{}", json.stderr);
+
+        assert_eq!(
+            from_info, from_ls,
+            "plugin info and plugin ls -v disagree on {name}'s tier"
+        );
+        assert_eq!(from_info, expected, "unexpected effective tier for {name}");
+        assert!(
+            json.stdout.contains(&format!("\"tier\":\"{expected}\"")),
+            "plugin info --json disagrees for {name}: {}",
+            json.stdout
+        );
+    }
+}

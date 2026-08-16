@@ -418,7 +418,7 @@ where
             .iter()
             .map(|plugin| PluginNameAndTier {
                 name: plugin.manifest.name.clone(),
-                tier: plugin.manifest.tier.unwrap_or(PluginTier::Core),
+                tier: effective_tier(&plugin.manifest),
             })
             .collect::<Vec<_>>(),
     );
