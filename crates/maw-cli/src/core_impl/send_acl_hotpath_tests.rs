@@ -446,6 +446,51 @@ mod send_acl_hotpath_tests {
         assert!(!wants_help_before_positionals(&send_acl_vec(&["bob", "hello", "--help"]), &["--from"]));
     }
 
+    /// The `default:` paragraph of `maw hey --help`, folded to one lowercase
+    /// line. Continuations are indented past the two-space key column, so a
+    /// five-space prefix separates them from the next `  --flag:` entry.
+    fn hey_usage_default_paragraph(usage: &str) -> String {
+        let mut lines = usage.lines().skip_while(|line| !line.trim_start().starts_with("default:"));
+        let head = lines.next().expect("hey usage must document the default path");
+        let tail = lines.take_while(|line| line.starts_with("     ") && !line.trim_start().starts_with("--"));
+        std::iter::once(head).chain(tail).collect::<Vec<_>>().join(" ").to_lowercase()
+    }
+
+    /// #787: the `default:` line was inherited verbatim from maw-js, whose
+    /// local branch really does persist the receiver inbox before `sendKeys`
+    /// (`docs/reference/wire-protocol.md:74`). maw-rs never ported that. The
+    /// local arm calls `send_local_message_with_audit` — `tmux send-text`
+    /// plus a sender-side audit record, no `ψ/inbox` write anywhere — and the
+    /// cross-node arm posts `inbox: args.inbox`, which `serve_deliver_send`
+    /// routes to `serve_deliver_inbox` only when the body says `inbox: true`.
+    /// So the promise was false on *every* route, not just locally. Pin the
+    /// denial rather than the wording, and require the help to name both
+    /// routes so a reader can't assume the cross-node one is the durable one.
+    ///
+    /// This guards the *docs*, so it over-fires by construction once the docs
+    /// stop being wrong: when #763 actually makes the default write an inbox,
+    /// the honest help says so and this test starts refusing the truth. Delete
+    /// it in that PR — it is not a behavioural guard and must not be worked
+    /// around by rewording the help back into vagueness.
+    #[test]
+    fn hey_usage_default_path_never_promises_inbox_durability() {
+        let paragraph = hey_usage_default_paragraph(&send_usage("hey"));
+
+        for clause in paragraph.split([';', '.', '—']) {
+            let denied = ["no ", "not ", "nothing", "never", "without"].iter().any(|negation| clause.contains(negation));
+            assert!(
+                !clause.contains("inbox") || denied,
+                "the default path writes no inbox on either route, but this clause promises one: {clause:?}"
+            );
+        }
+
+        assert!(paragraph.contains("pane"), "the default path must still say it injects into the pane: {paragraph:?}");
+        assert!(
+            paragraph.contains("cross-node") || paragraph.contains("peer"),
+            "the default path must name the cross-node route too — it skips the inbox exactly like the local one: {paragraph:?}"
+        );
+    }
+
     fn send_acl_write_scope(name: &str, members: &[&str]) {
         let dir = scope_native_dir();
         std::fs::create_dir_all(&dir).unwrap();
