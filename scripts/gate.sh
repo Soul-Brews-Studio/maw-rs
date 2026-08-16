@@ -295,7 +295,9 @@ gate_full() {
     acquire_lock
     warm_seed
     run_step "fmt --check" cargo fmt --all -- --check
+    LEAK_BEFORE="$(leak_count)"
     run_step "test --workspace" cargo test --workspace --locked --no-fail-fast
+    run_step "temp-fixture leak (#851)" leak_check "$LEAK_BEFORE"
     # Dimension 3 used to run clippy TWICE: once on whatever `stable` happened
     # to mean locally, once on a hardcoded `+1.97.0` guess at CI's stable —
     # because neither was KNOWN to be CI's toolchain, and a missing 1.97.0
@@ -312,6 +314,42 @@ gate_full() {
     run_step "clippy (wasm-host subset)" \
         cargo clippy -p maw-cli -p maw-plugin-manifest --all-targets --features wasm-host --locked -- -D warnings
     summary
+}
+
+# --- #851: temp-fixture leak guard -------------------------------------------
+# The suite creates per-test directories under $TMPDIR and mostly never removes
+# them. Measured 2026-08-16: 100,673 stale entries on white and 166,952 on
+# black, oldest three days, across ~1,237 distinct fixture families.
+#
+# This is a CORRECTNESS risk, not untidiness. Names embed the pid, pid_max here
+# is 4,194,304, and observed pids reach 4,108,102 — so pid reuse is live, and a
+# fresh test process can be handed a fixture path that already exists and is
+# already populated. #839 is the case that failed loudly: a test asserting a
+# repo was ABSENT got flipped by a leftover directory it never created.
+#
+# It also makes cross-host flake-rate comparison unsound, because the rate
+# becomes a function of how long since /tmp was last cleared.
+#
+# Reports the delta. Fails only when GATE_LEAK_STRICT=1, so this lands as a
+# measurement first and becomes a bar once the families are migrated — turning
+# it on today would red every run for a leak that predates the check.
+leak_count() { ls "${TMPDIR:-/tmp}" 2>/dev/null | grep -cE '^(maw|schedule-)' || true; }
+
+leak_check() {
+    local before="$1" after delta
+    after="$(leak_count)"
+    delta=$(( after - before ))
+    if [ "$delta" -le 0 ]; then
+        echo "    no temp fixtures leaked"
+        return 0
+    fi
+    echo "    leaked $delta temp fixture dirs (${before} -> ${after}) — see #851" >&2
+    if [ "${GATE_LEAK_STRICT:-0}" = "1" ]; then
+        echo "    GATE_LEAK_STRICT=1: failing on the leak" >&2
+        return 1
+    fi
+    echo "    not failing the gate: this leak predates the check (GATE_LEAK_STRICT=1 to enforce)"
+    return 0
 }
 
 gate_batch() {
