@@ -376,6 +376,32 @@ fn attach_picker_rows(target: &str, candidates: &[maw_matcher::ResolveMatch]) ->
 // resolver (which already disambiguates by window/oracle name) land on the
 // specific window the user asked for, instead of silently falling back to
 // the session's active/first window (#711).
+/// Pure half of #810: given the repo the picker resolved (if any), the wake command.
+///
+/// Split from the registry read so it is testable without process-global state —
+/// the same pure/effectful split that #732 and #839 both turned on.
+fn attach_oracle_wake_command(name: &str, repo: Option<&str>) -> String {
+    repo.map_or_else(
+        || format!("maw wake {name} --attach"),
+        |repo| format!("maw wake {name} --attach --repo {repo}"),
+    )
+}
+
+/// The `org/repo` the oracle registry has for `name`, if any.
+///
+/// #810: the picker resolved an oracle by name; wake must not re-derive the repo
+/// by fuzzy match, because a name that is unambiguous among ORACLES can still be
+/// ambiguous among REPOS.
+fn attach_oracle_repo(name: &str) -> Option<String> {
+    let cache = locate_load_registry_cache()?;
+    cache
+        .oracles
+        .iter()
+        .find(|entry| entry.name.eq_ignore_ascii_case(name))
+        .filter(|entry| !entry.org.is_empty() && !entry.repo.is_empty())
+        .map(|entry| format!("{}/{}", entry.org, entry.repo))
+}
+
 fn attach_picker_action(target: &str, matched: &maw_matcher::ResolveMatch) -> Option<String> {
     match matched.candidate.kind {
         maw_matcher::ResolveCandidateKind::FleetSquad => {
@@ -386,7 +412,23 @@ fn attach_picker_action(target: &str, matched: &maw_matcher::ResolveMatch) -> Op
             matched.candidate.name
         )),
         maw_matcher::ResolveCandidateKind::Oracle => {
-            Some(format!("maw wake {} --attach", matched.candidate.name))
+            // #810: pass the repo the picker ALREADY resolved.
+            //
+            // Handing wake the bare oracle name throws the disambiguation away and
+            // makes wake fuzzy-resolve the repo again from scratch — which can hit a
+            // DIFFERENT ambiguity and dead-end the user immediately after they chose:
+            //
+            //   pick [1-1] > 1
+            //   wake: ambiguous fuzzy repo for thclaws:
+            //     Soul-Brews-Studio/thClaws, Soul-Brews-Studio/thclaws-oracle, thClaws/thClaws
+            //
+            // The registry entry we matched on knows its org/repo, and --repo
+            // short-circuits the fuzzy path (wake_target_resolution.rs:137). Fall back
+            // to the bare form only when the registry has no repo for it.
+            Some(attach_oracle_wake_command(
+                &matched.candidate.name,
+                attach_oracle_repo(&matched.candidate.name).as_deref(),
+            ))
         }
         maw_matcher::ResolveCandidateKind::LiveSession
         | maw_matcher::ResolveCandidateKind::Window => {
@@ -1089,6 +1131,36 @@ mod attach_tests {
                 )]
             );
         });
+    }
+
+    // #810: the picker resolved an oracle; wake must not re-derive the repo by
+    // fuzzy match. Reported live 2026-08-17:
+    //
+    //   maw a thclaws
+    //   pick [1-1], Enter/y or q: 1
+    //   wake: ambiguous fuzzy repo for thclaws:
+    //     Soul-Brews-Studio/thClaws, Soul-Brews-Studio/thclaws-oracle, thClaws/thClaws
+    //
+    // The user answered the question and got a dead end anyway, because the handoff
+    // carried the NAME and dropped the identity. A name unambiguous among oracles
+    // can still be ambiguous among repos, so the picker's own resolution is the only
+    // thing that disambiguates — it must survive the handoff.
+    //
+    // Tests the pure half deliberately: the first version of this test read the real
+    // registry and its result depended on what happened to be installed on the host,
+    // which is exactly the #839 defect (a test asserting on process-global state
+    // without saying so).
+    #[test]
+    fn attach_oracle_wake_command_keeps_a_resolved_repo() {
+        assert_eq!(
+            attach_oracle_wake_command("thclaws", Some("Soul-Brews-Studio/thclaws-oracle")),
+            "maw wake thclaws --attach --repo Soul-Brews-Studio/thclaws-oracle"
+        );
+        // Unknown repo: the bare form is correct, and wake's own resolver runs.
+        assert_eq!(
+            attach_oracle_wake_command("thclaws", None),
+            "maw wake thclaws --attach"
+        );
     }
 
     #[test]
