@@ -18,5 +18,18 @@ examples/**/dist/
 .codex/
 .maw-engine/
 
+# maw writes its audit log and runtime state into a .maw/ directory in whatever
+# tree it is run from (dispatcher.rs:567), so running the suite from the repo
+# dirties crates/maw-cli/.maw/. Team charters live in .maw/teams/ and ARE meant
+# to be kept -- same ignore-contents-but-keep-teams split as ψ/* + !ψ/teams/
+# above. The `**/` is load-bearing: a pattern containing a slash is anchored to
+# this file's directory, so a bare `.maw/*` would only match at the repo root
+# and miss crates/maw-cli/.maw/ entirely. And the contents must be excluded
+# rather than the directory itself -- git cannot re-include a path whose parent
+# directory is excluded, so `.maw/` plus `!.maw/teams/` silently drops the
+# charters. (#836)
+**/.maw/*
+!**/.maw/teams/
+
 # nova builder worktrees
 agents/
