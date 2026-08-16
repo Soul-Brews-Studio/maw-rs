@@ -192,17 +192,19 @@ fn init_port_token_warning(opts: &InitNativeOptions) -> String {
 }
 
 fn init_write_json_atomic(path: &std::path::Path, value: &serde_json::Value) -> Result<(), String> {
-    let parent = path.parent().ok_or_else(|| format!("config path has no parent: {}", path.display()))?;
-    std::fs::create_dir_all(parent).map_err(|error| format!("init: create {}: {error}", parent.display()))?;
+    if path.parent().is_none() { return Err(format!("config path has no parent: {}", path.display())); }
     let tmp = path.with_extension(format!("json.tmp.{}", std::process::id()));
     let body = serde_json::to_string_pretty(value).map_err(|error| format!("init: render config: {error}"))? + "\n";
-    std::fs::write(&tmp, body).map_err(|error| format!("init: write {}: {error}", tmp.display()))?;
-    std::fs::rename(&tmp, path).map_err(|error| format!("init: rename {}: {error}", path.display()))
+    // #838: this config holds federationToken + CLAUDE_CODE_OAUTH_TOKEN — owner-only.
+    atomic_write_0600(path, &tmp, &body, "init")
 }
 
 fn init_backup_config(path: &std::path::Path) -> Result<std::path::PathBuf, String> {
     let backup = path.with_extension(format!("json.bak.{}", now_iso_utc()));
     std::fs::copy(path, &backup).map_err(|error| format!("init: backup {}: {error}", path.display()))?;
+    // #838: the copy carries the same tokens — and `fs::copy` carries the old
+    // file's mode with them, so tighten it explicitly.
+    set_owner_only(&backup, "init")?;
     Ok(backup)
 }
 

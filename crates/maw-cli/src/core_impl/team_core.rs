@@ -312,19 +312,11 @@ fn team_write_json_atomic_0600<T: serde::Serialize>(path: &std::path::Path, valu
 }
 
 fn team_atomic_write_0600(path: &std::path::Path, body: &str) -> Result<(), String> {
-    use std::io::Write as _;
-    #[cfg(unix)] use std::os::unix::fs::OpenOptionsExt as _;
+    // Mechanic shared with every other secret-bearing writer — see
+    // `atomic_write_0600` in config.rs (#838).
     let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
-    std::fs::create_dir_all(parent).map_err(|error| format!("team: create {} failed: {error}", parent.display()))?;
     let tmp = parent.join(format!(".{}.team-{}.tmp", path.file_name().and_then(std::ffi::OsStr::to_str).unwrap_or("state"), std::process::id()));
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create_new(true).truncate(false);
-    #[cfg(unix)] opts.mode(0o600);
-    let mut file = opts.open(&tmp).map_err(|error| format!("team: create tmp {} failed: {error}", tmp.display()))?;
-    file.write_all(body.as_bytes()).map_err(|error| format!("team: write tmp failed: {error}"))?;
-    file.sync_all().map_err(|error| format!("team: sync tmp failed: {error}"))?;
-    drop(file);
-    std::fs::rename(&tmp, path).map_err(|error| { let _ = std::fs::remove_file(&tmp); format!("team: atomic rename {} failed: {error}", path.display()) })
+    atomic_write_0600(path, &tmp, body, "team")
 }
 
 fn team_collect_teams(show_all: bool) -> Vec<(String, String, usize)> {

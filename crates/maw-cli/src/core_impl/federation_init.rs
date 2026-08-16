@@ -185,18 +185,20 @@ fn init_token_warning(opts: &InitOptions) -> String {
 
 #[allow(dead_code)]
 fn write_json_atomic(path: &std::path::Path, value: &serde_json::Value) -> Result<(), String> {
-    let parent = path.parent().ok_or_else(|| format!("config path has no parent: {}", path.display()))?;
-    std::fs::create_dir_all(parent).map_err(|error| format!("init: create {}: {error}", parent.display()))?;
+    if path.parent().is_none() { return Err(format!("config path has no parent: {}", path.display())); }
     let tmp = path.with_extension(format!("json.tmp.{}", std::process::id()));
     let body = serde_json::to_string_pretty(value).map_err(|error| format!("init: render config: {error}"))? + "\n";
-    std::fs::write(&tmp, body).map_err(|error| format!("init: write {}: {error}", tmp.display()))?;
-    std::fs::rename(&tmp, path).map_err(|error| format!("init: rename {}: {error}", path.display()))
+    // #838: `maw on` rewrites the same credential-bearing config — owner-only.
+    atomic_write_0600(path, &tmp, &body, "init")
 }
 
 #[allow(dead_code)]
 fn backup_init_config(path: &std::path::Path) -> Result<std::path::PathBuf, String> {
     let backup = path.with_extension(format!("json.bak.{}", now_iso_utc()));
     std::fs::copy(path, &backup).map_err(|error| format!("init: backup {}: {error}", path.display()))?;
+    // #838: kept in lockstep with `init_backup_config`, so this dormant copy
+    // cannot reintroduce the world-readable backup if it is ever revived.
+    set_owner_only(&backup, "init")?;
     Ok(backup)
 }
 
