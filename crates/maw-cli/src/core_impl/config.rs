@@ -490,20 +490,84 @@ fn config_target_path() -> std::path::PathBuf {
     }
 }
 
-fn config_atomic_write(path: &std::path::Path, body: &str) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
+/// Atomic, owner-only (0600) write — the one mechanic behind every writer of a
+/// secret-bearing file.
+///
+/// #838: `maw.config.json` carries `federationToken` and
+/// `env.CLAUDE_CODE_OAUTH_TOKEN`, but the writers here used `std::fs::write`,
+/// which creates `0666 & ~umask` — 0644 on a stock box, i.e. every local
+/// account could read the tokens.
+///
+/// Three details are load-bearing:
+/// * the temp file is *opened* 0600, so it is never briefly world-readable;
+/// * it is then chmod'ed 0600 through its own fd — `open` honours the umask
+///   (0177 would leave 0400) and the temp path may be a leftover with a looser
+///   mode, while an explicit chmod is exact and race-free;
+/// * `create` rather than `create_new`, so a temp file left behind by a killed
+///   process cannot brick every later write of the real file.
+///
+/// `rename` carries the inode's mode over, so the published file is 0600 —
+/// which also tightens configs that were written loose before this fix.
+fn atomic_write_0600(
+    path: &std::path::Path,
+    tmp: &std::path::Path,
+    body: &str,
+    context: &str,
+) -> Result<(), String> {
+    use std::io::Write as _;
+    if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)
-            .map_err(|error| format!("maw config: failed to create config dir: {error}"))?;
+            .map_err(|error| format!("{context}: create {} failed: {error}", parent.display()))?;
     }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options
+        .open(tmp)
+        .map_err(|error| format!("{context}: create tmp {} failed: {error}", tmp.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))
+            .map_err(|error| format!("{context}: chmod tmp {} failed: {error}", tmp.display()))?;
+    }
+    file.write_all(body.as_bytes())
+        .map_err(|error| format!("{context}: write tmp {} failed: {error}", tmp.display()))?;
+    file.sync_all()
+        .map_err(|error| format!("{context}: sync tmp {} failed: {error}", tmp.display()))?;
+    drop(file);
+    std::fs::rename(tmp, path).map_err(|error| {
+        let _ = std::fs::remove_file(tmp);
+        format!("{context}: atomic rename {} failed: {error}", path.display())
+    })
+}
+
+/// Force `path` to 0600 after the fact — for files maw creates by copying
+/// rather than writing. `std::fs::copy` carries the *source's* permission bits
+/// over, so backing up a legacy 0644 config minted a fresh world-readable
+/// credential file (#838).
+fn set_owner_only(path: &std::path::Path, context: &str) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|error| format!("{context}: chmod 0600 {} failed: {error}", path.display()))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path, context);
+    }
+    Ok(())
+}
+
+fn config_atomic_write(path: &std::path::Path, body: &str) -> Result<(), String> {
     let file_name = path
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or("maw.config.json");
     let tmp = path.with_file_name(format!("{file_name}.tmp"));
-    std::fs::write(&tmp, body)
-        .map_err(|error| format!("maw config: failed to write temp file: {error}"))?;
-    std::fs::rename(&tmp, path)
-        .map_err(|error| format!("maw config: failed to replace config: {error}"))
+    atomic_write_0600(path, &tmp, body, "maw config")
 }
 
 fn config_audit_write(path: &std::path::Path, before: &serde_json::Value, after: &serde_json::Value) {
