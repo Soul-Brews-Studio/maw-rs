@@ -42,7 +42,14 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
     exit 2
 }
 CACHE_ROOT="${MAW_GATE_CACHE:-$HOME/.maw/gate-cache}"
-TARGET_DIR="${GATE_TARGET_DIR:-$REPO_ROOT/target-gate}"
+# Default OFF the root filesystem. gate.sh passes --target-dir explicitly, which
+# overrides ~/.cargo/config.toml's build.target-dir — so the global NVMe setting
+# does NOT reach it, and this dir grew to 69G on / and filled the disk
+# (2026-08-16). /mnt/nvme1 has 2.3T free; / holds every oracle's transcripts and
+# logs, so a build filling it takes the whole box down, not just this repo.
+GATE_DEFAULT_TARGET="/mnt/nvme1/cargo/target-gate"
+[ -d /mnt/nvme1 ] || GATE_DEFAULT_TARGET="$REPO_ROOT/target-gate"
+TARGET_DIR="${GATE_TARGET_DIR:-$GATE_DEFAULT_TARGET}"
 export CARGO_TARGET_DIR="$TARGET_DIR"
 TOOLCHAIN_FILE="$REPO_ROOT/rust-toolchain.toml"
 WASM_TARGET="wasm32-unknown-unknown"
