@@ -116,7 +116,7 @@ fn agents_render(panes: &[ServecoreAgentPane], node: Option<&str>, all: bool) ->
     agents
 }
 
-fn agents_is_agent_pane(pane: &ServecoreAgentPane) -> bool {
+pub(crate) fn agents_is_agent_pane(pane: &ServecoreAgentPane) -> bool {
     let title = pane.title.to_ascii_lowercase();
     let command = pane.command.to_ascii_lowercase();
     title.contains("agent")
