@@ -50,7 +50,14 @@ sh install.sh --version v26.7.16 --install-dir "$HOME/bin"
 Supported prebuilt platforms:
 
 - `maw-rs-macos-arm64` — macOS Apple Silicon
-- `maw-rs-linux-x86_64-musl` — Linux x86_64 static binary
+- `maw-rs-linux-x86_64-gnu` — Linux x86_64, dynamic (glibc host); resolves `.local`/mDNS
+- `maw-rs-linux-x86_64-musl` — Linux x86_64, static and portable; **cannot** resolve `.local`/mDNS
+
+Linux ships both. The installer autodetects the host C library and prefers the
+glibc build, falling back to musl when glibc is not proven; `MAW_LIBC=gnu` or
+`MAW_LIBC=musl` forces the choice. musl has no glibc NSS, so a musl build never
+loads `mdns4_minimal` from `/etc/nsswitch.conf` and cannot resolve `*.local`
+peer names at all — pick `-gnu` on any host that federates over `.local`.
 
 Manual fallback:
 

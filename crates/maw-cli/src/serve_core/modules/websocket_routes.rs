@@ -7,6 +7,7 @@ use axum::Router;
 use std::time::Duration;
 
 const WS_CAPTURE_INTERVAL_ENV: &str = "MAW_WS_CAPTURE_INTERVAL_MS";
+const WS_PREVIEWS_INTERVAL_ENV: &str = "MAW_WS_PREVIEWS_INTERVAL_MS";
 const WS_CAPTURE_INTERVAL_MIN_MS: u64 = 100;
 const WS_CAPTURE_INTERVAL_MAX_MS: u64 = 30_000;
 
@@ -15,6 +16,7 @@ pub struct WsConfig {
     pub idle_timeout: Duration,
     pub heartbeat_interval: Duration,
     pub capture_interval: Duration,
+    pub previews_interval: Duration,
     pub send_timeout: Duration,
     pub max_frame_bytes: usize,
     pub max_connections: usize,
@@ -26,6 +28,7 @@ impl Default for WsConfig {
             idle_timeout: Duration::from_secs(30),
             heartbeat_interval: Duration::from_secs(10),
             capture_interval: Duration::from_secs(2),
+            previews_interval: Duration::from_secs(2),
             send_timeout: Duration::from_secs(2),
             max_frame_bytes: 64 * 1024,
             max_connections: 128,
@@ -47,6 +50,11 @@ impl WsConfig {
         if let Ok(raw) = std::env::var(WS_CAPTURE_INTERVAL_ENV) {
             if let Some(interval) = ws_parse_capture_interval(&raw) {
                 config.capture_interval = interval;
+            }
+        }
+        if let Ok(raw) = std::env::var(WS_PREVIEWS_INTERVAL_ENV) {
+            if let Some(interval) = ws_parse_capture_interval(&raw) {
+                config.previews_interval = interval;
             }
         }
         config
@@ -142,34 +150,8 @@ mod tests {
 
     static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    struct EnvGuard {
-        key: &'static str,
-        old: Option<std::ffi::OsString>,
-    }
-
-    impl EnvGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let old = std::env::var_os(key);
-            std::env::set_var(key, value);
-            Self { key, old }
-        }
-
-        fn remove(key: &'static str) -> Self {
-            let old = std::env::var_os(key);
-            std::env::remove_var(key);
-            Self { key, old }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            if let Some(old) = &self.old {
-                std::env::set_var(self.key, old);
-            } else {
-                std::env::remove_var(self.key);
-            }
-        }
-    }
+    // #757: was a private copy that serialized against nothing.
+    use crate::test_env::EnvVarGuard as EnvGuard;
 
     #[test]
     fn ws_lifecycle_matches_central_module_contract() {
@@ -189,6 +171,10 @@ mod tests {
             WsConfig::ws_from_process_env().capture_interval,
             Duration::from_secs(2)
         );
+        assert_eq!(
+            WsConfig::ws_from_process_env().previews_interval,
+            Duration::from_secs(2)
+        );
     }
 
     #[test]
@@ -200,6 +186,19 @@ mod tests {
 
         assert_eq!(
             WsConfig::ws_from_process_env().capture_interval,
+            Duration::from_millis(250)
+        );
+    }
+
+    #[test]
+    fn ws_previews_interval_env_accepts_valid_milliseconds() {
+        let _env_lock = ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = EnvGuard::set(WS_PREVIEWS_INTERVAL_ENV, "250");
+
+        assert_eq!(
+            WsConfig::ws_from_process_env().previews_interval,
             Duration::from_millis(250)
         );
     }

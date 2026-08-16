@@ -1972,24 +1972,9 @@ mod tests {
     use tokio::sync::oneshot;
     use tower::ServiceExt;
 
-    struct EnvGuard(&'static str, Option<std::ffi::OsString>);
-
-    impl EnvGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let old = std::env::var_os(key);
-            std::env::set_var(key, value);
-            Self(key, old)
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            match &self.1 {
-                Some(value) => std::env::set_var(self.0, value),
-                None => std::env::remove_var(self.0),
-            }
-        }
-    }
+    // #757: was a private copy that serialized against nothing. Uses the
+    // crate-wide guard, which holds the env lock for its lifetime.
+    use crate::test_env::EnvVarGuard as EnvGuard;
 
     #[derive(Default)]
     struct FakeOrchestrator {
@@ -3025,6 +3010,7 @@ mod tests {
                 idle_timeout: Duration::from_secs(5),
                 heartbeat_interval: Duration::from_secs(5),
                 capture_interval: Duration::from_secs(2),
+                previews_interval: Duration::from_secs(2),
                 send_timeout: Duration::from_secs(2),
                 max_frame_bytes: 1024,
                 max_connections: 8,
@@ -3098,6 +3084,7 @@ mod tests {
             idle_timeout: Duration::from_millis(80),
             heartbeat_interval: Duration::from_millis(20),
             capture_interval: Duration::from_secs(2),
+            previews_interval: Duration::from_secs(2),
             send_timeout: Duration::from_millis(50),
             max_frame_bytes: 1024,
             max_connections: 8,

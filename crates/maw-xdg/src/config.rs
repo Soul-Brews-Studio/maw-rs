@@ -10,25 +10,35 @@ use super::{
     types::{MawConfigLayerSource, MawConfigScope, MawXdgEnv, MergedMawConfig},
 };
 
+/// The config layers under `maw_config_dir(env)`, in load order (ascending
+/// precedence — the last entry wins on conflicting keys).
+///
+/// The un-numbered `maw.config.json` is a *fallback*, not a layer: it is only in the
+/// set when the directory holds no `maw.config.<NN>[.local].json`. Anything that
+/// reports "the config file" has to go through here rather than joining the
+/// un-numbered name onto the config dir, or it names a file that is structurally
+/// never opened (#840).
+///
+/// Pure in `env` plus the contents of that one directory — no cwd walk. Project
+/// layers (`<ancestor>/.maw/maw.config.<NN>.json`) depend on the working directory
+/// and are added only by [`discover_config_layers`].
 #[must_use]
-pub fn discover_config_layers(env: &MawXdgEnv, cwd: &Path) -> Vec<MawConfigLayerSource> {
-    let mut found = Vec::new();
+pub fn discover_user_config_layers(env: &MawXdgEnv) -> Vec<MawConfigLayerSource> {
     let config_dir = maw_config_dir(env);
     let user_weighted = scan_config_dir(&config_dir, MawConfigScope::User, 20, 0);
-    found.extend(user_weighted.iter().cloned());
-    if user_weighted.is_empty() {
-        let legacy = config_dir.join("maw.config.json");
-        if legacy.exists() {
-            found.push(MawConfigLayerSource {
-                path: legacy,
-                weight: 50,
-                is_local: false,
-                scope: MawConfigScope::Legacy,
-                scope_rank: 20,
-                depth: 0,
-            });
-        }
+    if !user_weighted.is_empty() {
+        return user_weighted;
     }
+    let legacy = config_dir.join("maw.config.json");
+    if legacy.exists() {
+        return vec![legacy_config_source(legacy, 20)];
+    }
+    Vec::new()
+}
+
+#[must_use]
+pub fn discover_config_layers(env: &MawXdgEnv, cwd: &Path) -> Vec<MawConfigLayerSource> {
+    let mut found = discover_user_config_layers(env);
 
     let mut chain = Vec::new();
     let mut dir = if cwd.is_absolute() {

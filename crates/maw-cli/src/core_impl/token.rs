@@ -481,8 +481,13 @@ fn token_apply_targets(panes: Vec<maw_tmux::TmuxPane>, sessions: Option<&[String
     out
 }
 
+// #813 deliberately does NOT widen this to `is_agent_pane`: `maw token apply`
+// types a Claude credential, so it must stay Claude-only and never reach a
+// codex/gemini pane. Only the source of the version arm changed -- from the
+// external `maw_split` copy of `is_claude_like_pane` to the byte-identical
+// in-workspace one, so maw-cli's agent detection has a single editable home.
 fn token_apply_is_claude_pane(pane: &maw_tmux::TmuxPane) -> bool {
-    maw_split::is_claude_like_pane(Some(&pane.command)) || pane.title.to_ascii_lowercase().contains("claude")
+    maw_tmux::is_claude_like_pane(Some(&pane.command)) || pane.title.to_ascii_lowercase().contains("claude")
 }
 
 fn token_apply_pane_in_session(pane: &maw_tmux::TmuxPane, session: &str) -> bool {

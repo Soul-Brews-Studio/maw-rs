@@ -1,9 +1,14 @@
+use super::agent_status::{
+    agentstatus_drain_feed, agentstatus_feed_history_and_cursor, agentstatus_poll_global,
+    agentstatus_sessions_from_tmux, AgentStatusSnapshot,
+};
 use super::ServecoreModuleRegistration;
 use crate::serve_core::{
-    process_engine::serveengine_tmux_capture, servecore_ws_connection_guard,
-    servecore_ws_connection_limit_reached, servecore_ws_handle_frame, servecore_ws_send,
-    servecore_ws_send_text_frames, servecore_ws_target, ServecoreAgentPane,
-    ServecoreLifecycleModule, ServecoreSharedState, ServecoreWsKind,
+    process_engine::{serveengine_tmux_capture, serveengine_tmux_capture_lines},
+    servecore_ws_connection_guard, servecore_ws_connection_limit_reached,
+    servecore_ws_handle_frame, servecore_ws_send, servecore_ws_send_text_frames,
+    servecore_ws_target, ServecoreAgentPane, ServecoreLifecycleModule, ServecoreSharedState,
+    ServecoreWsKind,
 };
 use axum::{
     body::{to_bytes, Body},
@@ -17,7 +22,7 @@ use maw_tmux::{TmuxSession, TmuxWindow};
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
     sync::Arc,
@@ -26,6 +31,7 @@ use std::{
 
 const GODUI_TEAM_RECENT_MS: u64 = 2 * 60 * 60 * 1_000;
 const GODUI_POST_BODY_LIMIT: usize = 64 * 1024;
+const GODUI_PREVIEW_LINES: u32 = 15;
 
 #[must_use]
 pub fn godui_lifecycle_module() -> ServecoreLifecycleModule {
@@ -132,6 +138,7 @@ async fn godui_ws_upgrade(
         .into_response()
 }
 
+#[allow(clippy::too_many_lines)]
 async fn godui_ws_stream(
     mut socket: WebSocket,
     state: Arc<ServecoreSharedState>,
@@ -147,12 +154,12 @@ async fn godui_ws_stream(
             .await;
         return;
     };
-    if !godui_ws_send_initial(&mut socket, &state, &config).await {
+    let Some(mut feed_cursor) = godui_ws_send_initial(&mut socket, &state, &config).await else {
         state
             .engine
             .servecore_ws_close(ServecoreWsKind::Engine, target.as_deref());
         return;
-    }
+    };
     let mut heartbeat = tokio::time::interval_at(
         tokio::time::Instant::now() + config.heartbeat_interval,
         config.heartbeat_interval,
@@ -165,19 +172,33 @@ async fn godui_ws_stream(
         tokio::time::Instant::now() + config.capture_interval,
         config.capture_interval,
     );
+    let mut previews_tick = tokio::time::interval_at(
+        tokio::time::Instant::now() + config.previews_interval,
+        config.previews_interval,
+    );
     let mut subscribed_target = target.clone();
+    let mut preview_targets = BTreeSet::new();
+    let mut last_previews = BTreeMap::new();
     let idle_timer = tokio::time::sleep(config.idle_timeout);
     tokio::pin!(idle_timer);
     loop {
         tokio::select! {
             _ = refresh.tick() => {
-                if !godui_ws_send_session_recent(&mut socket, &state, &config).await {
+                if !godui_ws_send_session_recent(&mut socket, &state, &config, &mut feed_cursor).await {
                     break;
                 }
                 idle_timer.as_mut().reset(tokio::time::Instant::now() + config.idle_timeout);
             }
             _ = capture_tick.tick() => {
                 if let Some(frame) = subscribed_target.as_deref().and_then(godui_ws_capture_frame) {
+                    if servecore_ws_send(&mut socket, Message::Text(frame), config.send_timeout).await.is_err() {
+                        break;
+                    }
+                    idle_timer.as_mut().reset(tokio::time::Instant::now() + config.idle_timeout);
+                }
+            }
+            _ = previews_tick.tick() => {
+                if let Some(frame) = godui_ws_previews_frame(&preview_targets, &mut last_previews, godui_ws_preview_capture) {
                     if servecore_ws_send(&mut socket, Message::Text(frame), config.send_timeout).await.is_err() {
                         break;
                     }
@@ -203,6 +224,14 @@ async fn godui_ws_stream(
                         let frame_target = if let Message::Text(text) = &frame {
                             if let Some(selected) = godui_ws_selected_target(text) {
                                 subscribed_target = Some(selected);
+                            }
+                            if let Some(targets) = godui_ws_preview_targets(text) {
+                                godui_ws_replace_preview_targets(
+                                    &mut preview_targets,
+                                    &mut last_previews,
+                                    targets,
+                                );
+                                continue;
                             }
                             godui_ws_message_target(text).or_else(|| subscribed_target.clone()).or_else(|| target.clone())
                         } else {
@@ -235,26 +264,28 @@ async fn godui_ws_send_initial(
     socket: &mut WebSocket,
     state: &ServecoreSharedState,
     config: &super::websocket_routes::WsConfig,
-) -> bool {
-    servecore_ws_send_text_frames(
-        socket,
-        godui_ws_initial_frames(state.servecore_tmux_sessions()),
-        config,
-    )
-    .await
+) -> Option<u64> {
+    let (frames, cursor) = godui_ws_initial_frames(state.servecore_tmux_sessions());
+    servecore_ws_send_text_frames(socket, frames, config)
+        .await
+        .then_some(cursor)
 }
 
 async fn godui_ws_send_session_recent(
     socket: &mut WebSocket,
     state: &ServecoreSharedState,
     config: &super::websocket_routes::WsConfig,
+    feed_cursor: &mut u64,
 ) -> bool {
-    servecore_ws_send_text_frames(
-        socket,
-        godui_ws_session_recent_frames(state.servecore_tmux_sessions()),
-        config,
-    )
-    .await
+    let mut frames = godui_ws_session_recent_frames(state.servecore_tmux_sessions());
+    let (events, next_cursor) = agentstatus_drain_feed(*feed_cursor);
+    *feed_cursor = next_cursor;
+    frames.extend(
+        events
+            .into_iter()
+            .map(|event| godui_ws_json_text(&json!({"type": "feed", "event": event}))),
+    );
+    servecore_ws_send_text_frames(socket, frames, config).await
 }
 
 fn godui_costs_payload() -> Value {
@@ -304,20 +335,36 @@ fn godui_pin_info_payload() -> GoduiPinInfoResponse {
     }
 }
 
-pub(crate) fn godui_ws_initial_frames(sessions: Vec<TmuxSession>) -> Vec<String> {
+pub(crate) fn godui_ws_initial_frames(sessions: Vec<TmuxSession>) -> (Vec<String>, u64) {
+    let agent_sessions = agentstatus_sessions_from_tmux(&sessions);
+    let snapshot = agentstatus_poll_global(&agent_sessions);
+    let (events, cursor) = agentstatus_feed_history_and_cursor();
     let mut frames = Vec::with_capacity(3);
     frames.push(godui_ws_json_text(
-        &json!({"type": "feed-history", "events": []}),
+        &json!({"type": "feed-history", "events": events}),
     ));
-    frames.extend(godui_ws_session_recent_frames(sessions));
-    frames
+    frames.extend(godui_ws_session_recent_frames_with_snapshot(
+        sessions, &snapshot,
+    ));
+    (frames, cursor)
 }
 
 pub(crate) fn godui_ws_session_recent_frames(sessions: Vec<TmuxSession>) -> Vec<String> {
-    let sessions = godui_ws_sessions(sessions);
+    let agent_sessions = agentstatus_sessions_from_tmux(&sessions);
+    let snapshot = agentstatus_poll_global(&agent_sessions);
+    godui_ws_session_recent_frames_with_snapshot(sessions, &snapshot)
+}
+
+fn godui_ws_session_recent_frames_with_snapshot(
+    sessions: Vec<TmuxSession>,
+    snapshot: &AgentStatusSnapshot,
+) -> Vec<String> {
+    let sessions = godui_ws_sessions(sessions, snapshot);
     vec![
         godui_ws_json_text(&json!({"type": "sessions", "sessions": sessions})),
-        godui_ws_json_text(&json!({"type": "recent", "agents": godui_ws_recent_agents(&sessions)})),
+        godui_ws_json_text(
+            &json!({"type": "recent", "agents": godui_ws_recent_agents(&sessions, snapshot)}),
+        ),
     ]
 }
 
@@ -347,11 +394,64 @@ fn godui_ws_value_target(value: &Value) -> Option<String> {
         .flatten()
 }
 
+fn godui_ws_preview_targets(text: &str) -> Option<BTreeSet<String>> {
+    let value = serde_json::from_str::<Value>(text).ok()?;
+    (value.get("type").and_then(Value::as_str) == Some("subscribe-previews")).then(|| {
+        value
+            .get("targets")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .filter_map(|target| {
+                super::websocket_routes::ws_validate_target(Some(target))
+                    .ok()
+                    .flatten()
+            })
+            .collect()
+    })
+}
+
+fn godui_ws_replace_preview_targets(
+    current: &mut BTreeSet<String>,
+    last_previews: &mut BTreeMap<String, String>,
+    next: BTreeSet<String>,
+) {
+    *current = next;
+    last_previews.retain(|target, _| current.contains(target));
+}
+
 fn godui_ws_capture_frame(target: &str) -> Option<String> {
     let content = serveengine_tmux_capture(target).ok()?;
     Some(godui_ws_json_text(
         &json!({"type":"capture","target":target,"content":content}),
     ))
+}
+
+fn godui_ws_preview_capture(target: &str) -> Option<String> {
+    serveengine_tmux_capture_lines(target, Some(GODUI_PREVIEW_LINES)).ok()
+}
+
+fn godui_ws_previews_frame<F>(
+    targets: &BTreeSet<String>,
+    last_previews: &mut BTreeMap<String, String>,
+    mut capture: F,
+) -> Option<String>
+where
+    F: FnMut(&str) -> Option<String>,
+{
+    let mut data = Map::new();
+    for target in targets {
+        let Some(content) = capture(target) else {
+            continue;
+        };
+        if last_previews.get(target) == Some(&content) {
+            continue;
+        }
+        last_previews.insert(target.clone(), content.clone());
+        data.insert(target.clone(), Value::String(content));
+    }
+    (!data.is_empty()).then(|| godui_ws_json_text(&json!({"type":"previews","data":data})))
 }
 
 async fn godui_store_json_body(req: Request<Body>, path: &Path) -> Response {
@@ -410,6 +510,8 @@ struct GoduiWsWindow {
     active: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -650,33 +752,56 @@ fn godui_write_json(path: &Path, payload: &Value) -> std::io::Result<()> {
     fs::write(path, format!("{text}\n"))
 }
 
-fn godui_ws_sessions(sessions: Vec<TmuxSession>) -> Vec<GoduiWsSession> {
+fn godui_ws_sessions(
+    sessions: Vec<TmuxSession>,
+    snapshot: &AgentStatusSnapshot,
+) -> Vec<GoduiWsSession> {
     sessions
         .into_iter()
         .map(|session| GoduiWsSession {
+            windows: session
+                .windows
+                .into_iter()
+                .map(|window| godui_ws_window(&session.name, window, snapshot))
+                .collect(),
             name: session.name,
-            windows: session.windows.into_iter().map(godui_ws_window).collect(),
         })
         .collect()
 }
 
-fn godui_ws_window(window: TmuxWindow) -> GoduiWsWindow {
+fn godui_ws_window(
+    session_name: &str,
+    window: TmuxWindow,
+    snapshot: &AgentStatusSnapshot,
+) -> GoduiWsWindow {
+    let target = format!("{}:{}", session_name, window.index);
     GoduiWsWindow {
         index: window.index,
         name: window.name,
         active: window.active,
         cwd: window.cwd,
+        status: snapshot
+            .agentstatus_status(&target)
+            .map(std::borrow::ToOwned::to_owned),
     }
 }
 
-fn godui_ws_recent_agents(sessions: &[GoduiWsSession]) -> Vec<GoduiWsRecentAgent> {
+fn godui_ws_recent_agents(
+    sessions: &[GoduiWsSession],
+    snapshot: &AgentStatusSnapshot,
+) -> Vec<GoduiWsRecentAgent> {
     sessions
         .iter()
         .flat_map(|session| {
-            session.windows.iter().map(|window| GoduiWsRecentAgent {
-                target: format!("{}:{}", session.name, window.index),
-                name: window.name.clone(),
-                session: session.name.clone(),
+            session.windows.iter().filter_map(|window| {
+                let target = format!("{}:{}", session.name, window.index);
+                snapshot
+                    .agentstatus_is_agent_target(&target)
+                    .then(|| GoduiWsRecentAgent {
+                        target,
+                        name: window.name.clone(),
+                        session: session.name.clone(),
+                    })
             })
         })
         .collect()
@@ -740,24 +865,9 @@ mod tests {
     use tokio::sync::oneshot;
     use tower::ServiceExt;
 
-    struct EnvGuard(&'static str, Option<std::ffi::OsString>);
-
-    impl EnvGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let old = std::env::var_os(key);
-            std::env::set_var(key, value);
-            Self(key, old)
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            match &self.1 {
-                Some(value) => std::env::set_var(self.0, value),
-                None => std::env::remove_var(self.0),
-            }
-        }
-    }
+    // #757: was a private copy that serialized against nothing. Uses the
+    // crate-wide guard, which holds the env lock for its lifetime.
+    use crate::test_env::EnvVarGuard as EnvGuard;
 
     #[test]
     fn godui_empty_payloads_match_maw_js_shapes() {
@@ -771,23 +881,27 @@ mod tests {
 
     #[test]
     fn godui_ws_frames_match_maw_js_sessions_and_recent_shapes() {
-        let sessions = godui_ws_sessions(vec![TmuxSession {
-            name: "142-athena".to_owned(),
-            windows: vec![
-                TmuxWindow {
-                    index: 1,
-                    name: "athena-oracle".to_owned(),
-                    active: true,
-                    cwd: Some("/opt/athena".to_owned()),
-                },
-                TmuxWindow {
-                    index: 2,
-                    name: "athena-codex-1".to_owned(),
-                    active: false,
-                    cwd: None,
-                },
-            ],
-        }]);
+        let snapshot = AgentStatusSnapshot::default();
+        let sessions = godui_ws_sessions(
+            vec![TmuxSession {
+                name: "142-athena".to_owned(),
+                windows: vec![
+                    TmuxWindow {
+                        index: 1,
+                        name: "athena-oracle".to_owned(),
+                        active: true,
+                        cwd: Some("/opt/athena".to_owned()),
+                    },
+                    TmuxWindow {
+                        index: 2,
+                        name: "athena-codex-1".to_owned(),
+                        active: false,
+                        cwd: None,
+                    },
+                ],
+            }],
+            &snapshot,
+        );
 
         assert_eq!(
             serde_json::to_value(&sessions).expect("sessions json"),
@@ -800,11 +914,9 @@ mod tests {
             }])
         );
         assert_eq!(
-            serde_json::to_value(godui_ws_recent_agents(&sessions)).expect("recent json"),
-            json!([
-                {"target": "142-athena:1", "name": "athena-oracle", "session": "142-athena"},
-                {"target": "142-athena:2", "name": "athena-codex-1", "session": "142-athena"}
-            ])
+            serde_json::to_value(godui_ws_recent_agents(&sessions, &snapshot))
+                .expect("recent json"),
+            json!([])
         );
     }
 
@@ -820,8 +932,71 @@ mod tests {
         assert_eq!(value["content"], "pane ansi");
     }
 
+    #[test]
+    fn godui_ws_previews_frame_sends_only_changed_targets() {
+        let targets = BTreeSet::from(["demo:1".to_owned(), "demo:2".to_owned()]);
+        let mut last_previews = BTreeMap::new();
+        let frame = godui_ws_previews_frame(&targets, &mut last_previews, |target| {
+            Some(format!("{target} pane \u{1b}[31mansi\u{1b}[0m"))
+        })
+        .expect("initial preview frame");
+        let value = serde_json::from_str::<Value>(&frame).expect("json");
+        assert_eq!(value["type"], "previews");
+        assert_eq!(
+            value["data"]["demo:1"],
+            "demo:1 pane \u{1b}[31mansi\u{1b}[0m"
+        );
+        assert_eq!(
+            value["data"]["demo:2"],
+            "demo:2 pane \u{1b}[31mansi\u{1b}[0m"
+        );
+
+        assert!(
+            godui_ws_previews_frame(&targets, &mut last_previews, |target| {
+                Some(format!("{target} pane \u{1b}[31mansi\u{1b}[0m"))
+            })
+            .is_none()
+        );
+
+        let changed = godui_ws_previews_frame(&targets, &mut last_previews, |target| {
+            Some(if target == "demo:2" {
+                "demo:2 updated".to_owned()
+            } else {
+                format!("{target} pane \u{1b}[31mansi\u{1b}[0m")
+            })
+        })
+        .expect("changed preview frame");
+        let changed = serde_json::from_str::<Value>(&changed).expect("json");
+        assert!(changed["data"].get("demo:1").is_none());
+        assert_eq!(changed["data"]["demo:2"], "demo:2 updated");
+    }
+
+    #[test]
+    fn godui_ws_subscribe_previews_replaces_targets_and_prunes_last_sent() {
+        let mut targets = godui_ws_preview_targets(
+            r#"{"type":"subscribe-previews","targets":["demo:1","demo:2"]}"#,
+        )
+        .expect("preview targets");
+        let mut last_previews = BTreeMap::from([
+            ("demo:1".to_owned(), "old 1".to_owned()),
+            ("demo:2".to_owned(), "old 2".to_owned()),
+        ]);
+
+        let next =
+            godui_ws_preview_targets(r#"{"type":"subscribe-previews","targets":["demo:2"]}"#)
+                .expect("replacement targets");
+        godui_ws_replace_preview_targets(&mut targets, &mut last_previews, next);
+
+        assert_eq!(targets, BTreeSet::from(["demo:2".to_owned()]));
+        assert_eq!(
+            last_previews,
+            BTreeMap::from([("demo:2".to_owned(), "old 2".to_owned())])
+        );
+    }
+
     #[tokio::test]
     async fn godui_ws_route_streams_sessions_and_recent_from_module() {
+        super::super::agent_status::agentstatus_reset_global();
         let state = ServecoreSharedState::default().servecore_with_tmux_sessions_snapshot(vec![
             TmuxSession {
                 name: "142-athena".to_owned(),
@@ -858,14 +1033,9 @@ mod tests {
         assert_eq!(frames[1]["type"], "sessions");
         assert_eq!(frames[1]["sessions"][0]["name"], "142-athena");
         assert_eq!(frames[1]["sessions"][0]["windows"][0]["cwd"], "/opt/athena");
+        assert_eq!(frames[1]["sessions"][0]["windows"][0]["status"], "idle");
         assert_eq!(frames[2]["type"], "recent");
-        assert_eq!(
-            frames[2]["agents"],
-            json!([
-                {"target": "142-athena:1", "name": "athena-oracle", "session": "142-athena"},
-                {"target": "142-athena:2", "name": "athena-codex-1", "session": "142-athena"}
-            ])
-        );
+        assert_eq!(frames[2]["agents"], json!([]));
     }
 
     #[test]

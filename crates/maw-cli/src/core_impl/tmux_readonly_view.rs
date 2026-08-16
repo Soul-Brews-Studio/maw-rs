@@ -390,6 +390,19 @@ fn view_cleanup_zombie_agents<R: maw_tmux::TmuxRunner>(runner: &mut R, yes: bool
     Ok(stdout)
 }
 
+// #813 SAFETY EXCLUSION -- deliberately NOT routed through the shared
+// `maw_tmux::is_agent_pane`.
+//
+// Everywhere else, matching means "this is an agent, so deliver / don't warn",
+// and a false negative costs a spurious warning. Here matching means "this is
+// a stray pane, KILL IT" (see `view_kill_pane_guarded`), so the arrow points
+// the other way: widening the predicate widens what gets killed. Adopting the
+// version arm would make every live Claude Code pane on an npm-launched host
+// eligible for the zombie sweep -- turning a cosmetic gap into destroyed work.
+//
+// The cost of leaving it: `maw view` cannot reap orphaned Claude panes on
+// those hosts. That is the correct trade for a kill-selector, and changing it
+// needs its own issue with its own evidence, not a unification pass.
 fn view_find_zombie_panes(panes: &[ViewPaneRef]) -> Vec<ViewZombiePane> {
     let safe_pane_ids: BTreeSet<String> = panes.iter().filter(|pane| view_is_fleet_or_view_target(&pane.target) || view_is_primary_oracle_pane(&pane.target)).map(|pane| pane.id.clone()).collect();
     panes.iter().filter(|pane| {

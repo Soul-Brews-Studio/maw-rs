@@ -218,7 +218,7 @@ fn plugins_info(plugins: &[maw_plugin_manifest::LoadedPlugin], options: &Plugins
     if options.json {
         return Ok(format!("{{\"command\":\"plugins\",\"kind\":\"info\",\"plugin\":{}}}\n", plugins_plugin_json(plugin)));
     }
-    Ok(format!("{} v{} ({})\n  tier: {}\n  status: {}\n  dir: {}\n", plugin.manifest.name, plugin.manifest.version, plugin.kind.as_str(), plugins_effective_tier(&plugin.manifest).as_str(), if plugin.disabled { "disabled" } else { "enabled" }, path_string(&plugin.dir)))
+    Ok(format!("{} v{} ({})\n  tier: {}\n  status: {}\n  dir: {}\n", plugin.manifest.name, plugin.manifest.version, plugin.kind.as_str(), maw_plugin_manifest::effective_tier(&plugin.manifest).as_str(), if plugin.disabled { "disabled" } else { "enabled" }, path_string(&plugin.dir)))
 }
 
 fn plugins_enable(
@@ -258,7 +258,7 @@ fn plugins_set_profile(
 ) -> Result<String, String> {
     let selected = plugins
         .iter()
-        .filter(|plugin| plugins_profile_includes(Some(profile), plugins_effective_tier(&plugin.manifest)))
+        .filter(|plugin| plugins_profile_includes(Some(profile), maw_plugin_manifest::effective_tier(&plugin.manifest)))
         .map(|plugin| plugin.manifest.name.clone())
         .collect::<Vec<_>>();
     plugins_write_profile(root, profile)?;
@@ -389,7 +389,7 @@ fn plugins_read_string_array(path: &std::path::Path, key: &str) -> Vec<String> {
 }
 
 fn plugins_plugin_json(plugin: &maw_plugin_manifest::LoadedPlugin) -> String {
-    format!("{{\"name\":{},\"version\":{},\"kind\":{},\"tier\":{},\"weight\":{},\"disabled\":{},\"dir\":{},\"command\":{},\"api\":{},\"capabilities\":{}}}", json_string(&plugin.manifest.name), json_string(&plugin.manifest.version), json_string(plugin.kind.as_str()), json_string(plugins_effective_tier(&plugin.manifest).as_str()), plugin.manifest.weight.unwrap_or(50), plugin.disabled, json_string(&path_string(&plugin.dir)), plugins_optional_json(plugin.manifest.cli.as_ref().map(|cli| cli.command.as_str())), plugins_optional_json(plugin.manifest.api.as_ref().map(|api| api.path.as_str())), json_string_array(&plugin.manifest.capabilities.clone().unwrap_or_default()))
+    format!("{{\"name\":{},\"version\":{},\"kind\":{},\"tier\":{},\"weight\":{},\"disabled\":{},\"dir\":{},\"command\":{},\"api\":{},\"capabilities\":{}}}", json_string(&plugin.manifest.name), json_string(&plugin.manifest.version), json_string(plugin.kind.as_str()), json_string(maw_plugin_manifest::effective_tier(&plugin.manifest).as_str()), plugin.manifest.weight.unwrap_or(50), plugin.disabled, json_string(&path_string(&plugin.dir)), plugins_optional_json(plugin.manifest.cli.as_ref().map(|cli| cli.command.as_str())), plugins_optional_json(plugin.manifest.api.as_ref().map(|api| api.path.as_str())), json_string_array(&plugin.manifest.capabilities.clone().unwrap_or_default()))
 }
 
 fn plugins_optional_json(value: Option<&str>) -> String {
@@ -410,24 +410,10 @@ impl<'a> PluginsRow<'a> {
         Self {
             name: &plugin.manifest.name,
             version: &plugin.manifest.version,
-            tier: plugins_effective_tier(&plugin.manifest),
+            tier: maw_plugin_manifest::effective_tier(&plugin.manifest),
             dir: path_string(&plugin.dir),
             disabled: plugin.disabled,
         }
-    }
-}
-
-fn plugins_effective_tier(manifest: &maw_plugin_manifest::PluginManifest) -> maw_plugin_manifest::PluginTier {
-    manifest.tier.unwrap_or_else(|| plugins_weight_to_tier(manifest.weight.unwrap_or(50)))
-}
-
-fn plugins_weight_to_tier(weight: u64) -> maw_plugin_manifest::PluginTier {
-    if weight < 10 {
-        maw_plugin_manifest::PluginTier::Core
-    } else if weight < 50 {
-        maw_plugin_manifest::PluginTier::Standard
-    } else {
-        maw_plugin_manifest::PluginTier::Extra
     }
 }
 

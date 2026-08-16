@@ -6,7 +6,76 @@
 // screen to tell those apart, so wake reports started only when it started.
 
 /// Bounded backoff schedule (ms) between launch-confirmation polls — ~2.5s total.
+///
+/// The built-in default. Under load the engine can need much longer than this
+/// (#751: false "engine did not start" at load 26–40 while the engine was up
+/// seconds later), so the real schedule comes from
+/// [`wake_launch_confirm_backoff`], which rebuilds this exact shape for the
+/// default budget and stretches it when the budget is raised. Kept as the
+/// regression anchor the generator is asserted against, so a refactor cannot
+/// silently change default wake timing — hence test-only.
+#[cfg(test)]
 const WAKE_LAUNCH_CONFIRM_BACKOFF_MS: &[u64] = &[50, 100, 200, 300, 400, 500, 500, 450];
+
+/// Total launch-confirmation poll budget (ms) — the sum of the default schedule.
+const WAKE_LAUNCH_CONFIRM_BUDGET_MS: u64 = 2_500;
+
+/// Longest single gap in the ramp; the budget is spent in steps of this once the
+/// ramp is exhausted, so a raised budget polls steadily instead of sleeping long.
+const WAKE_LAUNCH_CONFIRM_STEP_MS: u64 = 500;
+
+/// Ramp the schedule climbs before settling into [`WAKE_LAUNCH_CONFIRM_STEP_MS`] steps.
+const WAKE_LAUNCH_CONFIRM_RAMP_MS: &[u64] = &[50, 100, 200, 300, 400];
+
+/// Grace re-check (ms) after the budget is spent, before reporting failure (#751).
+///
+/// The reported failure was often a poll landing at one bad moment on a busy
+/// machine; crew-lab found that asking again immediately reproduces the same
+/// false negative, so one deliberately spaced extra look is the cheap fix.
+/// Set to `0` to disable the grace poll entirely.
+const WAKE_LAUNCH_CONFIRM_GRACE_MS: u64 = 500;
+
+/// Env override for the total poll budget (ms).
+const WAKE_LAUNCH_CONFIRM_BUDGET_ENV: &str = "MAW_RS_WAKE_CONFIRM_BUDGET_MS";
+
+/// Env override for the post-budget grace re-check (ms); `0` disables it.
+const WAKE_LAUNCH_CONFIRM_GRACE_ENV: &str = "MAW_RS_WAKE_CONFIRM_GRACE_MS";
+
+/// Resolve a wake confirmation timing knob: env, then `wake.<key>` in the merged
+/// config, then the built-in default. Garbage parses fall back rather than fail —
+/// a typo in config must not make wake unusable.
+fn wake_launch_confirm_ms(env_key: &str, config_key: &str, default_ms: u64) -> u64 {
+    if let Some(value) = std::env::var(env_key).ok().and_then(|raw| raw.trim().parse::<u64>().ok()) {
+        return value;
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    merged_config_value_in_dir(&cwd)
+        .get("wake")
+        .and_then(|wake| wake.get(config_key))
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(default_ms)
+}
+
+/// Build the launch-confirmation backoff schedule for the configured budget.
+///
+/// At the default budget this reproduces [`WAKE_LAUNCH_CONFIRM_BACKOFF_MS`]
+/// exactly, so existing behavior is unchanged unless an operator opts in.
+fn wake_launch_confirm_backoff() -> Vec<u64> {
+    let budget = wake_launch_confirm_ms(WAKE_LAUNCH_CONFIRM_BUDGET_ENV, "confirmBudgetMs", WAKE_LAUNCH_CONFIRM_BUDGET_MS);
+    let mut schedule = Vec::new();
+    let mut spent = 0;
+    for delay in WAKE_LAUNCH_CONFIRM_RAMP_MS.iter().copied() {
+        if spent + delay > budget { break; }
+        schedule.push(delay);
+        spent += delay;
+    }
+    while spent < budget {
+        let delay = WAKE_LAUNCH_CONFIRM_STEP_MS.min(budget - spent);
+        schedule.push(delay);
+        spent += delay;
+    }
+    schedule
+}
 
 /// True when a tmux `pane_current_command` still looks like an interactive shell.
 ///
@@ -84,8 +153,12 @@ fn wake_confirm_no_trust_prompt(tmux: &mut impl WakeTmuxNative, target: &str, co
 /// directory-trust prompt IS running, so the screen is additionally checked
 /// for trust-prompt markers before reporting success.
 fn wake_confirm_engine_launch(tmux: &mut impl WakeTmuxNative, target: &str, command: &str) -> Result<(), String> {
+    let backoff = wake_launch_confirm_backoff();
+    let grace_ms = wake_launch_confirm_ms(WAKE_LAUNCH_CONFIRM_GRACE_ENV, "confirmGraceMs", WAKE_LAUNCH_CONFIRM_GRACE_MS);
     let mut observed = None;
-    let mut delays = WAKE_LAUNCH_CONFIRM_BACKOFF_MS.iter().copied();
+    // The grace poll is appended to the schedule so the budget loop and the extra
+    // look share one code path: the last sleep is simply spaced further out.
+    let mut delays = backoff.iter().copied().chain(std::iter::once(grace_ms).filter(|ms| *ms > 0));
     loop {
         if let Ok(current) = tmux.wake_pane_current_command(target) {
             if !wake_pane_command_is_shell(&current) {
@@ -96,13 +169,20 @@ fn wake_confirm_engine_launch(tmux: &mut impl WakeTmuxNative, target: &str, comm
         let Some(delay_ms) = delays.next() else { break };
         tmux.wake_confirm_poll_sleep(std::time::Duration::from_millis(delay_ms));
     }
+    let waited_ms = backoff.iter().sum::<u64>() + grace_ms;
     observed.map_or(Ok(()), |observed| {
-        Err(format!("wake: engine did not start in {target} (pane still running '{observed}') — sent: {command}"))
+        // #751: callers act on this message. Say the engine has not started YET —
+        // a pane still in the shell after the budget may still be booting under
+        // load, and treating that as "will not come up" tears down healthy teams.
+        Err(format!(
+            "wake: engine has not started yet in {target} after {waited_ms}ms (pane still running '{observed}') — it may still be booting under load; re-check the pane, or raise {WAKE_LAUNCH_CONFIRM_BUDGET_ENV} / wake.confirmBudgetMs — sent: {command}"
+        ))
     })
 }
 
 fn wake_wait_for_shell_ready(tmux: &mut impl WakeTmuxNative, target: &str) {
-    let mut delays = WAKE_LAUNCH_CONFIRM_BACKOFF_MS.iter().copied();
+    let backoff = wake_launch_confirm_backoff();
+    let mut delays = backoff.iter().copied();
     loop {
         match tmux.wake_pane_current_command(target) {
             Ok(current) if wake_pane_command_is_shell(&current) => return,
@@ -119,4 +199,81 @@ fn wake_target_is_current_pane(tmux: &mut impl WakeTmuxNative, target: &str) -> 
     let current_pane = current_pane.trim();
     if current_pane.is_empty() { return false; }
     tmux.wake_target_pane_id(target).is_ok_and(|target_pane| target_pane.trim() == current_pane)
+}
+
+#[cfg(test)]
+mod wake_launch_timing_tests751 {
+    use super::*;
+
+    fn with_budget_env<T>(budget: Option<&str>, grace: Option<&str>, body: impl FnOnce() -> T) -> T {
+        let _guard = env_test_lock();
+        let _budget = EnvVarRestore::capture(WAKE_LAUNCH_CONFIRM_BUDGET_ENV);
+        let _grace = EnvVarRestore::capture(WAKE_LAUNCH_CONFIRM_GRACE_ENV);
+        // HOME is redirected so the merged-config layer cannot leak a real
+        // wake.confirmBudgetMs from the developer's machine into the assertion.
+        let _home = EnvVarRestore::capture("HOME");
+        std::env::set_var("HOME", std::env::temp_dir().join(format!("maw-rs-wake-751-{}", std::process::id())));
+        match budget {
+            Some(value) => std::env::set_var(WAKE_LAUNCH_CONFIRM_BUDGET_ENV, value),
+            None => std::env::remove_var(WAKE_LAUNCH_CONFIRM_BUDGET_ENV),
+        }
+        match grace {
+            Some(value) => std::env::set_var(WAKE_LAUNCH_CONFIRM_GRACE_ENV, value),
+            None => std::env::remove_var(WAKE_LAUNCH_CONFIRM_GRACE_ENV),
+        }
+        body()
+    }
+
+    /// The knob must be opt-in: with nothing configured the generated schedule is
+    /// byte-for-byte the historical one, so #751 changes no default timing.
+    #[test]
+    fn default_budget_reproduces_the_historical_schedule_exactly() {
+        with_budget_env(None, None, || {
+            assert_eq!(wake_launch_confirm_backoff(), WAKE_LAUNCH_CONFIRM_BACKOFF_MS.to_vec());
+            assert_eq!(wake_launch_confirm_backoff().iter().sum::<u64>(), WAKE_LAUNCH_CONFIRM_BUDGET_MS);
+        });
+    }
+
+    /// The whole point of #751: a busy machine can buy more wait without a rebuild.
+    #[test]
+    fn raised_budget_keeps_the_ramp_then_polls_in_steady_steps() {
+        with_budget_env(Some("10000"), None, || {
+            let schedule = wake_launch_confirm_backoff();
+            assert_eq!(schedule.iter().sum::<u64>(), 10_000, "budget must be spent exactly: {schedule:?}");
+            assert_eq!(&schedule[..WAKE_LAUNCH_CONFIRM_RAMP_MS.len()], WAKE_LAUNCH_CONFIRM_RAMP_MS, "ramp must survive");
+            assert!(schedule[WAKE_LAUNCH_CONFIRM_RAMP_MS.len()..].iter().all(|ms| *ms <= WAKE_LAUNCH_CONFIRM_STEP_MS),
+                "a raised budget must keep polling, not sleep in one long gap: {schedule:?}");
+            assert!(schedule.len() > WAKE_LAUNCH_CONFIRM_BACKOFF_MS.len(), "a bigger budget must mean more looks: {schedule:?}");
+        });
+    }
+
+    /// A budget below the ramp must still poll — never collapse to zero looks.
+    #[test]
+    fn tiny_and_garbage_budgets_stay_usable() {
+        with_budget_env(Some("120"), None, || {
+            let schedule = wake_launch_confirm_backoff();
+            assert_eq!(schedule.iter().sum::<u64>(), 120, "{schedule:?}");
+            assert!(!schedule.is_empty(), "a small budget must still poll");
+        });
+        with_budget_env(Some("not-a-number"), None, || {
+            assert_eq!(wake_launch_confirm_backoff(), WAKE_LAUNCH_CONFIRM_BACKOFF_MS.to_vec(), "garbage falls back, never panics");
+        });
+        with_budget_env(Some("0"), None, || {
+            assert!(wake_launch_confirm_backoff().is_empty(), "a zero budget means no waiting, not a hang");
+        });
+    }
+
+    /// Grace re-check is on by default and can be turned off with `0`.
+    #[test]
+    fn grace_recheck_defaults_on_and_is_disableable() {
+        with_budget_env(None, None, || {
+            assert_eq!(wake_launch_confirm_ms(WAKE_LAUNCH_CONFIRM_GRACE_ENV, "confirmGraceMs", WAKE_LAUNCH_CONFIRM_GRACE_MS), WAKE_LAUNCH_CONFIRM_GRACE_MS);
+        });
+        with_budget_env(None, Some("0"), || {
+            assert_eq!(wake_launch_confirm_ms(WAKE_LAUNCH_CONFIRM_GRACE_ENV, "confirmGraceMs", WAKE_LAUNCH_CONFIRM_GRACE_MS), 0);
+        });
+        with_budget_env(None, Some("3000"), || {
+            assert_eq!(wake_launch_confirm_ms(WAKE_LAUNCH_CONFIRM_GRACE_ENV, "confirmGraceMs", WAKE_LAUNCH_CONFIRM_GRACE_MS), 3_000);
+        });
+    }
 }

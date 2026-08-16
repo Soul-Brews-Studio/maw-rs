@@ -32,7 +32,7 @@ fn break_with_runner<R: maw_tmux::TmuxRunner>(argv: &[String], runner: &mut R) -
     if argv.iter().any(|arg| arg == "--help" || arg == "-h") { return Err((0, BREAK_USAGE.to_owned())); }
     let [target] = argv else { return Err((2, BREAK_USAGE.to_owned())); };
     tmux_break_validate_target(target).map_err(|message| (1, message.replace("tmux break", "break")))?;
-    runner.run("break-pane", &["-t".to_owned(), target.clone(), "-d".to_owned()])
+    runner.run("break-pane", &["-s".to_owned(), target.clone(), "-d".to_owned()])
         .map_err(|error| (1, format!("break: break-pane failed: {}", error.message)))?;
     Ok(format!("broke {target}\n"))
 }
@@ -78,7 +78,7 @@ fn tmux_break_parse(argv: &[String]) -> Result<TmuxBreakOptions, (i32, String)> 
 }
 
 fn tmux_break_args<R: maw_tmux::TmuxRunner>(target: &str, runner: &mut R) -> Vec<String> {
-    let mut args = vec!["-d".to_owned(), "-t".to_owned(), target.to_owned()];
+    let mut args = vec!["-d".to_owned(), "-s".to_owned(), target.to_owned()];
     let display_args = vec![
         "-p".to_owned(),
         "-t".to_owned(),
@@ -154,7 +154,7 @@ mod tmux_break_tests {
     fn break_top_level_uses_detached_break_pane_only() {
         let mut runner = BreakFakeRunner::default();
         assert_eq!(break_with_runner(&strings(&["%42"]), &mut runner).expect("break"), "broke %42\n");
-        assert_eq!(runner.calls, vec![("break-pane".to_owned(), strings(&["-t", "%42", "-d"]))]);
+        assert_eq!(runner.calls, vec![("break-pane".to_owned(), strings(&["-s", "%42", "-d"]))]);
     }
 
     #[test]
@@ -171,7 +171,7 @@ mod tmux_break_tests {
                 ),
                 (
                     "break-pane".to_owned(),
-                    strings(&["-d", "-t", "%42", "-n", "work"]),
+                    strings(&["-d", "-s", "%42", "-n", "work"]),
                 ),
             ]
         );

@@ -387,7 +387,24 @@ fn receiver_inbox_repo_candidates(
         }
         candidates.extend(phase_b);
     }
-    Ok(receiver_inbox_existing_candidates(candidates))
+    let candidates = receiver_inbox_existing_candidates(candidates);
+    if candidates.is_empty() {
+        // #788: every source above requires either a live tmux target, a
+        // configured psi path, or a fleet-config/registry-cache manifest
+        // entry. `maw locate <oracle> --path` also finds repos purely by
+        // scanning the ghq root for a `<oracle>-oracle` directory, with none
+        // of that — so a receiver whose repo is only discoverable that way
+        // was reported as "not a known local oracle" by this resolver while
+        // `maw locate` succeeded on the exact same name. Fall back to the
+        // same resolver `maw locate` uses so the two commands agree.
+        if let Some(path) = locate_find_oracle_repo_path(oracle) {
+            let path = std::path::PathBuf::from(path);
+            if path.exists() {
+                return Ok(vec![path]);
+            }
+        }
+    }
+    Ok(candidates)
 }
 
 fn persist_receiver_inbox(

@@ -104,6 +104,13 @@ async fn run_send_like_async_with_args(
         std::env::var_os("TMUX").is_some(),
         &mut runner,
     );
+    // #681: a target namedPeers doesn't know but ~/.maw/peers.json does
+    // should still route, not fail as "unknown node".
+    let result = if command == "hey" {
+        hey_peers_json_fallback_route(&routing_target, &config.route, &sessions, result)
+    } else {
+        result
+    };
     let result =
         route_result_prefer_pane_zero_for_ambiguous_agent(&send_args.target, result, &mut runner);
     if send_args.dry_run {
@@ -112,6 +119,12 @@ async fn run_send_like_async_with_args(
     if let Some(refusal) = send_route_gate(command, &send_args.target, &send_args.text, &result) {
         return refusal;
     }
+    // #790: surface it when the query's node/session part also names a
+    // federation peer, so a local-only result (success or error) is never
+    // silently misread as evidence the remote host was reached.
+    let collision_note = (command == "hey")
+        .then(|| hey_local_peer_collision_note(&routing_target, &sessions, &config.route))
+        .flatten();
     match result {
         RouteResult::Local { target } | RouteResult::SelfNode { target } if send_args.inbox == Some(true) => {
             send_local_inbox_only(
@@ -124,17 +137,29 @@ async fn run_send_like_async_with_args(
                 send_args.from.as_deref(),
             )
         }
-        RouteResult::Local { target } | RouteResult::SelfNode { target } => send_local_message_with_audit(
-            command,
-            &mut tmux,
-            &target,
-            &send_args.target,
-            &send_args.text,
-            &config,
-            &sender_oracle,
-            send_args.from.as_deref(),
-            &audit_args,
-        ),
+        RouteResult::Local { target } | RouteResult::SelfNode { target } => {
+            // #709: warn (don't block — we can't always be sure) when the
+            // resolved pane doesn't look like an agent, so a restructured
+            // session doesn't silently swallow a message into a bash prompt.
+            let agent_note = (command == "hey")
+                .then(|| warn_if_local_target_pane_is_not_agent(&target, &mut runner))
+                .flatten();
+            let mut output = send_local_message_with_audit(
+                command,
+                &mut tmux,
+                &target,
+                &send_args.target,
+                &send_args.text,
+                &config,
+                &sender_oracle,
+                send_args.from.as_deref(),
+                &audit_args,
+            );
+            for note in [collision_note.as_deref(), agent_note.as_deref()].into_iter().flatten() {
+                output.stderr = format!("{note}{}", output.stderr);
+            }
+            output
+        }
         RouteResult::Peer {
             peer_url,
             target,
@@ -153,11 +178,13 @@ async fn run_send_like_async_with_args(
             )
             .await
         }
-        RouteResult::Error { detail, hint, .. } => CliOutput {
-            code: send_error_code(command),
-            stdout: String::new(),
-            stderr: send_route_error(command, &send_args.target, &detail, hint.as_deref()),
-        },
+        RouteResult::Error { detail, hint, .. } => {
+            let mut stderr = send_route_error(command, &send_args.target, &detail, hint.as_deref());
+            if let Some(note) = &collision_note {
+                stderr = format!("{note}{stderr}");
+            }
+            CliOutput { code: send_error_code(command), stdout: String::new(), stderr }
+        }
     }
 }
 
@@ -344,9 +371,19 @@ fn send_usage_error(command: &str, message: &str) -> CliOutput {
     }
 }
 
+// #787: the `default:` line used to read "write receiver inbox and inject
+// into the target pane". That describes maw-js, whose local branch persists
+// the receiver inbox before `sendKeys` (docs/reference/wire-protocol.md:74);
+// it was copied into the port along with the rest of the usage block and
+// never matched maw-rs. Neither route writes an inbox by default: the local
+// arm runs `send_local_message_with_audit` (tmux send-text + a sender-side
+// audit record) and the cross-node arm posts `inbox: args.inbox`, which
+// `serve_deliver_send` only hands to `serve_deliver_inbox` when the body
+// says `inbox: true`. Implementing the promise is #763; this only stops the
+// help from making it, and names both routes so neither looks durable.
 fn send_usage(command: &str) -> String {
     if command == "hey" {
-        return "usage: maw hey <target> <message> [--inbox] [--force deprecated] [--approve] [--trust]\n       maw hey <target> -f <file>   read message from file (bytes-through; no shell)\n       maw hey <target> -           read message from stdin\n  default: write receiver inbox and inject into the target pane\n  --inbox: write receiver inbox only; skip pane injection\n  --force: deprecated compatibility alias; delivery is already forced by default\n  target forms:\n    <oracle-window>              same-node window name (local-only)\n    local:<agent>                explicit same-node target\n    <session>:<window>[.<pane>]  paste a TARGET from maw ls -v\n    <node>:<session>             canonical cross-node form (window 1)\n    <node>:<session>:<window>    target a specific tmux window (#410)\n  e.g. maw hey mawjs-oracle \"hello from neo\"\n       maw hey local:mawjs \"hello from neo\"\n       maw hey phaith:01-hojo:3 \"hello hojo-hermes\"\n       run `maw locate <agent>` to enumerate across federation".to_owned();
+        return "usage: maw hey <target> <message> [--inbox] [--force deprecated] [--approve] [--trust]\n       maw hey <target> -f <file>   read message from file (bytes-through; no shell)\n       maw hey <target> -           read message from stdin\n  default: inject into the target pane only — no inbox is written on either\n           the local route or the cross-node one (#787)\n  --inbox: write receiver inbox only; skip pane injection\n  --force: deprecated compatibility alias; delivery is already forced by default\n  target forms:\n    <oracle-window>              same-node window name (local-only)\n    local:<agent>                explicit same-node target\n    <session>:<window>[.<pane>]  paste a TARGET from maw ls -v\n    <node>:<session>             canonical cross-node form (window 1)\n    <node>:<session>:<window>    target a specific tmux window (#410)\n  e.g. maw hey mawjs-oracle \"hello from neo\"\n       maw hey local:mawjs \"hello from neo\"\n       maw hey phaith:01-hojo:3 \"hello hojo-hermes\"\n       run `maw locate <agent>` to enumerate across federation".to_owned();
     }
     format!(
         "usage: maw-rs {command} <target> <message> [--inbox|--no-inbox] [--from <oracle:node>] [--approve] [--trust] [--dry-run]\n       maw-rs {command} <target> -f <file> | -   read message from file or stdin (no shell interpolation)"
@@ -428,6 +465,28 @@ fn send_local_message(
     send_local_message_with_audit(command, tmux, target, target, text, config, sender_oracle, from, &[])
 }
 
+/// Delivers the typed people-analysis intent through the same local pane
+/// messaging primitive used by `maw hey`.
+pub(crate) fn deliver_people_analyze_intent(target: &str, text: &str) -> Result<(), String> {
+    let config = load_hey_config();
+    let sender_oracle = resolve_hey_sender_oracle_for_from(&config, None);
+    let mut tmux = TmuxClient::local();
+    let output = send_local_message(
+        "people-analyze",
+        &mut tmux,
+        target,
+        text,
+        &config,
+        &sender_oracle,
+        None,
+    );
+    if output.code == 0 {
+        Ok(())
+    } else {
+        Err(output.stderr.trim().to_owned())
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn send_local_message_with_audit(
     command: &str,
@@ -444,8 +503,7 @@ fn send_local_message_with_audit(
         Ok(signature) => signature,
         Err(message) => return CliOutput { code: send_error_code(command), stdout: String::new(), stderr: format!("{command}: {message}\n") },
     };
-    let display_from = send_display_from(from);
-    let outbound = format_local_hey_message(text, config, sender_oracle, display_from.as_deref());
+    let outbound = format_local_hey_message(text, config, sender_oracle, from);
     if let Err(error) = tmux.send_text(target, &outbound) {
         return CliOutput {
             code: 1,
@@ -521,6 +579,16 @@ fn send_local_inbox_only_with(
 
 fn send_success_output(command: &str, target: &str, outbound: &str) -> String {
     if command == "hey" { format!("delivered → {target}: {outbound}\n") } else { format!("delivered {target}\n") }
+}
+
+// #686: a cross-node delivery confirmation that only echoes the bare
+// session:window target is indistinguishable from a local delivery on a
+// fleet where session names collide across nodes — it took a receiver-side
+// `lastActivity` comparison to prove a message actually left the machine.
+// Prefix with the node it actually resolved to so a collision is visible in
+// the success line itself, not only in a separate warning.
+fn send_peer_success_target(node: &str, target: &str) -> String {
+    if node.is_empty() { target.to_owned() } else { format!("{node}:{target}") }
 }
 
 /// An empty message body must never reach delivery (#695): a caller with no
@@ -652,8 +720,7 @@ async fn send_peer_message(
     };
     match client.send_peer(&request).await {
         Ok(response) => {
-            let display_from = send_display_from(args.from.as_deref());
-            let outbound = format_local_hey_message(&args.text, config, sender_oracle, display_from.as_deref());
+            let outbound = format_local_hey_message(&args.text, config, sender_oracle, args.from.as_deref());
             send_record_success(command, audit_args, config, sender_oracle, args.from.as_deref(), &args.target, &outbound, &format!("peer:{node}"), signature.as_ref());
             // #709: the receiving serve may have delivered into a pane that
             // is not agent-shaped -- surface that here too, not just on the
@@ -669,7 +736,7 @@ async fn send_peer_message(
                 stdout: format!(
                     "{} {}\n",
                     response.state.as_deref().unwrap_or("queued"),
-                    response.target.as_deref().unwrap_or(target)
+                    send_peer_success_target(node, response.target.as_deref().unwrap_or(target))
                 ),
                 stderr,
             }
@@ -713,7 +780,6 @@ fn send_record_success(
         sink.record(&record);
     }
 }
-
 
 
 

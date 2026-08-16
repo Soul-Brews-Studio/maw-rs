@@ -99,8 +99,6 @@ const HELP_META: &[(&str, HelpTier, &str)] = &[
     ("consent-request", HelpTier::Extra, "Create a pending peer consent request with summary, action, PIN, and expiry metadata."),
     ("consent-store", HelpTier::Extra, "Inspect or model trust and pending consent store entries; use consent for the human flow."),
     ("consent-trust-check", HelpTier::Extra, "Check whether a from:to:action consent trust tuple is currently approved."),
-    ("discord", HelpTier::Standard, "Manage Discord fleet credentials, access, status, routing, and service lifecycle."),
-    ("discord-inv", HelpTier::Extra, "Inspect a Discord bot's guild and channel inventory, with optional threads and JSON output."),
     ("discover", HelpTier::Standard, "List configured and discovered federation peers, inventory sources, and live tmux state."),
     ("doctor", HelpTier::Standard, "Diagnose maw installation health and repair supported configuration problems."),
     ("federation", HelpTier::Standard, "Inspect and synchronize multi-node federation state; use pair to add a peer."),

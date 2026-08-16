@@ -277,12 +277,12 @@ fn plugin_find_loaded(name: &str, options: &DiscoverPackagesOptions) -> Result<L
 fn plugin_render_info(plugin: &LoadedPlugin, json: bool) -> String {
     if json { return plugin_info_json(plugin); }
     let manifest = &plugin.manifest;
-    format!("{}@{}\n  tier: {}\n  kind: {}\n  disabled: {}\n  dir: {}\n  entry: {}\n  wasm: {}\n", manifest.name, manifest.version, manifest.tier.unwrap_or(PluginTier::Core).as_str(), plugin.kind.as_str(), plugin.disabled, path_string(&plugin.dir), plugin.entry_path.as_ref().map_or_else(|| "-".to_owned(), path_string), if plugin.wasm_path.as_os_str().is_empty() { "-".to_owned() } else { path_string(&plugin.wasm_path) })
+    format!("{}@{}\n  tier: {}\n  kind: {}\n  disabled: {}\n  dir: {}\n  entry: {}\n  wasm: {}\n", manifest.name, manifest.version, maw_plugin_manifest::effective_tier(manifest).as_str(), plugin.kind.as_str(), plugin.disabled, path_string(&plugin.dir), plugin.entry_path.as_ref().map_or_else(|| "-".to_owned(), path_string), if plugin.wasm_path.as_os_str().is_empty() { "-".to_owned() } else { path_string(&plugin.wasm_path) })
 }
 
 fn plugin_info_json(plugin: &LoadedPlugin) -> String {
     let manifest = &plugin.manifest;
-    format!("{{\"name\":{},\"version\":{},\"tier\":{},\"kind\":{},\"disabled\":{},\"dir\":{},\"entryPath\":{},\"wasmPath\":{}}}\n", json_string(&manifest.name), json_string(&manifest.version), json_string(manifest.tier.unwrap_or(PluginTier::Core).as_str()), json_string(plugin.kind.as_str()), plugin.disabled, json_string(&path_string(&plugin.dir)), plugin.entry_path.as_ref().map_or_else(|| "null".to_owned(), |path| json_string(&path_string(path))), if plugin.wasm_path.as_os_str().is_empty() { "null".to_owned() } else { json_string(&path_string(&plugin.wasm_path)) })
+    format!("{{\"name\":{},\"version\":{},\"tier\":{},\"kind\":{},\"disabled\":{},\"dir\":{},\"entryPath\":{},\"wasmPath\":{}}}\n", json_string(&manifest.name), json_string(&manifest.version), json_string(maw_plugin_manifest::effective_tier(manifest).as_str()), json_string(plugin.kind.as_str()), plugin.disabled, json_string(&path_string(&plugin.dir)), plugin.entry_path.as_ref().map_or_else(|| "null".to_owned(), |path| json_string(&path_string(path))), if plugin.wasm_path.as_os_str().is_empty() { "null".to_owned() } else { json_string(&path_string(&plugin.wasm_path)) })
 }
 
 #[derive(Debug, Clone)]

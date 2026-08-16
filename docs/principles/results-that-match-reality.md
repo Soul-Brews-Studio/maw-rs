@@ -84,10 +84,13 @@ Concretely, in order of how often it bit us:
   machine read similar latency": different net paths (LAN vs WireGuard tunnel) legitimately
   differ. The honest check is against an independent request to the *same resolved IP*.
 
-- **Verify on the artifact that ships.** The Linux release is **musl** (no nss-mdns → can't
-  resolve `.local`); a debug build is **glibc** (can). Testing the fix on debug and shipping
-  musl means the fix that "worked" never ran. Invoke the real, shipped binary. (See also the
-  sibling lesson: native vs WASM behavior only settles under a real invoke.)
+- **Verify on the artifact that ships.** A Linux release **musl** build has no nss-mdns and
+  can't resolve `.local`; a debug build is **glibc** (can). Testing the fix on debug and
+  shipping musl means the fix that "worked" never ran. Invoke the real, shipped binary. (See
+  also the sibling lesson: native vs WASM behavior only settles under a real invoke.)
+  Since #812 Linux ships **two** artifacts — `-gnu` (dynamic, resolves `.local`) and `-musl`
+  (static, does not) — so "the Linux release" is no longer one thing: confirm which one is
+  installed with `file "$(command -v maw)"` before trusting any `.local` result.
 
 - **Same-program-different-context beats different-program.** `curl` from a shell inherited
   Terminal's macOS Local Network grant; the PM2 daemon never had it — so `curl` "proved"

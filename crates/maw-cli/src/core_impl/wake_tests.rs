@@ -47,6 +47,19 @@ mod wake_tests {
         // proves the matcher already picked exactly one candidate and moved
         // past the ambiguity check; "ambiguous registry target" would mean
         // #711 is still live.
+        // #839: this test READS process-global GHQ_ROOT without ever naming it.
+        // `wake_resolve_registry_target` builds a candidate repo_path from the
+        // ghq root and calls `is_dir()` on it (wake_target_resolution.rs:241),
+        // so the assertion below — that the repo is NOT on disk — is a claim
+        // about process-global state. A sibling test in this file points
+        // GHQ_ROOT at a fixture that DOES contain switchaphon/rpro-ent-oracle,
+        // and when the two overlap this test sees the repo and fails.
+        //
+        // Writers of env are greppable; readers like this one are invisible —
+        // nothing in the call below suggests it consults the environment. That
+        // is why this file had 79 tests and exactly ONE lock-taker: the writer.
+        // A mutex with one participant is not a mutex.
+        let _guard = env_test_lock();
         let entries = vec![rpro_ent_fleet_entry()];
         let error = wake_resolve_registry_target("rpro-ent-oracle", &entries, &[])
             .expect_err("repo is not actually cloned in this test");
@@ -63,6 +76,103 @@ mod wake_tests {
         let error = wake_resolve_registry_target("rpro-ent", &entries, &[])
             .expect_err("7 equally-plausible windows must not silently pick one");
         assert!(error.contains("ambiguous"), "{error}");
+    }
+
+    #[test]
+    fn wake_ambiguous_fuzzy_repo_prints_org_repo_not_the_same_name_twice() {
+        // #799: two genuinely different repos sharing a basename across orgs
+        // (real case: Soul-Brews-Studio/odin-oracle vs laris-co/odin-oracle)
+        // used to print the IDENTICAL basename for both candidates -- proving
+        // nothing and giving the caller no spelling that would actually
+        // disambiguate. The error must carry enough path to tell them apart.
+        wake_with_fixture(|root| {
+            std::fs::create_dir_all(root.join("ghq/github.com/Soul-Brews-Studio/odin-oracle")).expect("repo a");
+            std::fs::create_dir_all(root.join("ghq/github.com/laris-co/odin-oracle")).expect("repo b");
+            let error = wake_resolve_repo_target("odin", &[]).expect_err("two repos sharing a basename must stay ambiguous");
+            assert!(error.contains("ambiguous"), "{error}");
+            assert!(error.contains("Soul-Brews-Studio/odin-oracle"), "{error}");
+            assert!(error.contains("laris-co/odin-oracle"), "{error}");
+            // The old bug printed the bare name twice -- assert the message
+            // isn't just "odin-oracle, odin-oracle" (both entries collapsed
+            // to the same, non-disambiguating string).
+            let after_colon = error.rsplit(": ").next().unwrap_or_default();
+            let parts = after_colon.split(", ").collect::<Vec<_>>();
+            assert_eq!(parts.len(), 2, "{error}");
+            assert_ne!(parts[0], parts[1], "{error}");
+        });
+    }
+
+    fn wake_fleet_entry_with_windows(session: &str, windows: &[&str]) -> NativeFleetEntry {
+        NativeFleetEntry {
+            file: format!("{session}.json"),
+            path: std::path::PathBuf::from(format!("{session}.json")),
+            session: NativeFleetSession {
+                name: session.to_owned(),
+                windows: windows
+                    .iter()
+                    .map(|name| NativeFleetWindow { name: (*name).to_owned(), repo: format!("acme/{name}"), kind: None })
+                    .collect(),
+                ..NativeFleetSession::default()
+            },
+        }
+    }
+
+    /// #771/T4527: a session's primary window is the one carrying the oracle
+    /// identity. maw-js named it `<stem>-oracle`, so looking only for the bare
+    /// stem fell through to `.first()` and resolved a fan-out window instead.
+    #[test]
+    fn wake_primary_registry_window_prefers_the_oracle_window_over_first() {
+        let entry = wake_fleet_entry_with_windows("42-foo", &["foo-agent1", "foo-oracle"]);
+        assert_eq!(wake_primary_registry_window(&entry, "foo").expect("oracle window").name, "foo-oracle");
+    }
+
+    /// Negative control for the middle tier: windows maw-rs created itself are
+    /// named with the bare stem, so dropping that tier would silently break
+    /// them while every other arm still passed.
+    #[test]
+    fn wake_primary_registry_window_keeps_bare_stem_fallback_without_oracle_window() {
+        let entry = wake_fleet_entry_with_windows("42-foo", &["foo-agent1", "foo"]);
+        assert_eq!(wake_primary_registry_window(&entry, "foo").expect("bare stem fallback").name, "foo");
+    }
+
+    #[test]
+    fn wake_primary_registry_window_keeps_first_fallback_without_oracle_or_stem_window() {
+        let entry = wake_fleet_entry_with_windows("43-bar", &["bar-agent1"]);
+        assert_eq!(wake_primary_registry_window(&entry, "bar").expect("first fallback").name, "bar-agent1");
+    }
+
+    /// #771/T4527: the `-oracle` suffix is stripped case-insensitively, but the
+    /// case of what survives is preserved — it feeds `wake_slot`, so
+    /// lowercasing it would move a live `NN-Colophon` session to another slot.
+    #[test]
+    fn wake_oracle_suffix_is_stripped_case_insensitively_without_lowercasing_identity() {
+        assert_eq!(wake_oracle_stem("Colophon-Oracle"), "Colophon");
+        assert_eq!(wake_oracle_stem("lucifer-oracle"), "lucifer");
+        assert_eq!(wake_oracle_stem("maw-fleetpad"), "maw-fleetpad");
+        assert_eq!(wake_oracle_stem("-oracle"), "-oracle");
+        assert_eq!(wake_oracle_stem(""), "");
+        // raw CLI input reaches this before slug validation: a multi-byte name
+        // must not panic on a slice landing mid-codepoint
+        assert_eq!(wake_oracle_stem("นักพยากรณ์"), "นักพยากรณ์");
+        assert_eq!(wake_oracle_from_repo_slug("github.com/acme/Colophon-Oracle").as_deref(), Some("Colophon"));
+        assert_eq!(wake_oracle_from_repo_path(std::path::Path::new("/ghq/acme/Colophon-Oracle")).as_deref(), Some("Colophon"));
+        assert!(wake_repo_name_matches("Colophon-Oracle", "colophon"));
+        assert!(wake_repo_name_matches("lucifer-oracle", "lucifer"));
+        assert!(!wake_repo_name_matches("colophon-notes", "colophon"));
+
+        // a session created before the case-insensitive strip is still found
+        // rather than orphaned behind a second slot
+        assert!(wake_session_matches("31-Colophon-Oracle", "Colophon"));
+        assert!(wake_session_matches("31-neo", "neo"));
+        assert!(wake_session_matches("neo", "neo"));
+        assert!(!wake_session_matches("31-neon", "neo"));
+
+        let options = wake_parse_args(&wake_strings(&["Colophon-Oracle"])).expect("parse");
+        assert_eq!(wake_oracle(&options).as_deref(), Ok("Colophon"));
+        // the window keeps the identity's own name -- `team enter`/`team
+        // shutdown` refuse on a window whose name is not the member's, so
+        // wake must not invent an `-oracle` suffix the roster never asked for.
+        assert_eq!(wake_window_name(&options, "Colophon", None), "Colophon");
     }
 
     #[derive(Debug, Default)]
@@ -165,13 +275,42 @@ mod wake_tests {
 
     fn wake_strings(values: &[&str]) -> Vec<String> { values.iter().map(|value| (*value).to_owned()).collect() }
 
-    fn wake_temp_root(name: &str) -> std::path::PathBuf {
+    /// #839: removes the fixture on drop.
+    ///
+    /// This used to leak: the helper cleared the path on the way IN and never
+    /// on the way out, so every run left its tree behind. Measured 2026-08-16:
+    /// 15,135 stale `maw-rs-wake-fixture-*` dirs on white and 31,763 on black,
+    /// oldest three days old, 8.8% of them containing
+    /// `ghq/github.com/switchaphon/rpro-ent-oracle` — the exact repo the #711
+    /// test asserts is absent.
+    ///
+    /// That matters beyond tidiness: names are `<pid>-<counter>`, and with
+    /// `pid_max` at 4M and observed pids near 4.1M, pid reuse is live. A fresh
+    /// process can be handed a path that already exists and is already
+    /// populated — a second, independent route to the same failure that needs
+    /// no concurrent sibling at all.
+    struct WakeTempRoot {
+        path: std::path::PathBuf,
+    }
+
+    impl std::ops::Deref for WakeTempRoot {
+        type Target = std::path::Path;
+        fn deref(&self) -> &std::path::Path { &self.path }
+    }
+
+    impl Drop for WakeTempRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn wake_temp_root(name: &str) -> WakeTempRoot {
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let seq = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!("maw-rs-wake-{name}-{}-{seq}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("temp root");
-        path
+        WakeTempRoot { path }
     }
 
     struct CwdRestore {
@@ -300,10 +439,123 @@ mod wake_tests {
             .expect("write config");
             assert!(!dir.join("maw.config.json").exists());
             assert_eq!(
-                wake_resolve_engine_command("omx-1", root),
+                wake_engine_command_for("omx-1", root),
                 "bun codex-setup.ts 1 && CODEX_HOME=$PWD/.codex omx --direct --madmax"
             );
-            assert_eq!(wake_resolve_engine_command("codex", root), "codex");
+            // An explicit engine with no `commands` entry stays the literal
+            // binary: it must NOT fall through to `commands.default` (#682),
+            // or `-e codex` would silently launch claude.
+            assert_eq!(wake_engine_command_for("codex", root), "codex");
+        });
+    }
+
+    /// The launch line `wake` resolves for `-e <engine>` with no per-window
+    /// entry in play — the narrow shape the old `wake_resolve_engine_command`
+    /// covered before `wake_resolve_command_from_config` subsumed it (#761).
+    fn wake_engine_command_for(engine: &str, cwd: &std::path::Path) -> String {
+        let config = merged_config_value_in_dir(cwd);
+        let resolution = wake_resolve_command_from_config(&config, "engine-probe", Some(engine), None, "codex");
+        workon_prefix_zai_pool(&config, resolution.command)
+    }
+
+    #[test]
+    fn wake_command_resolution_matches_per_agent_exact_glob_and_fallback_precedence() {
+        // #761: maw-js matched the WINDOW name against `commands`
+        // (`command-logic.ts`); the port never did, so every per-agent entry
+        // was dead config and `commands.default` launched instead.
+        wake_with_fixture(|root| {
+            let dir = active_config_dir();
+            std::fs::create_dir_all(&dir).expect("config dir");
+            let write_config = |json: &str| std::fs::write(dir.join("maw.config.50.json"), json).expect("write config");
+            let resolved = |window: &str, argv: &[&str]| {
+                let options = wake_parse_args(&wake_strings(argv)).expect("parse wake args");
+                wake_command(window, root, &options).0
+            };
+
+            // exact window key beats a glob that also matches it
+            write_config(r#"{"commands":{"beacon*":"glob-haiku","beacon-oracle":"exact-haiku","default":"default-sonnet"}}"#);
+            assert_eq!(resolved("beacon-oracle", &["beacon-oracle"]), "MAW_SESSION_WINDOW=beacon-oracle exact-haiku");
+
+            // #771/T4527: a bare window still finds its `<oracle>-oracle` key,
+            // and an `<oracle>-oracle` window still finds a bare key — the two
+            // window-naming conventions read the same config.
+            write_config(r#"{"commands":{"codex-fanout-oracle":"fanout-codex","default":"default-sonnet"}}"#);
+            assert_eq!(resolved("codex-fanout", &["codex-fanout"]), "MAW_SESSION_WINDOW=codex-fanout fanout-codex");
+            write_config(r#"{"commands":{"beacon":"bare-beacon","default":"default-sonnet"}}"#);
+            assert_eq!(resolved("beacon-oracle", &["beacon-oracle"]), "MAW_SESSION_WINDOW=beacon-oracle bare-beacon");
+
+            // the window's own literal key still outranks the derived one
+            write_config(r#"{"commands":{"foo":"exact-foo","foo-oracle":"oracle-foo","default":"default-sonnet"}}"#);
+            assert_eq!(resolved("foo", &["foo"]), "MAW_SESSION_WINDOW=foo exact-foo");
+
+            // a named `<oracle>-oracle` key beats a glob; a window with no such
+            // key still falls to the glob
+            write_config(r#"{"commands":{"agent*":"glob-haiku","agent1-oracle":"oracle-haiku","default":"default-sonnet"}}"#);
+            assert_eq!(resolved("agent1", &["agent1"]), "MAW_SESSION_WINDOW=agent1 oracle-haiku");
+            assert_eq!(resolved("agent2", &["agent2"]), "MAW_SESSION_WINDOW=agent2 glob-haiku");
+
+            // config keys are lower case; a window name derived from a
+            // mixed-case repo directory still matches
+            write_config(r#"{"commands":{"colophon-oracle":"mixed-case-haiku","default":"default-sonnet"}}"#);
+            assert_eq!(resolved("Colophon", &["Colophon"]), "MAW_SESSION_WINDOW=Colophon mixed-case-haiku");
+
+            // a glob outranks an explicit `-e` that has no `commands` entry —
+            // the per-agent config is the more specific statement of intent
+            write_config(r#"{"commands":{"researcher*":"glob-haiku","default":"default-sonnet"}}"#);
+            assert_eq!(resolved("researcher", &["researcher"]), "MAW_SESSION_WINDOW=researcher glob-haiku");
+            assert_eq!(resolved("researcher", &["researcher", "-e", "claude"]), "MAW_SESSION_WINDOW=researcher glob-haiku");
+
+            // ...but with nothing per-agent to match, `-e` is still taken
+            // literally rather than replaced by wake.engine/commands.default
+            write_config(r#"{"commands":{"default":"default-sonnet"},"wake":{"engine":"omx"}}"#);
+            assert_eq!(resolved("unknown", &["unknown", "-e", "claude"]), "MAW_SESSION_WINDOW=unknown claude");
+
+            write_config(r#"{"commands":{"default":"default-sonnet"}}"#);
+            assert_eq!(resolved("unknown", &["unknown"]), "MAW_SESSION_WINDOW=unknown default-sonnet");
+
+            // a configured `-e` beats the per-agent key
+            write_config(r#"{"commands":{"beacon-oracle":"name-haiku","omx":"engine-haiku","default":"default-sonnet"}}"#);
+            assert_eq!(resolved("beacon-oracle", &["beacon-oracle", "-e", "omx"]), "MAW_SESSION_WINDOW=beacon-oracle engine-haiku");
+
+            // wake.engine ranks below the per-agent key, above commands.default
+            write_config(
+                r#"{"commands":{"beacon-oracle":"name-haiku","omx":"wake-engine-haiku","default":"default-sonnet"},"wake":{"engine":"omx"}}"#,
+            );
+            assert_eq!(resolved("beacon-oracle", &["beacon-oracle"]), "MAW_SESSION_WINDOW=beacon-oracle name-haiku");
+            assert_eq!(resolved("unknown", &["unknown"]), "MAW_SESSION_WINDOW=unknown wake-engine-haiku");
+        });
+    }
+
+    /// #771/T4527 end to end. Every `commands.*` key on the affected machine is
+    /// `<name>-oracle` -- that is the window name maw-js created -- while
+    /// maw-rs names the window with the bare oracle. So the lookup missed every
+    /// key and silently launched `commands.default`: wrong agent, no warning,
+    /// looks like it worked. dry-run now prints the line it would send, which
+    /// is the reason this stayed invisible for two days (#761).
+    #[test]
+    fn wake_oracle_suffixed_command_key_wins_over_default_and_shows_in_dry_run() {
+        wake_with_fixture(|_| {
+            let dir = active_config_dir();
+            std::fs::create_dir_all(&dir).expect("config dir");
+            std::fs::write(
+                dir.join("maw.config.50.json"),
+                r#"{"commands":{"neo-oracle":"thclaws --cli --model zai/glm-5.1","default":"claude"}}"#,
+            )
+            .expect("write config");
+
+            let mut tmux = WakeMockTmux::default();
+            let (code, stdout) = wake_run(&wake_strings(&["neo", "--dry-run", "--no-attach"]), &mut tmux).expect("dry run");
+            assert_eq!(code, 0, "{stdout}");
+            assert!(stdout.contains("would wake window 'neo'"), "{stdout}");
+            assert!(stdout.contains("command: MAW_SESSION_WINDOW=neo thclaws --cli --model zai/glm-5.1"), "{stdout}");
+            assert!(!stdout.contains("claude"), "{stdout}");
+            assert!(tmux.actions.is_empty());
+
+            let mut tmux = WakeMockTmux::default();
+            let (code, stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("wake");
+            assert_eq!(code, 0, "{stdout}");
+            let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo thclaws --cli --model zai/glm-5.1"), "{send}");
         });
     }
 
@@ -332,6 +584,59 @@ mod wake_tests {
             let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach", "--resume"]), &mut tmux).expect("resume");
             let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
             assert!(send.ends_with("MAW_SESSION_WINDOW=neo claude --continue"), "{send}");
+        });
+    }
+
+    #[test]
+    fn wake_legacy_default_engine_key_is_honoured_between_wake_engine_and_commands_default() {
+        // #682: `defaultEngine` is set in real fleet configs and used to be read
+        // by nothing, so the operator silently got the built-in codex fallback.
+        wake_with_fixture(|_| {
+            let dir = active_config_dir();
+            std::fs::create_dir_all(&dir).expect("config dir");
+
+            // (a) alone, it selects the engine instead of falling back to codex.
+            std::fs::write(dir.join("maw.config.50.json"), r#"{"defaultEngine":"claude"}"#).expect("write config");
+            let mut tmux = WakeMockTmux::default();
+            let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("defaultEngine");
+            let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo claude"), "{send}");
+            assert!(!send.contains("codex"), "{send}");
+
+            // (b) it outranks commands.default — an explicit engine name beats a
+            // command alias — and stays below wake.engine.
+            std::fs::write(
+                dir.join("maw.config.50.json"),
+                r#"{"defaultEngine":"claude","commands":{"default":"codex"}}"#,
+            )
+            .expect("write config");
+            let mut tmux = WakeMockTmux::default();
+            let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("alias beats commands.default");
+            let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo claude"), "{send}");
+
+            std::fs::write(
+                dir.join("maw.config.50.json"),
+                r#"{"defaultEngine":"claude","wake":{"engine":"gemini"}}"#,
+            )
+            .expect("write config");
+            let mut tmux = WakeMockTmux::default();
+            let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("wake.engine wins");
+            let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo gemini"), "{send}");
+
+            // (c) explicit -e still beats everything, and a blank alias is ignored
+            // rather than resolving to an empty engine.
+            let mut tmux = WakeMockTmux::default();
+            let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach", "-e", "codex"]), &mut tmux).expect("explicit -e");
+            let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo codex"), "{send}");
+
+            std::fs::write(dir.join("maw.config.50.json"), r#"{"defaultEngine":"   "}"#).expect("write config");
+            let mut tmux = WakeMockTmux::default();
+            let (_code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("blank alias");
+            let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo codex"), "{send}");
         });
     }
 
@@ -447,8 +752,8 @@ mod wake_tests {
 
             // Repo layer beats user config at equal weight (Project scope
             // outranks User); a dir outside the repo sees only the user layer.
-            assert_eq!(wake_resolve_engine_command("omx-1", &repo), "CODEX_HOME=$PWD/.codex omx --direct");
-            assert_eq!(wake_resolve_engine_command("omx-1", root), "user-omx");
+            assert_eq!(wake_engine_command_for("omx-1", &repo), "CODEX_HOME=$PWD/.codex omx --direct");
+            assert_eq!(wake_engine_command_for("omx-1", root), "user-omx");
 
             // End-to-end: waking the repo by name threads its resolved path
             // into engine resolution.
@@ -587,12 +892,15 @@ mod wake_tests {
         wake_with_fixture(|_| {
             let mut tmux = WakeMockTmux { pane_command_script: vec!["zsh".to_owned()], ..WakeMockTmux::default() };
             let err = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect_err("shell-stuck pane must fail");
-            assert!(err.contains("wake: engine did not start in"), "{err}");
+            // #751: "not started yet", not "did not start" — callers tear teams down
+            // on this message, and a pane still in the shell may still be booting.
+            assert!(err.contains("wake: engine has not started yet in"), "{err}");
+            assert!(err.contains("may still be booting under load"), "{err}");
             assert!(err.contains("pane still running 'zsh'"), "{err}");
             assert!(err.contains("— sent: "), "{err}");
-            // Poll budget is bounded: initial check + one per backoff step.
+            // Poll budget is bounded: initial check + one per backoff step + the #751 grace look.
             assert_eq!(tmux.pre_send_polls, 1);
-            assert_eq!(tmux.post_send_polls, WAKE_LAUNCH_CONFIRM_BACKOFF_MS.len() + 1);
+            assert_eq!(tmux.post_send_polls, WAKE_LAUNCH_CONFIRM_BACKOFF_MS.len() + 2);
         });
     }
 
@@ -692,7 +1000,7 @@ mod wake_tests {
         // trust-prompt capture path is never entered.
         let mut tmux = WakeMockTmux { pane_command_script: vec!["zsh".to_owned()], ..WakeMockTmux::default() };
         let err = wake_confirm_engine_launch(&mut tmux, "neo:main", "claude").expect_err("shell-stuck pane must fail");
-        assert!(err.contains("wake: engine did not start in"), "{err}");
+        assert!(err.contains("wake: engine has not started yet in"), "{err}");
         assert_eq!(tmux.pane_captures, 0);
     }
 
@@ -851,6 +1159,29 @@ mod wake_tests {
             assert!(err.contains("wake: repo path missing"), "{err}");
             assert!(err.contains(&missing_arg), "{err}");
             assert!(tmux.actions.is_empty(), "{:?}", tmux.actions);
+        });
+    }
+
+    #[test]
+    fn wake_dotted_identity_is_rejected_at_parse_time_naming_what_the_caller_typed() {
+        // #785 sub-bug A repro: `maw wake "a.b" --repo-path ... --no-attach`
+        // used to fail *after* creating a session -- tmux silently renames
+        // any '.' in a session name to '_' on creation (verified directly
+        // against tmux 3.4), so maw-rs went on to look up the session by its
+        // original dotted name and got "can't find session: 60-a.b". Reject
+        // before any tmux action runs at all, and name the identity the
+        // caller actually typed.
+        wake_with_fixture(|root| {
+            let repo = root.join("workspace/dotted-repro");
+            std::fs::create_dir_all(&repo).expect("repo dir");
+            let repo_arg = repo.display().to_string();
+            let mut tmux = WakeMockTmux::default();
+            let err = wake_run(&wake_strings(&["a.b", "--repo-path", &repo_arg, "--no-attach"]), &mut tmux)
+                .expect_err("dotted identity must be rejected");
+            assert!(err.contains("a.b"), "{err}");
+            assert!(err.contains('.'), "{err}");
+            assert!(tmux.actions.is_empty(), "{:?}", tmux.actions);
+            assert!(tmux.sessions.is_empty(), "{:?}", tmux.sessions);
         });
     }
 
@@ -1620,7 +1951,11 @@ mod wake_tests {
             assert_eq!(first["windows"].as_array().expect("windows").len(), 1);
             assert_eq!(first["windows"][0]["name"], "neo");
             assert_eq!(first["windows"][0]["repo"], "acme/neo-oracle");
-            assert_eq!(first["windows"][0]["kind"], "project");
+            // #783: the repo on disk is `neo-oracle` -- oracle-shaped by its
+            // own `-oracle` suffix -- so auto-registration must record
+            // kind:"oracle", not the old hardcoded "project" that permanently
+            // broke `maw locate`'s disk layer for every repo woken this way.
+            assert_eq!(first["windows"][0]["kind"], "oracle");
 
             let (code, stdout) = wake_run(&wake_strings(&["neo", "--task", "issue-90", "--no-attach"]), &mut tmux).expect("task wake");
             assert_eq!(code, 0, "{stdout}");
@@ -1629,9 +1964,45 @@ mod wake_tests {
             assert_eq!(windows.len(), 2);
             assert!(windows.iter().any(|window| window["name"] == "neo"));
             assert!(windows.iter().any(|window| window["name"] == "neo-issue-90"));
-            assert!(windows.iter().all(|window| window["kind"] == "project"));
+            assert!(windows.iter().all(|window| window["kind"] == "oracle"), "{windows:?}");
             assert_eq!(updated["created_at"], "2026-07-03T02:03:04.000Z");
         });
+    }
+
+    #[test]
+    fn wake_registration_kind_infers_oracle_shape_from_repo_not_window_name() {
+        // #783 root cause: by the time `wake_registration_kind` runs, the
+        // window name has already had its `-oracle` suffix stripped
+        // (`wake_oracle`) -- checking the window name instead of the actual
+        // repo directory is exactly how every auto-registered oracle ended
+        // up hardcoded to kind:"project" regardless of the repo it woke.
+        let root = wake_temp_root("kind-oracle-suffix");
+        let repo_path = root.join("acme-oracle");
+        std::fs::create_dir_all(&repo_path).expect("repo");
+        assert_eq!(wake_registration_kind(&repo_path, "acme"), NativeRepoKind::Oracle);
+    }
+
+    #[test]
+    fn wake_registration_kind_detects_bare_name_oracle_via_psi_and_claude_md() {
+        // #750: a bare-name oracle (no `-oracle` suffix, e.g. peer report's
+        // `spore`) with the ψ/+CLAUDE.md shape every bud/awaken produces
+        // must still register as oracle, not just suffix-named repos.
+        let root = wake_temp_root("kind-oracle-shape");
+        let repo_path = root.join("spore");
+        std::fs::create_dir_all(repo_path.join("ψ")).expect("psi dir");
+        std::fs::write(repo_path.join("CLAUDE.md"), "# spore\n").expect("claude md");
+        assert_eq!(wake_registration_kind(&repo_path, "spore"), NativeRepoKind::Oracle);
+    }
+
+    #[test]
+    fn wake_registration_kind_stays_project_for_a_genuinely_plain_repo() {
+        // A repo with neither an `-oracle` suffix nor the ψ/+CLAUDE.md shape
+        // must still register as kind:"project" -- the fix broadens the
+        // signal, it doesn't tag everything as an oracle.
+        let root = wake_temp_root("kind-project");
+        let repo_path = root.join("some-tool");
+        std::fs::create_dir_all(&repo_path).expect("repo");
+        assert_eq!(wake_registration_kind(&repo_path, "some-tool"), NativeRepoKind::Project);
     }
 
     #[test]
@@ -1641,5 +2012,73 @@ mod wake_tests {
         assert_eq!(code, 0);
         assert!(stdout.contains("12-neo (1 windows)"));
         assert!(tmux.actions.is_empty());
+    }
+
+    /// #738: `--engine-cmd` carries a charter's `engines:` launch line. It is a
+    /// command line, so spaces and `$PWD` must survive; only the separators that
+    /// would smuggle in a second command are rejected.
+    #[test]
+    fn wake_engine_cmd_parses_in_both_spellings_and_rejects_separators() {
+        let line = "CODEX_HOME=$PWD/.codex omx --direct";
+        for argv in [
+            wake_strings(&["neo", "--engine-cmd", line]),
+            wake_strings(&["neo", &format!("--engine-cmd={line}")]),
+        ] {
+            let options = wake_parse_args(&argv).expect("parse");
+            assert_eq!(options.engine_command.as_deref(), Some(line));
+        }
+        assert!(wake_parse_args(&wake_strings(&["neo", "--engine-cmd", "  "])).is_err());
+        assert!(wake_parse_args(&wake_strings(&["neo", "--engine-cmd", "claude\nrm -rf /"])).is_err());
+        assert!(wake_parse_args(&wake_strings(&["neo"])).expect("parse").engine_command.is_none());
+    }
+
+    /// #738: the charter line must outrank `commands.<engine>` from the worktree's
+    /// merged config -- otherwise the charter block stays decorative.
+    #[test]
+    fn wake_engine_cmd_outranks_commands_map() {
+        let config = serde_json::json!({ "commands": { "omx-1": "should-not-win" } });
+        let mut warnings = Vec::new();
+        let command = wake_engine_launch_command(
+            "omx-1",
+            "should-not-win".to_owned(),
+            &config,
+            false,
+            Some("CODEX_HOME=$PWD/.codex omx --direct"),
+            &mut warnings,
+        );
+        assert!(command.contains("omx --direct"), "charter line should win, got {command}");
+        assert!(!command.contains("should-not-win"), "commands map must not win, got {command}");
+    }
+
+    /// #738 review (GB): `commands.<engine>-resume` is an explicit resume
+    /// contract and must survive a charter engine line — bypassed configs are
+    /// the #682 failure mode. The override is warned, not silent.
+    #[test]
+    fn wake_engine_resume_command_survives_charter_line_with_warning() {
+        let config = serde_json::json!({ "commands": { "omx-1-resume": "omx --resume-explicit" } });
+        let mut warnings = Vec::new();
+        let command = wake_engine_launch_command(
+            "omx-1",
+            "omx-1".to_owned(),
+            &config,
+            true,
+            Some("CODEX_HOME=$PWD/.codex omx --direct"),
+            &mut warnings,
+        );
+        assert!(command.contains("--resume-explicit"), "resume contract should win, got {command}");
+        assert_eq!(warnings.len(), 1, "bypass must be warned: {warnings:?}");
+        assert!(warnings[0].contains("omx-1-resume"));
+        // Without a -resume key, resume derives from the charter's own binary.
+        let mut warnings = Vec::new();
+        let command = wake_engine_launch_command(
+            "omx-1",
+            "omx-1".to_owned(),
+            &serde_json::json!({}),
+            true,
+            Some("omx --direct"),
+            &mut warnings,
+        );
+        assert!(command.starts_with("omx"), "charter binary should drive resume, got {command}");
+        assert!(command.contains("resume"), "family resume form expected, got {command}");
     }
 }

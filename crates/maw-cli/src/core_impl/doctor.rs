@@ -253,8 +253,11 @@ fn doctor_check_xdg(options: &DoctorOptions) -> DoctorCheckNative {
     doctor_info("xdg", &format!("enabled={enabled}; config={}; data={}; state={}", config.display(), data.display(), state.display()))
 }
 
+/// #811: report the embedded build version (`maw --version`), not the crate
+/// version. `CARGO_PKG_VERSION` is a frozen placeholder (`0.1.0-alpha.1`) —
+/// printing it made a stale binary look current in doctor output.
 fn doctor_check_version(_options: &DoctorOptions) -> DoctorCheckNative {
-    doctor_info("version:source", &format!("maw-rs {} (no running maw probe in native doctor)", env!("CARGO_PKG_VERSION")))
+    doctor_info("version:source", &format!("maw-rs {MAW_RS_BUILD_VERSION} (no running maw probe in native doctor)"))
 }
 
 fn doctor_check_plugins() -> DoctorCheckNative {
@@ -602,7 +605,9 @@ fn doctor_check_worktrees() -> DoctorCheckNative {
 fn doctor_smoke_checks() -> Vec<DoctorCheckNative> {
     vec![
         doctor_info("smoke:ls", "native dispatch reachable"),
-        doctor_info("smoke:version", &format!("maw-rs {}", env!("CARGO_PKG_VERSION"))),
+        // #811: same rule as `doctor_check_version` — the embedded build
+        // version, never the frozen `CARGO_PKG_VERSION` placeholder.
+        doctor_info("smoke:version", &format!("maw-rs {MAW_RS_BUILD_VERSION}")),
         doctor_check_plugins(),
     ]
 }
@@ -931,6 +936,53 @@ mod doctor_tests {
         assert_eq!(parsed["ok"], true);
         assert_eq!(parsed["checks"][0]["name"], "xdg");
         assert!(parsed["checks"][0]["message"].as_str().expect("message").contains("json-xdg"));
+    }
+
+    /// Pull the `<version>` out of a `maw-rs <version> …` doctor message.
+    fn doctor_reported_version(message: &str) -> &str {
+        message
+            .strip_prefix("maw-rs ")
+            .and_then(|rest| rest.split_whitespace().next())
+            .unwrap_or_else(|| panic!("doctor message must lead with `maw-rs <version>`: {message}"))
+    }
+
+    /// #811: `maw doctor` must report the embedded build version — the same one
+    /// `maw --version` prints — not the frozen `CARGO_PKG_VERSION` placeholder,
+    /// which made a stale binary look current in doctor output. Covers both
+    /// version-bearing checks: `version:source` and `smoke:version`.
+    #[test]
+    fn doctor_version_checks_agree_with_top_level_version() {
+        let (_lock, _temp, _restore) = doctor_seed_env("version-agrees");
+
+        // The one string `maw --version` puts on stdout — the reference.
+        let version_stdout = super::run_cli(&doctor_strings(&["--version"])).stdout;
+        assert_eq!(version_stdout, format!("{}\n", super::MAW_RS_VERSION_STRING));
+
+        for (args, check_index, check_name) in [
+            (&["--json", "version"][..], 0, "version:source"),
+            (&["--json", "--smoke"][..], 1, "smoke:version"),
+        ] {
+            let output = run_doctor_command(&doctor_strings(args));
+            assert_eq!(output.stderr, "", "{check_name}");
+            assert_eq!(output.code, 0, "{check_name}");
+            let parsed: serde_json::Value = serde_json::from_str(&output.stdout).expect("json");
+            assert_eq!(parsed["checks"][check_index]["name"], check_name);
+            let message = parsed["checks"][check_index]["message"].as_str().expect("message");
+
+            // Parse the version straight back out of what doctor actually printed.
+            let reported = doctor_reported_version(message);
+            assert_eq!(reported, super::MAW_RS_BUILD_VERSION, "{check_name} must report the embedded build version");
+            assert!(
+                version_stdout.contains(&format!("maw-rs v{reported} (")),
+                "{check_name} reported {reported:?} but `maw --version` said {version_stdout:?}"
+            );
+
+            // Belt and braces: unless this build genuinely fell back to it, the
+            // crate version must not be what doctor surfaces.
+            if super::MAW_RS_BUILD_VERSION != env!("CARGO_PKG_VERSION") {
+                assert!(!message.contains(env!("CARGO_PKG_VERSION")), "{check_name} leaked CARGO_PKG_VERSION: {message}");
+            }
+        }
     }
 
     #[test]

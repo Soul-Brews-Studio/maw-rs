@@ -10,6 +10,7 @@
 //! 5. Never mount after `servecore_apply_pipeline`; all module routers must pass through default-deny.
 
 pub mod agent_routes;
+pub mod agent_status;
 pub mod debug_routes;
 pub mod federation_routes;
 pub mod god_mode_ui;

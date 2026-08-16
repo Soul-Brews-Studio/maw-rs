@@ -132,7 +132,7 @@ fn help_all_tiered_output_preserves_registered_count_and_descriptions() {
     assert_eq!(output.code, 0, "stderr: {}", output.stderr);
     assert!(output.stderr.is_empty(), "stderr: {}", output.stderr);
     let text = output.stdout;
-    assert!(text.starts_with("registered commands (197):"), "{text}");
+    assert!(text.starts_with("registered commands (195):"), "{text}");
     assert!(text.contains("\ncore (40):\n"), "{text}");
     // Per-tier counts shift as the fan-out describes more verbs; assert tier
     // presence (count-agnostic) rather than a brittle hardcoded number.

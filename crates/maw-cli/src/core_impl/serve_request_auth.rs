@@ -2,10 +2,11 @@
 //
 // Loopback is trusted outright; everything else must carry a v3 signature that
 // verifies against a pubkey this node already knows for that sender. Resolving
-// that pubkey is most of the work -- peers.json and the config both hold peer
-// identities in several historical shapes, so they are collected, normalized,
-// and cached behind a short TTL. An unsigned or unknown sender is refused with
-// the concrete reason, never a bare no.
+// that pubkey is most of the work -- peers.json, the config, and the
+// `maw trust add` store all hold peer identities in several historical
+// shapes, so they are collected, normalized, and cached behind a short TTL.
+// An unsigned or unknown sender is refused with the concrete reason, never a
+// bare no.
 
 fn verify_protected_request(
     state: &ServeState,
@@ -184,6 +185,20 @@ fn load_inbound_peer_pubkeys() -> Vec<ServePeerPubkey> {
     }
     let config = merged_config_value_for_env(&env);
     collect_peer_pubkeys(&config, None, &mut entries);
+    // #789: `maw trust add <sender> <target> --peer-key <key>` (trust.rs) is
+    // the explicit-human-step peer-key pinning flow -- its store already
+    // holds exactly the (sender identity, pubkey) shape `collect_peer_pubkeys`
+    // knows how to read (a `sender` identity plus a `peerKey`), and `serve`
+    // already owns this same path for its own `/api/trust` routes. Nothing
+    // fed it back into inbound auth, so a "trusted" `maw trust add` never
+    // actually let that peer authenticate against `/api/send`. Reading it
+    // here as a third pubkey source (same TTL reload as peers.json/config)
+    // closes that gap.
+    if let Ok(raw) = std::fs::read_to_string(trust_store_path()) {
+        if let Ok(value) = serde_json::from_str::<Value>(&raw) {
+            collect_peer_pubkeys(&value, None, &mut entries);
+        }
+    }
     entries
 }
 
@@ -219,8 +234,23 @@ fn resolve_request_cached_pubkey(
     let Some(first) = node_matches.next() else {
         return Err("refuse-missing-peer-key");
     };
-    if node_matches.any(|entry| entry.pubkey != first.pubkey) {
-        return Err("refuse-ambiguous-peer-key");
+    // #798: a v3 signature only proves the request was signed with this
+    // NODE's key -- every oracle on a node shares that one key (see
+    // sender_identity.rs::load_peer_key, which reads a single per-node
+    // `peer-key` file for every `maw hey` regardless of which oracle sent
+    // it), so `from`'s oracle half is still self-reported and unauthenticated
+    // at this point. When exactly one oracle identity has ever been
+    // registered for this node, honoring an unmatched claimed name is the
+    // documented "1-oracle-per-node, exact match not worth requiring" shape
+    // (see #794). But once two or more DISTINCT oracle identities are
+    // already registered for the same node -- even sharing one pubkey -- the
+    // key alone no longer narrows down which of them, or some brand new
+    // unregistered name, actually sent this: widening trust further is
+    // refused rather than silently accepted.
+    for entry in node_matches {
+        if entry.pubkey != first.pubkey || entry.from != first.from {
+            return Err("refuse-ambiguous-peer-key");
+        }
     }
     Ok(Some(first.pubkey.clone()))
 }
@@ -363,9 +393,29 @@ fn normalize_from_identity(value: &str) -> Option<String> {
 fn node_from_normalized_identity(value: &str) -> Option<String> {
     value
         .split_once(':')
-        .map(|(_, node)| node)
+        .map(|(_, node)| strip_peer_node_user_prefix(node))
         .filter(|node| !node.is_empty())
         .map(ToOwned::to_owned)
+}
+
+// #805: `/api/identity` reports a compound "user@host" node whenever the
+// daemon's port != 3456 (serve_identity.rs's port-based `user@` inference) or
+// an explicit nodeUser/serviceUser is configured, while a signed request's
+// `x-maw-from` always carries the BARE node -- sender_identity.rs's signing
+// path only ever reads config.node, with zero knowledge of that inference.
+// Keeping the compound form as-is is intentional for /api/identity's own
+// payload (it is real, displayed information -- see
+// serveidentity_payload_matches_identity_route_shape_without_real_secret and
+// serveidentity_explicit_user_precedence_matches_js) and for whatever else
+// consumes it (e.g. `maw peers map`), so it is NOT stripped there. Auth
+// MATCHING is the wrong place to lose that display value but the right place
+// to stop caring about it: both a pinned peer's node (extracted here from
+// peers.json's `identity.node`) and an incoming request's claimed node
+// (also extracted here, from its `x-maw-from` header) are normalized to the
+// bare host before comparison, so a peer pinned via a non-default-port probe
+// can still authenticate a request signed with the bare node, and vice versa.
+fn strip_peer_node_user_prefix(node: &str) -> &str {
+    node.split_once('@').map_or(node, |(_, host)| host)
 }
 
 fn node_from_identity(value: &str) -> Option<String> {

@@ -17,6 +17,9 @@ struct TeamRosterItem124 {
     role: String,
     identity: String,
     engine: String,
+    /// Launch line declared by the charter's `engines:` block for this member's
+    /// engine, if any (#738). `None` = fall back to the config `commands` map.
+    engine_command: Option<String>,
     worktree: String,
     worktree_opt_out: bool,
     state: String,
@@ -229,6 +232,7 @@ where
     let panes = team_t3_panes();
     charter.members.iter().map(|member| {
         let mut item = team_t3_classify(member, opts, session, &panes);
+        item.engine_command = charter.engines.get(&item.engine).cloned();
         item.action = action(&item, opts);
         item
     }).collect()
@@ -240,16 +244,25 @@ fn team_t3_classify(member: &TeamCharterMember122, opts: &TeamT3Options124, sess
     let engine = opts.engine.clone().or_else(|| member.engine.clone()).or_else(|| member.model.clone()).unwrap_or_else(|| "claude".to_owned());
     let worktree = member.worktree.clone().or_else(|| member.cwd.clone()).unwrap_or_else(|| identity.clone());
     let worktree_opt_out = member.worktree_opt_out;
-    if !opts.only.is_empty() && !team_t3_matches_selectors(member, &opts.only, &identity, &worktree) { return TeamRosterItem124 { role, identity, engine, worktree, worktree_opt_out, state: "skipped".to_owned(), action: String::new(), pane: None }; }
-    if !opts.members.is_empty() && !opts.members.iter().any(|item| item == &member.role) { return TeamRosterItem124 { role, identity, engine, worktree, worktree_opt_out, state: "skipped".to_owned(), action: String::new(), pane: None }; }
+    if !opts.only.is_empty() && !team_t3_matches_selectors(member, &opts.only, &identity, &worktree) { return TeamRosterItem124 { role, identity, engine, engine_command: None, worktree, worktree_opt_out, state: "skipped".to_owned(), action: String::new(), pane: None }; }
+    if !opts.members.is_empty() && !opts.members.iter().any(|item| item == &member.role) { return TeamRosterItem124 { role, identity, engine, engine_command: None, worktree, worktree_opt_out, state: "skipped".to_owned(), action: String::new(), pane: None }; }
     let candidates = team_t3_window_candidates(member, &identity, &worktree);
-    let pane = panes.iter().find(|pane| pane.session == session && candidates.iter().any(|candidate| candidate == &pane.window || pane.window.ends_with(&format!("-{candidate}")))).cloned();
+    // alpha's matcher helper (#829 window-suffix handling) + the PR's adopted-pane rule.
+    // Both are wanted: the helper is the shared predicate, and an adopted member's pane
+    // was never ours to create — once gone, `team up` must not treat it like a member we
+    // failed to spawn, or a fresh wake would start a second oracle behind the owner's back.
+    let pane = panes.iter().find(|pane| pane.session == session && candidates.iter().any(|candidate| team_t3_window_matches_candidate(&pane.window, candidate))).cloned();
     let mut state = pane.as_ref().map_or("missing", |p| if team_t3_is_live_command(&p.command) { "live" } else { "dead" }).to_owned();
-    // An adopted member's pane was never ours to create. Once it is gone, `team up` must
-    // not treat it like a member we failed to spawn — a fresh wake or a resume would
-    // start a second oracle behind the owner's back.
     if member.adopted && state != "live" { TEAM_ADOPTED_GONE.clone_into(&mut state); }
-    TeamRosterItem124 { role, identity, engine, worktree, worktree_opt_out, state, action: String::new(), pane }
+    TeamRosterItem124 { role, identity, engine, engine_command: None, worktree, worktree_opt_out, state, action: String::new(), pane }
+}
+
+// A member's window may be named `<identity>` or `<identity>-oracle` depending on who
+// asked for it. Treat `window` and `window` with any trailing `-oracle` stripped as the
+// same identity, symmetrically, so up's own liveness check and down's target lookup agree
+// on what a member's window is called without requiring a manual `tmux rename-window`.
+fn team_t3_window_matches_candidate(window: &str, candidate: &str) -> bool {
+    window == candidate || window.trim_end_matches("-oracle") == candidate || window.ends_with(&format!("-{candidate}"))
 }
 
 fn team_t3_matches_selectors(member: &TeamCharterMember122, selectors: &[String], identity: &str, worktree: &str) -> bool {
@@ -298,10 +311,25 @@ fn team_t3_parse_pane(line: &str) -> Option<TeamPane124> {
     Some(TeamPane124 { session: parts.next()?.to_owned(), window: parts.next()?.to_owned(), command: parts.next()?.to_owned(), path: parts.next().unwrap_or_default().to_owned(), pane_id: parts.next().unwrap_or_default().to_owned() })
 }
 
+// #785 sub-bug C: this used to be an ALLOWLIST of known engine binary names
+// ("claude"/"codex"/"omx"/"node"/"bun") -- any engine not on that closed
+// list (verified real case: `opencode`) silently read as "dead", so `team
+// down` reported a clean rc=0 teardown table over panes that were still
+// genuinely running (confirmed against tmux's own `pane_dead=0` for the
+// exact pane). A false "clean" table is worse than an error: nobody has a
+// reason to double-check it. `pane_current_command` only reports something
+// other than the login/interactive shell while a real foreground process is
+// running in that pane -- a pane whose process has actually exited either
+// disappears from `list-panes` outright (the normal case) or falls back to
+// showing its shell, it doesn't linger showing a stale non-shell command --
+// so treat "not a bare shell" as the live signal instead of matching a list
+// of engine names that will always be behind whatever engine ships next.
 fn team_t3_is_live_command(command: &str) -> bool {
-    let lower = command.to_ascii_lowercase();
-    if matches!(lower.as_str(), "sh" | "bash" | "zsh" | "fish" | "-sh" | "-bash" | "-zsh") { return false; }
-    lower.contains("claude") || lower.contains("codex") || lower.contains("omx") || lower.contains("node") || lower.contains("bun")
+    let lower = command.trim().to_ascii_lowercase();
+    !matches!(
+        lower.as_str(),
+        "" | "sh" | "bash" | "zsh" | "fish" | "dash" | "ksh" | "csh" | "tcsh" | "-sh" | "-bash" | "-zsh" | "-fish" | "-dash" | "-ksh" | "-csh" | "-tcsh"
+    )
 }
 
 #[cfg(test)]

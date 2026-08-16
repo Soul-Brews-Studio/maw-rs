@@ -100,6 +100,70 @@ fn weighted_config_loads_without_base_file() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// #840: the un-numbered `maw.config.json` is a fallback, not a layer. Callers that
+/// want to name "the config file" must go through `discover_user_config_layers`
+/// rather than joining the un-numbered name onto the config dir.
+#[test]
+fn user_config_layers_drop_the_un_numbered_file_once_a_numbered_layer_exists() {
+    let root = temp_root("user-layers");
+    let home = root.join("home");
+    let env = MawXdgEnv::with_vars(
+        &home,
+        [("MAW_CONFIG_DIR", root.join("cfg").display().to_string())],
+    );
+
+    // Alone, the un-numbered file is the whole set.
+    write_json(
+        &root.join("cfg/maw.config.json"),
+        r#"{"node":"unnumbered"}"#,
+    );
+    assert_eq!(
+        discover_user_config_layers(&env)
+            .into_iter()
+            .map(|source| (source.scope.as_str(), source.weight, source.path))
+            .collect::<Vec<_>>(),
+        vec![("legacy", 50, root.join("cfg/maw.config.json"))]
+    );
+
+    // Add numbered layers and the un-numbered file drops out entirely, in the same
+    // ascending-weight order the merge applies.
+    write_json(
+        &root.join("cfg/maw.config.70.json"),
+        r#"{"node":"seventy"}"#,
+    );
+    write_json(&root.join("cfg/maw.config.30.json"), r#"{"node":"thirty"}"#);
+    assert_eq!(
+        discover_user_config_layers(&env)
+            .into_iter()
+            .map(|source| (source.scope.as_str(), source.weight, source.path))
+            .collect::<Vec<_>>(),
+        vec![
+            ("user", 30, root.join("cfg/maw.config.30.json")),
+            ("user", 70, root.join("cfg/maw.config.70.json")),
+        ]
+    );
+
+    // And what the full loader reports for this dir agrees, so the extracted helper
+    // cannot drift from `discover_config_layers`.
+    assert_eq!(
+        discover_config_layers(&env, &root)
+            .into_iter()
+            .filter(|source| source.path.parent() == Some(root.join("cfg").as_path()))
+            .map(|source| source.path)
+            .collect::<Vec<_>>(),
+        vec![
+            root.join("cfg/maw.config.30.json"),
+            root.join("cfg/maw.config.70.json"),
+        ]
+    );
+
+    // The merge really does ignore the un-numbered file: "unnumbered" never wins.
+    let loaded = load_merged_config_in_dir(&env, &root);
+    assert_eq!(loaded.config["node"], "seventy");
+
+    let _ = fs::remove_dir_all(root);
+}
+
 #[test]
 fn maw_home_instance_overrides_singleton_config() {
     let root = temp_root("maw-home");

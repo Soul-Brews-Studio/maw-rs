@@ -95,11 +95,25 @@ fn peer_send_error_message(status: u16, parsed: &PeerSendResponse) -> String {
 }
 
 /// Human hint for a federation `decision` refusal code, so a bare 401 stops
-/// masquerading as a permissions problem when it is really a stale key cache
-/// or a missing signature.
+/// masquerading as a permissions problem when it is really an unpinned key or
+/// a missing signature.
+///
+/// A hint names the field that decided the refusal. It must not name a remedy
+/// that cannot work: the `refuse-missing-peer-key` arm used to end with "the
+/// receiver's serve loaded pubkeys at startup and needs a restart after the
+/// peer was added", which stopped being true once serve began hot-reloading
+/// `peer_pubkeys` on a short TTL (`maw-cli`'s `serve_hot_reload.rs`). Because
+/// the advice shipped inside the error it read as authoritative, and a real
+/// two-host bring-up restarted the receiving daemon three times on the
+/// strength of it — including once after the peer already showed
+/// `authOk: true` — before anyone doubted the string (#822).
 fn decision_hint(decision: &str) -> Option<&'static str> {
     Some(match decision {
-        "refuse-missing-peer-key" => "sender's pubkey is not in the receiver's peers.json — or the receiver's serve loaded pubkeys at startup and needs a restart after the peer was added",
+        // #819 is the case that actually produces this on a peer that looks
+        // registered: an entry whose `identity.oracle` is empty is dropped by
+        // the receiver's `normalize_from_identity`, so the lookup table holds
+        // no pubkey for that sender at all — not a stale one, none.
+        "refuse-missing-peer-key" => "the receiver has no pinned pubkey for this sender identity — run `maw peers info <alias>` on the receiver and look at identity.oracle: an empty oracle half is dropped rather than stored (#819), so re-add the peer with `maw peers add <alias> <url> --oracle <name>`. The receiver reloads peers within seconds, so restarting it does not help",
         "refuse-mismatch" => "signature mismatch: the sender's ~/.maw/peer-key differs from the receiver's pinned pubkey (key rotated, or MAW_HOME/MAW_PEER_KEY set differently in a worktree?)",
         "refuse-unsigned" => "the request carried no X-Maw-Signature",
         "refuse-ambiguous-peer-key" => "the receiver has multiple pubkeys pinned for this sender",
@@ -515,7 +529,25 @@ mod decision_tests {
         );
         assert!(msg.contains("HTTP 401"));
         assert!(msg.contains("[decision=refuse-missing-peer-key]"));
-        assert!(msg.contains("restart"));
+        assert!(msg.contains("identity.oracle"));
+    }
+
+    /// #822: the hint used to end with "the receiver's serve loaded pubkeys at
+    /// startup and needs a restart after the peer was added". Serve hot-reloads
+    /// `peer_pubkeys` on a short TTL (`PEER_PUBKEY_RELOAD_TTL_SECS`, applied by
+    /// `serve_hot_reload.rs`), so that restart is an action with no effect, and
+    /// it was followed three times during a real two-host bring-up before
+    /// anyone doubted it. Pin the replacement: name the field the match is
+    /// actually decided on (#819), and let "restart" survive only inside its
+    /// own denial.
+    #[test]
+    fn missing_peer_key_hint_names_the_field_and_never_prescribes_a_restart() {
+        let hint = decision_hint("refuse-missing-peer-key").expect("hint for a known decision");
+        assert!(hint.contains("identity.oracle"), "{hint}");
+        assert!(hint.contains("--oracle"), "{hint}");
+        let denial = "restarting it does not help";
+        assert!(hint.contains(denial), "{hint}");
+        assert!(!hint.replace(denial, "").contains("restart"), "{hint}");
     }
 
     #[test]

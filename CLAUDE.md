@@ -14,9 +14,20 @@ scripts/gate.sh full    # pre-merge bar — all 4 CI dimensions
 ```
 
 `full` must pass before any merge/promote (it wraps `cargo fmt --all --check`,
-`cargo test --workspace --locked`, `cargo clippy --workspace --all-targets --
--D warnings` on stable + 1.97.0, and the wasm-host subset). See
+`cargo test --workspace --locked --no-fail-fast`, `cargo clippy --workspace
+--all-targets -- -D warnings`, and the wasm-host subset).
+Test dimensions run `--no-fail-fast` (#796): one failing target must not mask
+the others. See
 `docs/guides/gating.md` for tiers, the golden warm cache, and merge-trains.
+
+The toolchain is pinned by `rust-toolchain.toml` — exact channel plus
+`targets = ["wasm32-unknown-unknown"]` (#823). CI installs it with a bare
+`rustup toolchain install`, and every tier of `gate.sh` preflights that the
+active rustc IS the pin and that the wasm32 target is present, refusing up
+front instead of failing deep inside a plugin test. Two rustc versions
+genuinely disagree about this tree's lints (1.94.0 flagged two
+`clippy::redundant_iter_cloned` in `federation_routes.rs` that 1.97.1 does
+not), so bumping Rust means editing that one line, never `rustup update`.
 
 ## Branches
 
@@ -70,7 +81,11 @@ Layered Cargo workspace:
   were extracted to the external
   [Soul-Brews-Studio/maw-crates](https://github.com/Soul-Brews-Studio/maw-crates)
   repo (2026-07-16, repo split phase 3 batch) and are consumed by `maw-cli`
-  as rev-pinned Cargo git dependencies, like `maw-calver`.
+  as rev-pinned Cargo git dependencies, like `maw-calver`. `maw-discord`
+  (Discord bot connectivity, zero internal `maw-*` deps) was extracted the
+  same way to
+  [Soul-Brews-Studio/maw-discord](https://github.com/Soul-Brews-Studio/maw-discord)
+  (2026-08-13, repo split).
 - **Mid crates** — compose the leaf crates (e.g. `maw-peer`, `maw-tmux`,
   `maw-worktree`).
 - **Top crate** — `maw-cli`, the binary, depends on the rest of the workspace.

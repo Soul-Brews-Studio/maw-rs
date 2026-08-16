@@ -26,7 +26,6 @@ use maw_bind::{resolve_bind_host, BindConfig, BindHostResult};
 use maw_bring::{parse_bring_args, ParsedBringArgs};
 use maw_calver::{compute_version, Channel, ComputeArgs, DateParts};
 use maw_feed::{active_oracles_at, describe_activity, parse_line, FeedEvent};
-use maw_discord::run_discord_command;
 use maw_fuzzy::{distance as fuzzy_distance, fuzzy_match};
 use maw_identity::{canonical_node_identity, canonical_session_name, CanonicalSessionNameInput};
 use maw_matcher::{
@@ -255,7 +254,6 @@ const DISPATCH_01: &[DispatcherEntry] = &[
     DispatcherEntry { command: "-v", handler: Handler::Sync(version_handler) },
     DispatcherEntry { command: "version", handler: Handler::Sync(version_handler) },
     DispatcherEntry { command: "auto-wake", handler: Handler::Sync(run_auto_wake_plan) },
-    DispatcherEntry { command: "discord", handler: Handler::Async(run_discord_async) },
     #[cfg(test)]
     DispatcherEntry { command: "__async-dispatch-test", handler: Handler::Async(run_async_dispatch_test) },
 ];
@@ -658,17 +656,6 @@ fn run_async_handler_blocking(handler: AsyncHandler, args: &[String]) -> CliOutp
     runtime.block_on(handler(args.to_vec()))
 }
 
-fn run_discord_async(args: Vec<String>) -> Pin<Box<dyn Future<Output = CliOutput> + Send>> {
-    Box::pin(async move {
-        let output = run_discord_command(args).await;
-        CliOutput {
-            code: output.code,
-            stdout: output.stdout,
-            stderr: output.stderr,
-        }
-    })
-}
-
 #[cfg(test)]
 fn run_async_dispatch_test(args: Vec<String>) -> Pin<Box<dyn Future<Output = CliOutput> + Send>> {
     Box::pin(async move {
@@ -975,10 +962,224 @@ mod ts_plugin_dispatch_decision_tests {
         std::fs::remove_dir_all(caller_dir).expect("cleanup caller");
         std::fs::remove_dir_all(shim_dir).expect("cleanup bun");
     }
+
+    #[test]
+    fn bun_dev_banner_decision_matrix() {
+        // OFF by default — an unset var is quiet, regardless of tty-ness (#780).
+        assert!(!bun_dev_banner_decision(None));
+        // Explicit opt-in, every truthy spelling, case- and space-tolerant.
+        assert!(bun_dev_banner_decision(Some("1")));
+        assert!(bun_dev_banner_decision(Some("true")));
+        assert!(bun_dev_banner_decision(Some("yes")));
+        assert!(bun_dev_banner_decision(Some("ON")));
+        assert!(bun_dev_banner_decision(Some("  on  ")));
+        // Explicit off, and anything unrecognized, stay off.
+        assert!(!bun_dev_banner_decision(Some("0")));
+        assert!(!bun_dev_banner_decision(Some("false")));
+        assert!(!bun_dev_banner_decision(Some("off")));
+        assert!(!bun_dev_banner_decision(Some("bogus")));
+        assert!(!bun_dev_banner_decision(Some("")));
+    }
+
+    #[test]
+    fn bun_dev_io_mode_decision_matrix() {
+        // #803: stderr is an interactive terminal -> stream (inherit stdio).
+        assert_eq!(bun_dev_io_mode(true), BunDevIoMode::Streamed);
+        // Not a terminal (tests, CI, HTTP/API dispatch, piped output) -> the
+        // original piped+capture behavior, unchanged.
+        assert_eq!(bun_dev_io_mode(false), BunDevIoMode::Captured);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dispatch_bun_dev_plugin_streams_when_stderr_is_tty_and_returns_empty_capture() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let _env_guard = env_test_lock();
+        let _path_restore = EnvVarRestore::capture("PATH");
+        let (plugin_dir, plugin) = load_ts_plugin("bun-dev-streamed", Some("bun-dev"));
+        let shim_dir = temp_plugin_dir("fake-bun-bin-streamed");
+        let fake_bun = shim_dir.join("bun");
+        std::fs::write(
+            &fake_bun,
+            "#!/bin/sh\necho streamed-stdout\necho streamed-stderr 1>&2\nexit 7\n",
+        )
+        .expect("fake bun");
+        let mut permissions = std::fs::metadata(&fake_bun).expect("metadata").permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&fake_bun, permissions).expect("chmod");
+        let mut path_entries = vec![shim_dir.clone()];
+        if let Some(path) = std::env::var_os("PATH") {
+            path_entries.extend(std::env::split_paths(&path));
+        }
+        std::env::set_var("PATH", std::env::join_paths(path_entries).expect("PATH"));
+
+        let ctx = InvokeContext {
+            source: InvokeSource::Cli,
+            args: Vec::new(),
+            cwd: Some(plugin_dir.to_string_lossy().into_owned()),
+            home: None,
+        };
+
+        // Force the streamed/inherited path via the injected bool — cargo
+        // test's real stderr is not a tty, so this is the only way to reach
+        // this branch deterministically (mirrors x.rs's heartbeat_tty
+        // injection pattern rather than a literal stderr().is_terminal()
+        // call baked into the function).
+        let output = dispatch_bun_dev_plugin_with_tty(&plugin, &ctx, true);
+
+        assert_eq!(output.code, 7);
+        assert!(
+            output.stdout.is_empty(),
+            "inherited stdout never passes through maw to be captured, got {:?}",
+            output.stdout
+        );
+        assert!(
+            output.stderr.is_empty(),
+            "inherited stderr never passes through maw to be captured, got {:?}",
+            output.stderr
+        );
+
+        std::fs::remove_dir_all(plugin_dir).expect("cleanup plugin");
+        std::fs::remove_dir_all(shim_dir).expect("cleanup bun");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dispatch_bun_dev_plugin_piped_path_unaffected_when_stderr_is_not_tty() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let _env_guard = env_test_lock();
+        let _path_restore = EnvVarRestore::capture("PATH");
+        let (plugin_dir, plugin) = load_ts_plugin("bun-dev-piped-explicit", Some("bun-dev"));
+        let shim_dir = temp_plugin_dir("fake-bun-bin-piped-explicit");
+        let fake_bun = shim_dir.join("bun");
+        std::fs::write(&fake_bun, "#!/bin/sh\necho piped-stdout\nexit 0\n").expect("fake bun");
+        let mut permissions = std::fs::metadata(&fake_bun).expect("metadata").permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&fake_bun, permissions).expect("chmod");
+        let mut path_entries = vec![shim_dir.clone()];
+        if let Some(path) = std::env::var_os("PATH") {
+            path_entries.extend(std::env::split_paths(&path));
+        }
+        std::env::set_var("PATH", std::env::join_paths(path_entries).expect("PATH"));
+
+        let ctx = InvokeContext {
+            source: InvokeSource::Cli,
+            args: Vec::new(),
+            cwd: Some(plugin_dir.to_string_lossy().into_owned()),
+            home: None,
+        };
+
+        // Explicit false — same piped+capture behavior the existing
+        // dispatch_bun_dev_plugin_prefers_ctx_cwd_and_falls_back_to_plugin_dir
+        // test already exercises via the real (non-tty-under-cargo-test)
+        // wrapper; asserted directly here against the injectable seam.
+        let output = dispatch_bun_dev_plugin_with_tty(&plugin, &ctx, false);
+
+        assert_eq!(output.code, 0);
+        assert_eq!(output.stdout, "piped-stdout\n");
+
+        std::fs::remove_dir_all(plugin_dir).expect("cleanup plugin");
+        std::fs::remove_dir_all(shim_dir).expect("cleanup bun");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dispatch_bun_dev_plugin_wraps_cannot_find_module_error_with_plugin_context() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let _env_guard = env_test_lock();
+        let _path_restore = EnvVarRestore::capture("PATH");
+        let (plugin_dir, plugin) = load_ts_plugin("bun-dev-missing-module", Some("bun-dev"));
+        let shim_dir = temp_plugin_dir("fake-bun-bin-missing-module");
+        let fake_bun = shim_dir.join("bun");
+        std::fs::write(
+            &fake_bun,
+            "#!/bin/sh\necho \"error: Cannot find module 'foo' from '/some/path'\" 1>&2\nexit 1\n",
+        )
+        .expect("fake bun");
+        let mut permissions = std::fs::metadata(&fake_bun).expect("metadata").permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&fake_bun, permissions).expect("chmod");
+        let mut path_entries = vec![shim_dir.clone()];
+        if let Some(path) = std::env::var_os("PATH") {
+            path_entries.extend(std::env::split_paths(&path));
+        }
+        std::env::set_var("PATH", std::env::join_paths(path_entries).expect("PATH"));
+
+        let ctx = InvokeContext {
+            source: InvokeSource::Cli,
+            args: Vec::new(),
+            cwd: Some(plugin_dir.to_string_lossy().into_owned()),
+            home: None,
+        };
+
+        // stderr_is_tty = false — this diagnostic wrapping is a piped/capture
+        // concern (#804); the streamed path (#803) has nothing captured to
+        // pattern-match against.
+        let output = dispatch_bun_dev_plugin_with_tty(&plugin, &ctx, false);
+
+        assert_eq!(output.code, 1);
+        assert!(
+            output.stderr.contains("bun-dev-missing-module"),
+            "wrapped stderr should name the plugin: {}",
+            output.stderr
+        );
+        assert!(
+            output.stderr.contains("bun install"),
+            "wrapped stderr should suggest `bun install`: {}",
+            output.stderr
+        );
+        assert!(
+            output.stderr.contains("Cannot find module 'foo' from '/some/path'"),
+            "wrapped stderr should keep the raw bun error visible below the wrapper: {}",
+            output.stderr
+        );
+
+        std::fs::remove_dir_all(plugin_dir).expect("cleanup plugin");
+        std::fs::remove_dir_all(shim_dir).expect("cleanup bun");
+    }
 }
 
 fn dispatch_bun_dev_plugin(plugin: &LoadedPlugin, ctx: &InvokeContext) -> CliOutput {
-    let banner = bun_dev_banner(&plugin.manifest.name);
+    dispatch_bun_dev_plugin_with_tty(
+        plugin,
+        ctx,
+        std::io::IsTerminal::is_terminal(&std::io::stderr()),
+    )
+}
+
+/// #803: bun-dev plugins used to always spawn with piped+captured
+/// stdout/stderr so the full output could be parsed into a `CliOutput`
+/// (banner-prepended, #804-wrapped, checked for the "exited 0 silently"
+/// heuristic below). That capture is also exactly what made a long-running
+/// plugin's live `--verbose` progress look frozen: nothing reached the
+/// terminal until the child exited and the whole buffer was available.
+///
+/// `stderr_is_tty` gates the fix, mirroring `x_heartbeat_wanted`'s tty-gating
+/// pattern in `x.rs` (a plain bool, computed once at the real call boundary
+/// via `IsTerminal`, injected directly by tests) rather than calling
+/// `stderr().is_terminal()` inline where it can't be overridden. When stderr
+/// is an interactive terminal a human is actually watching, so the child
+/// inherits stdout/stderr instead of piping through maw — real-time
+/// streaming, at the cost of the returned `CliOutput`'s stdout/stderr coming
+/// back empty (inherited bytes go straight to the terminal and never pass
+/// through a pipe maw could read). The banner-prepend and silence-note
+/// heuristics stay in the piped branch only — both need captured text to
+/// work with, and captured text is exactly what streaming forgoes. Non-tty
+/// callers (tests, CI, HTTP/API dispatch, audit logging, piped output) are
+/// unaffected: identical piped+capture behavior as before.
+fn dispatch_bun_dev_plugin_with_tty(
+    plugin: &LoadedPlugin,
+    ctx: &InvokeContext,
+    stderr_is_tty: bool,
+) -> CliOutput {
+    let banner = if bun_dev_banner_wanted() {
+        bun_dev_banner(&plugin.manifest.name)
+    } else {
+        String::new()
+    };
     let Some(entry_path) = &plugin.entry_path else {
         return CliOutput {
             code: 2,
@@ -988,6 +1189,11 @@ fn dispatch_bun_dev_plugin(plugin: &LoadedPlugin, ctx: &InvokeContext) -> CliOut
     };
 
     let cwd = ctx.cwd.as_deref().map_or(plugin.dir.as_path(), Path::new);
+
+    if bun_dev_io_mode(stderr_is_tty) == BunDevIoMode::Streamed {
+        return dispatch_bun_dev_plugin_streamed(plugin, entry_path, &ctx.args, cwd);
+    }
+
     let output = std::process::Command::new("bun")
         .arg(entry_path)
         .args(&ctx.args)
@@ -1001,7 +1207,18 @@ fn dispatch_bun_dev_plugin(plugin: &LoadedPlugin, ctx: &InvokeContext) -> CliOut
         Ok(output) => {
             let code = output.status.code().unwrap_or(1);
             let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-            let plugin_stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+            let raw_plugin_stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+            // #804: a bun-dev plugin has no controlled module-resolution root, so a
+            // broken transitive import (e.g. a `bun link`ed dev package missing its
+            // own `node_modules`) surfaces as bun's raw stack trace — naming a
+            // package the user has likely never heard of and never saying which
+            // *plugin* failed. Wrap it with a maw-authored pointer; the raw trace
+            // stays appended below so a determined reader can still see it.
+            let plugin_stderr = if code != 0 && raw_plugin_stderr.contains("Cannot find module") {
+                wrap_bun_module_resolution_error(plugin, entry_path, &raw_plugin_stderr)
+            } else {
+                raw_plugin_stderr
+            };
             let silence_note = if code == 0 && stdout.is_empty() && plugin_stderr.is_empty() {
                 format!(
                     "plugin {} exited 0 with no output — maw executes the entry file, it does not import it; if your entry only exports a default function add an `import.meta.main` block\n",
@@ -1035,9 +1252,124 @@ fn dispatch_bun_dev_plugin(plugin: &LoadedPlugin, ctx: &InvokeContext) -> CliOut
     }
 }
 
+/// #803 streaming path: inherit stdout/stderr so a long-running plugin's
+/// progress reaches the terminal as it happens instead of buffering until
+/// exit. `Command::output()` cannot be reused for this branch — it
+/// unconditionally forces `Stdio::piped()` on stdout/stderr internally before
+/// spawning, silently discarding any `.stdout()`/`.stderr()` configuration
+/// set beforehand — so this path uses `spawn()` + `wait()` instead. There is
+/// nothing to capture, so the banner-prepend and "exited 0 with no output"
+/// silence-note heuristics from the piped branch don't apply here.
+fn dispatch_bun_dev_plugin_streamed(
+    plugin: &LoadedPlugin,
+    entry_path: &Path,
+    args: &[String],
+    cwd: &Path,
+) -> CliOutput {
+    let spawned = std::process::Command::new("bun")
+        .arg(entry_path)
+        .args(args)
+        .current_dir(cwd)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .spawn();
+
+    match spawned.and_then(|mut child| child.wait()) {
+        Ok(status) => CliOutput {
+            code: status.code().unwrap_or(1),
+            stdout: String::new(),
+            stderr: String::new(),
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => CliOutput {
+            code: 2,
+            stdout: String::new(),
+            stderr: format!(
+                "dev-tier plugin {} needs bun; install bun or build wasm\n",
+                plugin.manifest.name
+            ),
+        },
+        Err(error) => CliOutput {
+            code: 1,
+            stdout: String::new(),
+            stderr: format!(
+                "dev-tier plugin {} failed to run bun: {error}\n",
+                plugin.manifest.name
+            ),
+        },
+    }
+}
+
+/// #804 wrapper: name the plugin, name the entry path, and suggest `bun
+/// install` in the resolved package root (the directory containing the entry
+/// file, falling back to the plugin's own dir). Scope: diagnosis only — the
+/// issue's cheapest suggested fix (#1). Pinning the resolution root (#3),
+/// preflighting a dry-invoke (#2), and alias parity (#4) are separate, larger
+/// changes left out of this pass.
+fn wrap_bun_module_resolution_error(
+    plugin: &LoadedPlugin,
+    entry_path: &Path,
+    raw_stderr: &str,
+) -> String {
+    let package_root = entry_path.parent().unwrap_or(plugin.dir.as_path());
+    format!(
+        "maw: plugin '{name}' failed to load ('{entry}') — could not resolve a module.\n\
+maw: try running `bun install` in {root} (the plugin's package root).\n\
+--- raw bun error below ---\n{raw_stderr}",
+        name = plugin.manifest.name,
+        entry = entry_path.display(),
+        root = package_root.display(),
+    )
+}
+
+/// Which stdio strategy `dispatch_bun_dev_plugin_with_tty` uses for the bun
+/// child. Pure decision behind the #803 tty gate — mirrors
+/// `x_heartbeat_wanted`'s pattern in `x.rs`: real callers pass
+/// `stderr.is_terminal()`, tests inject the bool directly, so the branch is
+/// unit-testable without a real fd.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BunDevIoMode {
+    /// Pipe + capture stdout/stderr fully so the result can be parsed into a
+    /// `CliOutput`. Used whenever stderr is not an interactive terminal.
+    Captured,
+    /// Inherit stdout/stderr for real-time streaming (#803) — stderr is an
+    /// interactive terminal, so a human is actually watching.
+    Streamed,
+}
+
+fn bun_dev_io_mode(stderr_is_tty: bool) -> BunDevIoMode {
+    if stderr_is_tty {
+        BunDevIoMode::Streamed
+    } else {
+        BunDevIoMode::Captured
+    }
+}
+
 fn bun_dev_banner(plugin_name: &str) -> String {
     format!(
         "⚠ [dev-tier: bun] {plugin_name} — TS runs unsandboxed; ship tier = WASM (maw plugin build)\n"
+    )
+}
+
+/// The dev-tier banner is OFF by default (Nat, 2026-08-06). The tier is already
+/// discoverable on demand — `maw plugin info <name>` reports `kind`/`wasmPath`
+/// and `maw plugin ls -v` carries a runtime column — so announcing it on every
+/// invocation is noise rather than signal, and printing it unconditionally to
+/// stderr corrupted piped JSON for every bun-dev plugin (#778).
+/// `MAW_DEV_TIER_BANNER=1` (also `true`/`yes`/`on`, case- and space-insensitive)
+/// opts back in; anything else, including an unset var, stays quiet.
+fn bun_dev_banner_wanted() -> bool {
+    bun_dev_banner_decision(std::env::var("MAW_DEV_TIER_BANNER").ok().as_deref())
+}
+
+/// Pure decision behind [`bun_dev_banner_wanted`] — env in, bool out, so the
+/// opt-in matrix is unit-testable without touching a real fd or process env.
+fn bun_dev_banner_decision(override_env: Option<&str>) -> bool {
+    matches!(
+        override_env
+            .map(|raw| raw.trim().to_ascii_lowercase())
+            .as_deref(),
+        Some("1" | "true" | "yes" | "on")
     )
 }
 

@@ -330,9 +330,10 @@ fn tab_send_text_confirmed<R: maw_tmux::TmuxRunner>(
         .map_err(|error| (1, format!("tab: {}", error.message)))
 }
 
+// #813: another REFUSE site -- `maw tab send` rejected live Claude panes on
+// hosts where the pane command is the app version. Shared predicate now.
 fn tab_is_agent_command(command: &str) -> bool {
-    let command = command.to_ascii_lowercase();
-    command.contains("claude") || command.contains("codex") || command.contains("node")
+    maw_tmux::is_agent_pane_command(Some(command))
 }
 
 fn tab_validate_tmux_target(target: &str) -> Result<(), String> {

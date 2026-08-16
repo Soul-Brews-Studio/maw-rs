@@ -359,11 +359,11 @@ fn is_ls_team_session(session: &str) -> bool {
     session.starts_with("team-") || session.contains(":team-") || session.contains("-team-")
 }
 
+// #813: already had the version arm (via the external `maw_split` copy of
+// `is_claude_like_pane`) but hand-rolled the rest. Now the in-workspace
+// shared predicate, so `maw ls`'s agent column matches every other site.
 fn is_ls_agent_command(command: &str) -> bool {
-    let command = command.to_lowercase();
-    maw_split::is_claude_like_pane(Some(&command))
-        || command.contains("codex")
-        || command.contains("node")
+    maw_tmux::is_agent_pane_command(Some(command))
 }
 
 fn ls_pane_status(age_sec: Option<u64>) -> &'static str {

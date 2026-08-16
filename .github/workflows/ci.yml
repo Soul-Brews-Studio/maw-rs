@@ -45,11 +45,26 @@ jobs:
           tool-cache: true
           large-packages: true
 
-      - name: Install Rust toolchain
+      # rust-toolchain.toml at the repo root is the single source of truth for
+      # channel + components + targets (#823). `rustup toolchain install` with
+      # NO arguments installs exactly what that file names, so CI and every
+      # developer box judge with the same rustc — the file overrides the
+      # default toolchain inside the checkout, so no `rustup default` is needed.
+      #
+      # This used to say `rustup toolchain install stable`, which pinned
+      # nothing: a scheduled run got whatever stable was that day (1.97.1 on
+      # 2026-08-16) while a dev box that had not run `rustup update` since March
+      # was still on 1.94.0 — and the two disagreed about
+      # clippy::redundant_iter_cloned on the same commit. The hand-added
+      # `rustup target add wasm32-unknown-unknown` is likewise gone: it lives in
+      # `targets` in the toolchain file now, where a developer can also see it.
+      - name: Install Rust toolchain (pinned by rust-toolchain.toml)
         run: |
-          rustup toolchain install stable --profile minimal --component clippy --component rustfmt
-          rustup default stable
-          rustup target add wasm32-unknown-unknown
+          rustup --version
+          rustup toolchain install
+          rustup show active-toolchain
+          rustc --version
+          rustup target list --installed
 
       # "Install Bun" (oven-sh/setup-bun) removed 2026-07-16: its only consumers
       # ("Fleet-plugin bun tests" + AssemblyScript fixture build) were extracted
@@ -140,7 +155,10 @@ jobs:
           CARGO_BUILD_JOBS: 2
           CARGO_PROFILE_TEST_DEBUG: "0"
           CARGO_PROFILE_DEV_DEBUG: "0"
-        run: cargo test --workspace --locked
+        # --no-fail-fast: without it cargo halts at the FIRST failing test
+        # target, so a red CI run under-reports the true failure set and the
+        # next fix round trips on failures it never saw (#796).
+        run: cargo test --workspace --locked --no-fail-fast
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
@@ -165,8 +183,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y musl-tools
 
+      # Install the pinned toolchain first (#823), then add musl on top of it —
+      # `rustup target add` attaches the target to whatever toolchain is active,
+      # and inside the checkout that is the one rust-toolchain.toml names.
       - name: Install Rust musl target
-        run: rustup target add x86_64-unknown-linux-musl
+        run: |
+          rustup toolchain install
+          rustup target add x86_64-unknown-linux-musl
+          rustc --version
 
       # This job previously had NO cache at all — it rebuilt the entire
       # ~145-crate cranelift/extism stack for the musl target COLD every 4h,
@@ -210,11 +234,16 @@ jobs:
           tool-cache: true
           large-packages: true
 
-      - name: Install Rust toolchain
+      # Same pin as the rust job — see its Install step for why (#823). This
+      # job is where the wasm32 target actually earns its keep: the wasm-host
+      # tests cross-compile plugin fixtures to wasm32-unknown-unknown.
+      - name: Install Rust toolchain (pinned by rust-toolchain.toml)
         run: |
-          rustup toolchain install stable --profile minimal --component clippy
-          rustup default stable
-          rustup target add wasm32-unknown-unknown
+          rustup --version
+          rustup toolchain install
+          rustup show active-toolchain
+          rustc --version
+          rustup target list --installed
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
@@ -261,7 +290,9 @@ jobs:
           # (ld terminated with signal 7 [Bus error]).
           CARGO_PROFILE_TEST_DEBUG: "0"
           CARGO_PROFILE_DEV_DEBUG: "0"
-        run: cargo test -p maw-cli -p maw-plugin-manifest --features wasm-host --locked
+        # --no-fail-fast: report every failing target in one run, not just the
+        # first (#796).
+        run: cargo test -p maw-cli -p maw-plugin-manifest --features wasm-host --locked --no-fail-fast
 
       - name: Clippy with wasm-host feature
         env:

@@ -5,6 +5,11 @@ struct TeamT5SpawnOptions127 {
     team: String,
     role: String,
     engine: Option<String>,
+    /// Full launch line for `engine`, when it came from a charter `engines:`
+    /// alias rather than naming a binary the resolver can find. Passed through
+    /// as `--engine-cmd`, mirroring how `team up` already carries the resolved
+    /// command (#738/#758) instead of the bare alias key.
+    engine_command: Option<String>,
     model: Option<String>,
     cwd: Option<String>,
     prompt: Option<String>,
@@ -92,8 +97,10 @@ fn team_t5_spawn_one(opts: &TeamT5SpawnOptions127) -> Result<String, String> {
     let cwd = opts.cwd.as_deref().map(team_t5_canonical_work_path).transpose()?;
     let prompt = team_t5_spawn_prompt(&opts.team, &opts.role, opts.prompt.as_deref(), &opts.role);
     let prompt_path = paths.vault_dir.join(format!("{}-spawn-prompt.md", opts.role));
-    team_atomic_write_0600(&prompt_path, &prompt)?;
-    team_t5_upsert_manifest_member(&paths.vault_manifest, &opts.role)?;
+    if opts.prompt.is_some() || !prompt_path.exists() {
+        team_atomic_write_0600(&prompt_path, &prompt)?;
+    }
+    team_t5_upsert_manifest_member(&paths.vault_manifest, &opts.role, opts.engine.as_deref())?;
     team_t5_upsert_tool_member(&paths.tool_config, &opts.role, &engine, opts.model.as_deref())?;
 
     let mut out = format!("\x1b[32m✓\x1b[0m spawn prompt written for '{}'\n  \x1b[90mpast life: no\x1b[0m\n  \x1b[90mengine: {engine}\x1b[0m\n", opts.role);
@@ -178,10 +185,24 @@ fn team_t5_member_prompt(charter: &TeamCharter122, member: &TeamCharterMember122
     if parts.is_empty() { None } else { Some(parts.join("\n\n")) }
 }
 
-fn team_t5_upsert_manifest_member(path: &std::path::Path, role: &str) -> Result<(), String> {
+/// Record the member, and its engine ONLY when one was actually chosen.
+///
+/// `engine` is `None` when the caller fell back to the built-in default. That
+/// fallback is recomputed on every spawn and roster build (see
+/// `team_t3_classify`), so it is a decision, not an observation — writing it
+/// here would turn a default into a durable recorded fact and make every
+/// member that never passed `-e` look like a deliberate `claude` choice
+/// forever. Absence is the honest record: `team resume` reads no engine and
+/// re-derives the same default the same way.
+fn team_t5_upsert_manifest_member(path: &std::path::Path, role: &str, engine: Option<&str>) -> Result<(), String> {
     let mut value: serde_json::Value = team_read_json(path).ok_or_else(|| format!("team spawn: invalid manifest {}", path.display()))?;
     let members = value["members"].as_array_mut().ok_or_else(|| "team spawn: manifest members must be an array".to_owned())?;
     if !members.iter().any(|item| item.as_str() == Some(role)) { members.push(serde_json::json!(role)); }
+    let Some(engine) = engine else { return team_write_json_atomic_0600(path, &value) };
+    if !value["memberEngines"].is_object() {
+        value["memberEngines"] = serde_json::json!({});
+    }
+    value["memberEngines"][role] = serde_json::json!(engine);
     team_write_json_atomic_0600(path, &value)
 }
 
@@ -196,6 +217,7 @@ fn team_t5_upsert_tool_member(path: &std::path::Path, role: &str, engine: &str, 
 
 fn team_t5_controlled_maw_invocation(opts: &TeamT5SpawnOptions127, engine: &str, cwd: Option<&std::path::Path>) -> Vec<String> {
     let mut args = vec!["wake".to_owned(), opts.role.clone(), "--no-attach".to_owned(), "--session".to_owned(), opts.team.clone(), "-e".to_owned(), engine.to_owned()];
+    if let Some(command) = &opts.engine_command { args.extend(["--engine-cmd".to_owned(), command.clone()]); }
     if let Some(cwd) = cwd { args.extend(["--repo-path".to_owned(), cwd.display().to_string()]); }
     if let Some(id) = &opts.parent_session_id { args.extend(["--parent-session-id".to_owned(), id.clone()]); }
     if let Some(id) = &opts.session_id { args.extend(["--session-id".to_owned(), id.clone()]); }
@@ -242,4 +264,92 @@ fn team_t5_format_spawn_from(charter: &TeamCharter122, roles: &[String], opts: &
     out.push_str(if opts.exec { "  - --exec passed through to local cmdTeamSpawn\n" } else { "  - spawn prompts written; no tmux panes spawned without --exec\n" });
     out.push_str("  - existing:* and new:* targets blocked in this implementation\n");
     out
+}
+
+#[cfg(test)]
+mod team_spawn_tests127 {
+    use super::*;
+
+    fn team_spawn_temp_root(name: &str) -> std::path::PathBuf {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let seq = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("maw-rs-team-spawn-{name}-{}-{seq}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".git")).expect("git marker");
+        root
+    }
+
+    fn with_spawn_fixture<F>(name: &str, test: F)
+    where
+        F: FnOnce(&std::path::Path),
+    {
+        let _guard = env_test_lock();
+        let _home = EnvVarRestore::capture("HOME");
+        let _maw_home = EnvVarRestore::capture("MAW_HOME");
+        let _psi = EnvVarRestore::capture("MAW_RS_TEAM_PSI");
+        let root = team_spawn_temp_root(name);
+        std::env::set_var("HOME", root.join("home"));
+        std::env::set_var("MAW_HOME", root.join("maw-home"));
+        std::env::set_var("MAW_RS_TEAM_PSI", root.join("psi"));
+        let paths = team_paths("alpha");
+        std::fs::create_dir_all(&paths.vault_dir).expect("vault team");
+        std::fs::create_dir_all(&paths.tool_dir).expect("tool team");
+        team_write_json_atomic_0600(
+            &paths.vault_manifest,
+            &serde_json::json!({"name":"alpha","createdAt":1,"members":[]}),
+        )
+        .expect("manifest");
+        test(&root);
+    }
+
+    #[test]
+    fn team_spawn_without_prompt_preserves_existing_prompt_and_records_engine() {
+        with_spawn_fixture("preserve", |_| {
+            let paths = team_paths("alpha");
+            let prompt_path = paths.vault_dir.join("builder-spawn-prompt.md");
+            team_atomic_write_0600(&prompt_path, "line one\nline two\n").expect("seed prompt");
+
+            let out = team_t5_spawn_one(&TeamT5SpawnOptions127 {
+                team: "alpha".to_owned(),
+                role: "builder".to_owned(),
+                engine: Some("codex".to_owned()),
+                ..Default::default()
+            })
+            .expect("spawn");
+
+            assert_eq!(std::fs::read_to_string(&prompt_path).expect("prompt"), "line one\nline two\n");
+            assert!(out.contains("engine: codex"), "{out}");
+            let manifest: serde_json::Value = team_read_json(&paths.vault_manifest).expect("manifest");
+            assert_eq!(manifest["memberEngines"]["builder"], "codex");
+        });
+    }
+
+    #[test]
+    fn team_spawn_missing_prompt_writes_stub_and_explicit_prompt_overwrites() {
+        with_spawn_fixture("write", |_| {
+            let paths = team_paths("alpha");
+            let prompt_path = paths.vault_dir.join("reviewer-spawn-prompt.md");
+
+            team_t5_spawn_one(&TeamT5SpawnOptions127 {
+                team: "alpha".to_owned(),
+                role: "reviewer".to_owned(),
+                ..Default::default()
+            })
+            .expect("first spawn");
+            assert_eq!(
+                std::fs::read_to_string(&prompt_path).expect("stub prompt"),
+                "You are 'reviewer' on team 'alpha'."
+            );
+
+            team_t5_spawn_one(&TeamT5SpawnOptions127 {
+                team: "alpha".to_owned(),
+                role: "reviewer".to_owned(),
+                prompt: Some("Keep the real role brief.".to_owned()),
+                ..Default::default()
+            })
+            .expect("explicit prompt");
+            let prompt = std::fs::read_to_string(&prompt_path).expect("updated prompt");
+            assert!(prompt.contains("Keep the real role brief."), "{prompt}");
+        });
+    }
 }

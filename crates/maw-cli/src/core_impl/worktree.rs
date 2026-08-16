@@ -5,7 +5,11 @@ const DISPATCH_145: &[DispatcherEntry] = &[DispatcherEntry {
 
 const WORKTREE_USAGE: &str =
     "usage: maw worktree <ls|clean> [--dry-run] or maw worktree add <name> [--base <ref>]";
-const WORKTREE_MERGE_TARGET: &str = "origin/alpha";
+/// Last-resort base used only when the repository's integration branch cannot be
+/// resolved from the primary worktree (see [`worktree_resolve_base`]). `add` still
+/// tries it so historical maw-rs behavior is preserved; `clean`/`ls` treat an
+/// unresolved base as "nothing is merged" and never remove anything.
+const WORKTREE_FALLBACK_BASE: &str = "origin/alpha";
 const WORKTREE_TMUX_PANE_FORMAT: &str = "#{session_name}:#{window_name}|||#{pane_current_path}";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,8 +23,19 @@ enum WorktreeCommand {
 struct WorktreeOptions<'a> {
     command: WorktreeCommand,
     name: Option<&'a str>,
-    base: &'a str,
+    /// `None` means "no explicit `--base`" — the default is resolved lazily, and only
+    /// after `add`'s refusal guards have passed.
+    base: Option<&'a str>,
     dry_run: bool,
+}
+
+/// The repository's integration branch, plus whether it was actually resolved.
+/// `resolved == false` means the reference is a guess and must never be treated as
+/// authoritative merge state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WorktreeBase {
+    reference: String,
+    resolved: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -171,7 +186,7 @@ fn worktree_parse_args(argv: &[String]) -> Result<WorktreeOptions<'_>, (i32, Str
     };
     let mut dry_run = false;
     let mut name = None;
-    let mut base = WORKTREE_MERGE_TARGET;
+    let mut base = None;
     let mut index = 1;
     while index < argv.len() {
         let arg = &argv[index];
@@ -186,7 +201,7 @@ fn worktree_parse_args(argv: &[String]) -> Result<WorktreeOptions<'_>, (i32, Str
                     return Err((2, format!("worktree add: --base requires a value\n{WORKTREE_USAGE}")));
                 };
                 worktree_validate_ref(value).map_err(|message| (2, message))?;
-                base = value;
+                base = Some(value);
             }
             "--base" => {
                 return Err((2, format!("worktree: --base is only valid with add\n{WORKTREE_USAGE}")));
@@ -254,11 +269,12 @@ fn worktree_collect_statuses(
     let Some(main_path) = records.first().map(|record| record.path.clone()) else {
         return Ok(Vec::new());
     };
+    let base = worktree_resolve_base(runtime, &main_path);
     let live_refs = worktree_live_refs(runtime, &main_path)?;
     Ok(records
         .into_iter()
         .map(|record| WorktreeStatus {
-            merged: worktree_branch_merged(runtime, &main_path, record.branch.as_deref()),
+            merged: worktree_branch_merged(runtime, &main_path, record.branch.as_deref(), &base),
             dirty: worktree_is_dirty(runtime, &record.path),
             live: worktree_find_live(&record.path, &live_refs),
             path: record.path,
@@ -311,12 +327,51 @@ fn worktree_branch_merged(
     runtime: &mut impl WorktreeRuntime,
     main_path: &std::path::Path,
     branch: Option<&str>,
+    base: &WorktreeBase,
 ) -> bool {
+    if !base.resolved {
+        // Fail safe: an unresolved base means we cannot prove anything is merged,
+        // so `clean` skips every worktree instead of removing against a guess.
+        return false;
+    }
     branch.is_some_and(|branch| {
         runtime
-            .worktree_git(main_path, &["merge-base", "--is-ancestor", branch, WORKTREE_MERGE_TARGET])
+            .worktree_git(main_path, &["merge-base", "--is-ancestor", branch, &base.reference])
             .is_ok()
     })
+}
+
+/// Resolve the repository's integration branch from the **primary worktree**, so the
+/// answer does not change with the caller's cwd (#749).
+///
+/// Two probes, in order:
+/// 1. `@{upstream}` of the primary worktree's checked-out branch — respects an
+///    integration branch that is not the repo default (maw-rs itself: `alpha`).
+/// 2. `refs/remotes/origin/HEAD` — the remote's default branch, which still works when
+///    no tracking upstream is configured (the mechanism proposed in #749 and PR #777).
+///
+/// If neither resolves, the returned base is *unresolved*: `add` still tries
+/// [`WORKTREE_FALLBACK_BASE`] (and git reports a clear error if it does not exist),
+/// while `clean`/`ls` report every branch as unmerged and delete nothing.
+fn worktree_resolve_base(
+    runtime: &mut impl WorktreeRuntime,
+    main_path: &std::path::Path,
+) -> WorktreeBase {
+    const PROBES: [&[&str]; 2] = [
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+        &["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+    ];
+    for probe in PROBES {
+        let resolved = runtime
+            .worktree_git(main_path, probe)
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| worktree_validate_ref(value).is_ok());
+        if let Some(reference) = resolved {
+            return WorktreeBase { reference, resolved: true };
+        }
+    }
+    WorktreeBase { reference: WORKTREE_FALLBACK_BASE.to_owned(), resolved: false }
 }
 
 fn worktree_is_dirty(runtime: &mut impl WorktreeRuntime, path: &std::path::Path) -> bool {
@@ -473,19 +528,25 @@ fn worktree_run_add(
     if worktree_branch_exists(runtime, &main_path, &branch_ref) {
         return Err(format!("worktree add: branch already exists: {branch}"));
     }
+    // Base resolution is deliberately deferred until *after* both refusal guards: a
+    // request that will be rejected must not spend a single git call probing the base.
+    let base = match options.base {
+        Some(base) => base.to_owned(),
+        None => worktree_resolve_base(runtime, &main_path).reference,
+    };
     if let Some(parent) = path.parent() {
         runtime.worktree_create_dir_all(parent)?;
     }
     let path_text = path.to_string_lossy().into_owned();
     runtime.worktree_git(
         &main_path,
-        &["worktree", "add", "-b", &branch, &path_text, options.base],
+        &["worktree", "add", "-b", &branch, &path_text, &base],
     )?;
     Ok(format!(
         "created {} (branch {} from {})\n",
         path.display(),
         branch,
-        options.base
+        base
     ))
 }
 
@@ -584,6 +645,11 @@ mod worktree_tests {
     #[derive(Debug)]
     struct FakeWorktreeRuntime {
         cwd: std::path::PathBuf,
+        /// `@{upstream}` of the checked-out branch. The fake repo answers the same
+        /// value everywhere; tests assert *which worktree* the probe was run in.
+        upstream: Option<String>,
+        /// `refs/remotes/origin/HEAD`, the second base probe.
+        origin_head: Option<String>,
         worktrees: String,
         dirty_paths: BTreeSet<std::path::PathBuf>,
         merged_branches: BTreeSet<String>,
@@ -600,6 +666,8 @@ mod worktree_tests {
         fn default() -> Self {
             Self {
                 cwd: std::path::PathBuf::from("/repo"),
+                upstream: Some("origin/alpha".to_owned()),
+                origin_head: None,
                 worktrees: String::new(),
                 dirty_paths: BTreeSet::new(),
                 merged_branches: BTreeSet::new(),
@@ -630,6 +698,16 @@ mod worktree_tests {
             ));
             match args {
                 ["worktree", "list", "--porcelain"] => Ok(self.worktrees.clone()),
+                ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"] => self
+                    .upstream
+                    .clone()
+                    .map(|upstream| format!("{upstream}\n"))
+                    .ok_or_else(|| "fatal: no upstream configured".to_owned()),
+                ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"] => self
+                    .origin_head
+                    .clone()
+                    .map(|head| format!("{head}\n"))
+                    .ok_or_else(|| "fatal: ref refs/remotes/origin/HEAD is not a symbolic ref".to_owned()),
                 ["status", "--porcelain"] => {
                     if self.dirty_paths.contains(cwd) {
                         Ok(" M src/lib.rs\n".to_owned())
@@ -637,7 +715,7 @@ mod worktree_tests {
                         Ok(String::new())
                     }
                 }
-                ["merge-base", "--is-ancestor", branch, "origin/alpha"] => {
+                ["merge-base", "--is-ancestor", branch, _base] => {
                     if self.merged_branches.contains(*branch) {
                         Ok(String::new())
                     } else {
@@ -724,6 +802,24 @@ mod worktree_tests {
         }
     }
 
+    fn upstream_probe() -> Vec<String> {
+        strings(&["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])
+    }
+
+    fn origin_head_probe() -> Vec<String> {
+        strings(&["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"])
+    }
+
+    /// Every git call this module uses to *discover* the integration branch.
+    fn base_probe_calls(runtime: &FakeWorktreeRuntime) -> Vec<(std::path::PathBuf, Vec<String>)> {
+        runtime
+            .git_calls
+            .iter()
+            .filter(|(_, args)| args == &upstream_probe() || args == &origin_head_probe())
+            .cloned()
+            .collect()
+    }
+
     fn command_calls(runtime: &FakeWorktreeRuntime, command: &str) -> Vec<Vec<String>> {
         runtime
             .git_calls
@@ -768,6 +864,15 @@ mod worktree_tests {
                 (
                     std::path::PathBuf::from("/repo"),
                     strings(&[
+                        "rev-parse",
+                        "--abbrev-ref",
+                        "--symbolic-full-name",
+                        "@{upstream}"
+                    ])
+                ),
+                (
+                    std::path::PathBuf::from("/repo"),
+                    strings(&[
                         "worktree",
                         "add",
                         "-b",
@@ -807,6 +912,11 @@ mod worktree_tests {
                 "/repo/agents/review",
                 "origin/beta"
             ]))
+        );
+        assert!(
+            base_probe_calls(&runtime).is_empty(),
+            "explicit --base must not probe the repository for a base: {:?}",
+            runtime.git_calls
         );
     }
 
@@ -882,6 +992,107 @@ mod worktree_tests {
     }
 
     #[test]
+    fn add_default_base_comes_from_primary_worktree_upstream() {
+        let mut runtime = FakeWorktreeRuntime {
+            cwd: std::path::PathBuf::from("/repo/agents/current"),
+            upstream: Some("upstream/release".to_owned()),
+            worktrees: worktrees(&[("/repo", "main")]),
+            ..FakeWorktreeRuntime::default()
+        };
+
+        let output =
+            worktree_run_with(&strings(&["add", "release-fix"]), &mut runtime).expect("add output");
+
+        assert!(output.stdout.contains("from upstream/release"), "{}", output.stdout);
+        assert_eq!(
+            runtime.git_calls.last().map(|(_, args)| args.clone()),
+            Some(strings(&[
+                "worktree",
+                "add",
+                "-b",
+                "agents/release-fix",
+                "/repo/agents/release-fix",
+                "upstream/release"
+            ]))
+        );
+        assert_eq!(
+            base_probe_calls(&runtime),
+            vec![(std::path::PathBuf::from("/repo"), upstream_probe())],
+            "the base must be read from the primary worktree, not the caller cwd"
+        );
+    }
+
+    #[test]
+    fn add_default_base_falls_back_to_origin_head_without_upstream() {
+        let mut runtime = FakeWorktreeRuntime {
+            cwd: std::path::PathBuf::from("/repo/agents/current"),
+            upstream: None,
+            origin_head: Some("origin/main".to_owned()),
+            worktrees: worktrees(&[("/repo", "main")]),
+            ..FakeWorktreeRuntime::default()
+        };
+
+        let output =
+            worktree_run_with(&strings(&["add", "main-fix"]), &mut runtime).expect("add output");
+
+        assert!(output.stdout.contains("from origin/main"), "{}", output.stdout);
+        assert_eq!(
+            runtime.git_calls.last().map(|(_, args)| args.clone()),
+            Some(strings(&[
+                "worktree",
+                "add",
+                "-b",
+                "agents/main-fix",
+                "/repo/agents/main-fix",
+                "origin/main"
+            ]))
+        );
+    }
+
+    #[test]
+    fn add_default_base_falls_back_to_origin_alpha_when_unresolvable() {
+        let mut runtime = FakeWorktreeRuntime {
+            cwd: std::path::PathBuf::from("/repo/agents/current"),
+            upstream: None,
+            origin_head: None,
+            worktrees: worktrees(&[("/repo", "main")]),
+            ..FakeWorktreeRuntime::default()
+        };
+
+        let output =
+            worktree_run_with(&strings(&["add", "fallback"]), &mut runtime).expect("add output");
+
+        assert!(output.stdout.contains("from origin/alpha"), "{}", output.stdout);
+        assert_eq!(
+            base_probe_calls(&runtime),
+            vec![
+                (std::path::PathBuf::from("/repo"), upstream_probe()),
+                (std::path::PathBuf::from("/repo"), origin_head_probe()),
+            ],
+            "both probes must be tried before falling back"
+        );
+    }
+
+    #[test]
+    fn add_defers_base_resolution_until_after_existing_branch_refusal() {
+        let mut runtime = FakeWorktreeRuntime {
+            worktrees: worktrees(&[("/repo", "main")]),
+            existing_branch_refs: BTreeSet::from(["refs/heads/agents/old".to_owned()]),
+            ..FakeWorktreeRuntime::default()
+        };
+
+        let error =
+            worktree_run_with(&strings(&["add", "old"]), &mut runtime).expect_err("branch exists");
+
+        assert_eq!(error.0, 1);
+        assert!(
+            base_probe_calls(&runtime).is_empty(),
+            "a refused add must not resolve a base it will never use: {:?}",
+            runtime.git_calls
+        );
+    }
+
+    #[test]
     fn clean_removes_merged_clean_dead_worktree_and_prunes_afterward() {
         let mut runtime = runtime_with_two_worktrees("/repo/agents/old", "agents/old");
 
@@ -945,6 +1156,131 @@ mod worktree_tests {
             command_calls(&runtime, "worktree")
                 .iter()
                 .all(|args| args != &strings(&["worktree", "remove", "/repo/agents/fresh"]))
+        );
+    }
+
+    #[test]
+    fn clean_keeps_every_worktree_when_base_is_unresolvable() {
+        let mut runtime = runtime_with_two_worktrees("/repo/agents/old", "agents/old");
+        runtime.upstream = None;
+        runtime.origin_head = None;
+
+        let output = worktree_run_with(&strings(&["clean"]), &mut runtime).expect("clean output");
+
+        assert!(
+            output.stdout.contains("skip /repo/agents/old (unmerged)"),
+            "{}",
+            output.stdout
+        );
+        assert!(
+            command_calls(&runtime, "worktree")
+                .iter()
+                .all(|args| args != &strings(&["worktree", "remove", "/repo/agents/old"])),
+            "clean must never remove against an unresolved base: {:?}",
+            runtime.git_calls
+        );
+        assert!(
+            runtime
+                .git_calls
+                .iter()
+                .all(|(_, args)| args.first().map(String::as_str) != Some("merge-base")),
+            "clean must not infer merge state from the fallback base: {:?}",
+            runtime.git_calls
+        );
+    }
+
+    #[test]
+    fn ls_reports_unmerged_when_base_is_unresolvable() {
+        let mut runtime = runtime_with_two_worktrees("/repo/agents/old", "agents/old");
+        runtime.upstream = None;
+        runtime.origin_head = None;
+
+        let output = worktree_run_with(&strings(&["ls"]), &mut runtime).expect("ls output");
+
+        assert!(
+            output.stdout.contains("/repo/agents/old\tagents/old\tno\t"),
+            "{}",
+            output.stdout
+        );
+    }
+
+    #[test]
+    fn clean_resolves_merge_base_from_primary_worktree_not_cwd() {
+        let mut runtime = runtime_with_two_worktrees("/repo/agents/old", "agents/old");
+        runtime.cwd = std::path::PathBuf::from("/repo/agents/current");
+        runtime.upstream = Some("origin/trunk".to_owned());
+
+        let output = worktree_run_with(&strings(&["clean", "--dry-run"]), &mut runtime)
+            .expect("clean output");
+
+        assert!(
+            output.stdout.contains("would remove /repo/agents/old"),
+            "{}",
+            output.stdout
+        );
+        assert_eq!(
+            base_probe_calls(&runtime),
+            vec![(std::path::PathBuf::from("/repo"), upstream_probe())],
+            "the caller cwd must never select the merge base: {:?}",
+            runtime.git_calls
+        );
+        assert!(
+            runtime.git_calls.iter().any(|(cwd, args)| {
+                cwd == &std::path::PathBuf::from("/repo")
+                    && args
+                        == &strings(&[
+                            "merge-base",
+                            "--is-ancestor",
+                            "agents/old",
+                            "origin/trunk",
+                        ])
+            }),
+            "clean must compare against the resolved base: {:?}",
+            runtime.git_calls
+        );
+    }
+
+    #[test]
+    fn clean_uses_origin_head_as_merge_base_without_upstream() {
+        let mut runtime = runtime_with_two_worktrees("/repo/agents/old", "agents/old");
+        runtime.upstream = None;
+        runtime.origin_head = Some("origin/main".to_owned());
+
+        let output = worktree_run_with(&strings(&["clean", "--dry-run"]), &mut runtime)
+            .expect("clean output");
+
+        assert!(
+            output.stdout.contains("would remove /repo/agents/old"),
+            "{}",
+            output.stdout
+        );
+        assert!(
+            runtime.git_calls.iter().any(|(cwd, args)| {
+                cwd == &std::path::PathBuf::from("/repo")
+                    && args
+                        == &strings(&[
+                            "merge-base",
+                            "--is-ancestor",
+                            "agents/old",
+                            "origin/main",
+                        ])
+            }),
+            "clean must fall back to origin/HEAD: {:?}",
+            runtime.git_calls
+        );
+    }
+
+    #[test]
+    fn clean_resolves_the_base_once_for_the_whole_run() {
+        let mut runtime = runtime_with_two_worktrees("/repo/agents/old", "agents/old");
+
+        worktree_run_with(&strings(&["clean", "--dry-run"]), &mut runtime).expect("clean output");
+
+        assert_eq!(
+            base_probe_calls(&runtime).len(),
+            1,
+            "the base must be resolved once per run: {:?}",
+            runtime.git_calls
         );
     }
 
