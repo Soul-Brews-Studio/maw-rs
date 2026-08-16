@@ -294,7 +294,7 @@ const CONFIG_LEGACY_DEFAULT_ENGINE_KEY: &str = "defaultEngine";
 /// `maw config explain` points at, so `sources` names the mapping (#682).
 const CONFIG_LEGACY_ALIASES: &[(&str, &str)] = &[(
     CONFIG_LEGACY_DEFAULT_ENGINE_KEY,
-    "wake.engine (engine resolution order: -e > wake.engine > defaultEngine > commands.default > built-in)",
+    "wake.engine (engine resolution order: -e when it has a commands entry > commands.<window> > commands.<oracle>-oracle > commands glob > -e literally > wake.engine > defaultEngine > commands.default > built-in)",
 )];
 
 /// One advisory line per legacy alias key present in the merged config (#682).

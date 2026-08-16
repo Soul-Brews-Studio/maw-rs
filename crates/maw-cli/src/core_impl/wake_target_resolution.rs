@@ -79,7 +79,7 @@ fn wake_oracle(options: &WakeOptionsNative) -> Result<String, String> {
     // node the caller actually named (#711 fix 5 follow-up).
     let raw = if raw.matches(':').count() == 1 { raw.rsplit(':').next().unwrap_or(raw) } else { raw };
     let raw = raw.strip_suffix(".git").unwrap_or(raw);
-    let oracle = raw.strip_suffix("-oracle").unwrap_or(raw).trim();
+    let oracle = wake_oracle_stem(raw);
     wake_validate_slug(oracle, "oracle")?;
     // #785 (sub-bug A): tmux's own `new-session -s <name>` silently
     // substitutes any literal '.' in a session name with '_' -- no error,
@@ -204,12 +204,21 @@ fn wake_resolve_exact_registry_session(target: &str, fleet_entries: &[NativeFlee
     }))
 }
 
+// A session's primary window is the one carrying the oracle's own identity.
+// maw-js named it `<stem>-oracle` and maw-rs named it the bare `<stem>`, so
+// both spellings have to be tried before falling back to "whatever is first"
+// -- otherwise a session whose registry lists `[foo-agent1, foo-oracle]`
+// resolves to the fan-out window `foo-agent1` (#771/T4527). The bare-stem tier
+// stays between them on purpose: windows maw-rs created itself use that name,
+// and dropping the tier breaks them silently while every other arm still passes.
 fn wake_primary_registry_window<'a>(entry: &'a NativeFleetEntry, stem: &str) -> Option<&'a NativeFleetWindow> {
+    let oracle_window = format!("{stem}-oracle");
     entry
         .session
         .windows
         .iter()
-        .find(|window| window.name == stem)
+        .find(|window| window.name.eq_ignore_ascii_case(&oracle_window))
+        .or_else(|| entry.session.windows.iter().find(|window| window.name == stem))
         .or_else(|| entry.session.windows.first())
 }
 
@@ -500,19 +509,45 @@ fn wake_push_repo_candidate(
     candidates.push(WakeRepoCandidate { name: name.to_owned(), path });
 }
 
+// The oracle identity inside a repo/window/session name: the name with one
+// trailing `-oracle` removed. The suffix match is case-insensitive because the
+// name usually comes from a directory on disk (`Colophon-Oracle`) while every
+// other spelling of that identity -- config keys, window names -- is lower
+// case; an exact-case `strip_suffix` left the suffix attached and every
+// downstream comparison then missed (#771/T4527).
+//
+// The CASE of what survives is deliberately preserved. It feeds `wake_slot`
+// and `wake_session_name`, so lowercasing here would move a live
+// `31-Colophon` session to a different slot and orphan it.
+// `str::get` rather than `name[cut..]`: this runs on raw CLI input before
+// `wake_validate_slug`, so a multi-byte target would panic on a slice that
+// lands mid-codepoint. A non-boundary `cut` simply means the tail is not
+// `-oracle`.
+fn wake_oracle_stem(name: &str) -> &str {
+    let name = name.trim();
+    let Some(cut) = name.len().checked_sub("-oracle".len()) else { return name };
+    if cut > 0 && name.get(cut..).is_some_and(|tail| tail.eq_ignore_ascii_case("-oracle")) {
+        name.get(..cut).map_or(name, str::trim)
+    } else {
+        name
+    }
+}
+
 fn wake_repo_name_matches(name: &str, oracle: &str) -> bool {
-    name == oracle || name == format!("{oracle}-oracle") || name.trim_end_matches("-oracle") == oracle
+    wake_oracle_stem(name).eq_ignore_ascii_case(wake_oracle_stem(oracle))
 }
 
 fn wake_oracle_from_repo_slug(repo: &str) -> Option<String> {
-    let name = repo.rsplit('/').next()?.trim();
-    (!name.is_empty()).then(|| name.strip_suffix("-oracle").unwrap_or(name).to_owned())
+    wake_oracle_from_name(repo.rsplit('/').next()?)
 }
 
 fn wake_oracle_from_repo_path(path: &std::path::Path) -> Option<String> {
-    path.file_name()
-        .and_then(std::ffi::OsStr::to_str)
-        .and_then(|name| (!name.is_empty()).then(|| name.strip_suffix("-oracle").unwrap_or(name).to_owned()))
+    path.file_name().and_then(std::ffi::OsStr::to_str).and_then(wake_oracle_from_name)
+}
+
+fn wake_oracle_from_name(name: &str) -> Option<String> {
+    let stem = wake_oracle_stem(name);
+    (!stem.is_empty()).then(|| stem.to_owned())
 }
 
 fn wake_registry_missing_repo_message(name: &str, repo: &str, path: &std::path::Path) -> String {
@@ -549,8 +584,14 @@ fn wake_detect_session_from_fleet_registry(oracle: &str, repo_path: &std::path::
     if sessions.len() == 1 { Some(sessions[0].clone()) } else { None }
 }
 
+// Sessions are named `<slot>-<oracle>`, but sessions created before the
+// `-oracle` suffix was stripped case-insensitively (#771) are named
+// `<slot>-<oracle>-oracle` in whatever case the repo directory used. Strip that
+// tail off the SESSION name and the three historical arms collapse into two,
+// with the mixed-case form now matching instead of orphaning the live session.
 fn wake_session_matches(name: &str, oracle: &str) -> bool {
-    name == oracle || name.ends_with(&format!("-{oracle}")) || name.ends_with(&format!("-{oracle}-oracle"))
+    let name = wake_oracle_stem(name);
+    name == oracle || name.ends_with(&format!("-{oracle}"))
 }
 
 fn wake_session_name(oracle: &str, sessions: &[TmuxSession]) -> String {

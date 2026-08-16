@@ -758,23 +758,16 @@ fn workon_list_sessions<R: maw_tmux::TmuxRunner>(runner: &mut R) -> Vec<String> 
         .unwrap_or_default()
 }
 
+/// `workon` and `wake` used to resolve `commands` through two near-identical
+/// hand-written lookups, which is how wake ended up missing the per-agent and
+/// glob tiers entirely (#761). Both now go through
+/// `wake_resolve_command_from_config` so they cannot drift again; the only
+/// difference left is the built-in fallback binary — `workon` has always
+/// defaulted to claude, `wake` to codex.
 fn workon_build_command_in_dir(agent_name: &str, cwd: &std::path::Path, engine: Option<&str>) -> String {
     let config = merged_config_value_in_dir(cwd);
-    let commands = config.get("commands");
-    let command = if let Some(engine) = engine {
-        commands
-            .and_then(|commands| commands.get(engine))
-            .and_then(serde_json::Value::as_str)
-            .map_or_else(|| engine.to_owned(), str::to_owned)
-    } else {
-        commands
-            .and_then(|commands| {
-                commands.get(agent_name).and_then(serde_json::Value::as_str)
-                    .or_else(|| commands.get("default").and_then(serde_json::Value::as_str))
-            })
-            .map_or_else(|| "claude".to_owned(), str::to_owned)
-    };
-    workon_prefix_zai_pool(&config, command)
+    let resolution = wake_resolve_command_from_config(&config, agent_name, engine, None, "claude");
+    workon_prefix_zai_pool(&config, resolution.command)
 }
 
 /// Fleet token-pool spawn wiring (#293): when merged config names a fleet
@@ -1244,7 +1237,7 @@ mod workon_tests {
         std::fs::create_dir_all(root.join("config")).expect("config dir");
         std::fs::write(
             root.join("config/maw.config.50.json"),
-            r#"{"commands":{"omx":"CODEX_HOME=$PWD/.codex omx --direct","default":"claude --continue"}}"#,
+            r#"{"commands":{"agent*":"glob-agent","omx":"CODEX_HOME=$PWD/.codex omx --direct","default":"claude --continue"}}"#,
         )
         .expect("config");
 
@@ -1252,6 +1245,12 @@ mod workon_tests {
         assert_eq!(workon_build_command_in_dir("omx", &root, None), "CODEX_HOME=$PWD/.codex omx --direct");
         assert_eq!(workon_build_command_in_dir("unknown", &root, None), "claude --continue");
         assert_eq!(workon_build_command_in_dir("unknown", &root, Some("omx")), "CODEX_HOME=$PWD/.codex omx --direct");
+        // #761: workon now shares wake's resolver, so a glob entry reaches the
+        // agent name it was written for even when `-e` names an engine with no
+        // `commands` entry of its own...
+        assert_eq!(workon_build_command_in_dir("agent-1", &root, Some("codex")), "glob-agent");
+        // ...but with nothing per-agent to match, an explicit engine is still
+        // taken literally rather than replaced by `commands.default`.
         assert_eq!(workon_build_command_in_dir("unknown", &root, Some("codex")), "codex");
         let _ = std::fs::remove_dir_all(root);
     }
