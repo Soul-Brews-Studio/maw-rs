@@ -14,8 +14,10 @@ scripts/gate.sh full    # pre-merge bar — all 4 CI dimensions
 ```
 
 `full` must pass before any merge/promote (it wraps `cargo fmt --all --check`,
-`cargo test --workspace --locked`, `cargo clippy --workspace --all-targets --
--D warnings` on stable + 1.97.0, and the wasm-host subset). See
+`cargo test --workspace --locked --no-fail-fast`, `cargo clippy --workspace
+--all-targets -- -D warnings` on stable + 1.97.0, and the wasm-host subset).
+Test dimensions run `--no-fail-fast` (#796): one failing target must not mask
+the others. See
 `docs/guides/gating.md` for tiers, the golden warm cache, and merge-trains.
 
 ## Branches

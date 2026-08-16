@@ -14,11 +14,13 @@ scripts/gate.sh full    # before merge/promote: all 4 CI dimensions
 ```
 
 `gate.sh full` runs exactly: `cargo fmt --all -- --check`,
-`cargo test --workspace --locked`,
+`cargo test --workspace --locked --no-fail-fast`,
 `cargo clippy --workspace --all-targets -- -D warnings` (stable + the
 1.97.0 toolchain — CI's current stable), and the wasm-host subset
-(`cargo test -p maw-cli -p maw-plugin-manifest --features wasm-host --locked`
-plus its clippy). It warm-seeds an isolated `CARGO_TARGET_DIR` from the
+(`cargo test -p maw-cli -p maw-plugin-manifest --features wasm-host --locked
+--no-fail-fast` plus its clippy). Every test dimension carries
+`--no-fail-fast` (#796) so one red target cannot hide the rest — it changes
+what runs, never the exit code, so a failure still fails the gate. It warm-seeds an isolated `CARGO_TARGET_DIR` from the
 golden cache (`scripts/gate-cache-refresh.sh`) and locks the target dir so
 two gates can never share one. Leads amortize full gates over several PRs
 with `scripts/gate.sh batch <branch>...` (merge-train).

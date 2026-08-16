@@ -140,7 +140,10 @@ jobs:
           CARGO_BUILD_JOBS: 2
           CARGO_PROFILE_TEST_DEBUG: "0"
           CARGO_PROFILE_DEV_DEBUG: "0"
-        run: cargo test --workspace --locked
+        # --no-fail-fast: without it cargo halts at the FIRST failing test
+        # target, so a red CI run under-reports the true failure set and the
+        # next fix round trips on failures it never saw (#796).
+        run: cargo test --workspace --locked --no-fail-fast
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
@@ -261,7 +264,9 @@ jobs:
           # (ld terminated with signal 7 [Bus error]).
           CARGO_PROFILE_TEST_DEBUG: "0"
           CARGO_PROFILE_DEV_DEBUG: "0"
-        run: cargo test -p maw-cli -p maw-plugin-manifest --features wasm-host --locked
+        # --no-fail-fast: report every failing target in one run, not just the
+        # first (#796).
+        run: cargo test -p maw-cli -p maw-plugin-manifest --features wasm-host --locked --no-fail-fast
 
       - name: Clippy with wasm-host feature
         env:

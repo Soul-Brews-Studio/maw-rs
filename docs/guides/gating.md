@@ -25,9 +25,15 @@ these pass — `gate.sh full` runs exactly this set:
 | # | dimension | command |
 |---|---|---|
 | 1 | format | `cargo fmt --all -- --check` |
-| 2 | workspace tests | `cargo test --workspace --locked` |
+| 2 | workspace tests | `cargo test --workspace --locked --no-fail-fast` |
 | 3 | clippy, stable **and** `1.97.0` (CI installs `stable`, which is currently 1.97.0) | `cargo clippy --workspace --all-targets -- -D warnings` (×2 toolchains; a missing 1.97.0 **fails** the full gate unless `GATE_ALLOW_MISSING_197=1` accepts the gap explicitly) |
-| 4 | wasm-host subset | `cargo test -p maw-cli -p maw-plugin-manifest --features wasm-host --locked` + the matching clippy |
+| 4 | wasm-host subset | `cargo test -p maw-cli -p maw-plugin-manifest --features wasm-host --locked --no-fail-fast` + the matching clippy |
+
+Every test dimension runs with **`--no-fail-fast`** (#796). Without it cargo
+halts at the first failing test target, so a red run shows one failure and
+hides the rest — the fixer then discovers the next one only on the following
+round trip. `--no-fail-fast` changes *what runs*, never the exit code: cargo
+still exits non-zero if any test failed, so the gate still fails.
 
 The quick tier deliberately runs **less** — that is fine for iteration, but
 the full set must still run somewhere before anything is promoted: either

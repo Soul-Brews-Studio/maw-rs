@@ -18,6 +18,13 @@
 # Env overrides:
 #   GATE_TARGET_DIR   target dir (default <repo>/target-gate)
 #   MAW_GATE_CACHE    golden cache root (default ~/.maw/gate-cache)
+#
+# Every `cargo test` below passes --no-fail-fast on purpose (#796): without it
+# cargo stops at the FIRST failing test target, so one red target hides every
+# other one and the gate under-reports the true failure set — a fixer then
+# round-trips through failures the first run never printed. --no-fail-fast
+# changes only WHAT RUNS, not the exit code: cargo still exits non-zero when
+# any test failed, so run_step still trips and gate.sh still exits 1.
 set -u -o pipefail
 
 MODE="${1:-}"
@@ -161,7 +168,7 @@ quick_tests() {
     done <<<"$(affected_crates)"
     if [ "$wide" = 1 ]; then
         echo "quick: root Cargo.toml/Cargo.lock changed -> full workspace tests"
-        run_step "test (workspace: manifest changed)" cargo test --workspace --locked
+        run_step "test (workspace: manifest changed)" cargo test --workspace --locked --no-fail-fast
         return
     fi
     crates="$(echo "$crates" | tr ' ' '\n' | sort -u | tr '\n' ' ')"
@@ -171,7 +178,7 @@ quick_tests() {
     fi
     local pkgs=()
     for c in $crates; do pkgs+=(-p "$c"); done
-    run_step "test (affected:$crates)" cargo test "${pkgs[@]}"
+    run_step "test (affected:$crates)" cargo test "${pkgs[@]}" --no-fail-fast
 }
 
 # ---- tiers -------------------------------------------------------------------
@@ -190,7 +197,7 @@ gate_full() {
     acquire_lock
     warm_seed
     run_step "fmt --check" cargo fmt --all -- --check
-    run_step "test --workspace" cargo test --workspace --locked
+    run_step "test --workspace" cargo test --workspace --locked --no-fail-fast
     run_step "clippy (stable)" cargo clippy --workspace --all-targets -- -D warnings
     if rustup toolchain list 2>/dev/null | grep -q '^1\.97\.0'; then
         run_step "clippy (+1.97.0 = CI's current stable)" cargo +1.97.0 clippy --workspace --all-targets -- -D warnings
@@ -210,7 +217,7 @@ gate_full() {
         exit 4
     fi
     run_step "test (wasm-host subset)" \
-        cargo test -p maw-cli -p maw-plugin-manifest --features wasm-host --locked
+        cargo test -p maw-cli -p maw-plugin-manifest --features wasm-host --locked --no-fail-fast
     run_step "clippy (wasm-host subset)" \
         cargo clippy -p maw-cli -p maw-plugin-manifest --all-targets --features wasm-host --locked -- -D warnings
     summary
