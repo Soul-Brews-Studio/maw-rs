@@ -150,34 +150,8 @@ mod tests {
 
     static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    struct EnvGuard {
-        key: &'static str,
-        old: Option<std::ffi::OsString>,
-    }
-
-    impl EnvGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let old = std::env::var_os(key);
-            std::env::set_var(key, value);
-            Self { key, old }
-        }
-
-        fn remove(key: &'static str) -> Self {
-            let old = std::env::var_os(key);
-            std::env::remove_var(key);
-            Self { key, old }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            if let Some(old) = &self.old {
-                std::env::set_var(self.key, old);
-            } else {
-                std::env::remove_var(self.key);
-            }
-        }
-    }
+    // #757: was a private copy that serialized against nothing.
+    use crate::test_env::EnvVarGuard as EnvGuard;
 
     #[test]
     fn ws_lifecycle_matches_central_module_contract() {

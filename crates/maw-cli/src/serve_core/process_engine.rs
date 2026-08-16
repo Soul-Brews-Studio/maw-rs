@@ -590,16 +590,30 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
+    /// #757: holds the crate-wide env lock for its whole lifetime.
+    ///
+    /// Previously this mutated process-global env with no serialization,
+    /// because `core_impl`'s lock is a private fn in a private module and
+    /// `serve_core` is a sibling — unreachable, not merely unused. Owning the
+    /// guard rather than asking callers to take it first makes the protection
+    /// inherited: a test added next month cannot forget. The lock is
+    /// re-entrant per thread, so nesting two of these is safe.
     struct EnvGuard {
         key: &'static str,
         old: Option<std::ffi::OsString>,
+        _lock: crate::test_env::EnvLockGuard,
     }
 
     impl EnvGuard {
         fn set_os(key: &'static str, value: &std::ffi::OsStr) -> Self {
+            let lock = crate::test_env::env_test_lock();
             let old = std::env::var_os(key);
             std::env::set_var(key, value);
-            Self { key, old }
+            Self {
+                key,
+                old,
+                _lock: lock,
+            }
         }
 
         fn set_path(key: &'static str, value: &Path) -> Self {
