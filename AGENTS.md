@@ -15,10 +15,18 @@ scripts/gate.sh full    # before merge/promote: all 4 CI dimensions
 
 `gate.sh full` runs exactly: `cargo fmt --all -- --check`,
 `cargo test --workspace --locked --no-fail-fast`,
-`cargo clippy --workspace --all-targets -- -D warnings` (stable + the
-1.97.0 toolchain — CI's current stable), and the wasm-host subset
-(`cargo test -p maw-cli -p maw-plugin-manifest --features wasm-host --locked
---no-fail-fast` plus its clippy). Every test dimension carries
+`cargo clippy --workspace --all-targets -- -D warnings`, and the wasm-host
+subset (`cargo test -p maw-cli -p maw-plugin-manifest --features wasm-host
+--locked --no-fail-fast` plus its clippy).
+
+All of it runs on the toolchain `rust-toolchain.toml` pins — exact channel plus
+`targets = ["wasm32-unknown-unknown"]` — which every tier preflights before
+touching cargo, so a stale rustc or a missing wasm32 target is named up front
+instead of surfacing as a mystery lint or a failing plugin test (#823). Do not
+`rustup update` to fix a gate: edit the pin (one line, one reviewable diff, and
+CI follows), or set `GATE_ALLOW_TOOLCHAIN_DRIFT=1` to state the gap out loud.
+
+Every test dimension carries
 `--no-fail-fast` (#796) so one red target cannot hide the rest — it changes
 what runs, never the exit code, so a failure still fails the gate. It warm-seeds an isolated `CARGO_TARGET_DIR` from the
 golden cache (`scripts/gate-cache-refresh.sh`) and locks the target dir so
