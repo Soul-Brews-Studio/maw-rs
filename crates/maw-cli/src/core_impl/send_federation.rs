@@ -371,9 +371,19 @@ fn send_usage_error(command: &str, message: &str) -> CliOutput {
     }
 }
 
+// #787: the `default:` line used to read "write receiver inbox and inject
+// into the target pane". That describes maw-js, whose local branch persists
+// the receiver inbox before `sendKeys` (docs/reference/wire-protocol.md:74);
+// it was copied into the port along with the rest of the usage block and
+// never matched maw-rs. Neither route writes an inbox by default: the local
+// arm runs `send_local_message_with_audit` (tmux send-text + a sender-side
+// audit record) and the cross-node arm posts `inbox: args.inbox`, which
+// `serve_deliver_send` only hands to `serve_deliver_inbox` when the body
+// says `inbox: true`. Implementing the promise is #763; this only stops the
+// help from making it, and names both routes so neither looks durable.
 fn send_usage(command: &str) -> String {
     if command == "hey" {
-        return "usage: maw hey <target> <message> [--inbox] [--force deprecated] [--approve] [--trust]\n       maw hey <target> -f <file>   read message from file (bytes-through; no shell)\n       maw hey <target> -           read message from stdin\n  default: write receiver inbox and inject into the target pane\n  --inbox: write receiver inbox only; skip pane injection\n  --force: deprecated compatibility alias; delivery is already forced by default\n  target forms:\n    <oracle-window>              same-node window name (local-only)\n    local:<agent>                explicit same-node target\n    <session>:<window>[.<pane>]  paste a TARGET from maw ls -v\n    <node>:<session>             canonical cross-node form (window 1)\n    <node>:<session>:<window>    target a specific tmux window (#410)\n  e.g. maw hey mawjs-oracle \"hello from neo\"\n       maw hey local:mawjs \"hello from neo\"\n       maw hey phaith:01-hojo:3 \"hello hojo-hermes\"\n       run `maw locate <agent>` to enumerate across federation".to_owned();
+        return "usage: maw hey <target> <message> [--inbox] [--force deprecated] [--approve] [--trust]\n       maw hey <target> -f <file>   read message from file (bytes-through; no shell)\n       maw hey <target> -           read message from stdin\n  default: inject into the target pane only — no inbox is written on either\n           the local route or the cross-node one (#787)\n  --inbox: write receiver inbox only; skip pane injection\n  --force: deprecated compatibility alias; delivery is already forced by default\n  target forms:\n    <oracle-window>              same-node window name (local-only)\n    local:<agent>                explicit same-node target\n    <session>:<window>[.<pane>]  paste a TARGET from maw ls -v\n    <node>:<session>             canonical cross-node form (window 1)\n    <node>:<session>:<window>    target a specific tmux window (#410)\n  e.g. maw hey mawjs-oracle \"hello from neo\"\n       maw hey local:mawjs \"hello from neo\"\n       maw hey phaith:01-hojo:3 \"hello hojo-hermes\"\n       run `maw locate <agent>` to enumerate across federation".to_owned();
     }
     format!(
         "usage: maw-rs {command} <target> <message> [--inbox|--no-inbox] [--from <oracle:node>] [--approve] [--trust] [--dry-run]\n       maw-rs {command} <target> -f <file> | -   read message from file or stdin (no shell interpolation)"
