@@ -60,7 +60,12 @@ async fn native_send_posts_signed_api_send_to_configured_peer() {
     .await;
 
     assert_eq!(output.code, 0, "{}", output.stderr);
-    assert_eq!(output.stdout, "queued agent\n");
+    // #686 (landed via #802): a cross-node confirmation that echoes only the
+    // bare target is indistinguishable from a local delivery when session
+    // names collide across nodes, so the success line is prefixed with the
+    // node it actually resolved to. This test predates that and asserted the
+    // bare form -- the prefix is the intended behaviour, not a regression.
+    assert_eq!(output.stdout, "queued remote:agent\n");
 
     let captured = rx.await.expect("capture");
     assert_eq!(captured.method, "POST");
