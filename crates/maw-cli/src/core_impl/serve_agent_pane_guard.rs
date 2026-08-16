@@ -9,42 +9,14 @@
 /// #709: a bare session target resolves to a specific window/pane (often
 /// index 0) with no check that anything agent-shaped is actually there --
 /// window renames, pane replacement, or an agent closing leave `delivered`
-/// reporting success into a plain shell. Same keyword/semver-command
-/// heuristic as `agents_is_agent_pane` (#699/#690) — kept as a small local
-/// duplicate rather than reaching into `serve_core::modules::agent_routes`,
-/// since the two call sites (this file and the `/api/agents` listing) sit in
-/// different module trees.
+/// reporting success into a plain shell.
+///
+/// #813: the local keyword/semver duplicate that used to live here is gone --
+/// it had already drifted from the `/api/agents` copy (this one accepted
+/// `1.2.3.4` as a version, that one did not). Both now call the one shared
+/// `maw_tmux::is_agent_pane`.
 fn serve_pane_looks_like_agent(command: &str, title: &str) -> bool {
-    let command_lower = command.to_ascii_lowercase();
-    let title_lower = title.to_ascii_lowercase();
-    title_lower.contains("agent")
-        || title_lower.contains("oracle")
-        || title_lower.contains("codex")
-        || title_lower.contains("claude")
-        || command_lower.contains("codex")
-        || command_lower.contains("claude")
-        || serve_command_is_versioned_binary(command)
-}
-
-/// A live Claude Code pane reports its own version string as the pane
-/// command (e.g. `2.1.219`) rather than a process name.
-fn serve_command_is_versioned_binary(command: &str) -> bool {
-    let mut parts = command.split('.');
-    let Some(major) = parts.next() else {
-        return false;
-    };
-    let Some(minor) = parts.next() else {
-        return false;
-    };
-    let rest: Vec<&str> = parts.collect();
-    !major.is_empty()
-        && !minor.is_empty()
-        && !rest.is_empty()
-        && major.bytes().all(|byte| byte.is_ascii_digit())
-        && minor.bytes().all(|byte| byte.is_ascii_digit())
-        && rest
-            .iter()
-            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+    maw_tmux::is_agent_pane(Some(command), Some(title))
 }
 
 /// `resolved` (from `resolve_route_target`) is `session:windowIndex` -- but

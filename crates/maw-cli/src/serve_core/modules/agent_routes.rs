@@ -116,40 +116,14 @@ fn agents_render(panes: &[ServecoreAgentPane], node: Option<&str>, all: bool) ->
     agents
 }
 
-pub(crate) fn agents_is_agent_pane(pane: &ServecoreAgentPane) -> bool {
-    let title = pane.title.to_ascii_lowercase();
-    let command = pane.command.to_ascii_lowercase();
-    title.contains("agent")
-        || title.contains("oracle")
-        || title.contains("codex")
-        || title.contains("claude")
-        || command.contains("codex")
-        || command.contains("claude")
-        || agents_command_is_versioned_binary(&pane.command)
-}
-
 /// A live Claude Code pane reports its own version string as the tmux pane
 /// command (e.g. `2.1.219`), not a process name — the title carries "Claude
 /// Code" only while idle and switches to a task-status line while busy (#520
-/// gotcha). Recognize the shape so a busy pane is not dropped for lacking any
-/// title/command keyword.
-fn agents_command_is_versioned_binary(command: &str) -> bool {
-    let mut parts = command.split('.');
-    let Some(major) = parts.next() else {
-        return false;
-    };
-    let Some(minor) = parts.next() else {
-        return false;
-    };
-    let rest: Vec<&str> = parts.collect();
-    !major.is_empty()
-        && !minor.is_empty()
-        && !rest.is_empty()
-        && major.bytes().all(|byte| byte.is_ascii_digit())
-        && minor.bytes().all(|byte| byte.is_ascii_digit())
-        && rest
-            .iter()
-            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+/// gotcha). #813 moved that shape check, and the title keywords, into the one
+/// shared `maw_tmux::is_agent_pane` so this listing and the `hey` guards can
+/// no longer drift apart.
+pub(crate) fn agents_is_agent_pane(pane: &ServecoreAgentPane) -> bool {
+    maw_tmux::is_agent_pane(Some(&pane.command), Some(&pane.title))
 }
 
 fn agents_entry(pane: &ServecoreAgentPane, node: Option<&str>) -> AgentsEntry {
@@ -226,16 +200,20 @@ mod tests {
         assert_eq!(agents_render(&panes, Some("node-a"), true).len(), 2);
     }
 
+    /// #813: the local `agents_command_is_versioned_binary` is gone; the same
+    /// property now belongs to the shared version arm. Every input and every
+    /// expected verdict below is unchanged -- only the function under test
+    /// moved, so this keeps guarding the shape from its new home.
     #[test]
     fn agents_command_is_versioned_binary_matches_semver_only() {
-        assert!(agents_command_is_versioned_binary("2.1.219"));
-        assert!(agents_command_is_versioned_binary("10.0.1"));
-        assert!(!agents_command_is_versioned_binary("codex"));
-        assert!(!agents_command_is_versioned_binary("bash"));
-        assert!(!agents_command_is_versioned_binary("2.1"));
-        assert!(!agents_command_is_versioned_binary(""));
-        assert!(!agents_command_is_versioned_binary("2..1"));
-        assert!(!agents_command_is_versioned_binary("v2.1.219"));
+        assert!(maw_tmux::is_claude_like_pane(Some("2.1.219")));
+        assert!(maw_tmux::is_claude_like_pane(Some("10.0.1")));
+        assert!(!maw_tmux::is_claude_like_pane(Some("codex")));
+        assert!(!maw_tmux::is_claude_like_pane(Some("bash")));
+        assert!(!maw_tmux::is_claude_like_pane(Some("2.1")));
+        assert!(!maw_tmux::is_claude_like_pane(Some("")));
+        assert!(!maw_tmux::is_claude_like_pane(Some("2..1")));
+        assert!(!maw_tmux::is_claude_like_pane(Some("v2.1.219")));
     }
 
     #[test]

@@ -122,6 +122,13 @@ fn has_non_space_after(bytes: &[u8]) -> bool {
 }
 
 /// Detect Claude Code or version-shaped Claude wrapper pane commands.
+///
+/// #813 SAFETY EXCLUSION -- deliberately left narrow. Its callers
+/// (`send_command`, `host_tmux` send, orphan tagging) use it as a REFUSE
+/// guard: matching means "do not type into this pane". Widening it to every
+/// agent engine would change what those guards protect, and their error text
+/// names "claude-like" specifically. `is_agent_pane_command` composes this as
+/// its leading arm instead -- see `agent_pane_heuristic.rs`.
 #[must_use]
 pub fn is_claude_like_pane(pane_current_command: Option<&str>) -> bool {
     let Some(command) = pane_current_command else {

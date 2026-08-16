@@ -275,15 +275,13 @@ fn hey_peers_json_fallback_route(
 // warns rather than refuses, but it turns a silent misroute into a visible
 // one.
 
+// #813: this was the reported divergence. The copy here checked the title's
+// four keywords plus `codex`/`claude` in the command -- but a live Claude Code
+// pane reports its VERSION (`2.1.233`) as the command and its current task
+// line as the title, so on npm-launched hosts this warned at 7 of 7 real agent
+// panes. Now delegated to the one shared predicate.
 fn route_pane_looks_like_agent(command: &str, title: &str) -> bool {
-    let command = command.to_ascii_lowercase();
-    let title = title.to_ascii_lowercase();
-    title.contains("agent")
-        || title.contains("oracle")
-        || title.contains("codex")
-        || title.contains("claude")
-        || command.contains("codex")
-        || command.contains("claude")
+    maw_tmux::is_agent_pane(Some(command), Some(title))
 }
 
 fn warn_if_local_target_pane_is_not_agent<R: maw_tmux::TmuxRunner>(

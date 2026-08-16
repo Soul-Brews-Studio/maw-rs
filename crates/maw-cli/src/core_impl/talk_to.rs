@@ -250,9 +250,14 @@ fn talkto_validate_tmux_target(value: &str) -> Result<(), String> {
     Ok(())
 }
 
+// #813: this one REFUSES rather than warns, so a false negative is a broken
+// command, not a stray line of output -- a live Claude pane reporting its
+// version (`2.1.233`) made `maw talk-to` refuse to deliver at all. Shared
+// predicate now; note it also narrows `node` from a substring to argv0, so
+// `nodemon` is no longer mistaken for an agent (already pinned by
+// `agentstatus_is_agent_command`'s own test).
 fn talkto_is_agent_command(command: &str) -> bool {
-    let lower = command.to_ascii_lowercase();
-    lower.contains("claude") || lower.contains("codex") || lower.contains("node")
+    maw_tmux::is_agent_pane_command(Some(command))
 }
 
 fn talkto_append_log(to: &str, target: &str, message: &str, thread: Option<&TalktoThreadResult>) -> Result<(), String> {
