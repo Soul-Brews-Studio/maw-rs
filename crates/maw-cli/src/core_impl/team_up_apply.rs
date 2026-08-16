@@ -32,6 +32,8 @@ fn team_t5b_exec_up(charter: &TeamCharter122, opts: &TeamT3Options124) -> Result
     let mut actions = Vec::new();
     for item in &roster {
         if item.state == "skipped" || item.state == "live" { actions.push(team_t5b_action(item, "skip")); continue; }
+        // Must come before the --force branch: force may not resurrect a pane we never owned.
+        if item.state == TEAM_ADOPTED_GONE { actions.push(team_t5b_action(item, TEAM_ADOPTED_GONE_ACTION)); continue; }
         if team_t3_has(opts, TEAM_T3_FORCE) { team_t5b_kill_window(&mut runner, item, &session)?; }
         if item.state == "dead" && !team_t3_has(opts, TEAM_T3_FORCE) { team_t5b_resume_pane(&mut runner, item, opts, &session)?; actions.push(team_t5b_action(item, "resume in place")); }
         else { team_t5b_wake_window(&mut runner, item, opts, &session)?; actions.push(team_t5b_action(item, "fresh wake")); }
@@ -57,7 +59,7 @@ fn team_t5b_exec_bring(team: &str, opts: &TeamT3Options124) -> Result<String, St
 fn team_t5b_exec_apply(charter: &TeamCharter122, opts: &TeamT3Options124) -> Result<String, String> {
     let session = team_t3_session(charter, opts);
     team_t5b_validate_session(&session)?;
-    let roster = team_t3_roster(charter, opts, &session, |item, _| match item.state.as_str() { "missing" => "spawn member".to_owned(), "live" => "skip live".to_owned(), "dead" => "skip dead member (team up can resume)".to_owned(), _ => "skip".to_owned() });
+    let roster = team_t3_roster(charter, opts, &session, |item, _| match item.state.as_str() { "missing" => "spawn member".to_owned(), "live" => "skip live".to_owned(), "dead" => "skip dead member (team up can resume)".to_owned(), TEAM_ADOPTED_GONE => TEAM_ADOPTED_GONE_ACTION.to_owned(), _ => "skip".to_owned() });
     let mut runner = TeamT5bTmuxRunner128::new();
     let mut actions = Vec::new();
     for item in &roster {

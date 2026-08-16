@@ -1,6 +1,6 @@
 const DISPATCH_122: &[DispatcherEntry] = &[];
 
-const TEAM_USAGE: &str = "usage: maw team <create|new|list|ls|status|tasks|oracle-members|members|lives|history|plan|preflight|check|load|spawn|spawn-from|send|msg|broadcast|inbox|invite|up|bring|apply|reassign|liveness|down|remove|delete|rm|prune|gc|shutdown|resume|enter|send-enter|add|task|done|assign>";
+const TEAM_USAGE: &str = "usage: maw team <create|new|list|ls|status|tasks|oracle-members|members|lives|history|plan|preflight|check|load|spawn|spawn-from|send|msg|broadcast|inbox|invite|adopt|release|up|bring|apply|reassign|liveness|down|remove|delete|rm|prune|gc|shutdown|resume|enter|send-enter|add|task|done|assign>";
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -94,6 +94,9 @@ struct TeamCharterMember122 {
     worktree: Option<String>,
     worktree_opt_out: bool,
     branch: Option<String>,
+    /// Registered by `maw team adopt` from an already-running pane/session.
+    /// Adopted members are never spawned and must be dropped with `team release`.
+    adopted: bool,
 }
 
 fn team_run_command(argv: &[String]) -> CliOutput {
@@ -131,6 +134,8 @@ fn team_run(argv: &[String]) -> Result<String, String> {
         "broadcast" => team_broadcast(argv),
         "inbox" => team_inbox(argv),
         "invite" => team_invite(argv),
+        "adopt" => team_adopt(argv),
+        "release" => team_release(argv),
         "up" => team_t5b_up(argv),
         "bring" => team_t5b_bring(argv),
         "apply" => team_t5b_apply(argv),
@@ -473,7 +478,7 @@ fn team_json_scalar_to_string(value: &serde_json::Value) -> Option<String> {
 }
 
 fn team_member_from_json(value: &serde_json::Value) -> TeamCharterMember122 {
-    TeamCharterMember122 { role: value["role"].as_str().unwrap_or("").to_owned(), name: value["name"].as_str().map(str::to_owned), model: value["model"].as_str().map(str::to_owned), cwd: value["cwd"].as_str().map(str::to_owned), engine: value["engine"].as_str().map(str::to_owned), target: value["target"].as_str().map(str::to_owned), prompt: value["prompt"].as_str().map(str::to_owned), worktree: team_member_worktree_from_json(value), worktree_opt_out: team_member_worktree_opt_out_from_json(value), branch: value["branch"].as_str().map(str::to_owned) }
+    TeamCharterMember122 { role: value["role"].as_str().unwrap_or("").to_owned(), name: value["name"].as_str().map(str::to_owned), model: value["model"].as_str().map(str::to_owned), cwd: value["cwd"].as_str().map(str::to_owned), engine: value["engine"].as_str().map(str::to_owned), target: value["target"].as_str().map(str::to_owned), prompt: value["prompt"].as_str().map(str::to_owned), worktree: team_member_worktree_from_json(value), worktree_opt_out: team_member_worktree_opt_out_from_json(value), branch: value["branch"].as_str().map(str::to_owned), adopted: value["adopted"].as_bool().unwrap_or(false) }
 }
 
 fn team_member_worktree_from_json(value: &serde_json::Value) -> Option<String> {
@@ -590,6 +595,10 @@ fn team_yaml_line(line: &str, charter: &mut TeamCharter122, current: &mut Option
 
 fn team_yaml_member_line(line: &str, member: &mut TeamCharterMember122) -> Option<usize> {
     let trimmed = line.trim_start();
+    if let Some(rest) = trimmed.strip_prefix("adopted:") {
+        member.adopted = team_unquote(rest).eq_ignore_ascii_case("true");
+        return None;
+    }
     if let Some(rest) = trimmed.strip_prefix("worktree:") {
         let value = team_unquote(rest);
         member.worktree_opt_out = team_worktree_literal_is_opt_out(&value);

@@ -7,6 +7,11 @@ struct TeamPane124 {
     pane_id: String,
 }
 
+/// State for a member that was adopted (never spawned by us) whose pane is no longer live.
+/// Every apply path must skip it: we may not spawn, resume, or tear down what we did not start.
+const TEAM_ADOPTED_GONE: &str = "adopted-gone";
+const TEAM_ADOPTED_GONE_ACTION: &str = "skip adopted member (release, then re-adopt)";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TeamRosterItem124 {
     role: String,
@@ -242,20 +247,20 @@ fn team_t3_classify(member: &TeamCharterMember122, opts: &TeamT3Options124, sess
     if !opts.only.is_empty() && !team_t3_matches_selectors(member, &opts.only, &identity, &worktree) { return TeamRosterItem124 { role, identity, engine, engine_command: None, worktree, worktree_opt_out, state: "skipped".to_owned(), action: String::new(), pane: None }; }
     if !opts.members.is_empty() && !opts.members.iter().any(|item| item == &member.role) { return TeamRosterItem124 { role, identity, engine, engine_command: None, worktree, worktree_opt_out, state: "skipped".to_owned(), action: String::new(), pane: None }; }
     let candidates = team_t3_window_candidates(member, &identity, &worktree);
+    // alpha's matcher helper (#829 window-suffix handling) + the PR's adopted-pane rule.
+    // Both are wanted: the helper is the shared predicate, and an adopted member's pane
+    // was never ours to create — once gone, `team up` must not treat it like a member we
+    // failed to spawn, or a fresh wake would start a second oracle behind the owner's back.
     let pane = panes.iter().find(|pane| pane.session == session && candidates.iter().any(|candidate| team_t3_window_matches_candidate(&pane.window, candidate))).cloned();
-    let state = pane.as_ref().map_or("missing", |p| if team_t3_is_live_command(&p.command) { "live" } else { "dead" }).to_owned();
+    let mut state = pane.as_ref().map_or("missing", |p| if team_t3_is_live_command(&p.command) { "live" } else { "dead" }).to_owned();
+    if member.adopted && state != "live" { TEAM_ADOPTED_GONE.clone_into(&mut state); }
     TeamRosterItem124 { role, identity, engine, engine_command: None, worktree, worktree_opt_out, state, action: String::new(), pane }
 }
 
-// #785 sub-bug B: `team up` and `team down` both classify panes through this
-// same predicate (via `team_t3_classify`), but a member whose charter
-// role/name is bare can end up with a live window named `<role>-oracle` --
-// `wake`'s own oracle-detection can preserve or land on that suffixed name
-// (e.g. reusing an existing registry window) even though the charter never
-// asked for it. Treat `window` and `window` with any trailing `-oracle`
-// stripped as the same identity, symmetrically, so up's own liveness check
-// and down's target lookup agree on what a member's window is called
-// without requiring a manual `tmux rename-window` in between.
+// A member's window may be named `<identity>` or `<identity>-oracle` depending on who
+// asked for it. Treat `window` and `window` with any trailing `-oracle` stripped as the
+// same identity, symmetrically, so up's own liveness check and down's target lookup agree
+// on what a member's window is called without requiring a manual `tmux rename-window`.
 fn team_t3_window_matches_candidate(window: &str, candidate: &str) -> bool {
     window == candidate || window.trim_end_matches("-oracle") == candidate || window.ends_with(&format!("-{candidate}"))
 }
@@ -274,6 +279,7 @@ fn team_t3_window_candidates(member: &TeamCharterMember122, identity: &str, work
 
 fn team_t3_up_action(item: &TeamRosterItem124, opts: &TeamT3Options124) -> String {
     if item.state == "skipped" { return "skip (selector)".to_owned(); }
+    if item.state == TEAM_ADOPTED_GONE { return TEAM_ADOPTED_GONE_ACTION.to_owned(); }
     let wt = if item.worktree_opt_out { String::new() } else { format!(" --wt {}", item.worktree) };
     if team_t3_has(opts, TEAM_T3_FORCE) { return format!("would force fresh wake{wt} -e {} --session {}", item.engine, opts.session.as_deref().unwrap_or("<team>")); }
     match item.state.as_str() {

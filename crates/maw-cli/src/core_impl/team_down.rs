@@ -124,6 +124,11 @@ fn team_down_keep_reason(member: &TeamCharterMember122, item: &TeamRosterItem124
     if !include_lead && matches!(member.role.as_str(), "lead" | "bridge") {
         return Some("lead".to_owned());
     }
+    // `team down` runs `maw done` on every live member. An adopted member's pane belongs to
+    // whoever started it, so tearing the team down must never kill it — not even with --all.
+    if member.adopted {
+        return Some("adopted".to_owned());
+    }
     if team_down_matches_keep(member, keep) {
         return Some("--keep".to_owned());
     }
