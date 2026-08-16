@@ -7,7 +7,12 @@ GITHUB_RELEASES="https://github.com/$REPO/releases"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 MAW_VERSION="${MAW_VERSION:-}"
 MAW_CHANNEL="${MAW_CHANNEL:-alpha}"
+MAW_LIBC="${MAW_LIBC:-}"
 MAW_ADD_TO_PATH="${MAW_ADD_TO_PATH:-0}"
+# Glibc loader/libc paths probed when `ldd --version` gives no answer. Space
+# separated; overridable only so scripts/test-install-resolve.sh can simulate a
+# host with no glibc. Mirrors UPDATE_GLIBC_LOADER_PATHS in update_plan.rs.
+MAW_LIBC_LOADER_PATHS="${MAW_LIBC_LOADER_PATHS:-/lib/x86_64-linux-gnu/libc.so.6 /usr/lib/x86_64-linux-gnu/libc.so.6 /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-x86-64.so.2 /usr/lib64/libc.so.6}"
 
 say() {
   printf '%s\n' "$*"
@@ -35,6 +40,9 @@ Usage:
 Environment:
   MAW_VERSION   Release tag to install (overrides channel resolution)
   MAW_CHANNEL   Release channel: alpha or stable (default: alpha)
+  MAW_LIBC      Linux C library to install: gnu or musl (default: autodetect)
+                gnu  = dynamic, needs a glibc host, resolves .local/mDNS
+                musl = static, portable, CANNOT resolve .local/mDNS
   MAW_ADD_TO_PATH
                 Set to 1 to append INSTALL_DIR to ~/.profile (default: 0)
   INSTALL_DIR   Install directory (default: ~/.local/bin)
@@ -167,6 +175,57 @@ resolve_version() {
   esac
 }
 
+# Which Linux C library this host runs: prints "gnu" or "musl".
+#
+# Two Linux x86_64 builds ship per release and they are NOT interchangeable.
+# The musl build is static and runs on any distro, but musl has no glibc NSS,
+# so it cannot load mdns4_minimal from /etc/nsswitch.conf and CANNOT resolve
+# *.local names at all (#812) — which breaks every cross-machine peer on a
+# .local hostname. The gnu build needs a glibc host and resolves .local through
+# the system resolver.
+#
+# Rules, in order (mirrored by update_classify_libc in the Rust updater so
+# `maw update` and install.sh always agree):
+#   1. MAW_LIBC=gnu|musl forces the answer.
+#   2. `ldd --version` naming musl  -> musl  (musl's own ldd says "musl";
+#      it writes to stderr and exits nonzero, so both streams are captured).
+#   3. `ldd --version` naming GNU/GLIBC -> gnu.
+#   4. a glibc dynamic loader present on disk -> gnu.
+#   5. anything else -> musl. Ambiguity always degrades to the static build:
+#      a binary that runs beats a dynamic one that does not.
+detect_linux_libc() {
+  case "${MAW_LIBC:-}" in
+    gnu|glibc) printf 'gnu\n'; return ;;
+    musl) printf 'musl\n'; return ;;
+    '') ;;
+    *) warn "ignoring unknown MAW_LIBC=\"$MAW_LIBC\" (expected gnu or musl)" ;;
+  esac
+
+  ldd_out=$(ldd --version 2>&1 || true)
+  case "$ldd_out" in
+    *musl*|*MUSL*) printf 'musl\n'; return ;;
+    *GLIBC*|*glibc*|*"GNU libc"*|*"GNU C Library"*) printf 'gnu\n'; return ;;
+    *) ;;
+  esac
+
+  # Split on spaces by hand: zsh does not word-split unquoted expansions, and
+  # a `while read` loop would run in a subshell where `return` cannot answer.
+  remaining=$MAW_LIBC_LOADER_PATHS
+  while [ -n "$remaining" ]; do
+    candidate=${remaining%% *}
+    case "$remaining" in
+      *' '*) remaining=${remaining#* } ;;
+      *) remaining= ;;
+    esac
+    if [ -n "$candidate" ] && [ -e "$candidate" ]; then
+      printf 'gnu\n'
+      return
+    fi
+  done
+
+  printf 'musl\n'
+}
+
 detect_platform() {
   os=$(uname -s 2>/dev/null || printf unknown)
   arch=$(uname -m 2>/dev/null || printf unknown)
@@ -175,7 +234,7 @@ detect_platform() {
       printf '%s\n' "maw-rs-macos-arm64"
       ;;
     Linux:x86_64|Linux:amd64)
-      printf '%s\n' "maw-rs-linux-x86_64-musl"
+      printf '%s\n' "maw-rs-linux-x86_64-$(detect_linux_libc)"
       ;;
     *)
       die "no prebuilt binary for $os/$arch; build from source"
@@ -220,6 +279,39 @@ download_and_verify() {
   chmod 755 "$bin"
   VERIFIED_HASH=$actual
   DOWNLOADED_BIN=$bin
+}
+
+# Can this host actually execute the downloaded binary?
+#
+# The gnu asset is dynamic, so it needs a glibc at least as new as the one CI
+# built it against. Rather than hardcode a floor that silently drifts every
+# time the CI runner image moves, just run the thing once: an empirical answer
+# never goes stale.
+binary_runs_here() {
+  "$1" --version >/dev/null 2>&1
+}
+
+# gnu chosen but unrunnable (glibc too old) -> re-download the static musl
+# asset, which runs anywhere. Reads and updates the globals `asset` and
+# `DOWNLOADED_BIN` in place (no subshell: a command substitution would throw
+# the new download away). Only ever downgrades gnu -> musl, so macOS and musl
+# installs behave exactly as they did before.
+fallback_if_unrunnable() {
+  fallback_tag=$1
+  fallback_tmpdir=$2
+  case "$asset" in
+    *-gnu) ;;
+    *) return 0 ;;
+  esac
+  if binary_runs_here "$DOWNLOADED_BIN"; then
+    return 0
+  fi
+  warn "the glibc build will not start on this host (glibc older than the build's?)"
+  warn "falling back to the static musl build — note it CANNOT resolve .local/mDNS names"
+  asset=maw-rs-linux-x86_64-musl
+  download_and_verify "$fallback_tag" "$asset" "$fallback_tmpdir"
+  binary_runs_here "$DOWNLOADED_BIN" ||
+    die "neither Linux asset runs on this host; build from source"
 }
 
 backup_path() {
@@ -296,8 +388,19 @@ main() {
   asset=$(detect_platform)
   say "maw-rs installer"
   say "platform asset: $asset"
+  case "$asset" in
+    *-gnu)
+      say "  gnu build: dynamic (glibc host), resolves .local/mDNS via the system resolver"
+      ;;
+    *-musl)
+      say "  musl build: static and portable, but CANNOT resolve .local/mDNS names"
+      say "  on a glibc host run again with MAW_LIBC=gnu to get the dynamic build"
+      ;;
+    *) ;;
+  esac
   say "version: $tag"
   download_and_verify "$tag" "$asset" "$tmpdir"
+  fallback_if_unrunnable "$tag" "$tmpdir"
   install_binary "$DOWNLOADED_BIN"
   post_install
 }

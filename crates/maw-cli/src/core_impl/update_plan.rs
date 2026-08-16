@@ -42,6 +42,21 @@ enum UpdateCompare {
     LocalDev,
 }
 
+/// Which Linux C library the *host* runs — decides which Linux asset to fetch.
+///
+/// Two Linux binaries ship per release and they are NOT interchangeable:
+/// the musl build is static and runs anywhere, but musl has no glibc NSS, so
+/// it cannot load `mdns4_minimal` from `/etc/nsswitch.conf` and therefore
+/// cannot resolve `*.local` names at all (#812). The gnu build needs a glibc
+/// host but resolves `.local` through the system resolver. Prefer gnu when the
+/// host is provably glibc; fall back to musl whenever the evidence is unclear,
+/// because a static binary that runs beats a dynamic one that does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UpdateLibc {
+    Gnu,
+    Musl,
+}
+
 /// Channel inference from the running build version: hyphenated = alpha, else stable.
 fn update_infer_channel(version: &str) -> UpdateChannel {
     if version.contains('-') {
@@ -185,14 +200,67 @@ fn update_pick_latest_tag(tags: &[String], channel: UpdateChannel) -> Option<Upd
         .max_by_key(|info| (info.base, info.alpha_n))
 }
 
-/// Release asset name for the current platform; only two prebuilt targets exist.
-fn update_asset_for_platform(os: &str, arch: &str) -> Option<&'static str> {
+/// Release asset name for a platform. Linux ships two `x86_64` builds, so the
+/// host libc (see [`UpdateLibc`]) picks between them; other platforms ignore it.
+fn update_asset_for_platform(os: &str, arch: &str, libc: UpdateLibc) -> Option<&'static str> {
     match (os, arch) {
         ("macos", "aarch64") => Some("maw-rs-macos-arm64"),
-        ("linux", "x86_64") => Some("maw-rs-linux-x86_64-musl"),
+        ("linux", "x86_64") => Some(match libc {
+            UpdateLibc::Gnu => "maw-rs-linux-x86_64-gnu",
+            UpdateLibc::Musl => "maw-rs-linux-x86_64-musl",
+        }),
         _ => None,
     }
 }
+
+/// An explicit `MAW_LIBC` override, if it names a libc we ship.
+///
+/// Same variable install.sh honors, so both installers can be forced the same
+/// way. An unset or unrecognized value means "decide from evidence".
+fn update_libc_from_override(value: Option<&str>) -> Option<UpdateLibc> {
+    match value?.trim().to_ascii_lowercase().as_str() {
+        "gnu" | "glibc" => Some(UpdateLibc::Gnu),
+        "musl" => Some(UpdateLibc::Musl),
+        _ => None,
+    }
+}
+
+/// Decide the host libc from gathered evidence. Pure: the caller runs `ldd`
+/// and stats the loader path, this only judges what came back.
+///
+/// Mirrors `install.sh`'s `detect_linux_libc()` rule for rule — the installer
+/// and `maw update` must never disagree about which asset a host gets.
+///
+///  1. `ldd --version` naming musl wins outright (musl's own ldd says "musl").
+///  2. otherwise `ldd --version` naming GNU/GLIBC means glibc.
+///  3. otherwise a glibc dynamic loader on disk means glibc.
+///  4. otherwise musl — the safe default when nothing is provable.
+fn update_classify_libc(ldd_version_output: Option<&str>, glibc_loader_present: bool) -> UpdateLibc {
+    if let Some(text) = ldd_version_output {
+        let lower = text.to_ascii_lowercase();
+        if lower.contains("musl") {
+            return UpdateLibc::Musl;
+        }
+        if lower.contains("gnu libc") || lower.contains("glibc") || lower.contains("gnu c library") {
+            return UpdateLibc::Gnu;
+        }
+    }
+    if glibc_loader_present {
+        UpdateLibc::Gnu
+    } else {
+        UpdateLibc::Musl
+    }
+}
+
+/// Glibc loader/libc paths probed when `ldd --version` gives no answer.
+/// Kept beside the classifier so install.sh and `maw update` probe the same set.
+const UPDATE_GLIBC_LOADER_PATHS: &[&str] = &[
+    "/lib/x86_64-linux-gnu/libc.so.6",
+    "/usr/lib/x86_64-linux-gnu/libc.so.6",
+    "/lib64/ld-linux-x86-64.so.2",
+    "/lib/ld-linux-x86-64.so.2",
+    "/usr/lib64/libc.so.6",
+];
 
 fn update_download_url(tag: &str, asset: &str) -> String {
     format!("https://github.com/{UPDATE_REPO}/releases/download/{tag}/{asset}")
@@ -316,14 +384,66 @@ mod update_plan_tests {
 
     #[test]
     fn update_asset_selection_per_platform() {
-        assert_eq!(update_asset_for_platform("macos", "aarch64"), Some("maw-rs-macos-arm64"));
-        assert_eq!(update_asset_for_platform("linux", "x86_64"), Some("maw-rs-linux-x86_64-musl"));
-        assert_eq!(update_asset_for_platform("windows", "x86_64"), None);
-        assert_eq!(update_asset_for_platform("linux", "aarch64"), None);
+        for libc in [UpdateLibc::Gnu, UpdateLibc::Musl] {
+            assert_eq!(update_asset_for_platform("macos", "aarch64", libc), Some("maw-rs-macos-arm64"));
+            assert_eq!(update_asset_for_platform("windows", "x86_64", libc), None);
+            assert_eq!(update_asset_for_platform("linux", "aarch64", libc), None);
+        }
+        // the only place libc matters: two Linux x86_64 builds ship per release
+        assert_eq!(
+            update_asset_for_platform("linux", "x86_64", UpdateLibc::Gnu),
+            Some("maw-rs-linux-x86_64-gnu")
+        );
+        assert_eq!(
+            update_asset_for_platform("linux", "x86_64", UpdateLibc::Musl),
+            Some("maw-rs-linux-x86_64-musl")
+        );
         assert_eq!(
             update_download_url("v26.7.16", "maw-rs-macos-arm64"),
             "https://github.com/Soul-Brews-Studio/maw-rs/releases/download/v26.7.16/maw-rs-macos-arm64"
         );
+    }
+
+    #[test]
+    fn update_libc_classification_prefers_gnu_only_on_proof() {
+        // real `ldd --version` first lines, glibc and musl
+        let glibc = "ldd (Ubuntu GLIBC 2.39-0ubuntu8.8) 2.39\nCopyright (C) 2024 Free Software Foundation, Inc.";
+        let debian = "ldd (Debian GNU libc 2.36-9) 2.36";
+        let musl = "musl libc (x86_64)\nVersion 1.2.5\nDynamic Program Loader";
+        assert_eq!(update_classify_libc(Some(glibc), false), UpdateLibc::Gnu);
+        assert_eq!(update_classify_libc(Some(debian), false), UpdateLibc::Gnu);
+        assert_eq!(update_classify_libc(Some(musl), false), UpdateLibc::Musl);
+
+        // musl wins even when a glibc loader is also on disk (gcompat / mixed host):
+        // a musl ldd is proof the host is musl, and musl is the safe answer anyway
+        assert_eq!(update_classify_libc(Some(musl), true), UpdateLibc::Musl);
+
+        // no ldd at all: the loader probe decides, and absence means musl
+        assert_eq!(update_classify_libc(None, true), UpdateLibc::Gnu);
+        assert_eq!(update_classify_libc(None, false), UpdateLibc::Musl);
+
+        // unrecognizable ldd output is ambiguous, never a reason to pick gnu
+        assert_eq!(update_classify_libc(Some("ldd: unrecognized option"), false), UpdateLibc::Musl);
+        assert_eq!(update_classify_libc(Some(""), false), UpdateLibc::Musl);
+        assert_eq!(update_classify_libc(Some("ldd: unrecognized option"), true), UpdateLibc::Gnu);
+    }
+
+    #[test]
+    fn update_libc_override_accepts_only_shipped_names() {
+        assert_eq!(update_libc_from_override(Some("gnu")), Some(UpdateLibc::Gnu));
+        assert_eq!(update_libc_from_override(Some("glibc")), Some(UpdateLibc::Gnu));
+        assert_eq!(update_libc_from_override(Some(" MUSL \n")), Some(UpdateLibc::Musl));
+        assert_eq!(update_libc_from_override(Some("uclibc")), None);
+        assert_eq!(update_libc_from_override(Some("")), None);
+        assert_eq!(update_libc_from_override(None), None);
+    }
+
+    #[test]
+    fn update_glibc_loader_paths_are_absolute_and_nonempty() {
+        assert!(!UPDATE_GLIBC_LOADER_PATHS.is_empty());
+        for path in UPDATE_GLIBC_LOADER_PATHS {
+            assert!(path.starts_with('/'), "loader probe path must be absolute: {path}");
+        }
     }
 
     #[test]

@@ -97,4 +97,147 @@ assert_eq "" "$already_output" "already-on-PATH no-op output"
   exit 1
 }
 
-printf 'install resolve_version tests: ok\n'
+# ---- Linux libc selection (#812) --------------------------------------------
+# A musl binary cannot resolve *.local (no glibc NSS), so prefer gnu when glibc
+# is PROVEN and degrade to musl whenever it is not. These cases mirror
+# update_classify_libc() in crates/maw-cli/src/core_impl/update_plan.rs — the
+# installer and `maw update` must never disagree about which asset a host gets.
+
+# shellcheck disable=SC2034
+MAW_LIBC=gnu
+assert_eq gnu "$(detect_linux_libc)" "MAW_LIBC=gnu forces gnu"
+# shellcheck disable=SC2034
+MAW_LIBC=glibc
+assert_eq gnu "$(detect_linux_libc)" "MAW_LIBC=glibc forces gnu"
+# shellcheck disable=SC2034
+MAW_LIBC=musl
+assert_eq musl "$(detect_linux_libc)" "MAW_LIBC=musl forces musl"
+# shellcheck disable=SC2034
+MAW_LIBC=
+
+# glibc's ldd answers on stdout
+# shellcheck disable=SC2329
+ldd() {
+  printf 'ldd (Ubuntu GLIBC 2.39-0ubuntu8.8) 2.39\n'
+}
+assert_eq gnu "$(detect_linux_libc)" "glibc ldd -> gnu"
+
+# shellcheck disable=SC2329
+ldd() {
+  printf 'ldd (Debian GNU libc 2.36-9) 2.36\n'
+}
+assert_eq gnu "$(detect_linux_libc)" "Debian GNU libc ldd -> gnu"
+
+# musl's ldd writes to stderr and exits nonzero — still proof, and it wins even
+# when a glibc loader is also on disk (gcompat hosts)
+# shellcheck disable=SC2329
+ldd() {
+  printf 'musl libc (x86_64)\nVersion 1.2.5\nDynamic Program Loader\n' >&2
+  return 1
+}
+assert_eq musl "$(detect_linux_libc)" "musl ldd -> musl"
+
+# unrecognizable ldd: fall through to the loader probe
+# shellcheck disable=SC2329
+ldd() {
+  printf 'ldd: unrecognized option\n' >&2
+  return 1
+}
+libc_probe_root=$(mktemp -d "${TMPDIR:-/tmp}/maw-install-libc.XXXXXX")
+# shellcheck disable=SC2034
+MAW_LIBC_LOADER_PATHS="$libc_probe_root/absent-libc.so.6"
+assert_eq musl "$(detect_linux_libc)" "ambiguous ldd + no glibc loader -> musl (safe default)"
+: >"$libc_probe_root/present-libc.so.6"
+# shellcheck disable=SC2034
+MAW_LIBC_LOADER_PATHS="$libc_probe_root/absent-libc.so.6 $libc_probe_root/present-libc.so.6"
+assert_eq gnu "$(detect_linux_libc)" "ambiguous ldd + glibc loader on disk -> gnu"
+rm -rf "$libc_probe_root"
+
+# no ldd on the host at all: loader probe still decides, absence means musl
+# shellcheck disable=SC2329
+ldd() {
+  return 127
+}
+# shellcheck disable=SC2034
+MAW_LIBC_LOADER_PATHS="/nonexistent/libc.so.6"
+assert_eq musl "$(detect_linux_libc)" "no ldd + no glibc loader -> musl"
+
+# detect_platform must actually thread the libc into the asset name.
+case "$(uname -s):$(uname -m)" in
+  Linux:x86_64|Linux:amd64)
+    # shellcheck disable=SC2034
+    MAW_LIBC=gnu
+    assert_eq maw-rs-linux-x86_64-gnu "$(detect_platform)" "detect_platform gnu asset"
+    # shellcheck disable=SC2034
+    MAW_LIBC=musl
+    assert_eq maw-rs-linux-x86_64-musl "$(detect_platform)" "detect_platform musl asset"
+    ;;
+  Darwin:arm64|Darwin:aarch64)
+    assert_eq maw-rs-macos-arm64 "$(detect_platform)" "detect_platform macOS asset"
+    ;;
+  *)
+    printf 'skip: detect_platform asset check (no prebuilt target for this host)\n'
+    ;;
+esac
+
+# ---- gnu -> musl runtime fallback (#812) ------------------------------------
+# The gnu asset is dynamic, so a host with an older glibc than the build cannot
+# run it. install.sh proves the download starts before installing it and only
+# ever downgrades gnu -> musl; macOS and musl paths must stay untouched.
+fallback_root=$(mktemp -d "${TMPDIR:-/tmp}/maw-install-fallback.XXXXXX")
+
+# shellcheck disable=SC2329
+download_and_verify() {
+  asset=$2
+  DOWNLOADED_BIN="$3/$2"
+}
+
+gnu_runs=1
+musl_runs=1
+# shellcheck disable=SC2329
+binary_runs_here() {
+  case "$1" in
+    *-gnu) [ "$gnu_runs" = 1 ] ;;
+    *) [ "$musl_runs" = 1 ] ;;
+  esac
+}
+
+asset=maw-rs-linux-x86_64-musl
+DOWNLOADED_BIN="$fallback_root/$asset"
+fallback_if_unrunnable v26.7.23 "$fallback_root"
+assert_eq maw-rs-linux-x86_64-musl "$asset" "musl asset is never probed or swapped"
+
+asset=maw-rs-macos-arm64
+DOWNLOADED_BIN="$fallback_root/$asset"
+fallback_if_unrunnable v26.7.23 "$fallback_root"
+assert_eq maw-rs-macos-arm64 "$asset" "macOS asset is never probed or swapped"
+
+# shellcheck disable=SC2034
+gnu_runs=1
+asset=maw-rs-linux-x86_64-gnu
+DOWNLOADED_BIN="$fallback_root/$asset"
+fallback_if_unrunnable v26.7.23 "$fallback_root"
+assert_eq maw-rs-linux-x86_64-gnu "$asset" "runnable gnu asset is kept"
+
+# shellcheck disable=SC2034
+gnu_runs=0
+asset=maw-rs-linux-x86_64-gnu
+DOWNLOADED_BIN="$fallback_root/$asset"
+fallback_if_unrunnable v26.7.23 "$fallback_root" 2>/dev/null
+assert_eq maw-rs-linux-x86_64-musl "$asset" "unrunnable gnu falls back to musl"
+assert_eq "$fallback_root/maw-rs-linux-x86_64-musl" "$DOWNLOADED_BIN" \
+  "fallback re-downloads the musl asset"
+
+# shellcheck disable=SC2034
+gnu_runs=0
+# shellcheck disable=SC2034
+musl_runs=0
+asset=maw-rs-linux-x86_64-gnu
+DOWNLOADED_BIN="$fallback_root/$asset"
+if (fallback_if_unrunnable v26.7.23 "$fallback_root" >/dev/null 2>&1); then
+  printf 'FAIL neither Linux asset runnable must be fatal\n' >&2
+  exit 1
+fi
+rm -rf "$fallback_root"
+
+printf 'install resolve_version + libc detection + fallback tests: ok\n'

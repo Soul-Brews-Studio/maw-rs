@@ -67,6 +67,36 @@ jobs:
           name: linux-musl
           path: dist/*
 
+  # Second Linux artifact, built alongside (never instead of) the musl one.
+  # musl is static and portable but has no glibc NSS, so it cannot load
+  # mdns4_minimal from /etc/nsswitch.conf and cannot resolve *.local names
+  # at all (#812). This gnu build links the host glibc and resolves .local
+  # through the system resolver. Same --features wasm-host as the musl job:
+  # a silent feature difference between the two Linux artifacts would be its
+  # own bug.
+  build-linux-gnu:
+    name: Build linux x86_64-gnu (dynamic glibc)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build maw-rs (gnu dynamic)
+        env:
+          MAW_BUILD_VERSION: ${{ github.ref_name }}
+        run: cargo build --release --target x86_64-unknown-linux-gnu --bin maw-rs --features wasm-host
+      - name: Stage binary
+        run: |
+          mkdir -p dist
+          cp target/x86_64-unknown-linux-gnu/release/maw-rs dist/maw-rs-linux-x86_64-gnu
+          sha256sum dist/maw-rs-linux-x86_64-gnu > dist/maw-rs-linux-x86_64-gnu.sha256
+      - name: Show linkage and glibc floor
+        run: |
+          file dist/maw-rs-linux-x86_64-gnu
+          ldd dist/maw-rs-linux-x86_64-gnu || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-gnu
+          path: dist/*
+
   build-macos-arm64:
     name: Build macOS arm64
     runs-on: macos-latest
@@ -88,7 +118,7 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    needs: [build-linux-musl, build-macos-arm64]
+    needs: [build-linux-musl, build-linux-gnu, build-macos-arm64]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -119,7 +149,27 @@ jobs:
             (e.g. `ln -sf /path/to/maw-rs-macos-arm64 ~/.bun/bin/maw`). Verify with the `.sha256` files.
 
             - `maw-rs-macos-arm64` — macOS Apple Silicon
-            - `maw-rs-linux-x86_64-musl` — Linux x86_64 (static, no libc dependency)
+            - `maw-rs-linux-x86_64-gnu` — Linux x86_64, **dynamic (glibc)**
+            - `maw-rs-linux-x86_64-musl` — Linux x86_64, **static (musl)**
+
+            **Which Linux binary?** Both are built from the same commit with the
+            same feature set; they differ only in C library, and that difference
+            decides whether `.local` names resolve:
+
+            | | `-gnu` | `-musl` |
+            |---|---|---|
+            | linkage | dynamic, needs a glibc host | static, runs on any distro |
+            | `.local` / mDNS | **resolves** via the system resolver (NSS) | **cannot resolve** — no glibc NSS, so `mdns4_minimal` in `/etc/nsswitch.conf` is never loaded |
+            | pick it when | the host has glibc (Debian/Ubuntu/Fedora/Arch/…) — required if any peer is addressed by a `.local` hostname | Alpine, musl distros, containers without glibc, or a static binary is needed |
+
+            `install.sh` and `maw update` autodetect the host libc and prefer
+            `-gnu` when glibc is proven, falling back to `-musl` when it is not.
+            Force either with `MAW_LIBC=gnu` / `MAW_LIBC=musl`.
+
+            `-gnu` is built on the CI runner image, so it needs a glibc at least
+            that new. `install.sh` runs the download once before installing and
+            re-fetches `-musl` if it will not start; `maw update` restores the
+            previous binary and tells you to retry with `MAW_LIBC=musl`.
 
             **Homebrew (stable releases):** `brew install soul-brews-studio/maw/maw`
 

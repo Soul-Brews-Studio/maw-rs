@@ -8,7 +8,7 @@ const DISPATCH_150: &[DispatcherEntry] = &[
     DispatcherEntry { command: "upgrade", handler: Handler::Sync(upgrade_run_command) },
 ];
 
-const UPDATE_USAGE: &str = "usage: maw update [--check] [--channel stable|alpha] [--version vYY.M.DD] [--force]\n\n  Self-update maw-rs from GitHub releases (Soul-Brews-Studio/maw-rs).\n  The channel defaults to the running build's channel: a hyphenated\n  version (e.g. 26.7.16-alpha.1159) means alpha, plain means stable.\n\n  Flags:\n    --check            report the newest release on the channel, change nothing\n    --channel <name>   stable | alpha (also accepted as a bare positional)\n    --version <tag>    install an exact release tag, e.g. v26.7.16\n    --force            reinstall even when already up to date (or a dev build)\n    --yes, -y          accepted for script compatibility (no prompt exists)\n    --help, -h         show this message and exit (no side effects)\n\n  sha256 verification against the release .sha256 sidecar is mandatory;\n  a mismatch always refuses to install (there is no override flag).";
+const UPDATE_USAGE: &str = "usage: maw update [--check] [--channel stable|alpha] [--version vYY.M.DD] [--force]\n\n  Self-update maw-rs from GitHub releases (Soul-Brews-Studio/maw-rs).\n  The channel defaults to the running build's channel: a hyphenated\n  version (e.g. 26.7.16-alpha.1159) means alpha, plain means stable.\n\n  Flags:\n    --check            report the newest release on the channel, change nothing\n    --channel <name>   stable | alpha (also accepted as a bare positional)\n    --version <tag>    install an exact release tag, e.g. v26.7.16\n    --force            reinstall even when already up to date (or a dev build)\n    --yes, -y          accepted for script compatibility (no prompt exists)\n    --help, -h         show this message and exit (no side effects)\n\n  Linux ships two x86_64 builds and they are not interchangeable:\n    gnu   dynamic, needs a glibc host, resolves .local/mDNS names\n    musl  static, portable across distros, CANNOT resolve .local/mDNS\n  The host libc is detected automatically (glibc preferred, musl when\n  unclear); set MAW_LIBC=gnu|musl to force one.\n\n  sha256 verification against the release .sha256 sidecar is mandatory;\n  a mismatch always refuses to install (there is no override flag).";
 
 const UPDATE_USER_AGENT: &str = "maw-rs-update";
 
@@ -147,22 +147,85 @@ fn update_execute(request: &UpdateRequest150) -> Result<String, String> {
     }
 
     let install_target = update_resolve_install_target()?;
-    let asset = update_asset_for_platform(std::env::consts::OS, std::env::consts::ARCH).ok_or_else(|| {
+    let libc = update_detect_host_libc();
+    let asset = update_asset_for_platform(std::env::consts::OS, std::env::consts::ARCH, libc).ok_or_else(|| {
         format!(
-            "no prebuilt release asset for {}/{} — supported: macos/aarch64, linux/x86_64 (musl); build from source instead",
+            "no prebuilt release asset for {}/{} — supported: macos/aarch64, linux/x86_64 (gnu and musl); build from source instead",
             std::env::consts::OS,
             std::env::consts::ARCH
         )
     })?;
+    if std::env::consts::OS == "linux" {
+        let _ = writeln!(out, "  host libc: {}{}", update_libc_label(libc), update_libc_note(libc));
+    }
 
     let backup = update_download_verify_replace(&mut out, &target.tag, asset, &install_target)?;
 
-    let proof = update_prove_and_finalize(&install_target, backup.as_deref())?;
+    let proof = update_prove_and_finalize(&install_target, backup.as_deref())
+        .map_err(|error| update_annotate_proof_failure(error, asset))?;
     let _ = writeln!(out, "  proof (`{} version`):\n{proof}", install_target.display());
     if update_maw_serve_running() {
         out.push_str("  maw-serve runs under PM2 — restart it to pick up the new binary: pm2 restart maw-serve\n");
     }
     Ok(out)
+}
+
+/// Host libc for Linux asset selection.
+///
+/// An explicit `MAW_LIBC=gnu|musl` wins (same variable install.sh honors);
+/// otherwise gather evidence — `ldd --version` (musl's ldd writes to stderr
+/// and exits nonzero, so both streams are read) plus a glibc loader probe —
+/// and let the pure `update_classify_libc` judge it. Unclear evidence means
+/// musl: a static binary that runs beats a dynamic one that does not.
+fn update_detect_host_libc() -> UpdateLibc {
+    let forced = std::env::var("MAW_LIBC").ok();
+    if let Some(libc) = update_libc_from_override(forced.as_deref()) {
+        return libc;
+    }
+    let ldd = std::process::Command::new("ldd")
+        .arg("--version")
+        .output()
+        .ok()
+        .map(|output| {
+            let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+            text.push('\n');
+            text.push_str(&String::from_utf8_lossy(&output.stderr));
+            text
+        });
+    let loader_present =
+        UPDATE_GLIBC_LOADER_PATHS.iter().any(|path| std::path::Path::new(path).exists());
+    update_classify_libc(ldd.as_deref(), loader_present)
+}
+
+fn update_libc_label(libc: UpdateLibc) -> &'static str {
+    match libc {
+        UpdateLibc::Gnu => "glibc",
+        UpdateLibc::Musl => "musl",
+    }
+}
+
+/// A gnu asset that will not start is almost always a glibc floor problem —
+/// the release is built against the CI runner's glibc, which can be newer than
+/// an older host's. The previous binary has already been restored by then, so
+/// the only thing missing is the way out: name it.
+fn update_annotate_proof_failure(error: String, asset: &str) -> String {
+    if asset.ends_with("-gnu") {
+        format!(
+            "{error}\n  the glibc build may need a newer glibc than this host has — retry with MAW_LIBC=musl for the static build (which cannot resolve .local/mDNS)"
+        )
+    } else {
+        error
+    }
+}
+
+/// The operator-facing reason the choice matters (#812).
+fn update_libc_note(libc: UpdateLibc) -> &'static str {
+    match libc {
+        UpdateLibc::Gnu => " — dynamic build, resolves .local/mDNS via the system resolver",
+        UpdateLibc::Musl => {
+            " — static build, portable but cannot resolve .local/mDNS (override: MAW_LIBC=gnu)"
+        }
+    }
 }
 
 /// Download the asset + sha256 sidecar and swap the new binary into place.
@@ -491,6 +554,44 @@ mod update_upgrade_tests150 {
         assert!(out.stdout.contains("usage: maw update"));
         assert!(out.stdout.contains("sha256"));
         assert!(out.stderr.is_empty());
+    }
+
+    #[test]
+    fn update_help_documents_the_two_linux_builds() {
+        let out = update_run_command(&update_args(&["--help"]));
+        assert!(out.stdout.contains("MAW_LIBC"), "stdout={}", out.stdout);
+        assert!(out.stdout.contains("CANNOT resolve .local"), "stdout={}", out.stdout);
+    }
+
+    /// The libc choice must be explained to the operator, not just made (#812).
+    #[test]
+    fn update_libc_labels_and_notes_name_the_dot_local_tradeoff() {
+        assert_eq!(update_libc_label(UpdateLibc::Gnu), "glibc");
+        assert_eq!(update_libc_label(UpdateLibc::Musl), "musl");
+        assert!(update_libc_note(UpdateLibc::Gnu).contains("resolves .local"));
+        assert!(update_libc_note(UpdateLibc::Musl).contains("cannot resolve .local"));
+        assert!(update_libc_note(UpdateLibc::Musl).contains("MAW_LIBC=gnu"));
+    }
+
+    #[test]
+    fn update_proof_failure_points_at_the_musl_escape_hatch_for_gnu_only() {
+        let annotated =
+            update_annotate_proof_failure("new binary exited nonzero".to_owned(), "maw-rs-linux-x86_64-gnu");
+        assert!(annotated.starts_with("new binary exited nonzero"), "annotated={annotated}");
+        assert!(annotated.contains("MAW_LIBC=musl"), "annotated={annotated}");
+        for asset in ["maw-rs-linux-x86_64-musl", "maw-rs-macos-arm64"] {
+            assert_eq!(update_annotate_proof_failure("boom".to_owned(), asset), "boom");
+        }
+    }
+
+    /// On this Linux host (glibc, `ldd --version` answers) detection must land
+    /// on gnu; anywhere else it must still return one of the two shipped libcs.
+    #[test]
+    fn update_detect_host_libc_returns_a_shipped_libc() {
+        let detected = update_detect_host_libc();
+        assert!(matches!(detected, UpdateLibc::Gnu | UpdateLibc::Musl));
+        let asset = update_asset_for_platform("linux", "x86_64", detected).expect("linux asset");
+        assert!(asset.starts_with("maw-rs-linux-x86_64-"), "asset={asset}");
     }
 
     #[test]
