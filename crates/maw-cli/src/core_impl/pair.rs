@@ -346,7 +346,25 @@ fn pair_system_generate_live(plan: &PairGeneratePlan, config: &PairConfig) -> Re
     let code = pair_json_string(&value, "code").ok_or_else(|| "pair generate: missing code".to_owned())?;
     let normalized = pair_normalize_code(&code);
     if !pair_is_valid_code(&normalized) { return Err("pair generate: invalid code returned".to_owned()); }
+    pair_announce_generated_code(&normalized, plan);
     pair_system_generate_wait_and_write(plan, &normalized, config)
+}
+
+// #816: the code minted above used to stay buffered in the command's return
+// string, which only reaches the operator after `pair_system_generate_wait_and_write`
+// returns — i.e. after the handshake it was needed for is already over. Print
+// it here, before the poll loop starts, and flush so it lands even when
+// stdout isn't a tty (piped/backgrounded runs).
+fn pair_announce_generated_code(normalized_code: &str, plan: &PairGeneratePlan) {
+    use std::io::Write;
+    println!(
+        "pair code: {}   (expires in {}s)\non the other machine run:\n    maw pair {} {}\nwaiting for the peer to accept…",
+        pair_pretty_code(normalized_code),
+        plan.expires_sec,
+        plan.local_url,
+        pair_pretty_code(normalized_code)
+    );
+    let _ = std::io::stdout().flush();
 }
 
 /// Polls `/api/pair/status/:code` for an already-minted code until the
