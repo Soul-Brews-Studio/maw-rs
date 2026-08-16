@@ -513,12 +513,12 @@ fn awaken_wait_for_agent(target: &str, runner: &mut impl AwakenRunner) -> Result
     Ok(false)
 }
 
+// #813: `awaken_wait_for_agent` polls `#{pane_current_command}` twenty times
+// waiting for the agent to appear. Without the version arm it never saw a
+// Claude Code pane on the npm launch path and always fell through to the
+// "could not resolve after wake" branch. Shared predicate now.
 fn awaken_is_agent_command(command: &str) -> bool {
-    let lower = command.to_ascii_lowercase();
-    matches!(lower.as_str(), "claude" | "codex" | "gemini" | "node")
-        || lower.contains("claude")
-        || lower.contains("codex")
-        || lower.contains("gemini")
+    maw_tmux::is_agent_pane_command(Some(command))
 }
 
 fn awaken_push_flag(args: &mut Vec<String>, flag: &str, enabled: bool) {
