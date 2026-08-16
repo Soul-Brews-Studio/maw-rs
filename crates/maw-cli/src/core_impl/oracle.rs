@@ -51,7 +51,7 @@ struct OracleListOptions { json: bool, awake: bool, org: Option<String>, path: b
 
 #[derive(Debug, Clone, Default)]
 #[allow(clippy::struct_excessive_bools)]
-struct OracleScanOptions { json: bool, stale: bool, verbose: bool, all: bool, quiet: bool }
+struct OracleScanOptions { json: bool, stale: bool, verbose: bool, all: bool, quiet: bool, force: bool }
 
 #[derive(Default)]
 struct OracleTmux { runner: maw_tmux::CommandTmuxRunner }
@@ -123,7 +123,8 @@ fn oracle_parse_scan_options(argv: &[String], start: usize) -> Result<OracleScan
             "--all" => opts.all = true,
             "--verbose" | "-v" => opts.verbose = true,
             "--quiet" | "-q" => opts.quiet = true,
-            "--force" | "--local" => {},
+            "--force" => opts.force = true,
+            "--local" => {},
             "--remote" => return Err("oracle scan: --remote is not available in native offline mode".to_owned()),
             value if value.starts_with('-') => return Err(format!("oracle: unknown argument {value}")),
             _ => return Err(ORACLE_USAGE.to_owned()),
@@ -137,6 +138,7 @@ fn oracle_list(opts: &OracleListOptions, tmux: &mut OracleTmux) -> Result<String
     let registry = if opts.scan {
         let previous = oracle_read_registry();
         let registry = oracle_merge_scan_registry(oracle_scan_registry()?, &previous);
+        oracle_guard_scan_write(&registry, &previous, false)?;
         oracle_write_registry(&registry)?;
         registry
     } else {
@@ -155,6 +157,7 @@ fn oracle_scan(opts: &OracleScanOptions) -> Result<String, String> {
     if opts.stale { return Ok(oracle_stale(opts.json)); }
     let previous = oracle_read_registry();
     let registry = oracle_merge_scan_registry(oracle_scan_registry()?, &previous);
+    oracle_guard_scan_write(&registry, &previous, opts.force)?;
     oracle_write_registry(&registry)?;
     if opts.json { return serde_json::to_string_pretty(&registry).map(|value| format!("{value}\n")).map_err(|error| error.to_string()); }
     Ok(format!("\n  \x1b[32m✓\x1b[0m {} oracles locally (cache written)\n\n", registry.oracles.len()))
@@ -168,6 +171,7 @@ fn oracle_scan_with_progress(opts: &OracleScanOptions) -> Result<(String, String
     let previous = oracle_read_registry();
     let (registry, mut stderr) = oracle_scan_registry_with_progress(opts.verbose, emit_progress)?;
     let registry = oracle_merge_scan_registry(registry, &previous);
+    oracle_guard_scan_write(&registry, &previous, opts.force)?;
     oracle_write_registry(&registry)?;
     if opts.json { return serde_json::to_string_pretty(&registry).map(|value| (format!("{value}\n"), stderr)).map_err(|error| error.to_string()); }
     if opts.all && emit_progress {
@@ -315,6 +319,44 @@ fn oracle_scan_registry_with_progress(verbose: bool, show_progress: bool) -> Res
     entries.sort_by(|a, b| a.name.cmp(&b.name));
     Ok((OracleRegistry { schema: 1, local_scanned_at: oracle_now_string(), ghq_root: root.display().to_string(), oracles: entries, retired: Vec::new() }, progress))
 }
+
+// `oracles.json` is the only place `federation_node` is ever stored — locate/roster/recruit
+// read it, nothing else writes it — so an entry the scan drops is gone for good (#732).
+// #773 made a *missing* ghq root a hard error; an existing-but-wrong root (a bare `~/Code`
+// that happens to hold a `github.com/`) still walked straight into the write with 0 hits.
+// A scan that collapses the cached fleet is far more often a mis-resolved root than a real
+// wipe, so refuse the write and make the caller say --force.
+const ORACLE_SCAN_COLLAPSE_FLOOR: usize = 4;
+
+fn oracle_scan_collapses_registry(scanned: &OracleRegistry, previous: &OracleRegistry) -> bool {
+    if previous.oracles.is_empty() { return false; }
+    // Only rows that were on disk are this scan's responsibility: entries registered from
+    // tmux/fleet carry an empty local_path and a filesystem scan never re-finds them, so
+    // counting them would fire the guard on healthy registries.
+    //
+    // This denominator MUST be computed before the zero-scan branch. It used to sit after
+    // it, so a registry made entirely of never-cloned rows (which `oracle register` writes
+    // for an awake-but-not-cloned oracle, and `oracle stale` exists to report) hard-errored
+    // on a CORRECT, genuinely empty ghq root — the tool refusing while its own `oracle stale`
+    // called the same rows DEAD. Nothing recoverable was at stake there.
+    let on_disk = previous.oracles.iter().filter(|entry| !entry.local_path.is_empty()).count();
+    if on_disk == 0 { return false; }
+    if scanned.oracles.is_empty() { return true; }
+    on_disk >= ORACLE_SCAN_COLLAPSE_FLOOR && scanned.oracles.len() * 2 < on_disk
+}
+
+fn oracle_guard_scan_write(scanned: &OracleRegistry, previous: &OracleRegistry, force: bool) -> Result<(), String> {
+    if force || !oracle_scan_collapses_registry(scanned, previous) { return Ok(()); }
+    let (cached, found) = (previous.oracles.len(), scanned.oracles.len());
+    Err(format!(
+        "oracle scan: refusing to overwrite {cached} cached {} — the scan of {} found {found} {}.\n  That usually means the ghq root is wrong, not that the fleet shrank (federation_node lives only in this cache).\n  Re-run as `maw oracle scan --force` to overwrite anyway, or `maw oracle ls` to read the cache untouched.",
+        oracle_plural_oracles(cached),
+        if scanned.ghq_root.is_empty() { "(unknown root)" } else { &scanned.ghq_root },
+        oracle_plural_oracles(found),
+    ))
+}
+
+fn oracle_plural_oracles(count: usize) -> &'static str { if count == 1 { "oracle" } else { "oracles" } }
 
 fn oracle_merge_scan_registry(mut scanned: OracleRegistry, previous: &OracleRegistry) -> OracleRegistry {
     let previous_by_name = previous.oracles.iter().map(|entry| (entry.name.as_str(), entry)).collect::<BTreeMap<_, _>>();
@@ -633,6 +675,125 @@ mod oracle_tests {
         assert_eq!(entry.budded_at.as_deref(), Some("2026-08-03T00:00:00Z"));
         assert_eq!(entry.federation_node.as_deref(), Some("edge-a"));
         assert_eq!(entry.nickname.as_deref(), Some("Neo Prime"));
+    }
+
+    // #732 — the ghq root exists but is not the fleet's root, so the scan finds nothing.
+    // #773 only covers a *missing* root; an existing-but-wrong one still reached the write.
+    fn oracle_seed_wrong_root(name: &str) -> (std::path::PathBuf, Vec<EnvVarRestore>, String) {
+        let root = oracle_temp_root(name);
+        let env = oracle_test_env(&root, &root.join("wrong-root"));
+        std::fs::create_dir_all(root.join("wrong-root/github.com")).expect("empty github root");
+        let mut neo = oracle_test_entry("neo");
+        neo.federation_node = Some("edge-a".to_owned());
+        let registry = OracleRegistry { schema: 1, local_scanned_at: "old".to_owned(), ghq_root: "old-ghq".to_owned(), oracles: vec![neo, oracle_test_entry("trinity")], retired: oracle_test_retired() };
+        oracle_write_registry(&registry).expect("seed registry");
+        let before = std::fs::read_to_string(oracle_registry_path()).expect("registry before");
+        (root, env, before)
+    }
+
+    // Pins the over-fire the guard's first version had: it short-circuited on an
+    // empty scan BEFORE computing the on-disk denominator, so a registry made
+    // entirely of never-cloned rows hard-errored on a CORRECT, empty ghq root.
+    // `oracle register` writes exactly such rows for an awake-but-not-cloned
+    // oracle, and `oracle stale` reports them DEAD — the tool refused to write
+    // while its own diagnostic said those rows were already gone. Nothing
+    // recoverable was at stake, which is what makes it an over-fire rather than
+    // caution.
+    #[test]
+    fn oracle_scan_guard_ignores_rows_that_were_never_on_disk() {
+        let never_cloned = |name: &str| OracleEntry { name: name.to_owned(), ..Default::default() };
+        let previous = OracleRegistry {
+            oracles: vec![never_cloned("a"), never_cloned("b"), never_cloned("c")],
+            ..Default::default()
+        };
+        let scanned = OracleRegistry::default();
+        assert!(
+            !oracle_scan_collapses_registry(&scanned, &previous),
+            "rows with an empty local_path are not a filesystem scan's responsibility"
+        );
+        assert!(oracle_guard_scan_write(&scanned, &previous, false).is_ok());
+    }
+
+    #[test]
+    fn oracle_scan_refuses_to_wipe_registry_when_existing_root_finds_nothing() {
+        let _guard = env_test_lock();
+        let (_root, _env, before) = oracle_seed_wrong_root("scan-empty-root");
+
+        let error = oracle_scan_with_progress(&OracleScanOptions::default()).expect_err("scan should refuse to wipe");
+
+        assert!(error.contains("found 0 oracles"), "{error}");
+        assert!(error.contains("--force"), "{error}");
+        assert_eq!(std::fs::read_to_string(oracle_registry_path()).expect("registry after"), before);
+        let kept = oracle_read_registry();
+        assert_eq!(kept.oracles.len(), 2);
+        assert_eq!(kept.oracles.iter().find(|entry| entry.name == "neo").and_then(|entry| entry.federation_node.as_deref()), Some("edge-a"));
+    }
+
+    #[test]
+    fn oracle_list_scan_refuses_to_wipe_registry_when_existing_root_finds_nothing() {
+        let _guard = env_test_lock();
+        let (_root, _env, before) = oracle_seed_wrong_root("list-scan-empty-root");
+
+        let opts = OracleListOptions { scan: true, ..OracleListOptions::default() };
+        let error = oracle_list(&opts, &mut OracleTmux::default()).expect_err("ls --scan should refuse to wipe");
+
+        assert!(error.contains("found 0 oracles"), "{error}");
+        assert_eq!(std::fs::read_to_string(oracle_registry_path()).expect("registry after"), before);
+    }
+
+    #[test]
+    fn oracle_scan_force_still_overwrites_with_an_empty_result() {
+        let _guard = env_test_lock();
+        let (_root, _env, _before) = oracle_seed_wrong_root("scan-empty-root-forced");
+
+        oracle_scan_with_progress(&OracleScanOptions { force: true, ..OracleScanOptions::default() }).expect("forced scan");
+
+        assert!(oracle_read_registry().oracles.is_empty());
+    }
+
+    #[test]
+    fn oracle_scan_refuses_a_majority_drop_but_allows_a_minority_one() {
+        let _guard = env_test_lock();
+        let root = oracle_temp_root("scan-majority-drop");
+        let _env = oracle_test_env(&root, &root.join("ghq"));
+        std::fs::create_dir_all(root.join("ghq/github.com/acme/neo-oracle/ψ")).expect("neo");
+        let seed = |names: &[&str]| {
+            let oracles = names.iter().map(|name| oracle_test_entry(name)).collect::<Vec<_>>();
+            oracle_write_registry(&OracleRegistry { schema: 1, oracles, ..OracleRegistry::default() }).expect("seed registry");
+        };
+
+        seed(&["neo", "trinity", "morpheus", "atlas"]);
+        let error = oracle_scan_with_progress(&OracleScanOptions::default()).expect_err("4 -> 1 should refuse");
+        assert!(error.contains("found 1 oracle"), "{error}");
+        assert_eq!(oracle_read_registry().oracles.len(), 4);
+
+        seed(&["neo", "trinity"]);
+        oracle_scan_with_progress(&OracleScanOptions::default()).expect("2 -> 1 stays allowed");
+        assert_eq!(oracle_read_registry().oracles.len(), 1);
+    }
+
+    #[test]
+    fn oracle_scan_still_allowed_when_the_lost_rows_were_never_on_disk() {
+        let _guard = env_test_lock();
+        let root = oracle_temp_root("scan-uncloned-rows");
+        let _env = oracle_test_env(&root, &root.join("ghq"));
+        std::fs::create_dir_all(root.join("ghq/github.com/acme/neo-oracle/ψ")).expect("neo");
+        // Two rows a filesystem scan can find, four registered from tmux/fleet with no path.
+        let mut oracles = vec![oracle_test_entry("neo"), oracle_test_entry("trinity")];
+        for name in ["ghost-a", "ghost-b", "ghost-c", "ghost-d"] {
+            oracles.push(OracleEntry { local_path: String::new(), ..oracle_test_entry(name) });
+        }
+        oracle_write_registry(&OracleRegistry { schema: 1, oracles, ..OracleRegistry::default() }).expect("seed registry");
+
+        oracle_scan_with_progress(&OracleScanOptions::default()).expect("6 rows -> 1 on-disk hit stays allowed");
+
+        assert_eq!(oracle_read_registry().oracles.len(), 1);
+    }
+
+    #[test]
+    fn oracle_scan_parser_records_force() {
+        assert!(oracle_parse_scan_options(&oracle_strings(&["scan", "--force"]), 1).expect("scan opts").force);
+        assert!(!oracle_parse_scan_options(&oracle_strings(&["scan", "--local"]), 1).expect("scan opts").force);
     }
 
     #[test]
