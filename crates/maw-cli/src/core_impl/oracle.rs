@@ -330,11 +330,18 @@ const ORACLE_SCAN_COLLAPSE_FLOOR: usize = 4;
 
 fn oracle_scan_collapses_registry(scanned: &OracleRegistry, previous: &OracleRegistry) -> bool {
     if previous.oracles.is_empty() { return false; }
-    if scanned.oracles.is_empty() { return true; }
     // Only rows that were on disk are this scan's responsibility: entries registered from
     // tmux/fleet carry an empty local_path and a filesystem scan never re-finds them, so
     // counting them would fire the guard on healthy registries.
+    //
+    // This denominator MUST be computed before the zero-scan branch. It used to sit after
+    // it, so a registry made entirely of never-cloned rows (which `oracle register` writes
+    // for an awake-but-not-cloned oracle, and `oracle stale` exists to report) hard-errored
+    // on a CORRECT, genuinely empty ghq root — the tool refusing while its own `oracle stale`
+    // called the same rows DEAD. Nothing recoverable was at stake there.
     let on_disk = previous.oracles.iter().filter(|entry| !entry.local_path.is_empty()).count();
+    if on_disk == 0 { return false; }
+    if scanned.oracles.is_empty() { return true; }
     on_disk >= ORACLE_SCAN_COLLAPSE_FLOOR && scanned.oracles.len() * 2 < on_disk
 }
 
@@ -682,6 +689,29 @@ mod oracle_tests {
         oracle_write_registry(&registry).expect("seed registry");
         let before = std::fs::read_to_string(oracle_registry_path()).expect("registry before");
         (root, env, before)
+    }
+
+    // Pins the over-fire the guard's first version had: it short-circuited on an
+    // empty scan BEFORE computing the on-disk denominator, so a registry made
+    // entirely of never-cloned rows hard-errored on a CORRECT, empty ghq root.
+    // `oracle register` writes exactly such rows for an awake-but-not-cloned
+    // oracle, and `oracle stale` reports them DEAD — the tool refused to write
+    // while its own diagnostic said those rows were already gone. Nothing
+    // recoverable was at stake, which is what makes it an over-fire rather than
+    // caution.
+    #[test]
+    fn oracle_scan_guard_ignores_rows_that_were_never_on_disk() {
+        let never_cloned = |name: &str| OracleEntry { name: name.to_owned(), ..Default::default() };
+        let previous = OracleRegistry {
+            oracles: vec![never_cloned("a"), never_cloned("b"), never_cloned("c")],
+            ..Default::default()
+        };
+        let scanned = OracleRegistry::default();
+        assert!(
+            !oracle_scan_collapses_registry(&scanned, &previous),
+            "rows with an empty local_path are not a filesystem scan's responsibility"
+        );
+        assert!(oracle_guard_scan_write(&scanned, &previous, false).is_ok());
     }
 
     #[test]
