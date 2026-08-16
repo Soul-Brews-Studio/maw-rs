@@ -150,7 +150,7 @@ pub fn is_claude_like_pane(pane_current_command: Option<&str>) -> bool {
 /// path and reports the version instead, which matches the directory Claude
 /// Code installs each build into (`~/.local/share/claude/versions/<N.N.N>`).
 /// The macOS mechanism is INFERRED from the observation, not measured --
-/// nobody has probed proc_pidpath() directly. Observed 2026-08-16: black
+/// nobody has probed `proc_pidpath()` directly. Observed 2026-08-16: black
 /// 19/19 `claude`, white 4/4 `claude`, m5 (macOS) 0/7 `claude` and 7/7 version.
 ///
 /// So this rule TRACKS A THIRD PARTY'S NAMING SCHEME. If Claude Code ever
