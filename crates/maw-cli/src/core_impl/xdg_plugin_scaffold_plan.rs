@@ -24,11 +24,25 @@ struct XdgResolvedPaths {
     data_path: String,
     state_path: String,
     cache_path: String,
+    config_layers: Vec<String>,
     config_path: String,
 }
 
 impl XdgResolvedPaths {
     fn from_env(env: &MawXdgEnv) -> Self {
+        // #840: `configPath` used to be a blind `configDir/maw.config.json` join, which
+        // names a file the loader structurally never opens once the dir holds a
+        // `maw.config.<NN>.json`. Ask the loader instead: `config_layers` is the real
+        // ordered load set for this config dir and `config_path` is its winner, falling
+        // back to the un-numbered name only when nothing is there (which is what the
+        // loader synthesises and what `maw config set` writes).
+        let config_layers = maw_xdg::discover_user_config_layers(env)
+            .into_iter()
+            .map(|source| path_string(source.path))
+            .collect::<Vec<_>>();
+        let config_path = config_layers.last().cloned().unwrap_or_else(|| {
+            path_string(maw_config_path(env, &["maw.config.json"]))
+        });
         Self {
             xdg_enabled: is_maw_xdg_enabled(env),
             runtime_home: path_string(maw_runtime_home_dir(env)),
@@ -39,7 +53,8 @@ impl XdgResolvedPaths {
             data_path: path_string(maw_data_path(env, &["plugins"])),
             state_path: path_string(maw_state_path(env, &["peers.json"])),
             cache_path: path_string(maw_cache_path(env, &["registry-cache.json"])),
-            config_path: path_string(maw_config_path(env, &["maw.config.json"])),
+            config_layers,
+            config_path,
         }
     }
 }
@@ -128,7 +143,7 @@ fn take_xdg_value(argv: &[String], index: usize, name: &str) -> Result<String, S
 
 fn render_xdg_paths_json(paths: &XdgResolvedPaths) -> String {
     format!(
-        "{{\"command\":\"xdg\",\"kind\":\"paths\",\"xdgEnabled\":{},\"runtimeHome\":{},\"dataDir\":{},\"stateDir\":{},\"cacheDir\":{},\"configDir\":{},\"dataPath\":{},\"statePath\":{},\"cachePath\":{},\"configPath\":{}}}\n",
+        "{{\"command\":\"xdg\",\"kind\":\"paths\",\"xdgEnabled\":{},\"runtimeHome\":{},\"dataDir\":{},\"stateDir\":{},\"cacheDir\":{},\"configDir\":{},\"dataPath\":{},\"statePath\":{},\"cachePath\":{},\"configPath\":{},\"configLayers\":{}}}\n",
         paths.xdg_enabled,
         json_string(&paths.runtime_home),
         json_string(&paths.data_dir),
@@ -138,7 +153,8 @@ fn render_xdg_paths_json(paths: &XdgResolvedPaths) -> String {
         json_string(&paths.data_path),
         json_string(&paths.state_path),
         json_string(&paths.cache_path),
-        json_string(&paths.config_path)
+        json_string(&paths.config_path),
+        json_string_array(&paths.config_layers)
     )
 }
 
@@ -178,7 +194,7 @@ fn run_xdg_constants_plan(argv: &[String]) -> CliOutput {
 }
 
 fn render_xdg_constants_json() -> String {
-    r#"{"command":"xdg","action":"constants","actions":["paths","core-paths","validate-instance"],"truthyMawXdg":["1","true","yes","on"],"overrideEnv":["MAW_HOME","MAW_CONFIG_DIR","MAW_DATA_DIR","MAW_STATE_DIR","MAW_CACHE_DIR"],"xdgBaseEnv":["XDG_CONFIG_HOME","XDG_DATA_HOME","XDG_STATE_HOME","XDG_CACHE_HOME"],"legacyDirs":{"runtime":"$HOME/.maw","config":"$HOME/.config/maw","data":"$HOME/.maw","state":"$HOME/.maw","cache":"$HOME/.maw"},"xdgDirs":{"runtime":"$XDG_STATE_HOME/maw","config":"$XDG_CONFIG_HOME/maw","data":"$XDG_DATA_HOME/maw","state":"$XDG_STATE_HOME/maw","cache":"$XDG_CACHE_HOME/maw"},"samplePaths":{"data":["plugins"],"state":["peers.json"],"cache":["registry-cache.json"],"config":["maw.config.json"]},"corePaths":{"fleetDir":"configDir/fleet","configFile":"configDir/maw.config.json"},"instanceName":{"maxBytes":32,"first":"lowercase ascii alnum","rest":"lowercase ascii alnum, underscore, hyphen"}}
+    r#"{"command":"xdg","action":"constants","actions":["paths","core-paths","validate-instance"],"truthyMawXdg":["1","true","yes","on"],"overrideEnv":["MAW_HOME","MAW_CONFIG_DIR","MAW_DATA_DIR","MAW_STATE_DIR","MAW_CACHE_DIR"],"xdgBaseEnv":["XDG_CONFIG_HOME","XDG_DATA_HOME","XDG_STATE_HOME","XDG_CACHE_HOME"],"legacyDirs":{"runtime":"$HOME/.maw","config":"$HOME/.config/maw","data":"$HOME/.maw","state":"$HOME/.maw","cache":"$HOME/.maw"},"xdgDirs":{"runtime":"$XDG_STATE_HOME/maw","config":"$XDG_CONFIG_HOME/maw","data":"$XDG_DATA_HOME/maw","state":"$XDG_STATE_HOME/maw","cache":"$XDG_CACHE_HOME/maw"},"samplePaths":{"data":["plugins"],"state":["peers.json"],"cache":["registry-cache.json"],"config":["maw.config.json"]},"corePaths":{"fleetDir":"configDir/fleet","configFile":"configDir/maw.config.json"},"configLayers":{"pattern":"configDir/maw.config.<NN>[.local].json","order":"ascending weight; last wins","fallback":"configDir/maw.config.json, used only when configDir holds no numbered layer","projectLayers":"<ancestor>/.maw/maw.config.<NN>[.local].json are cwd-dependent and listed by `maw config sources`, not by `xdg paths`"},"instanceName":{"maxBytes":32,"first":"lowercase ascii alnum","rest":"lowercase ascii alnum, underscore, hyphen"}}
 "#
     .to_owned()
 }

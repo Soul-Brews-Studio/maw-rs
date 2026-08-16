@@ -1,6 +1,7 @@
 # Config guide
 
 - If any weighted layer (`maw.config.<N>.json` or `maw.config.<N>.local.json`) exists in the active config directory, legacy `maw.config.json` is ignored; move live keys into a weighted layer.
+- To see which files are actually in the load set: `maw config sources` (full set, including cwd-dependent Project layers) or `maw xdg paths --plan-json` (`configLayers` — the user config dir only, plus `configPath` for the layer that wins there). Both read the loader; neither guesses a filename (#840).
 
 ## Dir-local layers (`.maw/maw.config.<NN>.json`)
 

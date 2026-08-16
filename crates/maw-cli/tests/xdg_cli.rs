@@ -182,3 +182,97 @@ fn xdg_plan_rejects_bad_env_shape() {
     assert_eq!(output.code, 2);
     assert!(output.stderr.contains("--env must be KEY=VALUE"));
 }
+
+/// #840: `xdg paths` used to print `configDir/maw.config.json` unconditionally, but
+/// `discover_config_layers` only falls back to that un-numbered file when the config
+/// dir holds no `maw.config.<NN>.json` layer. With a numbered layer present the
+/// reported path named a file the loader structurally never opens.
+///
+/// Ground truth here comes from the loader itself (filtered to the config dir, so
+/// cwd-dependent project layers from an ancestor `.maw/` cannot make this test
+/// machine-dependent) rather than from a hand-written expectation.
+#[test]
+fn xdg_paths_reports_config_layers_the_loader_actually_reads() {
+    let home = temp_home("config-layers");
+    let config_dir = home.join("config");
+    fs::create_dir_all(&config_dir).expect("create config dir");
+    fs::write(
+        config_dir.join("maw.config.json"),
+        "{\"node\":\"unnumbered\"}\n",
+    )
+    .expect("write un-numbered config");
+    fs::write(
+        config_dir.join("maw.config.30.json"),
+        "{\"node\":\"thirty\"}\n",
+    )
+    .expect("write weighted config");
+
+    let output = json(&run_cli(&[
+        "xdg".to_owned(),
+        "paths".to_owned(),
+        "--home".to_owned(),
+        home.display().to_string(),
+        "--env".to_owned(),
+        format!("MAW_CONFIG_DIR={}", config_dir.display()),
+        "--plan-json".to_owned(),
+    ]));
+
+    let env = maw_xdg::MawXdgEnv::with_vars(
+        home.clone(),
+        [("MAW_CONFIG_DIR", config_dir.display().to_string())],
+    );
+    let loaded: Vec<String> = maw_xdg::discover_config_layers(&env, &config_dir)
+        .into_iter()
+        .filter(|source| source.path.parent() == Some(config_dir.as_path()))
+        .map(|source| source.path.display().to_string())
+        .collect();
+    assert_eq!(
+        loaded,
+        vec![config_dir.join("maw.config.30.json").display().to_string()],
+        "loader must skip the un-numbered file once a numbered layer exists"
+    );
+
+    let config_path = output["configPath"].as_str().expect("configPath string");
+    assert!(
+        loaded.iter().any(|path| path == config_path),
+        "configPath {config_path} is not in the loaded set {loaded:?}"
+    );
+
+    let reported: Vec<String> = output["configLayers"]
+        .as_array()
+        .expect("configLayers array")
+        .iter()
+        .map(|value| value.as_str().expect("layer path string").to_owned())
+        .collect();
+    assert_eq!(reported, loaded, "configLayers must be the real load set");
+
+    fs::remove_dir_all(home).ok();
+}
+
+/// The un-numbered file is the honest answer only when nothing outranks it: an empty
+/// config dir keeps `configPath` on `configDir/maw.config.json`, which is what the
+/// loader synthesises as its last-resort source and what `maw config set` writes.
+#[test]
+fn xdg_paths_config_path_stays_on_the_un_numbered_file_when_no_layer_exists() {
+    let home = temp_home("config-empty");
+    let config_dir = home.join("config");
+    fs::create_dir_all(&config_dir).expect("create config dir");
+
+    let output = json(&run_cli(&[
+        "xdg".to_owned(),
+        "paths".to_owned(),
+        "--home".to_owned(),
+        home.display().to_string(),
+        "--env".to_owned(),
+        format!("MAW_CONFIG_DIR={}", config_dir.display()),
+        "--plan-json".to_owned(),
+    ]));
+
+    assert_eq!(
+        output["configPath"],
+        config_dir.join("maw.config.json").display().to_string()
+    );
+    assert_eq!(output["configLayers"], serde_json::json!([]));
+
+    fs::remove_dir_all(home).ok();
+}
