@@ -1,0 +1,46 @@
+# The one toolchain the local gate and CI both judge with (#823).
+#
+# WHY AN EXACT VERSION AND NOT `channel = "stable"`
+# "stable" is not a fixed thing, and that was the bug. Measured 2026-08-16 on
+# the same commit (alpha @ 5a30acab):
+#
+#   rustc 1.94.0  ->  2 clippy::redundant_iter_cloned errors, in
+#                     crates/maw-cli/src/serve_core/modules/federation_routes.rs
+#                     at :294 and :407  (cargo clippy exits 101)
+#   rustc 1.97.1  ->  0 errors                                (cargo clippy exits 0)
+#
+# A dev box whose rustup had not been updated since March resolved `stable` to
+# 1.94.0; a fresh `rustup toolchain install stable` — exactly what
+# .github/workflows/ci.yml does at :50 and :218 — resolves it to 1.97.1
+# (released 2026-07-14). Two machines, one commit, opposite verdicts.
+#
+# `channel = "stable"` would NOT have closed that gap: rustup installs a
+# MISSING toolchain named by this file, but it never *updates* an already
+# installed `stable`. The March box would still have been on 1.94.0 and the
+# gate would still have depended on who ran it.
+#
+# 1.97.1 is what `rustup toolchain install stable` resolves to today, so this
+# pin IS what CI runs. When stable moves on, bump this one line and the whole
+# fleet — every worktree, every agent, and CI — moves together in one
+# reviewable diff instead of drifting apart silently.
+#
+# WHY THE TARGET IS LISTED HERE
+# `maw plugin build` shells out to `cargo build --release --target
+# wasm32-unknown-unknown` (plugin_cargo_build_args, crates/maw-cli/src/
+# core_impl/plugin.rs:628). Without that rust-std the build exits 101 and
+# plugin_build_route_a_builds_dist_and_extism_loads_fixture
+# (crates/maw-cli/tests/native_plugin_build_dispatch.rs:99) fails
+# deterministically. ci.yml knew this and added the target by hand in BOTH Rust
+# jobs (:52, :220); nothing told a developer. Declaring it here means rustup
+# provisions it on the first cargo command in this repo, for everyone.
+#
+# `profile`/`components` mirror ci.yml's
+# `--profile minimal --component clippy --component rustfmt` exactly. If you
+# want rust-analyzer's std support, add it per-machine with
+# `rustup component add rust-src` — extra components change nothing about the
+# gate's verdict, so they do not belong in the shared pin.
+[toolchain]
+channel = "1.97.1"
+profile = "minimal"
+components = ["clippy", "rustfmt"]
+targets = ["wasm32-unknown-unknown"]

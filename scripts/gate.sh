@@ -15,9 +15,16 @@
 # runs must never share a live target dir (one-gate-per-target-dir scar,
 # 2026-07-14: phantom FAILEDs from the other tree).
 #
+# Toolchain: every tier preflights that the ACTIVE rustc is the one
+# rust-toolchain.toml pins and that the wasm32-unknown-unknown rust-std is
+# installed, and refuses before running any cargo step if either is off (#823).
+# The gate's verdict must not depend on whose machine ran it.
+#
 # Env overrides:
-#   GATE_TARGET_DIR   target dir (default <repo>/target-gate)
-#   MAW_GATE_CACHE    golden cache root (default ~/.maw/gate-cache)
+#   GATE_TARGET_DIR              target dir (default <repo>/target-gate)
+#   MAW_GATE_CACHE               golden cache root (default ~/.maw/gate-cache)
+#   GATE_ALLOW_TOOLCHAIN_DRIFT=1 skip the toolchain preflight and accept that
+#                                this run does not reproduce CI's toolchain
 #
 # Every `cargo test` below passes --no-fail-fast on purpose (#796): without it
 # cargo stops at the FIRST failing test target, so one red target hides every
@@ -37,6 +44,9 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
 CACHE_ROOT="${MAW_GATE_CACHE:-$HOME/.maw/gate-cache}"
 TARGET_DIR="${GATE_TARGET_DIR:-$REPO_ROOT/target-gate}"
 export CARGO_TARGET_DIR="$TARGET_DIR"
+TOOLCHAIN_FILE="$REPO_ROOT/rust-toolchain.toml"
+WASM_TARGET="wasm32-unknown-unknown"
+PINNED_CHANNEL=""
 
 STEP_NAMES=()
 STEP_SECS=()
@@ -68,6 +78,85 @@ run_step() {
         release_lock
         exit 1
     fi
+}
+
+# ---- toolchain preflight (#823) ---------------------------------------------
+# Two machine-dependent verdicts this gate used to ship silently:
+#   1. rustc version. On alpha @ 5a30acab, 1.94.0 reported 2
+#      clippy::redundant_iter_cloned errors in federation_routes.rs (:294,
+#      :407) that 1.97.1 did not. Both called themselves "stable".
+#   2. the wasm32-unknown-unknown rust-std. `maw plugin build` shells out to
+#      `cargo build --release --target wasm32-unknown-unknown`, which exits 101
+#      when that rust-std is absent, so
+#      plugin_build_route_a_builds_dist_and_extism_loads_fixture fails
+#      deterministically — far into `cargo test --workspace`, as a subprocess
+#      failure that reads like a code bug rather than a missing target.
+# Both are cheap to detect up front, so detect them up front.
+#
+# Covered by scripts/test-gate-preflight.sh (standalone; run it after touching
+# anything below or after bumping the pin). It deliberately is NOT wired into
+# gate.sh — the test drives gate.sh, so calling it from here would recurse.
+pinned_channel() {
+    sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
+        "$TOOLCHAIN_FILE" 2>/dev/null | head -1
+}
+
+preflight() {
+    PINNED_CHANNEL="$(pinned_channel)"
+    # A missing pin is a REPO bug, not a machine state — no escape hatch.
+    if [ -z "$PINNED_CHANNEL" ]; then
+        echo "gate.sh: no [toolchain] channel pinned in $TOOLCHAIN_FILE" >&2
+        echo "  Without a pin, 'stable' means a different rustc on every box and" >&2
+        echo "  the gate's verdict depends on who ran it (#823)." >&2
+        exit 4
+    fi
+
+    if [ "${GATE_ALLOW_TOOLCHAIN_DRIFT:-0}" = 1 ]; then
+        echo
+        echo "WARNING: toolchain preflight skipped (GATE_ALLOW_TOOLCHAIN_DRIFT=1)." >&2
+        echo "  This run does NOT reproduce CI's toolchain; a green here certifies" >&2
+        echo "  only this machine." >&2
+        return
+    fi
+
+    # Accept EITHER form, deliberately as a union so this can only refuse less:
+    #   - the running rustc's version equals the pin (this repo pins an exact
+    #     version, so that is the normal path), or
+    #   - rustup reports the pinned name as the active toolchain (covers a
+    #     future `nightly-YYYY-MM-DD` / `beta` pin, whose rustc --version never
+    #     spells the channel name).
+    # A guard that refuses a machine which IS reproducing CI would be a bug.
+    local active active_tc
+    active="$(rustc --version 2>/dev/null | awk '{print $2}')"
+    active_tc="$(rustup show active-toolchain 2>/dev/null | awk '{print $1}')"
+    case "$active_tc" in
+        "$PINNED_CHANNEL" | "$PINNED_CHANNEL"-*) active="$PINNED_CHANNEL" ;;
+        *) ;;
+    esac
+    if [ "$active" != "$PINNED_CHANNEL" ]; then
+        echo "gate.sh: active rustc is ${active:-none}, but $TOOLCHAIN_FILE pins $PINNED_CHANNEL" >&2
+        echo "  Different rustc, different lints: 1.94.0 and 1.97.1 disagree on" >&2
+        echo "  clippy::redundant_iter_cloned on this very tree (#823)." >&2
+        echo "  Fix:    rustup toolchain install   (no args: installs the pin)" >&2
+        echo "  Check:  rustup show active-toolchain   (a rustup override or" >&2
+        echo "          RUSTUP_TOOLCHAIN in your env beats rust-toolchain.toml)" >&2
+        echo "  Or:     GATE_ALLOW_TOOLCHAIN_DRIFT=1 gate.sh $MODE   (accept the gap)" >&2
+        exit 4
+    fi
+
+    if ! rustup target list --installed 2>/dev/null | grep -qx "$WASM_TARGET"; then
+        echo "gate.sh: rust-std for $WASM_TARGET is not installed for rustc $active" >&2
+        echo "  'maw plugin build' cross-compiles to it, so cargo test --workspace" >&2
+        echo "  fails deep inside plugin_build_route_a_builds_dist_and_extism_loads_fixture" >&2
+        echo "  without it. $TOOLCHAIN_FILE lists it under 'targets', so this" >&2
+        echo "  usually means rustup could not reach the network to fetch it." >&2
+        echo "  Fix:    rustup target add $WASM_TARGET" >&2
+        echo "          (or: rustup toolchain install  — installs channel + targets)" >&2
+        echo "  Or:     GATE_ALLOW_TOOLCHAIN_DRIFT=1 gate.sh $MODE   (accept the gap)" >&2
+        exit 4
+    fi
+
+    echo "preflight: rustc $active (pinned), $WASM_TARGET installed"
 }
 
 # ---- one-gate-per-target-dir lock ------------------------------------------
@@ -183,10 +272,11 @@ quick_tests() {
 
 # ---- tiers -------------------------------------------------------------------
 gate_quick() {
+    preflight
     acquire_lock
     warm_seed
     run_step "fmt --check" cargo fmt --all -- --check
-    run_step "clippy (stable)" cargo clippy --workspace --all-targets -- -D warnings
+    run_step "clippy (pinned $PINNED_CHANNEL)" cargo clippy --workspace --all-targets -- -D warnings
     quick_tests
     summary
     echo
@@ -194,28 +284,22 @@ gate_quick() {
 }
 
 gate_full() {
+    preflight
     acquire_lock
     warm_seed
     run_step "fmt --check" cargo fmt --all -- --check
     run_step "test --workspace" cargo test --workspace --locked --no-fail-fast
-    run_step "clippy (stable)" cargo clippy --workspace --all-targets -- -D warnings
-    if rustup toolchain list 2>/dev/null | grep -q '^1\.97\.0'; then
-        run_step "clippy (+1.97.0 = CI's current stable)" cargo +1.97.0 clippy --workspace --all-targets -- -D warnings
-    elif [ "${GATE_ALLOW_MISSING_197:-0}" = 1 ]; then
-        echo
-        echo "WARNING: toolchain 1.97.0 absent — clippy dimension SKIPPED (GATE_ALLOW_MISSING_197=1)."
-        STEP_NAMES+=("clippy (+1.97.0)"); STEP_SECS+=(0); STEP_RESULTS+=("SKIPPED (allowed by env)")
-    else
-        # A full gate that silently skips a CI dimension is a false green a
-        # lead will promote on — missing toolchain is a FAILURE by default.
-        STEP_NAMES+=("clippy (+1.97.0)"); STEP_SECS+=(0); STEP_RESULTS+=("MISSING TOOLCHAIN")
-        summary
-        echo "gate.sh: toolchain 1.97.0 (CI's current stable) is not installed —" >&2
-        echo "  full cannot certify all 4 CI dimensions." >&2
-        echo "  Fix:    rustup toolchain install 1.97.0 --component clippy" >&2
-        echo "  Or:     GATE_ALLOW_MISSING_197=1 gate.sh full   (accept the gap explicitly)" >&2
-        exit 4
-    fi
+    # Dimension 3 used to run clippy TWICE: once on whatever `stable` happened
+    # to mean locally, once on a hardcoded `+1.97.0` guess at CI's stable —
+    # because neither was KNOWN to be CI's toolchain, and a missing 1.97.0
+    # hard-failed the gate (exit 4). Both halves were wrong by 2026-08-16: CI
+    # installs `stable`, which resolves to 1.97.1, so the "CI's current stable"
+    # run was 1.97.0 — itself a guess, and stale. rust-toolchain.toml now pins
+    # the toolchain and preflight() has already proven the active rustc IS that
+    # pin, so ONE run certifies the dimension exactly instead of two runs
+    # approximating it. No dimension is dropped; the guess is.
+    run_step "clippy (pinned $PINNED_CHANNEL = CI's stable)" \
+        cargo clippy --workspace --all-targets -- -D warnings
     run_step "test (wasm-host subset)" \
         cargo test -p maw-cli -p maw-plugin-manifest --features wasm-host --locked --no-fail-fast
     run_step "clippy (wasm-host subset)" \
