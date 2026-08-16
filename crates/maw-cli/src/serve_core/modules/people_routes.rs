@@ -247,8 +247,26 @@ mod tests {
             .expect("request")
     }
 
-    fn reset_dedupe() {
+    /// Serializes the tests that share `PEOPLE_DEDUPE` (#824).
+    ///
+    /// `PEOPLE_DEDUPE` is a process-global `LazyLock<Mutex<_>>` and four tests
+    /// mutate it. `reset_dedupe()` clears it but holds nothing, so a sibling
+    /// resetting mid-flight wipes the entry this test just recorded — the
+    /// second request then sees an empty store, returns OK instead of
+    /// CONFLICT, and delivers twice. That is why it passes alone and fails in
+    /// the full suite, and why the #757 env lock did not help: this is a
+    /// different global.
+    /// A tokio mutex, not a std one: three of the four callers are
+    /// `#[tokio::test]` and hold the guard across `.await`. A std `MutexGuard`
+    /// is not `Send` and pins the runtime thread if held there —
+    /// `clippy::await_holding_lock` flags exactly this, and on a multi-threaded
+    /// runtime it deadlocks rather than merely warning.
+    static DEDUPE_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    async fn reset_dedupe() -> tokio::sync::MutexGuard<'static, ()> {
+        let guard = DEDUPE_TEST_LOCK.lock().await;
         PEOPLE_DEDUPE.lock().expect("dedupe lock").clear();
+        guard
     }
 
     #[test]
@@ -293,7 +311,7 @@ mod tests {
 
     #[tokio::test]
     async fn people_analyze_delivers_one_fixed_intent_to_resolved_target() {
-        reset_dedupe();
+        let _dedupe_guard = reset_dedupe().await;
         let delivered = Arc::new(Mutex::new(Vec::new()));
         let captured = Arc::clone(&delivered);
         let response = people_analyze_with_delivery(
@@ -320,7 +338,7 @@ mod tests {
 
     #[tokio::test]
     async fn people_analyze_dedupe_prevents_second_delivery() {
-        reset_dedupe();
+        let _dedupe_guard = reset_dedupe().await;
         let deliveries = Arc::new(AtomicUsize::new(0));
         for expected in [StatusCode::OK, StatusCode::CONFLICT] {
             let deliveries = Arc::clone(&deliveries);
@@ -340,7 +358,7 @@ mod tests {
 
     #[tokio::test]
     async fn people_analyze_reports_dead_target_delivery_failure() {
-        reset_dedupe();
+        let _dedupe_guard = reset_dedupe().await;
         let response = people_analyze_with_delivery(
             Arc::new(state()),
             analyze_request("770", "people"),
