@@ -47,6 +47,19 @@ mod wake_tests {
         // proves the matcher already picked exactly one candidate and moved
         // past the ambiguity check; "ambiguous registry target" would mean
         // #711 is still live.
+        // #839: this test READS process-global GHQ_ROOT without ever naming it.
+        // `wake_resolve_registry_target` builds a candidate repo_path from the
+        // ghq root and calls `is_dir()` on it (wake_target_resolution.rs:241),
+        // so the assertion below — that the repo is NOT on disk — is a claim
+        // about process-global state. A sibling test in this file points
+        // GHQ_ROOT at a fixture that DOES contain switchaphon/rpro-ent-oracle,
+        // and when the two overlap this test sees the repo and fails.
+        //
+        // Writers of env are greppable; readers like this one are invisible —
+        // nothing in the call below suggests it consults the environment. That
+        // is why this file had 79 tests and exactly ONE lock-taker: the writer.
+        // A mutex with one participant is not a mutex.
+        let _guard = env_test_lock();
         let entries = vec![rpro_ent_fleet_entry()];
         let error = wake_resolve_registry_target("rpro-ent-oracle", &entries, &[])
             .expect_err("repo is not actually cloned in this test");
@@ -262,13 +275,42 @@ mod wake_tests {
 
     fn wake_strings(values: &[&str]) -> Vec<String> { values.iter().map(|value| (*value).to_owned()).collect() }
 
-    fn wake_temp_root(name: &str) -> std::path::PathBuf {
+    /// #839: removes the fixture on drop.
+    ///
+    /// This used to leak: the helper cleared the path on the way IN and never
+    /// on the way out, so every run left its tree behind. Measured 2026-08-16:
+    /// 15,135 stale `maw-rs-wake-fixture-*` dirs on white and 31,763 on black,
+    /// oldest three days old, 8.8% of them containing
+    /// `ghq/github.com/switchaphon/rpro-ent-oracle` — the exact repo the #711
+    /// test asserts is absent.
+    ///
+    /// That matters beyond tidiness: names are `<pid>-<counter>`, and with
+    /// `pid_max` at 4M and observed pids near 4.1M, pid reuse is live. A fresh
+    /// process can be handed a path that already exists and is already
+    /// populated — a second, independent route to the same failure that needs
+    /// no concurrent sibling at all.
+    struct WakeTempRoot {
+        path: std::path::PathBuf,
+    }
+
+    impl std::ops::Deref for WakeTempRoot {
+        type Target = std::path::Path;
+        fn deref(&self) -> &std::path::Path { &self.path }
+    }
+
+    impl Drop for WakeTempRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn wake_temp_root(name: &str) -> WakeTempRoot {
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let seq = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!("maw-rs-wake-{name}-{}-{seq}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("temp root");
-        path
+        WakeTempRoot { path }
     }
 
     struct CwdRestore {
