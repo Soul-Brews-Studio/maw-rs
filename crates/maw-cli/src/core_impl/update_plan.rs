@@ -438,6 +438,136 @@ mod update_plan_tests {
         assert_eq!(update_libc_from_override(None), None);
     }
 
+    /// How `ldd --version` behaves on the host under test.
+    #[derive(Clone, Copy)]
+    enum LddStub {
+        /// Prints to stdout and exits 0 — glibc's behaviour.
+        Stdout(&'static str),
+        /// Prints to stderr and exits non-zero — musl's actual behaviour, and
+        /// the reason install.sh captures with `2>&1 || true`.
+        StderrFail(&'static str),
+        /// No `ldd` on PATH at all, as in a minimal musl container.
+        Absent,
+    }
+
+    /// Resolve a libc the way `maw update` does: an explicit override wins,
+    /// otherwise judge the evidence.
+    fn updater_libc(override_value: &str, ldd: LddStub) -> &'static str {
+        // The updater runs `ldd` itself: text on either stream is evidence,
+        // while a binary that will not spawn leaves it with nothing to judge.
+        let evidence = match ldd {
+            LddStub::Stdout(text) | LddStub::StderrFail(text) => Some(text),
+            LddStub::Absent => None,
+        };
+        let over = (!override_value.is_empty()).then_some(override_value);
+        let libc = update_libc_from_override(over)
+            .unwrap_or_else(|| update_classify_libc(evidence, false));
+        match libc {
+            UpdateLibc::Gnu => "gnu",
+            UpdateLibc::Musl => "musl",
+        }
+    }
+
+    /// Resolve a libc the way install.sh does, by sourcing the real script and
+    /// calling the real function with `ldd` stubbed out. Loader probing is
+    /// pointed at a path that cannot exist so the on-disk branch is pinned to
+    /// the `glibc_loader_present: false` the updater side is given.
+    fn installer_libc(override_value: &str, ldd: LddStub) -> String {
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install.sh")
+            .canonicalize()
+            .expect("install.sh must sit at the repo root");
+        // `command_not_found_handle`-free way to make `ldd` genuinely absent:
+        // shadow it with a function that exits like a missing command.
+        let stub = match ldd {
+            LddStub::Stdout(_) => "ldd() { printf '%s\\n' \"$FAKE_LDD\"; }",
+            LddStub::StderrFail(_) => "ldd() { printf '%s\\n' \"$FAKE_LDD\" >&2; return 1; }",
+            LddStub::Absent => "ldd() { printf 'sh: ldd: not found\\n' >&2; return 127; }",
+        };
+        let text = match ldd {
+            LddStub::Stdout(text) | LddStub::StderrFail(text) => text,
+            LddStub::Absent => "",
+        };
+        let output = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!(". \"$MAW_INSTALL_SH\"\n{stub}\ndetect_linux_libc"))
+            .env("MAW_INSTALL_SH", &script)
+            .env("MAW_INSTALL_TESTING", "1")
+            .env("MAW_LIBC", override_value)
+            .env("FAKE_LDD", text)
+            .env("MAW_LIBC_LOADER_PATHS", "/nonexistent/maw-parity/libc.so.6")
+            .output()
+            .expect("sh must run install.sh");
+        assert!(
+            output.status.success(),
+            "install.sh detect_linux_libc failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    }
+
+    // #812: install.sh and `maw update` each implement the libc rule, the
+    // commit claimed they "mirror rule for rule", and each side's own tests
+    // passed while the pair disagreed — the updater trimmed and lowercased,
+    // the installer matched exact literals, so MAW_LIBC="MUSL" sent the two
+    // installers to different assets. Asserting the rule twice cannot catch
+    // that; only driving both from one table can.
+    #[test]
+    fn install_sh_and_updater_resolve_every_libc_input_identically() {
+        let glibc = LddStub::Stdout("ldd (Ubuntu GLIBC 2.39-0ubuntu8) 2.39");
+        let cases: &[(&str, LddStub)] = &[
+            // no override: the evidence decides
+            ("", glibc),
+            ("", LddStub::Stdout("musl libc (x86_64)")),
+            ("", LddStub::Stdout("Musl libc (x86_64)")),
+            ("", LddStub::Stdout("MUSL libc")),
+            ("", LddStub::Stdout("GNU LIBC")),
+            ("", LddStub::Stdout("gnu c library")),
+            ("", LddStub::Stdout("ldd: unrecognized option")),
+            ("", LddStub::Stdout("")),
+            // override wins over contradicting evidence
+            ("gnu", LddStub::Stdout("musl libc")),
+            ("glibc", LddStub::Stdout("musl libc")),
+            ("musl", glibc),
+            // case and surrounding whitespace must not change the answer
+            ("MUSL", glibc),
+            (" MUSL \n", glibc),
+            ("  gnu  ", LddStub::Stdout("musl libc")),
+            ("GLIBC", LddStub::Stdout("musl libc")),
+            ("\tMusl\t", glibc),
+            // a .envrc edited on Windows leaves a trailing CR
+            ("musl\r", glibc),
+            ("gnu\r\n", LddStub::Stdout("musl libc")),
+            // unrecognized overrides fall through to the evidence
+            ("uclibc", glibc),
+            ("uclibc", LddStub::Stdout("musl libc")),
+            // interior whitespace is not a shipped name on either side
+            ("mu sl", glibc),
+            // musl's real ldd: writes to stderr and exits non-zero
+            ("", LddStub::StderrFail("musl libc (x86_64)\nVersion 1.2.5")),
+            ("", LddStub::StderrFail("ldd: unrecognized option")),
+            ("gnu", LddStub::StderrFail("musl libc (x86_64)")),
+            // no ldd on PATH at all, as in a minimal musl container
+            ("", LddStub::Absent),
+            ("gnu", LddStub::Absent),
+            ("musl", LddStub::Absent),
+        ];
+
+        for (override_value, ldd) in cases {
+            let installer = installer_libc(override_value, *ldd);
+            let updater = updater_libc(override_value, *ldd);
+            let shown = match ldd {
+                LddStub::Stdout(text) => format!("stdout {text:?}"),
+                LddStub::StderrFail(text) => format!("stderr+fail {text:?}"),
+                LddStub::Absent => "absent".to_owned(),
+            };
+            assert_eq!(
+                installer, updater,
+                "libc parity broke for MAW_LIBC={override_value:?} ldd={shown}: install.sh said {installer}, maw update said {updater}"
+            );
+        }
+    }
+
     #[test]
     fn update_glibc_loader_paths_are_absolute_and_nonempty() {
         assert!(!UPDATE_GLIBC_LOADER_PATHS.is_empty());

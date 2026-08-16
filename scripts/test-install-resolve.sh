@@ -240,4 +240,91 @@ if (fallback_if_unrunnable v26.7.23 "$fallback_root" >/dev/null 2>&1); then
 fi
 rm -rf "$fallback_root"
 
+# #812: a release that does not carry the gnu asset must degrade to musl rather
+# than 404 and die. Every published release today is musl-only, and pinned or
+# stable tags can never gain a gnu asset, so without this the installer breaks
+# on every glibc host the moment the new detect_platform lands on alpha.
+#
+# The fallback must fire ONLY on a genuine 404. Downgrading on a 5xx or a
+# rate-limit would silently hand a glibc host the musl build, which cannot
+# resolve .local names — reintroducing #812 itself, invisibly.
+missing_root=$(mktemp -d "${TMPDIR:-/tmp}/maw-install-missing.XXXXXX")
+
+# The fallback tests above replace download_and_verify with a stub; re-source
+# to get the real one back before exercising it here.
+# shellcheck disable=SC1090
+. "$ROOT/install.sh"
+
+# shellcheck disable=SC2329
+download_to() {
+  case "$1" in
+    *.sha256) printf 'c0ffee  asset\n' > "$2" ;;
+    *) printf 'binary\n' > "$2" ;;
+  esac
+}
+# shellcheck disable=SC2329
+sha256_file() {
+  printf 'c0ffee\n'
+}
+
+# shellcheck disable=SC2329
+download_probe_to() {
+  case "$1" in
+    *-gnu) printf 'missing\n' ;;
+    *) printf 'found\n' ;;
+  esac
+}
+download_and_verify v26.7.16 maw-rs-linux-x86_64-gnu "$missing_root" >/dev/null 2>&1
+assert_eq maw-rs-linux-x86_64-musl "$asset" "unpublished gnu asset falls back to musl"
+assert_eq "$missing_root/maw-rs-linux-x86_64-musl" "$DOWNLOADED_BIN" \
+  "missing-asset fallback re-downloads the musl asset"
+
+# A server error is NOT absence: it must stay fatal rather than downgrade.
+# shellcheck disable=SC2329
+download_probe_to() {
+  printf 'error\n'
+}
+if (download_and_verify v26.7.16 maw-rs-linux-x86_64-gnu "$missing_root" >/dev/null 2>&1); then
+  printf 'FAIL server error must not silently fall back to musl\n' >&2
+  exit 1
+fi
+
+# A missing musl asset is a real packaging failure, with nothing to degrade to.
+# shellcheck disable=SC2329
+download_probe_to() {
+  printf 'missing\n'
+}
+if (download_and_verify v26.7.16 maw-rs-linux-x86_64-musl "$missing_root" >/dev/null 2>&1); then
+  printf 'FAIL missing musl asset must be fatal\n' >&2
+  exit 1
+fi
+
+# macOS has no sibling to degrade to either.
+if (download_and_verify v26.7.16 maw-rs-macos-arm64 "$missing_root" >/dev/null 2>&1); then
+  printf 'FAIL missing macOS asset must be fatal\n' >&2
+  exit 1
+fi
+
+# A truncated or corrupted download arrives as a perfectly good HTTP 200, so
+# nothing keyed on status can see it — the checksum is the only thing standing
+# there. It must stay fatal and must NOT reach the gnu -> musl fallback: a
+# corrupt gnu asset is a broken artifact, not an absent one, and degrading
+# would hand a glibc host the musl build (no .local/mDNS, #812) while hiding a
+# real packaging failure behind a silent downgrade.
+# shellcheck disable=SC2329
+download_probe_to() {
+  printf 'found\n'
+}
+# shellcheck disable=SC2329
+sha256_file() {
+  printf 'truncated-does-not-match\n'
+}
+asset=maw-rs-linux-x86_64-gnu
+if (download_and_verify v26.7.16 maw-rs-linux-x86_64-gnu "$missing_root" >/dev/null 2>&1); then
+  printf 'FAIL a checksum mismatch must be fatal\n' >&2
+  exit 1
+fi
+assert_eq maw-rs-linux-x86_64-gnu "$asset" "a corrupt gnu asset must not fall back to musl"
+rm -rf "$missing_root"
+
 printf 'install resolve_version + libc detection + fallback tests: ok\n'

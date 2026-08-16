@@ -159,10 +159,15 @@ fn update_execute(request: &UpdateRequest150) -> Result<String, String> {
         let _ = writeln!(out, "  host libc: {}{}", update_libc_label(libc), update_libc_note(libc));
     }
 
-    let backup = update_download_verify_replace(&mut out, &target.tag, asset, &install_target)?;
+    // The asset that actually landed, which is not always the one asked for:
+    // a release without the gnu artifact degrades to musl. Annotating a proof
+    // failure against the requested asset would tell a host that just received
+    // the musl build to retry with MAW_LIBC=musl.
+    let (backup, installed_asset) =
+        update_download_verify_replace(&mut out, &target.tag, asset, &install_target)?;
 
     let proof = update_prove_and_finalize(&install_target, backup.as_deref())
-        .map_err(|error| update_annotate_proof_failure(error, asset))?;
+        .map_err(|error| update_annotate_proof_failure(error, installed_asset))?;
     let _ = writeln!(out, "  proof (`{} version`):\n{proof}", install_target.display());
     if update_maw_serve_running() {
         out.push_str("  maw-serve runs under PM2 — restart it to pick up the new binary: pm2 restart maw-serve\n");
@@ -235,25 +240,56 @@ fn update_libc_note(libc: UpdateLibc) -> &'static str {
 /// is renamed into place, so there is no verify-then-copy swap window.
 /// Returns the backup path (old binary moved aside); the caller keeps it
 /// until the version proof passes and restores it if the proof fails.
-fn update_download_verify_replace(
+/// The asset to try after `asset` turned out not to exist in a release.
+///
+/// Only ever gnu -> musl, and only once: musl is the static build that runs
+/// anywhere, so it is the floor. A missing musl or macOS asset is a real
+/// packaging failure with nothing to degrade to, and must stay fatal.
+fn update_asset_fallback_after_not_found(asset: &str) -> Option<&'static str> {
+    asset.ends_with("-gnu").then_some("maw-rs-linux-x86_64-musl")
+}
+
+fn update_download_verify_replace<'a>(
     out: &mut String,
     tag: &str,
-    asset: &str,
+    asset: &'a str,
     install_target: &std::path::Path,
-) -> Result<Option<std::path::PathBuf>, String> {
+) -> Result<(Option<std::path::PathBuf>, &'a str), String> {
     use std::fmt::Write as _;
 
-    let asset_url = update_download_url(tag, asset);
+    let mut asset = asset;
+    let mut asset_url = update_download_url(tag, asset);
     let _ = writeln!(out, "  downloading {asset} ({tag}) ...");
-    let binary_bytes = update_http_get_bytes(&asset_url, std::time::Duration::from_mins(10))?;
-    let sidecar_bytes = update_http_get_bytes(&format!("{asset_url}.sha256"), std::time::Duration::from_mins(1))?;
+    let binary_bytes = match update_http_get_bytes(&asset_url, std::time::Duration::from_mins(10)) {
+        Ok(bytes) => bytes,
+        // #812: every release cut before the gnu artifact existed — and every
+        // pinned or stable tag, permanently — carries musl only. Degrade to it
+        // rather than abort, but say so: a glibc host that silently receives
+        // the static build loses .local/mDNS resolution, which is the very bug
+        // the gnu artifact was added to fix.
+        Err(error) => {
+            let Some(fallback) =
+                update_asset_fallback_after_not_found(asset).filter(|_| error.is_not_found())
+            else {
+                return Err(error.into_message());
+            };
+            let _ = writeln!(out, "  {asset} is not published for {tag} — falling back to {fallback}");
+            let _ = writeln!(out, "  note: the musl build CANNOT resolve .local/mDNS names (#812)");
+            asset = fallback;
+            asset_url = update_download_url(tag, asset);
+            update_http_get_bytes(&asset_url, std::time::Duration::from_mins(10))
+                .map_err(UpdateHttpError::into_message)?
+        }
+    };
+    let sidecar_bytes = update_http_get_bytes(&format!("{asset_url}.sha256"), std::time::Duration::from_mins(1))
+        .map_err(UpdateHttpError::into_message)?;
     let expected = update_parse_sha256_sidecar(&String::from_utf8_lossy(&sidecar_bytes))
         .ok_or_else(|| format!("malformed sha256 sidecar for {asset} — refusing to install"))?;
 
     let backup = update_safe_replace(install_target, &binary_bytes, &expected)?;
     let _ = writeln!(out, "  sha256 verified: {expected}");
     let _ = writeln!(out, "  installed: {} (old binary moved aside — new inode)", install_target.display());
-    Ok(backup)
+    Ok((backup, asset))
 }
 
 fn update_resolve_install_target() -> Result<std::path::PathBuf, String> {
@@ -404,9 +440,47 @@ fn update_maw_serve_running() -> bool {
         .is_ok_and(|status| status.success())
 }
 
+/// A failed GET, split so callers can tell "this object does not exist" from
+/// every other reason a request can fail.
+///
+/// #812: only a 404 means a release simply does not carry an asset, which is
+/// recoverable by choosing a different one. A 403, a rate-limit, a 5xx or a
+/// dropped connection must never be read as absence — silently downgrading a
+/// glibc host to the musl build because GitHub had a bad minute reintroduces
+/// the .local/mDNS bug this change exists to fix, with no indication why.
+enum UpdateHttpError {
+    NotFound(String),
+    Other(String),
+}
+
+/// Classify a non-2xx response. Exactly 404 counts as absence — never a 4xx
+/// range: a 403 is a rate-limit or a private repo, a 401 is bad credentials,
+/// and neither means the asset does not exist.
+fn update_http_status_error(url: &str, status: reqwest::StatusCode) -> UpdateHttpError {
+    let message = format!("GET {url} -> HTTP {status}");
+    if status == reqwest::StatusCode::NOT_FOUND {
+        UpdateHttpError::NotFound(message)
+    } else {
+        UpdateHttpError::Other(message)
+    }
+}
+
+impl UpdateHttpError {
+    fn is_not_found(&self) -> bool {
+        matches!(self, Self::NotFound(_))
+    }
+
+    fn into_message(self) -> String {
+        match self {
+            Self::NotFound(message) | Self::Other(message) => message,
+        }
+    }
+}
+
 fn update_fetch_release_tags() -> Result<Vec<String>, String> {
     let url = format!("https://api.github.com/repos/{UPDATE_REPO}/releases?per_page=50");
-    let bytes = update_http_get_bytes(&url, std::time::Duration::from_secs(30))?;
+    let bytes = update_http_get_bytes(&url, std::time::Duration::from_secs(30))
+        .map_err(UpdateHttpError::into_message)?;
     let value: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|error| format!("releases API returned invalid JSON: {error}"))?;
     let releases = value
@@ -419,41 +493,44 @@ fn update_fetch_release_tags() -> Result<Vec<String>, String> {
         .collect())
 }
 
-fn update_http_get_bytes(url: &str, timeout: std::time::Duration) -> Result<Vec<u8>, String> {
+fn update_http_get_bytes(url: &str, timeout: std::time::Duration) -> Result<Vec<u8>, UpdateHttpError> {
     let url = url.to_owned();
     let handle = std::thread::spawn(move || {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .map_err(|error| format!("update runtime failed: {error}"))?;
+            .map_err(|error| UpdateHttpError::Other(format!("update runtime failed: {error}")))?;
         runtime.block_on(update_http_get_bytes_async(&url, timeout))
     });
     handle
         .join()
-        .unwrap_or_else(|_| Err("update download thread panicked".to_owned()))
+        .unwrap_or_else(|_| Err(UpdateHttpError::Other("update download thread panicked".to_owned())))
 }
 
-async fn update_http_get_bytes_async(url: &str, timeout: std::time::Duration) -> Result<Vec<u8>, String> {
+async fn update_http_get_bytes_async(
+    url: &str,
+    timeout: std::time::Duration,
+) -> Result<Vec<u8>, UpdateHttpError> {
     let client = reqwest::Client::builder()
         .timeout(timeout)
         .user_agent(UPDATE_USER_AGENT)
         .build()
-        .map_err(|error| format!("http client failed: {error}"))?;
+        .map_err(|error| UpdateHttpError::Other(format!("http client failed: {error}")))?;
     let response = client
         .get(url)
         .header("Accept", "application/vnd.github+json, application/octet-stream")
         .send()
         .await
-        .map_err(|error| format!("GET {url} failed: {error}"))?;
+        .map_err(|error| UpdateHttpError::Other(format!("GET {url} failed: {error}")))?;
     let status = response.status();
     if !status.is_success() {
-        return Err(format!("GET {url} -> HTTP {status} (release or asset not found?)"));
+        return Err(update_http_status_error(url, status));
     }
     response
         .bytes()
         .await
         .map(|bytes| bytes.to_vec())
-        .map_err(|error| format!("GET {url} body failed: {error}"))
+        .map_err(|error| UpdateHttpError::Other(format!("GET {url} body failed: {error}")))
 }
 
 fn update_output(code: i32, stdout: String, stderr: String) -> CliOutput { CliOutput { code, stdout, stderr } }
@@ -520,6 +597,42 @@ mod update_upgrade_tests150 {
         assert_eq!(parsed.channel, Some(UpdateChannel::Alpha));
         let parsed = update_parse_request("update", &update_args(&["v26.7.16"])).expect("parse");
         assert_eq!(parsed.version.as_deref(), Some("v26.7.16"));
+    }
+
+    // #812: only the gnu asset has somewhere to degrade to. A missing musl or
+    // macOS asset is a packaging failure and must stay fatal.
+    #[test]
+    fn update_asset_fallback_only_downgrades_gnu_to_musl() {
+        assert_eq!(
+            update_asset_fallback_after_not_found("maw-rs-linux-x86_64-gnu"),
+            Some("maw-rs-linux-x86_64-musl")
+        );
+        assert_eq!(update_asset_fallback_after_not_found("maw-rs-linux-x86_64-musl"), None);
+        assert_eq!(update_asset_fallback_after_not_found("maw-rs-macos-arm64"), None);
+    }
+
+    // The fallback keys off this classification, so widening it to a 4xx range
+    // would turn a rate-limit or an auth failure into a silent downgrade to
+    // the musl build — which cannot resolve .local names, the very bug the gnu
+    // artifact exists to fix. Only 404 may ever mean "absent".
+    #[test]
+    fn update_http_only_404_counts_as_a_missing_asset() {
+        let url = "https://example.invalid/asset";
+        assert!(update_http_status_error(url, reqwest::StatusCode::NOT_FOUND).is_not_found());
+        for status in [
+            reqwest::StatusCode::UNAUTHORIZED,
+            reqwest::StatusCode::FORBIDDEN,
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            reqwest::StatusCode::BAD_GATEWAY,
+            reqwest::StatusCode::SERVICE_UNAVAILABLE,
+            reqwest::StatusCode::GATEWAY_TIMEOUT,
+        ] {
+            assert!(
+                !update_http_status_error(url, status).is_not_found(),
+                "HTTP {status} must not be read as a missing asset"
+            );
+        }
     }
 
     #[test]

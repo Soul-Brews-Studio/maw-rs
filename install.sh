@@ -96,6 +96,44 @@ download_to() {
   fi
 }
 
+# Like download_to, but reports a MISSING remote object separately from every
+# other failure. Prints "found", "missing", or "error"; never exits.
+#
+# Only a 404 means "this release does not carry that asset", which is
+# recoverable by choosing a different one. A 403, a 5xx, a rate-limit or a
+# dropped connection must NOT be treated as absence: downgrading the artifact
+# because GitHub had a bad minute would silently hand a glibc host the musl
+# build, which cannot resolve .local names (#812) — reintroducing the exact bug
+# this change exists to fix, invisibly. Ambiguity reports "error" and the
+# caller dies loudly.
+download_probe_to() {
+  probe_url=$1
+  probe_out=$2
+  if have curl; then
+    # No -f: we want the status line rather than a generic exit 22 for every
+    # 4xx/5xx. The error body lands in $probe_out and is discarded by the
+    # caller on any non-200.
+    probe_code=$(curl -sSL -o "$probe_out" -w '%{http_code}' "$probe_url" 2>/dev/null) || {
+      printf 'error\n'
+      return
+    }
+  elif have wget; then
+    # wget collapses all server errors into exit 8, so read the status line it
+    # prints with -S (on stderr) instead of trusting the exit code.
+    probe_headers=$(wget -S -q -O "$probe_out" "$probe_url" 2>&1) || true
+    probe_code=$(printf '%s\n' "$probe_headers" |
+      awk '/^[[:space:]]*HTTP\/[0-9.]+ [0-9]+/ { code = $2 } END { print code }')
+    [ -n "$probe_code" ] || probe_code=000
+  else
+    die "need curl or wget to download releases"
+  fi
+  case "$probe_code" in
+    200) printf 'found\n' ;;
+    404) printf 'missing\n' ;;
+    *) printf 'error\n' ;;
+  esac
+}
+
 download_stdout() {
   url=$1
   if have curl; then
@@ -193,8 +231,31 @@ resolve_version() {
 #   4. a glibc dynamic loader present on disk -> gnu.
 #   5. anything else -> musl. Ambiguity always degrades to the static build:
 #      a binary that runs beats a dynamic one that does not.
+# Strip leading/trailing whitespace and lowercase, matching Rust's
+# `.trim().to_ascii_lowercase()`. The Rust side normalized and this side did
+# not, so the same input picked different assets: MAW_LIBC="MUSL" resolved to
+# musl for `maw update` and to gnu for the installer. Only the ends are
+# trimmed — deleting interior whitespace would accept "mu sl", which Rust
+# rejects, trading one divergence for another.
+normalize_libc_token() {
+  token=$1
+  while :; do
+    case $token in
+      [[:space:]]*) token=${token#?} ;;
+      *) break ;;
+    esac
+  done
+  while :; do
+    case $token in
+      *[[:space:]]) token=${token%?} ;;
+      *) break ;;
+    esac
+  done
+  printf '%s' "$token" | tr '[:upper:]' '[:lower:]'
+}
+
 detect_linux_libc() {
-  case "${MAW_LIBC:-}" in
+  case "$(normalize_libc_token "${MAW_LIBC:-}")" in
     gnu|glibc) printf 'gnu\n'; return ;;
     musl) printf 'musl\n'; return ;;
     '') ;;
@@ -202,9 +263,9 @@ detect_linux_libc() {
   esac
 
   ldd_out=$(ldd --version 2>&1 || true)
-  case "$ldd_out" in
-    *musl*|*MUSL*) printf 'musl\n'; return ;;
-    *GLIBC*|*glibc*|*"GNU libc"*|*"GNU C Library"*) printf 'gnu\n'; return ;;
+  case "$(printf '%s' "$ldd_out" | tr '[:upper:]' '[:lower:]')" in
+    *musl*) printf 'musl\n'; return ;;
+    *glibc*|*"gnu libc"*|*"gnu c library"*) printf 'gnu\n'; return ;;
     *) ;;
   esac
 
@@ -267,7 +328,28 @@ download_and_verify() {
   sidecar="$tmpdir/$asset.sha256"
 
   say "downloading: $base/$asset"
-  download_to "$base/$asset" "$bin"
+  case "$(download_probe_to "$base/$asset" "$bin")" in
+    found) ;;
+    missing)
+      # This release predates the gnu artifact, or a pinned/stable tag will
+      # never carry it. Only ever downgrade gnu -> musl; a missing musl or
+      # macOS asset is a real packaging failure and must still be fatal.
+      case "$asset" in
+        *-gnu)
+          warn "$asset is not published for $tag — falling back to the static musl build"
+          warn "note the musl build CANNOT resolve .local/mDNS names (#812)"
+          warn "to get the glibc build, install a release that ships it"
+          asset=maw-rs-linux-x86_64-musl
+          bin="$tmpdir/$asset"
+          sidecar="$tmpdir/$asset.sha256"
+          say "downloading: $base/$asset"
+          download_to "$base/$asset" "$bin"
+          ;;
+        *) die "release $tag does not contain $asset" ;;
+      esac
+      ;;
+    *) die "failed to download $asset from $tag (network or server error)" ;;
+  esac
   download_to "$base/$asset.sha256" "$sidecar"
 
   expected=$(awk 'NR == 1 {print $1}' "$sidecar")
@@ -303,10 +385,25 @@ fallback_if_unrunnable() {
     *-gnu) ;;
     *) return 0 ;;
   esac
-  if binary_runs_here "$DOWNLOADED_BIN"; then
+  probe_status=0
+  binary_runs_here "$DOWNLOADED_BIN" || probe_status=$?
+  if [ "$probe_status" -eq 0 ]; then
     return 0
   fi
-  warn "the glibc build will not start on this host (glibc older than the build's?)"
+  # POSIX reserves 126 for "found but could not be executed", which is what a
+  # noexec mount (a standard CIS hardening on /tmp) produces. That is a
+  # statement about the DIRECTORY, not about the binary — but this probe cannot
+  # tell the difference, so it must not pretend to. Downgrading silently here
+  # would regress hosts that install fine today, so say exactly what happened
+  # and how to override it. See #812 follow-up.
+  if [ "$probe_status" -eq 126 ]; then
+    warn "could not execute the downloaded binary to verify it (exit 126)"
+    warn "this usually means the download directory is mounted noexec, not that the build is wrong"
+    warn "falling back to the static musl build, which may not be what you want here"
+    warn "to keep the glibc build: re-run with MAW_LIBC=gnu and TMPDIR set to an executable directory"
+  else
+    warn "the glibc build will not start on this host (glibc older than the build's?)"
+  fi
   warn "falling back to the static musl build — note it CANNOT resolve .local/mDNS names"
   asset=maw-rs-linux-x86_64-musl
   download_and_verify "$fallback_tag" "$asset" "$fallback_tmpdir"
