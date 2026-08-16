@@ -48,6 +48,25 @@ cores ⇒ contention multiplier ≈ N. Instead:
    inspection).
 4. Promote/release still requires a full gate on the final `alpha` tip.
 
+## Worktree base resolution (`maw worktree`)
+
+`maw worktree` no longer hardcodes `origin/alpha` (#749). Both the default `add
+--base` and the `merged?` column that `ls` shows and `clean` acts on come from the
+same resolution, always run against the **primary worktree** so the answer does not
+change with the caller's cwd:
+
+1. `git rev-parse --abbrev-ref --symbolic-full-name @{upstream}` — the tracking
+   upstream of the primary worktree's branch. This is what makes maw-rs resolve
+   `origin/alpha` rather than its `main` default branch.
+2. `git symbolic-ref --quiet --short refs/remotes/origin/HEAD` — the remote default
+   branch, for repos whose primary worktree has no tracking upstream.
+3. Neither resolved ⇒ the base is *unresolved*. `add` still tries `origin/alpha` (git
+   reports a clear error if it does not exist), while `ls` reports every branch as
+   `unmerged` and `clean` removes nothing. An unproven base never deletes a worktree.
+
+Pass `maw worktree add <name> --base <ref>` to bypass resolution entirely; an explicit
+base issues no probe at all.
+
 ## Golden warm cache
 
 `scripts/gate-cache-refresh.sh` builds workspace test + clippy artifacts,
