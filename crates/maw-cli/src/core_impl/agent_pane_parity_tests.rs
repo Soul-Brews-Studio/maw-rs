@@ -119,9 +119,28 @@ mod agent_pane_parity_tests {
         ParityCase {
             command: "node",
             title: "building the thing",
-            expect_command: true,
-            expect_pane: true,
-            why: "node launcher path for an agent",
+            expect_command: false,
+            expect_pane: false,
+            why: "inherited dead weight: reached maw-rs via #770's maw-js port, where it is a \
+                  VENDORED substring regex matching `nodemon` too. maw-js runs under bun and \
+                  send-keys `claude`; no launcher reports `node`. 31 panes measured, zero",
+        },
+        ParityCase {
+            command: "nodejs",
+            title: "building the thing",
+            expect_command: false,
+            expect_pane: false,
+            why: "Debian's package name for the same interpreter; out for the same reason as \
+                  `node` itself",
+        },
+        ParityCase {
+            command: "node",
+            title: "delivered to a replaced pane",
+            expect_command: false,
+            expect_pane: false,
+            why: "SYMPTOM at serve_agent_pane_guard, where matching SUPPRESSES: false here means \
+                  the #709 'likely misaddressed' warning FIRES, which is what a node process \
+                  standing where an agent used to be should produce",
         },
         ParityCase {
             command: "gemini",

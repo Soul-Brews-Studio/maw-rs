@@ -141,6 +141,24 @@ pub fn is_claude_like_pane(pane_current_command: Option<&str>) -> bool {
     is_three_part_numeric_version(command.trim())
 }
 
+/// Exactly three numeric segments — this arm is, in practice, macOS-only.
+///
+/// Why a version string reaches `pane_current_command` at all: on Linux the
+/// field is argv0 (measured on white and black with
+/// `exec -a FAKEARGV0 node` -- tmux reported `FAKEARGV0`, not `/proc/comm`),
+/// and Claude Code's argv0 is `claude`. macOS tmux uses a different osdep
+/// path and reports the version instead, which matches the directory Claude
+/// Code installs each build into (`~/.local/share/claude/versions/<N.N.N>`).
+/// The macOS mechanism is INFERRED from the observation, not measured --
+/// nobody has probed proc_pidpath() directly. Observed 2026-08-16: black
+/// 19/19 `claude`, white 4/4 `claude`, m5 (macOS) 0/7 `claude` and 7/7 version.
+///
+/// So this rule TRACKS A THIRD PARTY'S NAMING SCHEME. If Claude Code ever
+/// ships a build as `2.1.233.1`, every macOS agent pane in the fleet stops
+/// matching at once — and no Linux host, CI runner included, would show it.
+/// Two serve-side copies used to accept 4+ segments; that accepted a shape
+/// the scheme cannot currently produce, so tightening to 3 loses nothing real
+/// but does bind us to the scheme staying three-part.
 fn is_three_part_numeric_version(value: &str) -> bool {
     let mut parts = value.split('.');
     let first = parts.next().unwrap_or_default();

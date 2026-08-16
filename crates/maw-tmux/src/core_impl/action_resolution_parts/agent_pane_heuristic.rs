@@ -26,8 +26,8 @@
 /// Composes [`is_claude_like_pane`] (claude substring + three-part numeric
 /// version) with the other agent launchers. Distinctive names (`claude`,
 /// `codex`) match anywhere in the command line; generic English words
-/// (`node`, `gemini`) must be the program actually being run, so `nodemon`
-/// and `geminix` stay out.
+/// (`gemini`) must be the program actually being run, so `geminix`
+/// stays out.
 #[must_use]
 pub fn is_agent_pane_command(pane_current_command: Option<&str>) -> bool {
     if is_claude_like_pane(pane_current_command) {
@@ -40,7 +40,28 @@ pub fn is_agent_pane_command(pane_current_command: Option<&str>) -> bool {
     if lower.contains("codex") {
         return true;
     }
-    matches!(agent_pane_program_name(&lower), "node" | "gemini")
+    // `node` is deliberately ABSENT -- and NOT because the string is
+    // unreachable. It is reachable: `pane_current_command` is argv0, so any
+    // plainly-launched Node process reports `node`. Measured on white and
+    // black, tmux 3.4, by making the three candidate fields disagree:
+    //
+    //   bash -c 'exec -a FAKEARGV0 node -e "..."'
+    //     tmux pane_current_command = FAKEARGV0   (argv0)
+    //     /proc/<pid>/comm          = MainThread  (Node names its main thread)
+    //     exe basename              = node
+    //
+    // So a `node` pane is a real thing this predicate will meet. It is
+    // excluded because when it IS met, the pane is a bare interpreter and not
+    // an agent -- which is exactly the #709 pane-replacement case that should
+    // draw a warning rather than be silently treated as an agent.
+    //
+    // Provenance, for whoever finds this via #770: `node` reached maw-rs by
+    // porting maw-js's detection, where it lives in
+    // src/vendor/mpr-plugins/talk-to/impl.ts:192 as `/claude|codex|node/i` --
+    // a VENDORED substring regex that also matches `nodemon`. maw-js itself
+    // spawns `claude` into panes (wake-pane-size.ts:12) and runs under bun,
+    // so it never relied on this arm for its own agents.
+    agent_pane_program_name(&lower) == "gemini"
 }
 
 /// argv0 with any directory prefix stripped, e.g. `/usr/bin/node --x` -> `node`.

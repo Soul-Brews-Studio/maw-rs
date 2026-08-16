@@ -71,6 +71,20 @@ fn serve_non_agent_pane_warning_from_panes(
     let (session_name, _) = resolved.split_once(':')?;
     let window_name = serve_window_name_for_resolved_target(sessions, resolved)?;
     let pane = serve_pane_for_resolved_target(panes, session_name, &window_name)?;
+    // INVERTED CALL SITE: matching SUPPRESSES the warning.
+    //
+    // Everywhere else a match means "act on this pane". Here it means "stay
+    // quiet", so widening the predicate NARROWS this guard, and any widening
+    // is a decision to go silent for the widened shapes. That is why bare
+    // `node` must not match: a `node` pane where an agent used to be is the
+    // pane-replacement case #709 was built for, and matching it would delete
+    // both this warning and the delivered-non-agent lifecycle log.
+    //
+    // The reverse error is not free either: this warning fired on 7 of 7
+    // healthy panes on m5 and its reader learned to ignore it, which destroys
+    // the true positives along with the false ones. Both directions cost
+    // something, so changes here get pinned by symptom in the parity table,
+    // not by boolean.
     if serve_pane_looks_like_agent(&pane.command, &pane.title) {
         return None;
     }

@@ -313,7 +313,7 @@ pub(crate) fn agentstatus_oracle_from_feed_payload(payload: &[u8]) -> Option<Str
 
 /// #813: the hardcoded arms (claude / codex / version shape / exact `node`)
 /// moved into the shared `maw_tmux::is_agent_pane_command` — this file was one
-/// of only two that already had the version arm, and its exact-`node` rule is
+/// of only two that already had the version arm, and its argv0-exact rule is
 /// the one the shared predicate adopted for every generic launcher name. The
 /// per-deployment `configured_bins` arm is genuinely local and stays here.
 pub(crate) fn agentstatus_is_agent_command(cmd: &str, configured_bins: &[String]) -> bool {
@@ -715,13 +715,17 @@ mod tests {
     #[test]
     fn agentstatus_is_agent_command_matches_keywords_versions_and_exact_bins() {
         let configured = vec!["omx --direct".to_owned()];
-        for command in ["claude", "codex", "node", "1.2.3", "omx"] {
+        for command in ["claude", "codex", "1.2.3", "omx"] {
             assert!(
                 agentstatus_is_agent_command(command, &configured),
                 "{command}"
             );
         }
-        for command in ["bash", "zsh", "nodemon", ""] {
+        // `node` sits beside `nodemon` deliberately (#813): it reached maw-rs
+        // through #770's port of maw-js, where it is a VENDORED substring regex
+        // (`/claude|codex|node/i`) that matches `nodemon` too. No launcher in
+        // either codebase reports `node` as pane_current_command.
+        for command in ["bash", "zsh", "node", "nodemon", ""] {
             assert!(
                 !agentstatus_is_agent_command(command, &configured),
                 "{command}"
