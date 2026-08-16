@@ -28,6 +28,14 @@ debug can be dead in the shipped artifact. `curl` is glibc and resolves `.local`
 even on black, so `curl` proving a hostname works proves nothing about the musl
 binary. Point Linux peers at IPs / WireGuard, not `.local`.
 
+> **Update (#812):** releases now ship **both** Linux x86_64 binaries —
+> `maw-rs-linux-x86_64-gnu` (dynamic glibc, resolves `.local`) alongside
+> `maw-rs-linux-x86_64-musl` (static, still cannot). `install.sh` and
+> `maw update` autodetect and prefer gnu on a glibc host; `MAW_LIBC=gnu|musl`
+> forces it. The lesson stands: check *which* binary is installed
+> (`file "$(command -v maw)"` — "dynamically linked" vs "static-pie") before
+> concluding anything about `.local` resolution.
+
 **`rtk` mangles piped `ps`/`ls`/`wc` output** — it rewrites the stream and you can
 read "0 processes" for a live build, or a header row where a path should be. Use
 `rtk proxy <cmd>` or a dedicated tool when parsing output; don't trust a piped
