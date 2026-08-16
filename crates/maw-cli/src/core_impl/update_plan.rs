@@ -473,6 +473,13 @@ mod update_plan_tests {
     /// pointed at a path that cannot exist so the on-disk branch is pinned to
     /// the `glibc_loader_present: false` the updater side is given.
     fn installer_libc(override_value: &str, ldd: LddStub) -> String {
+        // `Command` snapshots the parent's environment at spawn, and several
+        // sibling tests mutate process-global env with set_var/remove_var
+        // (#757). Without this lock the child can inherit a half-applied
+        // environment from another test and resolve a different libc, which
+        // made this test pass alone and fail ~2 runs in 3 inside the full
+        // suite.
+        let _guard = env_test_lock();
         let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../install.sh")
             .canonicalize()
