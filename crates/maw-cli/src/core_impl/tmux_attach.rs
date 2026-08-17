@@ -67,7 +67,18 @@ fn run_attach_plan(argv: &[String]) -> CliOutput {
     }
     if alive.is_empty() {
         let mut client = TmuxClient::local();
-        alive = client.list_session_names().into_iter().collect();
+        // #860: a tmux connect failure must not silently masquerade as "no
+        // live sessions" (which then reads as "target not found" below).
+        alive = match client.list_session_names() {
+            Ok(names) => names.into_iter().collect(),
+            Err(error) => {
+                return CliOutput {
+                    code: 1,
+                    stdout: String::new(),
+                    stderr: format!("attach: tmux unreachable: {error}\n"),
+                }
+            }
+        };
     }
     let resolved_target = match resolve_tmux_attach_session(&target, &alive) {
         TmuxAttachSessionResolution::Match { session }
@@ -452,7 +463,11 @@ fn resolve_local_tmux_command_target(
     client: &mut TmuxClient<maw_tmux::CommandTmuxRunner>,
     query: &str,
 ) -> Result<String, String> {
-    let sessions = tmux_sessions_to_route_sessions(client.list_all());
+    let sessions = tmux_sessions_to_route_sessions(
+        client
+            .list_all()
+            .map_err(|error| format!("tmux unreachable: {error}"))?,
+    );
     resolve_local_tmux_target_from_sessions(query, &sessions)
 }
 

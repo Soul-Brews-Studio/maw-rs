@@ -78,6 +78,11 @@ fn send_args_for_inbox_hey(query: &str, message: &str) -> SendArgs {
     }
 }
 
+// #860: already at clippy's line budget before this change; the tmux-unreachable
+// match added here (necessary so a connect failure surfaces distinctly instead
+// of silently defaulting) pushed it over. Splitting this dispatch further would
+// fragment one linear routing flow across Local/SelfNode/Peer/inbox-only arms.
+#[allow(clippy::too_many_lines)]
 async fn run_send_like_async_with_args(
     command: &str,
     send_args: SendArgs,
@@ -87,7 +92,10 @@ async fn run_send_like_async_with_args(
     let config = load_hey_config();
     let sender_oracle = resolve_hey_sender_oracle_for_from(&config, send_args.from.as_deref());
     let mut tmux = TmuxClient::local();
-    let sessions = route_sessions_from_tmux(&mut tmux);
+    let sessions = match route_sessions_from_tmux(&mut tmux) {
+        Ok(sessions) => sessions,
+        Err(message) => return send_tmux_unreachable_error(command, &message),
+    };
     let routing_target = if command == "hey" {
         match hey_picker_target(&send_args.target, &config.route, &sessions) {
             Ok(target) => target,
@@ -192,6 +200,14 @@ async fn run_send_like_async_with_args(
             stdout: String::new(),
             stderr: send_route_error(command, &send_args.target, &detail, hint.as_deref()),
         },
+    }
+}
+
+fn send_tmux_unreachable_error(command: &str, message: &str) -> CliOutput {
+    CliOutput {
+        code: 1,
+        stdout: String::new(),
+        stderr: format!("{command}: {message}\n"),
     }
 }
 

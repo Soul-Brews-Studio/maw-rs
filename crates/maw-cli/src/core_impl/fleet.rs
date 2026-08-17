@@ -97,7 +97,7 @@ struct FleetState {
 
 trait FleetRuntime {
     fn fleet_run_command(&mut self, program: &str, args: &[String]) -> Result<String, String>;
-    fn fleet_list_all(&mut self) -> Vec<TmuxSession>;
+    fn fleet_list_all(&mut self) -> Result<Vec<TmuxSession>, String>;
 }
 
 struct FleetSystemRuntime;
@@ -115,8 +115,10 @@ impl FleetRuntime for FleetSystemRuntime {
         }
     }
 
-    fn fleet_list_all(&mut self) -> Vec<TmuxSession> {
-        TmuxClient::local().list_all()
+    fn fleet_list_all(&mut self) -> Result<Vec<TmuxSession>, String> {
+        TmuxClient::local()
+            .list_all()
+            .map_err(|error| format!("tmux unreachable: {error}"))
     }
 }
 
@@ -408,7 +410,7 @@ fn fleet_run_add(
 ) -> Result<(i32, String), String> {
     let session = options.target.as_deref().ok_or_else(|| "fleet add: missing session".to_owned())?;
     let live = runtime
-        .fleet_list_all()
+        .fleet_list_all()?
         .into_iter()
         .find(|item| item.name == session)
         .ok_or_else(|| format!("fleet add: live session not found: {session}"))?;

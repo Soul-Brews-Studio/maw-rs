@@ -56,6 +56,7 @@ impl RestartRunner for RestartSystemRunner {
         let mut client = TmuxClient::local();
         Ok(client
             .list_all()
+            .map_err(|error| format!("tmux unreachable: {error}"))?
             .into_iter()
             .map(|session| RestartSession {
                 name: session.name,

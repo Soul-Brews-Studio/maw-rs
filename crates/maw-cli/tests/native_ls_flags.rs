@@ -64,6 +64,26 @@ printf '[{"name":"blue-oracle","windows":[{"name":"main","index":0,"active":true
     chmod_exec(&curl);
 }
 
+// #860: `render_ls_plan` now surfaces a real tmux connect failure as a
+// distinct "tmux unreachable" error instead of silently treating it as an
+// empty pane list. These hermetic tests run with `env_clear()` and no real
+// `tmux` on PATH, so without this fake they'd hit that new, correct error
+// path -- previously they were (accidentally) relying on the old bug to
+// silently swallow "tmux binary not found" as "no local panes" so the rest
+// of the test (federation peer curl fetch, `--fix` git-prune) could run.
+// This fake simulates a reachable, empty local tmux server instead.
+fn write_fake_tmux(bin_dir: &Path) {
+    let tmux = bin_dir.join("tmux");
+    fs::write(
+        &tmux,
+        r"#!/bin/sh
+exit 0
+",
+    )
+    .expect("write fake tmux");
+    chmod_exec(&tmux);
+}
+
 fn write_fake_git(bin_dir: &Path, log: &Path) {
     let git = bin_dir.join("git");
     fs::write(
@@ -163,6 +183,7 @@ fn ls_federation_peer_drilldown_fetches_peer_sessions() {
     let bin_dir = root.join("bin");
     fs::create_dir_all(&bin_dir).expect("bin");
     write_fake_curl(&bin_dir);
+    write_fake_tmux(&bin_dir);
 
     let output = run_binary(&root, &["ls", "--federation", "blue", "--json"]);
 
@@ -215,6 +236,7 @@ fn ls_verify_and_fix_validate_before_git_prune_and_use_argv_only() {
     let git_log = root.join("git.log");
     write_fake_git(&bin_dir, &git_log);
     write_fake_maw(&bin_dir);
+    write_fake_tmux(&bin_dir);
 
     let output = run_binary(&root, &["ls", "--fix"]);
 

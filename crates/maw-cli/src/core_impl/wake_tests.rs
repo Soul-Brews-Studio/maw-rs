@@ -204,7 +204,7 @@ mod wake_tests {
     }
 
     impl WakeTmuxNative for WakeMockTmux {
-        fn wake_list(&mut self) -> Vec<TmuxSession> { self.sessions.clone() }
+        fn wake_list(&mut self) -> Result<Vec<TmuxSession>, String> { Ok(self.sessions.clone()) }
         fn wake_has_session(&mut self, name: &str) -> bool { self.sessions.iter().any(|session| session.name == name) }
         fn wake_new_session(&mut self, name: &str, window: &str, cwd: &std::path::Path) -> Result<(), String> {
             self.actions.push(format!("new-session {name} {window} {}", cwd.display()));

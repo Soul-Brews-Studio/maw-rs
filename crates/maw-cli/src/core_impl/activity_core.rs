@@ -81,7 +81,7 @@ struct ActivitySample {
 
 trait ActivityTmux {
     fn capture(&mut self, target: &str, lines: u32) -> Result<String, String>;
-    fn list_all(&mut self) -> Vec<TmuxSession>;
+    fn list_all(&mut self) -> Result<Vec<TmuxSession>, String>;
 }
 
 struct LocalActivityTmux {
@@ -104,8 +104,10 @@ impl ActivityTmux for LocalActivityTmux {
             .map_err(|error| error.message)
     }
 
-    fn list_all(&mut self) -> Vec<TmuxSession> {
-        self.client.list_all()
+    fn list_all(&mut self) -> Result<Vec<TmuxSession>, String> {
+        self.client
+            .list_all()
+            .map_err(|error| format!("tmux unreachable: {error}"))
     }
 }
 
@@ -407,7 +409,7 @@ fn sample_all_activity(
     clock: &mut dyn ActivityClock,
 ) -> Result<Vec<ActivityResult>, String> {
     let parsed = parse_activity_options(opts)?;
-    let sessions = tmux.list_all();
+    let sessions = tmux.list_all()?;
     let targets = all_activity_targets(&load_native_fleet());
     let mut results = Vec::new();
     for target in targets.into_iter().take(ACTIVITY_ALL_CONCURRENCY.max(1) * 1_000) {
@@ -805,8 +807,8 @@ mod activity_tests {
             }
         }
 
-        fn list_all(&mut self) -> Vec<TmuxSession> {
-            self.sessions.clone()
+        fn list_all(&mut self) -> Result<Vec<TmuxSession>, String> {
+            Ok(self.sessions.clone())
         }
     }
 

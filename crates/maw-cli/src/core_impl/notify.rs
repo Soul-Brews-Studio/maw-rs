@@ -17,7 +17,10 @@ async fn notify_run_async_impl(raw_args: &[String]) -> CliOutput {
     let config = load_hey_config();
     let sender_oracle = resolve_hey_sender_oracle(&config);
     let mut tmux = TmuxClient::local();
-    let sessions = route_sessions_from_tmux(&mut tmux);
+    let sessions = match route_sessions_from_tmux(&mut tmux) {
+        Ok(sessions) => sessions,
+        Err(message) => return notify_route_error(&message, None),
+    };
     match resolve_route_target(&args.target, &config.route, &sessions) {
         RouteResult::Local { target } | RouteResult::SelfNode { target } => {
             notify_local(&args, &target, &config, &sender_oracle)

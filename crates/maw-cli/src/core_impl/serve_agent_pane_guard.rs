@@ -95,9 +95,15 @@ fn serve_non_agent_pane_warning_from_panes(
 }
 
 fn serve_non_agent_pane_warning(resolved: &str) -> Option<String> {
+    // #860: this runs *after* delivery already succeeded, purely to decide
+    // whether to attach a best-effort "landed in a non-agent pane" warning.
+    // The function's only channel back to its caller is `Option<String>` --
+    // there is nowhere sensible to surface "tmux became unreachable between
+    // delivery and this check", so a tmux error here degrades to "no warning"
+    // rather than losing the (already-successful) delivery outcome.
     let mut tmux = TmuxClient::local();
-    let sessions = route_sessions_from_tmux(&mut tmux);
-    let panes = tmux.list_panes();
+    let sessions = route_sessions_from_tmux(&mut tmux).unwrap_or_default();
+    let panes = tmux.list_panes().unwrap_or_default();
     serve_non_agent_pane_warning_from_panes(&sessions, &panes, resolved)
 }
 

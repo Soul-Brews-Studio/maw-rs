@@ -126,7 +126,12 @@ fn fleet_roster_run(argv: &[String]) -> Result<(i32, String), String> {
     match sub {
         "create" => fleet_roster_create_with_token(&env, group, token.as_deref()),
         "show" => fleet_roster_show(&env, group, json, None),
-        _ => fleet_roster_show(&env, group, json, Some(&TmuxClient::local().list_all())),
+        _ => {
+            let live = TmuxClient::local()
+                .list_all()
+                .map_err(|error| format!("tmux unreachable: {error}"))?;
+            fleet_roster_show(&env, group, json, Some(&live))
+        }
     }
 }
 

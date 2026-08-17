@@ -161,6 +161,16 @@ impl ServecoreSharedState {
         self
     }
 
+    // #860: these two accessors back six call sites across HTTP/websocket
+    // handlers (`agent_routes`, `god_mode_ui`, `people_routes`,
+    // `process_engine`) in the long-running `maw serve` daemon. A tmux
+    // connect failure here degrading to an empty snapshot -- rather than
+    // Result-ifying the accessor and pushing error handling into every one
+    // of those handlers -- is a deliberate, scoped-down choice for this PR:
+    // a transient tmux hiccup should not 500 the whole HTTP layer. Making
+    // this genuinely correct (distinct tmux-unreachable responses from each
+    // handler) is real, separable follow-up work, not a silent regression --
+    // tracked against #860.
     #[must_use]
     pub fn servecore_agents_panes(&self) -> Vec<ServecoreAgentPane> {
         if let Some(snapshot) = &self.agents_snapshot {
@@ -168,6 +178,7 @@ impl ServecoreSharedState {
         }
         let mut tmux = TmuxClient::local();
         tmux.list_panes()
+            .unwrap_or_default()
             .into_iter()
             .map(ServecoreAgentPane::from)
             .collect()
@@ -179,7 +190,7 @@ impl ServecoreSharedState {
             return snapshot.as_ref().clone();
         }
         let mut tmux = TmuxClient::local();
-        tmux.list_all()
+        tmux.list_all().unwrap_or_default()
     }
 
     #[must_use]
@@ -469,6 +480,7 @@ impl ServecorePaneRunner for ServecoreTmuxPaneRunner {
         let mut tmux = TmuxClient::local();
         Ok(tmux
             .list_panes()
+            .map_err(|error| format!("tmux unreachable: {error}"))?
             .into_iter()
             .map(|pane| ServecorePaneCandidate {
                 id: pane.id,

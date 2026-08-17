@@ -57,7 +57,7 @@ struct ForgetFleetEntry {
 }
 
 trait ForgetTmux {
-    fn forget_list_all(&mut self) -> Vec<TmuxSession>;
+    fn forget_list_all(&mut self) -> Result<Vec<TmuxSession>, String>;
     fn forget_kill_session(&mut self, name: &str) -> Result<(), String>;
 }
 
@@ -72,8 +72,10 @@ impl ForgetNativeTmux {
 }
 
 impl ForgetTmux for ForgetNativeTmux {
-    fn forget_list_all(&mut self) -> Vec<TmuxSession> {
-        self.client.list_all()
+    fn forget_list_all(&mut self) -> Result<Vec<TmuxSession>, String> {
+        self.client
+            .list_all()
+            .map_err(|error| format!("tmux unreachable: {error}"))
     }
 
     fn forget_kill_session(&mut self, name: &str) -> Result<(), String> {
@@ -177,7 +179,7 @@ fn forget_plan_with_env<T: ForgetTmux>(
 ) -> Result<ForgetResult, String> {
     let repo = forget_resolve_repo(&options.oracle, ghq)?;
     let fleet_entry = forget_resolve_fleet_entry(&options.oracle, &repo.repo_name, env)?;
-    let session_name = forget_resolve_session_name(&options.oracle, &repo.repo_name, fleet_entry.as_ref(), &tmux.forget_list_all())?;
+    let session_name = forget_resolve_session_name(&options.oracle, &repo.repo_name, fleet_entry.as_ref(), &tmux.forget_list_all()?)?;
     let snapshot_files = forget_matching_snapshot_files(&options.oracle, &repo.repo_name, session_name.as_deref(), env)?;
     let mut actions = vec![ForgetAction {
         layer: "worktrees",
@@ -632,8 +634,8 @@ mod forget_tests {
     }
 
     impl ForgetTmux for ForgetMockTmux {
-        fn forget_list_all(&mut self) -> Vec<TmuxSession> {
-            self.sessions.clone()
+        fn forget_list_all(&mut self) -> Result<Vec<TmuxSession>, String> {
+            Ok(self.sessions.clone())
         }
 
         fn forget_kill_session(&mut self, name: &str) -> Result<(), String> {

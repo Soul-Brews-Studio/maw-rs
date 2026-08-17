@@ -24,7 +24,7 @@ trait TokenRunner {
 }
 
 trait TokenApplyTmux {
-    fn apply_list_panes(&mut self) -> Vec<maw_tmux::TmuxPane>;
+    fn apply_list_panes(&mut self) -> Result<Vec<maw_tmux::TmuxPane>, String>;
     fn apply_capture(&mut self, target: &str) -> Result<String, String>;
     fn apply_send_text(&mut self, target: &str, text: &str) -> Result<(), String>;
     fn apply_send_enter(&mut self, target: &str) -> Result<(), String>;
@@ -65,7 +65,9 @@ struct TokenSystemApplyTmux { client: maw_tmux::TmuxClient<maw_tmux::CommandTmux
 impl TokenSystemApplyTmux { fn new() -> Self { Self { client: maw_tmux::TmuxClient::local() } } }
 
 impl TokenApplyTmux for TokenSystemApplyTmux {
-    fn apply_list_panes(&mut self) -> Vec<maw_tmux::TmuxPane> { self.client.list_panes() }
+    fn apply_list_panes(&mut self) -> Result<Vec<maw_tmux::TmuxPane>, String> {
+        self.client.list_panes().map_err(|error| format!("tmux unreachable: {error}"))
+    }
     fn apply_capture(&mut self, target: &str) -> Result<String, String> { self.client.capture(target, Some(80)).map_err(|error| error.message) }
     fn apply_send_text(&mut self, target: &str, text: &str) -> Result<(), String> { self.client.send_keys_literal(target, text).map_err(|error| error.message) }
     fn apply_send_enter(&mut self, target: &str) -> Result<(), String> { self.client.send_enter(target).map_err(|error| error.message) }
@@ -163,7 +165,12 @@ fn token_dispatch(argv: &[String], runner: &mut dyn TokenRunner) -> Result<Token
         "list" | "ls" | "tokens" => token_cmd_list(runner).map(token_ok),
         "current" => Ok(token_ok(token_current().map_or_else(String::new, |name| format!("{name}\n")))),
         "resolve" => token_cmd_resolve().map(token_ok),
-        "status" => Ok(token_ok(token_status(&TmuxClient::local().list_panes())?)),
+        "status" => {
+            let panes = TmuxClient::local()
+                .list_panes()
+                .map_err(|error| format!("tmux unreachable: {error}"))?;
+            Ok(token_ok(token_status(&panes)?))
+        }
         "use" => token_cmd_use(&parsed, runner),
         "apply" => {
             let mut tmux = TokenSystemApplyTmux::new();
@@ -291,7 +298,7 @@ fn token_cmd_apply(args: &TokenArgs, runner: &mut dyn TokenRunner, tmux: &mut dy
     let scopes = usize::from(args.all) + usize::from(args.session.is_some()) + usize::from(args.squad.is_some());
     if scopes > 1 { return Err("maw token apply: choose only one of --session, --squad, or --all".to_owned()); }
     let sessions = token_apply_scope_sessions(args)?;
-    let panes = token_apply_targets(tmux.apply_list_panes(), sessions.as_deref());
+    let panes = token_apply_targets(tmux.apply_list_panes()?, sessions.as_deref());
     let mut out = format!("token apply {name}: {} target(s)\n", panes.len());
     let mut idle = Vec::new();
     for pane in panes {
@@ -791,7 +798,7 @@ mod token_apply_tests {
     struct FakeApply { panes: Vec<maw_tmux::TmuxPane>, captures: Vec<String>, actions: Vec<String> }
 
     impl TokenApplyTmux for FakeApply {
-        fn apply_list_panes(&mut self) -> Vec<maw_tmux::TmuxPane> { self.panes.clone() }
+        fn apply_list_panes(&mut self) -> Result<Vec<maw_tmux::TmuxPane>, String> { Ok(self.panes.clone()) }
         fn apply_capture(&mut self, _target: &str) -> Result<String, String> { Ok(self.captures.remove(0)) }
         fn apply_send_text(&mut self, target: &str, text: &str) -> Result<(), String> { self.actions.push(format!("text {target} {text}")); Ok(()) }
         fn apply_send_enter(&mut self, target: &str) -> Result<(), String> { self.actions.push(format!("enter {target}")); Ok(()) }

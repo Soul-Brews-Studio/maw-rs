@@ -17,7 +17,7 @@ struct FleetFinding {
 
 fn fleet_run_doctor(state: &FleetState, options: &FleetOptions, runtime: &mut impl FleetRuntime) -> Result<(i32, String), String> {
     let apply_fix = options.fix && !options.dry_run;
-    let live = runtime.fleet_list_all();
+    let live = runtime.fleet_list_all()?;
     let repairs = if apply_fix { fleet_fix_duplicate_windows(&state.fleet_entries, &live)? } else { Vec::new() };
     let refreshed = if apply_fix { Some(fleet_load_state_with(runtime)?) } else { None };
     let state = refreshed.as_ref().unwrap_or(state);

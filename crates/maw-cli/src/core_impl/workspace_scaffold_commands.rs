@@ -276,7 +276,7 @@ struct PromoteCandidateNative {
 
 #[allow(dead_code)]
 trait PromoteTmuxNative {
-    fn promote_list_all(&mut self) -> Vec<TmuxSession>;
+    fn promote_list_all(&mut self) -> Result<Vec<TmuxSession>, String>;
     fn promote_list_windows(&mut self, session: &str) -> Result<Vec<maw_tmux::TmuxWindow>, String>;
     fn promote_has_session(&mut self, name: &str) -> bool;
     fn promote_caller_in_tmux(&self) -> bool;
@@ -290,7 +290,11 @@ trait PromoteTmuxNative {
 struct PromoteSystemTmuxNative;
 
 impl PromoteTmuxNative for PromoteSystemTmuxNative {
-    fn promote_list_all(&mut self) -> Vec<TmuxSession> { TmuxClient::local().list_all() }
+    fn promote_list_all(&mut self) -> Result<Vec<TmuxSession>, String> {
+        TmuxClient::local()
+            .list_all()
+            .map_err(|error| format!("tmux unreachable: {error}"))
+    }
 
     fn promote_list_windows(&mut self, session: &str) -> Result<Vec<maw_tmux::TmuxWindow>, String> {
         promote_validate_tmux_name(session, "source session")?;
@@ -1260,12 +1264,12 @@ fn promote_execute(options: &PromoteOptionsNative, tmux: &mut impl PromoteTmuxNa
 }
 
 fn promote_resolve_ready(options: &PromoteOptionsNative, tmux: &mut impl PromoteTmuxNative) -> Result<PromoteResolvedNative, String> {
-    let sessions = tmux.promote_list_all();
+    let sessions = tmux.promote_list_all()?;
     promote_resolve_ready_from_sessions(options, tmux, &sessions, "promote planning")
 }
 
 fn promote_revalidate_ready(options: &PromoteOptionsNative, planned: &PromoteResolvedNative, tmux: &mut impl PromoteTmuxNative) -> Result<PromoteResolvedNative, String> {
-    let sessions = tmux.promote_list_all();
+    let sessions = tmux.promote_list_all()?;
     let fresh = promote_resolve_ready_from_sessions(options, tmux, &sessions, "promote mutation")?;
     if fresh.src_session != planned.src_session || fresh.src_window != planned.src_window {
         return Err(format!(

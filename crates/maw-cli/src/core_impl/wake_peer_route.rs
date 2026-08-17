@@ -26,7 +26,16 @@ async fn run_wake_async_impl(raw_args: &[String]) -> CliOutput {
     };
     let config = load_hey_config();
     let mut tmux = TmuxClient::local();
-    let sessions = route_sessions_from_tmux(&mut tmux);
+    let sessions = match route_sessions_from_tmux(&mut tmux) {
+        Ok(sessions) => sessions,
+        Err(message) => {
+            return CliOutput {
+                code: 1,
+                stdout: String::new(),
+                stderr: format!("wake: {message}\n"),
+            }
+        }
+    };
     match resolve_route_target(&wake_args.target, &config.route, &sessions) {
         RouteResult::Peer {
             peer_url,

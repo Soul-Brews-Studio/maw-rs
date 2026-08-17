@@ -12,7 +12,14 @@ struct CensusSpace { display: String, space: String, oracles: Vec<CensusOracle> 
 fn census_run_command(argv: &[String]) -> CliOutput {
     let json = match census_parse_args(argv) { Ok(json) => json, Err(output) => return output };
     let mut client = TmuxClient::local();
-    let options = LsPlanOptions { json: false, mode: LsMode::Verbose, all: true, channels: false, active: false, active_threshold_sec: None, recent: false, recent_limit: None, filter: None, peer: None, federation: false, node: None, fleet_only: false, teams: true, verify: false, fix: false, watch_interval_sec: None, now: Some(current_epoch_seconds()), panes: client.list_panes(), session_created: BTreeMap::new() };
+    // #860: a tmux connect failure must not be silently reported as "no
+    // oracle panes or pins found" — that's the exact false-negative this
+    // issue is about, just under `maw census` instead of `maw ls`.
+    let panes = match client.list_panes() {
+        Ok(panes) => panes,
+        Err(error) => return CliOutput { code: 1, stdout: String::new(), stderr: format!("tmux unreachable: {error}\n") },
+    };
+    let options = LsPlanOptions { json: false, mode: LsMode::Verbose, all: true, channels: false, active: false, active_threshold_sec: None, recent: false, recent_limit: None, filter: None, peer: None, federation: false, node: None, fleet_only: false, teams: true, verify: false, fix: false, watch_interval_sec: None, now: Some(current_epoch_seconds()), panes, session_created: BTreeMap::new() };
     let panes = project_ls_panes(&options);
     let pins = census_read_pins(&census_default_pins_path());
     let spaces = census_join(&panes, &pins, &ls_annotation_context());

@@ -7,19 +7,30 @@ where
         Self { runner }
     }
 
-    /// List session names; tmux-unavailable errors are fail-soft and return an empty list.
-    pub fn list_session_names(&mut self) -> Vec<String> {
+    /// List session names.
+    ///
+    /// # Errors
+    ///
+    /// Returns the injected runner error when tmux is unreachable (e.g. a stale/orphaned
+    /// socket) — this is distinct from a reachable server with zero sessions, which returns
+    /// `Ok(vec![])`. Callers must not collapse the two; see #860.
+    pub fn list_session_names(&mut self) -> Result<Vec<String>, TmuxError> {
         self.runner
             .run(
                 "list-sessions",
                 &["-F".to_owned(), "#{session_name}".to_owned()],
             )
             .map(|raw| parse_session_names(&raw))
-            .unwrap_or_default()
     }
 
-    /// List all sessions/windows in a single tmux call; tmux-unavailable errors return empty.
-    pub fn list_all(&mut self) -> Vec<TmuxSession> {
+    /// List all sessions/windows in a single tmux call.
+    ///
+    /// # Errors
+    ///
+    /// Returns the injected runner error when tmux is unreachable (e.g. a stale/orphaned
+    /// socket) — this is distinct from a reachable server with zero sessions, which returns
+    /// `Ok(vec![])`. Callers must not collapse the two; see #860.
+    pub fn list_all(&mut self) -> Result<Vec<TmuxSession>, TmuxError> {
         self.runner
             .run(
                 "list-windows",
@@ -30,7 +41,6 @@ where
                 ],
             )
             .map(|raw| parse_list_all_windows(&raw))
-            .unwrap_or_default()
     }
 
     /// List one session's windows.
@@ -51,19 +61,30 @@ where
         Ok(parse_list_windows(&raw))
     }
 
-    /// Get all pane IDs; tmux-unavailable errors return empty.
-    pub fn list_pane_ids(&mut self) -> BTreeSet<String> {
+    /// Get all pane IDs.
+    ///
+    /// # Errors
+    ///
+    /// Returns the injected runner error when tmux is unreachable (e.g. a stale/orphaned
+    /// socket) — this is distinct from a reachable server with zero panes, which returns
+    /// `Ok(BTreeSet::new())`. Callers must not collapse the two; see #860.
+    pub fn list_pane_ids(&mut self) -> Result<BTreeSet<String>, TmuxError> {
         self.runner
             .run(
                 "list-panes",
                 &["-a".to_owned(), "-F".to_owned(), "#{pane_id}".to_owned()],
             )
             .map(|raw| parse_pane_ids(&raw))
-            .unwrap_or_default()
     }
 
-    /// Get structured pane information; tmux-unavailable errors return empty.
-    pub fn list_panes(&mut self) -> Vec<TmuxPane> {
+    /// Get structured pane information.
+    ///
+    /// # Errors
+    ///
+    /// Returns the injected runner error when tmux is unreachable (e.g. a stale/orphaned
+    /// socket) — this is distinct from a reachable server with zero panes, which returns
+    /// `Ok(vec![])`. Callers must not collapse the two; see #860.
+    pub fn list_panes(&mut self) -> Result<Vec<TmuxPane>, TmuxError> {
         self.runner
             .run(
                 "list-panes",
@@ -74,7 +95,6 @@ where
                 ],
             )
             .map(|raw| parse_list_panes(&raw))
-            .unwrap_or_default()
     }
 
     /// Check whether a tmux session exists.

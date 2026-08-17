@@ -90,7 +90,13 @@ fn write_cli_output(stdout: &str, stderr: &str) -> io::Result<()> {
 
 fn maybe_exec_attach(argv: &[String]) -> Option<i32> {
     let mut client = TmuxClient::local();
-    let alive_sessions = client.list_session_names();
+    // #860: this is a fast-path shortcut (skip straight to `tmux attach` when
+    // there's an unambiguous session) -- on a tmux connect failure there is
+    // nothing to shortcut, so fall through (`None`) to the normal dispatcher,
+    // which reports "tmux unreachable" properly (see tmux_attach.rs).
+    let Ok(alive_sessions) = client.list_session_names() else {
+        return None;
+    };
     maybe_exec_attach_with(
         argv,
         std::io::stdout().is_terminal(),

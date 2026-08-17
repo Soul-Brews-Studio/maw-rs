@@ -33,11 +33,15 @@ async fn run_health_async_impl(raw_args: &[String]) -> CliOutput {
         };
     }
     let mut lines = vec!["\nmaw health\n".to_owned()];
-    let sessions = TmuxClient::local().list_all();
-    lines.push(format!(
-        "  \u{1b}[32m●\u{1b}[0m tmux server        running ({} sessions)",
-        sessions.len()
-    ));
+    match TmuxClient::local().list_all() {
+        Ok(sessions) => lines.push(format!(
+            "  \u{1b}[32m●\u{1b}[0m tmux server        running ({} sessions)",
+            sessions.len()
+        )),
+        Err(error) => lines.push(format!(
+            "  \u{1b}[31m●\u{1b}[0m tmux server        unreachable: {error}"
+        )),
+    }
     match localserver_request(LocalserverCliRequest {
         method: "POST".to_owned(),
         path: "/api/probe".to_owned(),

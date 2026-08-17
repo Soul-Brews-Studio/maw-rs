@@ -34,7 +34,7 @@ struct OverviewTarget {
 
 trait OverviewTmux {
     fn kill_session(&mut self, name: &str) -> Result<(), String>;
-    fn list_all(&mut self) -> Vec<TmuxSession>;
+    fn list_all(&mut self) -> Result<Vec<TmuxSession>, String>;
     fn new_session(&mut self, name: &str, window: &str, command: &str) -> Result<(), String>;
     fn new_window(&mut self, session: &str, name: &str, command: &str) -> Result<(), String>;
     fn set(&mut self, target: &str, option: &str, value: &str) -> Result<(), String>;
@@ -63,8 +63,10 @@ impl OverviewTmux for NativeOverviewTmux {
         Ok(())
     }
 
-    fn list_all(&mut self) -> Vec<TmuxSession> {
-        self.client.list_all()
+    fn list_all(&mut self) -> Result<Vec<TmuxSession>, String> {
+        self.client
+            .list_all()
+            .map_err(|error| format!("tmux unreachable: {error}"))
     }
 
     fn new_session(&mut self, name: &str, window: &str, command: &str) -> Result<(), String> {
@@ -176,7 +178,7 @@ fn run_overview_with_tmux(
         return Ok("overview killed\n".to_owned());
     }
 
-    let targets = build_overview_targets(&tmux.list_all(), &args.filters);
+    let targets = build_overview_targets(&tmux.list_all()?, &args.filters);
     if targets.is_empty() {
         return Ok("no oracle sessions found\n".to_owned());
     }
@@ -413,9 +415,9 @@ mod overview_tests {
             Ok(())
         }
 
-        fn list_all(&mut self) -> Vec<TmuxSession> {
+        fn list_all(&mut self) -> Result<Vec<TmuxSession>, String> {
             self.calls.push("list-all".to_owned());
-            self.sessions.clone()
+            Ok(self.sessions.clone())
         }
 
         fn new_session(&mut self, name: &str, window: &str, command: &str) -> Result<(), String> {

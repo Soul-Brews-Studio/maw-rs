@@ -73,8 +73,8 @@ struct AgentsRow {
 trait AgentsRuntime {
     fn agents_node(&self) -> String;
     fn agents_routes(&self) -> HashMap<String, String>;
-    fn agents_sessions(&mut self) -> Vec<TmuxSession>;
-    fn agents_panes(&mut self) -> Vec<TmuxPane>;
+    fn agents_sessions(&mut self) -> Result<Vec<TmuxSession>, String>;
+    fn agents_panes(&mut self) -> Result<Vec<TmuxPane>, String>;
 }
 
 struct AgentsSystemRuntime;
@@ -88,12 +88,16 @@ impl AgentsRuntime for AgentsSystemRuntime {
         load_hey_config().route.agents
     }
 
-    fn agents_sessions(&mut self) -> Vec<TmuxSession> {
-        TmuxClient::local().list_all()
+    fn agents_sessions(&mut self) -> Result<Vec<TmuxSession>, String> {
+        TmuxClient::local()
+            .list_all()
+            .map_err(|error| format!("tmux unreachable: {error}"))
     }
 
-    fn agents_panes(&mut self) -> Vec<TmuxPane> {
-        TmuxClient::local().list_panes()
+    fn agents_panes(&mut self) -> Result<Vec<TmuxPane>, String> {
+        TmuxClient::local()
+            .list_panes()
+            .map_err(|error| format!("tmux unreachable: {error}"))
     }
 }
 
@@ -141,8 +145,8 @@ fn agents_run(argv: &[String], runtime: &mut impl AgentsRuntime) -> Result<Strin
         return Ok(agents_render_table(&rows));
     }
     let node = runtime.agents_node();
-    let sessions = runtime.agents_sessions();
-    let panes = runtime.agents_panes();
+    let sessions = runtime.agents_sessions()?;
+    let panes = runtime.agents_panes()?;
     let rows = agents_build_rows(&panes, &sessions, &node, options.all);
     if options.json {
         return agents_render_json(&rows);
@@ -436,7 +440,7 @@ struct AgentsGcPhantom {
 trait AgentsGcRuntime {
     fn gc_agents(&self) -> BTreeMap<String, String>;
     fn gc_local_node(&self) -> String;
-    fn gc_live_names(&mut self) -> BTreeSet<String>;
+    fn gc_live_names(&mut self) -> Result<BTreeSet<String>, String>;
     fn gc_registry_names(&self) -> BTreeSet<String>;
     fn gc_repo_exists(&self, name: &str) -> bool;
     fn gc_config_read(&self) -> Result<serde_json::Value, String>;
@@ -455,15 +459,18 @@ impl AgentsGcRuntime for AgentsGcSystemRuntime {
         agents_load_node().unwrap_or_else(|| "local".to_owned())
     }
 
-    fn gc_live_names(&mut self) -> BTreeSet<String> {
+    fn gc_live_names(&mut self) -> Result<BTreeSet<String>, String> {
         let mut names = BTreeSet::new();
-        for session in TmuxClient::local().list_all() {
+        let sessions = TmuxClient::local()
+            .list_all()
+            .map_err(|error| format!("tmux unreachable: {error}"))?;
+        for session in sessions {
             names.insert(session.name.clone());
             for window in &session.windows {
                 names.insert(window.name.clone());
             }
         }
-        names
+        Ok(names)
     }
 
     fn gc_registry_names(&self) -> BTreeSet<String> {
@@ -515,7 +522,7 @@ fn agents_gc_run(argv: &[String], runtime: &mut impl AgentsGcRuntime) -> Result<
             other => return Err(format!("agents gc: unknown argument {other}\n{AGENTS_GC_USAGE}")),
         }
     }
-    let scan = agents_gc_find_phantoms(runtime);
+    let scan = agents_gc_find_phantoms(runtime)?;
     if apply {
         agents_gc_apply(runtime, &scan)
     } else {
@@ -529,10 +536,10 @@ struct AgentsGcScan {
     remote_skipped: usize,
 }
 
-fn agents_gc_find_phantoms(runtime: &mut impl AgentsGcRuntime) -> AgentsGcScan {
+fn agents_gc_find_phantoms(runtime: &mut impl AgentsGcRuntime) -> Result<AgentsGcScan, String> {
     let agents = runtime.gc_agents();
     let local_node = runtime.gc_local_node();
-    let live = agents_gc_canonical_set(&runtime.gc_live_names());
+    let live = agents_gc_canonical_set(&runtime.gc_live_names()?);
     let registry = agents_gc_canonical_set(&runtime.gc_registry_names());
     let mut phantoms = Vec::new();
     let mut remote_skipped = 0_usize;
@@ -563,11 +570,11 @@ fn agents_gc_find_phantoms(runtime: &mut impl AgentsGcRuntime) -> AgentsGcScan {
             reason,
         });
     }
-    AgentsGcScan {
+    Ok(AgentsGcScan {
         total: agents.len(),
         phantoms,
         remote_skipped,
-    }
+    })
 }
 
 fn agents_gc_node_is_local(route_node: &str, local_node: &str) -> bool {
@@ -727,14 +734,14 @@ mod agents_tests {
             self.routes.clone()
         }
 
-        fn agents_sessions(&mut self) -> Vec<TmuxSession> {
+        fn agents_sessions(&mut self) -> Result<Vec<TmuxSession>, String> {
             self.touched_tmux = true;
-            self.sessions.clone()
+            Ok(self.sessions.clone())
         }
 
-        fn agents_panes(&mut self) -> Vec<TmuxPane> {
+        fn agents_panes(&mut self) -> Result<Vec<TmuxPane>, String> {
             self.touched_tmux = true;
-            self.panes.clone()
+            Ok(self.panes.clone())
         }
     }
 
@@ -905,8 +912,8 @@ mod agents_tests {
             self.local_node.clone()
         }
 
-        fn gc_live_names(&mut self) -> BTreeSet<String> {
-            self.live.clone()
+        fn gc_live_names(&mut self) -> Result<BTreeSet<String>, String> {
+            Ok(self.live.clone())
         }
 
         fn gc_registry_names(&self) -> BTreeSet<String> {

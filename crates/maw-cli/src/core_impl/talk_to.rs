@@ -34,7 +34,10 @@ async fn talkto_run_async_impl(raw_args: &[String]) -> CliOutput {
     let thread = talkto_persist_thread(&args.recipient, &args.message);
     let notification = talkto_notification(&args, thread.as_ref());
     let mut tmux = TmuxClient::local();
-    let sessions = route_sessions_from_tmux(&mut tmux);
+    let sessions = match route_sessions_from_tmux(&mut tmux) {
+        Ok(sessions) => sessions,
+        Err(message) => return talkto_route_error(&message, None, thread.as_ref()),
+    };
     match resolve_route_target(&args.recipient, &config.route, &sessions) {
         RouteResult::Local { target } | RouteResult::SelfNode { target } => {
             talkto_local(&mut tmux, &target, &args, &notification, thread.as_ref())

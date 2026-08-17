@@ -19,7 +19,7 @@ struct FleetRenumberItem {
 
 fn fleet_run_renumber(state: &FleetState, options: &FleetOptions, runtime: &mut impl FleetRuntime) -> Result<(i32, String), String> {
     let mut items = fleet_renumber_plan(&state.fleet_entries, options.include_99, options.only_99);
-    let live = runtime.fleet_list_all().into_iter().map(|session| session.name).collect::<Vec<_>>();
+    let live = runtime.fleet_list_all()?.into_iter().map(|session| session.name).collect::<Vec<_>>();
     if !options.dry_run {
         fleet_apply_renumber(&mut items, &live, runtime)?;
     }

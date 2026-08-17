@@ -224,6 +224,9 @@ fn real_xdg_env() -> MawXdgEnv {
 
 fn route_sessions_from_tmux(
     tmux: &mut TmuxClient<maw_tmux::CommandTmuxRunner>,
-) -> Vec<RouteSession> {
-    tmux_sessions_to_route_sessions(tmux.list_all())
+) -> Result<Vec<RouteSession>, String> {
+    Ok(tmux_sessions_to_route_sessions(
+        tmux.list_all()
+            .map_err(|error| format!("tmux unreachable: {error}"))?,
+    ))
 }
