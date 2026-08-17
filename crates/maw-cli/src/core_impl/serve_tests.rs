@@ -2458,7 +2458,7 @@ mod serve_tests {
     // `/api/*` whenever no `serve.token` is configured, which is the default
     // state exercised by `serve_test_app` (`ServeApiTokenAuth::open()`).
     /// `serve_test_app`, but with the auth clock set to `now` instead of the
-    /// fixture's pinned 1_782_277_200. Needed whenever the REAL client-side
+    /// fixture's pinned `1_782_277_200`. Needed whenever the REAL client-side
     /// signer produces the headers: it stamps the real wall clock, which is
     /// ~54 days outside the pinned fixture's 300s window (`WINDOW_SEC`), so a
     /// correctly signed request would 403 for a reason that has nothing to do
@@ -2610,20 +2610,24 @@ mod serve_tests {
     // than in production between two nodes.
     #[tokio::test]
     async fn serve_federation_signed_get_headers_authenticate_against_the_real_router() {
-        let _guard = env_test_lock();
-        let _token = EnvVarRestore::capture("MAW_FEDERATION_TOKEN");
-        let _peer_key = EnvVarRestore::capture("MAW_PEER_KEY");
-        let _sender = EnvVarRestore::capture("MAW_SENDER");
-        // serve_test_app trusts KEY as both the workspace key and the cached
-        // pubkey, and FROM ("sender-oracle:sender-node") as the identity.
-        // MAW_SENDER is human-ordered node:oracle.
-        std::env::set_var("MAW_FEDERATION_TOKEN", KEY);
-        std::env::set_var("MAW_PEER_KEY", KEY);
-        std::env::set_var("MAW_SENDER", "sender-node:sender-oracle");
-
-        let headers =
-            federation_signed_get_headers("/api/sessions").expect("client-side signing must work");
-        let map = headers.to_btree_map();
+        // The env lock is released before the first `.await`: signing reads the
+        // environment, the router does not, so the guard has no business being
+        // held across an await point (clippy::await_holding_lock).
+        let map = {
+            let _guard = env_test_lock();
+            let _token = EnvVarRestore::capture("MAW_FEDERATION_TOKEN");
+            let _peer_key = EnvVarRestore::capture("MAW_PEER_KEY");
+            let _sender = EnvVarRestore::capture("MAW_SENDER");
+            // serve_test_app trusts KEY as both the workspace key and the cached
+            // pubkey, and FROM ("sender-oracle:sender-node") as the identity.
+            // MAW_SENDER is human-ordered node:oracle.
+            std::env::set_var("MAW_FEDERATION_TOKEN", KEY);
+            std::env::set_var("MAW_PEER_KEY", KEY);
+            std::env::set_var("MAW_SENDER", "sender-node:sender-oracle");
+            federation_signed_get_headers("/api/sessions")
+                .expect("client-side signing must work")
+                .to_btree_map()
+        };
 
         // Assert the ACTUAL wire string, not just that the request succeeds.
         // `validate_wire_from` accepts any two non-empty colon-separated parts
@@ -2645,7 +2649,7 @@ mod serve_tests {
         let mut builder = axum::http::Request::builder()
             .method("GET")
             .uri("/api/sessions");
-        for (name, value) in map {
+        for (name, value) in map.clone() {
             builder = builder.header(name, value);
         }
         let mut request = builder.body(Body::empty()).expect("request");
@@ -2675,7 +2679,7 @@ mod serve_tests {
         // refusal. (Mechanism A is unaffected either way: `token_matches` only
         // ever reads `Authorization: Bearer` / `x-maw-token`.)
         let mut old_peer_builder = axum::http::Request::builder().method("GET").uri("/api/feed");
-        for (name, value) in headers.to_btree_map() {
+        for (name, value) in map {
             old_peer_builder = old_peer_builder.header(name, value);
         }
         let mut old_peer_request = old_peer_builder.body(Body::empty()).expect("request");
@@ -2701,20 +2705,24 @@ mod serve_tests {
     // query form turns this red instead of breaking peek in production.
     #[tokio::test]
     async fn serve_peek_signed_capture_headers_authenticate_against_the_real_router() {
-        let _guard = env_test_lock();
-        let _token = EnvVarRestore::capture("MAW_FEDERATION_TOKEN");
-        let _peer_key = EnvVarRestore::capture("MAW_PEER_KEY");
-        std::env::set_var("MAW_FEDERATION_TOKEN", KEY);
-        std::env::set_var("MAW_PEER_KEY", KEY);
-
         let now = i64::try_from(current_epoch_seconds()).unwrap_or(i64::MAX);
-        let headers = peek_signed_capture_headers(FROM, now).expect("peek signing must work");
+        // Env lock released before the first `.await` — see the sibling test.
+        let map = {
+            let _guard = env_test_lock();
+            let _token = EnvVarRestore::capture("MAW_FEDERATION_TOKEN");
+            let _peer_key = EnvVarRestore::capture("MAW_PEER_KEY");
+            std::env::set_var("MAW_FEDERATION_TOKEN", KEY);
+            std::env::set_var("MAW_PEER_KEY", KEY);
+            peek_signed_capture_headers(FROM, now)
+                .expect("peek signing must work")
+                .to_btree_map()
+        };
 
         let mut builder = axum::http::Request::builder()
             .method("GET")
             // The real peek URL: query present here, absent from what was signed.
             .uri("/api/capture?target=nova%3A1.0");
-        for (name, value) in headers.to_btree_map() {
+        for (name, value) in map {
             builder = builder.header(name, value);
         }
         let mut request = builder.body(Body::empty()).expect("request");
