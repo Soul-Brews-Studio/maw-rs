@@ -1684,6 +1684,7 @@ dependencies = [
 [[package]]
 name = "maw-schedule-launchd"
 version = "0.1.0-alpha.1"
+source = "git+https://github.com/Soul-Brews-Studio/maw-schedule-runtime?rev=ba95c3f7c0b987509b4fe906e8375d6b4e6bc402#ba95c3f7c0b987509b4fe906e8375d6b4e6bc402"
 dependencies = [
  "maw-schedule",
 ]
@@ -1691,6 +1692,7 @@ dependencies = [
 [[package]]
 name = "maw-schedule-runner"
 version = "0.1.0-alpha.1"
+source = "git+https://github.com/Soul-Brews-Studio/maw-schedule-runtime?rev=ba95c3f7c0b987509b4fe906e8375d6b4e6bc402#ba95c3f7c0b987509b4fe906e8375d6b4e6bc402"
 dependencies = [
  "fd-lock",
  "maw-schedule",

@@ -92,8 +92,8 @@ git diff --name-only | grep '^ψ/' || true
 
 - Leaf crates: self-contained logic with no internal deps. Most are deterministic and
   side-effect-free; filesystem-facing leaves contain I/O within documented boundaries.
-- Mid crates: compose leaves, such as the peer/tmux layers. `maw-worktree` is an
-  external rev-pinned mid crate.
+- Mid crates: compose leaves, such as the peer/tmux layers. `maw-worktree` and
+  the schedule launchd/runner adapters are external rev-pinned mid crates.
 - Top crate: `maw-cli`, the binary and integration surface.
 
 New logic belongs in the lowest layer that can hold it. Keep I/O out of pure core leaves;
