@@ -38,7 +38,7 @@ struct RunPeerDeps<'a, P: RunPeerTransport> {
 }
 
 trait RunTmux {
-    fn run_sessions(&mut self) -> Vec<RouteSession>;
+    fn run_sessions(&mut self) -> Result<Vec<RouteSession>, String>;
     fn run_pane_targets_raw(&mut self) -> Option<String>;
     fn run_send_text(&mut self, target: &str, text: &str) -> Result<(), String>;
     fn run_send_enter(&mut self, target: &str) -> Result<(), String>;
@@ -63,8 +63,12 @@ impl RunSystemTmux {
 }
 
 impl RunTmux for RunSystemTmux {
-    fn run_sessions(&mut self) -> Vec<RouteSession> {
-        tmux_sessions_to_route_sessions(self.client.list_all())
+    fn run_sessions(&mut self) -> Result<Vec<RouteSession>, String> {
+        Ok(tmux_sessions_to_route_sessions(
+            self.client
+                .list_all()
+                .map_err(|error| format!("tmux unreachable: {error}"))?,
+        ))
     }
 
     fn run_pane_targets_raw(&mut self) -> Option<String> {
@@ -168,7 +172,10 @@ fn run_run_with_from(
     let parsed = run_parse_args(argv).map_err(|message| (2, message))?;
     run_validate_target_query(&parsed.target).map_err(|message| (2, message))?;
     run_validate_command_text(&parsed.text).map_err(|message| (2, message))?;
-    match resolve_route_target(&parsed.target, &config.route, &tmux.run_sessions()) {
+    let sessions = tmux
+        .run_sessions()
+        .map_err(|message| (1, message))?;
+    match resolve_route_target(&parsed.target, &config.route, &sessions) {
         RouteResult::Local { target } | RouteResult::SelfNode { target } => {
             let target = run_prefer_pane_zero_for_ambiguous_agent(&parsed.target, &target, tmux);
             run_local(&target, &parsed.text, tmux)
@@ -460,8 +467,8 @@ mod run_tests {
     }
 
     impl RunTmux for RunFakeTmux {
-        fn run_sessions(&mut self) -> Vec<RouteSession> {
-            self.sessions.clone()
+        fn run_sessions(&mut self) -> Result<Vec<RouteSession>, String> {
+            Ok(self.sessions.clone())
         }
 
         fn run_pane_targets_raw(&mut self) -> Option<String> {

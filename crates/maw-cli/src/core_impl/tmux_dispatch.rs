@@ -39,7 +39,12 @@ fn tmux_usage() -> CliOutput { CliOutput { code: 0, stdout: "usage: maw tmux <ls
 fn run_tmux_ls(argv: &[String]) -> CliOutput {
     let json = argv.iter().any(|arg| arg == "--json");
     let mut client = TmuxClient::local();
-    let sessions = client.list_all();
+    // #860: a tmux connect failure must surface distinctly, not render as an
+    // empty (and therefore indistinguishable from truly-empty) session list.
+    let sessions = match client.list_all() {
+        Ok(sessions) => sessions,
+        Err(error) => return CliOutput { code: 1, stdout: String::new(), stderr: format!("tmux unreachable: {error}\n") },
+    };
     if json { return CliOutput { code: 0, stdout: serde_json::to_string(&sessions.iter().map(|s| serde_json::json!({"name": s.name, "windows": s.windows.iter().map(|w| serde_json::json!({"index": w.index, "name": w.name, "active": w.active})).collect::<Vec<_>>() })).collect::<Vec<_>>()).unwrap_or_else(|_| "[]".to_owned()) + "\n", stderr: String::new() }; }
     let mut stdout = String::new();
     for session in sessions { let _ = writeln!(stdout, "{}", session.name); for window in session.windows { let _ = writeln!(stdout, "  {}:{}{}", window.index, window.name, if window.active { " *" } else { "" }); } }

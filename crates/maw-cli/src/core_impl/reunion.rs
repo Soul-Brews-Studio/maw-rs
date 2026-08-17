@@ -103,7 +103,11 @@ fn reunion_resolve_cwd(window: Option<&str>) -> Result<ReunionCwd, String> {
 fn reunion_resolve_window_cwd(window: &str) -> Result<ReunionCwd, String> {
     let mut tmux = TmuxClient::local();
     let wanted = window.to_ascii_lowercase();
-    let target = tmux.list_all().into_iter().find_map(|session| {
+    let target = tmux
+        .list_all()
+        .map_err(|error| format!("tmux unreachable: {error}"))?
+        .into_iter()
+        .find_map(|session| {
         session.windows.into_iter().find(|item| item.name.to_ascii_lowercase() == wanted).map(|item| format!("{}:{}", session.name, item.name))
     });
     let Some(target) = target else {
