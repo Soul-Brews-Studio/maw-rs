@@ -239,6 +239,7 @@ pub(crate) fn agentstatus_poll_global(sessions: &[AgentStatusSession]) -> AgentS
     if global
         .last_sweep_ms
         .is_some_and(|last| now_ms.saturating_sub(last) < poll_interval_ms)
+        && agentstatus_snapshot_matches_sessions(&global.snapshot, sessions)
     {
         return global.snapshot.clone();
     }
@@ -255,6 +256,27 @@ pub(crate) fn agentstatus_poll_global(sessions: &[AgentStatusSession]) -> AgentS
     global.last_sweep_ms = Some(now_ms);
     global.snapshot = snapshot.clone();
     snapshot
+}
+
+fn agentstatus_snapshot_matches_sessions(
+    snapshot: &AgentStatusSnapshot,
+    sessions: &[AgentStatusSession],
+) -> bool {
+    // #889: the throttle may reuse status values, but never for a different
+    // session/window set. The UI combines this snapshot with the fresh
+    // `sessions` argument, so a shape mismatch would serialize null statuses.
+    let expected_len = sessions
+        .iter()
+        .map(|session| session.windows.len())
+        .sum::<usize>();
+    expected_len == snapshot.statuses.len()
+        && sessions.iter().all(|session| {
+            session.windows.iter().all(|window| {
+                snapshot
+                    .statuses
+                    .contains_key(&agentstatus_target(&session.name, window.index))
+            })
+        })
 }
 
 pub(crate) fn agentstatus_feed_history_and_cursor() -> (Vec<AgentStatusFeedEvent>, u64) {
