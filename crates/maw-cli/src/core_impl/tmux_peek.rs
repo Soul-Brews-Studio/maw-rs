@@ -48,8 +48,7 @@ fn peek_with_runner<R: maw_tmux::TmuxRunner>(
                 return Err((1, peek_ambiguous_message(&alias, &target)));
             }
             PeekRoute::Remote { peer, target } => {
-                let from = peek_sender_address();
-                let content = peek_fetch_remote(&peer, &target, &from).map_err(|message| (1, message))?;
+                let content = peek_fetch_remote(&peer, &target).map_err(|message| (1, message))?;
                 return Ok(CliOutput {
                     code: 0,
                     stdout: format!(

@@ -125,13 +125,32 @@ fn load_federation_token() -> Result<String, String> {
 /// the fleet-token `X-Maw-Signature` over whatever path it is handed, so passing
 /// a query string here produces two signatures that can never verify. That was a
 /// latent no-op while these routes were unprotected (#866); it is a hard 403 now.
+///
+/// Every cross-node GET goes through here — `maw ls --federation`
+/// (`ls_fetch_peer_sessions`), the serve-side fleet sweep
+/// (`federation_signed_sessions_headers`) and `maw peek <peer>:<target>`
+/// (`peek_signed_capture_argv`). peek used to carry its own copy of this
+/// canonicalization; #820 shipped that copy signing the QUERY-BEARING path, and
+/// nothing caught it because `/capture` was unprotected at the time. Two
+/// implementations of one rule is how that happens, so there is now one (#878).
 pub(crate) fn federation_signed_get_headers(auth_path: &str) -> Option<Headers> {
+    federation_signed_get_headers_at(auth_path, federation_signing_timestamp())
+}
+
+/// `federation_signed_get_headers` with the clock supplied rather than read.
+///
+/// The signature covers the timestamp, so two callers signing "the same inputs"
+/// a second apart produce different bytes. Pinning time is what lets a test
+/// assert that peek's wire bytes are byte-identical to this helper's instead of
+/// merely asserting that some request came back non-403 — a status-only check
+/// passes even with the `X-Maw-From` halves swapped, because `validate_wire_from`
+/// accepts any two non-empty colon-separated parts in either order (#878).
+fn federation_signed_get_headers_at(auth_path: &str, timestamp: i64) -> Option<Headers> {
     let config = load_hey_config();
     let sender_oracle = resolve_hey_sender_oracle_for_from(&config, None);
     let from = resolve_hey_wire_from(None, &config, &sender_oracle).ok()?;
     let peer_key = load_peer_key().ok()?;
     let federation_token = load_federation_token().ok()?;
-    let timestamp = i64::try_from(current_epoch_seconds()).unwrap_or(i64::MAX);
     sign_headers_v3_at(
         &federation_token,
         &peer_key,
@@ -142,6 +161,17 @@ pub(crate) fn federation_signed_get_headers(auth_path: &str) -> Option<Headers> 
         timestamp,
     )
     .ok()
+}
+
+/// The wall clock every federated signature is stamped with.
+///
+/// One expression, shared by every caller, so nothing can drift on how epoch
+/// seconds are derived or clamped. `maw peek` used to compute its own with a
+/// separate `SystemTime` chain that failed the whole command on a
+/// before-epoch clock where this one saturates; the value is identical for
+/// every reachable time, but "identical by coincidence" is what #878 is about.
+fn federation_signing_timestamp() -> i64 {
+    i64::try_from(current_epoch_seconds()).unwrap_or(i64::MAX)
 }
 
 /// Read-only auth probe used by `maw peers` to learn whether OUR signed
