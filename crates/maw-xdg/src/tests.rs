@@ -205,3 +205,196 @@ fn maw_home_instance_overrides_singleton_config() {
     assert_eq!(loaded.config["commands"]["omx"], "instance");
     let _ = fs::remove_dir_all(root);
 }
+
+/// #874: `namedPeers` is a list of *named records*, not an ordered list of
+/// values. A higher-weight layer must add to (and override entries of) the
+/// lower layer's peers, never silently substitute its own list — the failure
+/// mode was invisible at the config layer and only surfaced downstream as
+/// `node '<name>' not in namedPeers or peers`.
+#[test]
+fn named_peers_merge_by_name_across_weighted_layers() {
+    let root = temp_root("named-peers-merge");
+    let home = root.join("home");
+    let env = MawXdgEnv::with_vars(
+        &home,
+        [("MAW_CONFIG_DIR", root.join("cfg").display().to_string())],
+    );
+    write_json(
+        &root.join("cfg/maw.config.50.json"),
+        r#"{"namedPeers":[{"name":"white","url":"http://white:3456"},{"name":"mba","url":"http://mba:3456","pubKey":"mba-key"}]}"#,
+    );
+    write_json(
+        &root.join("cfg/maw.config.51.json"),
+        r#"{"namedPeers":[{"name":"mba","url":"http://mba.wg:3457"},{"name":"clinic","url":"http://clinic:3456"}]}"#,
+    );
+
+    let loaded = load_merged_config_in_dir(&env, &root);
+
+    // The weight-50 peer the weight-51 layer never mentions survives; the one it
+    // does mention is replaced whole (a peer's url/pubKey are one credential set,
+    // so a half-merged entry could pair a new url with a stale key); and the new
+    // peer is appended.
+    assert_eq!(
+        loaded.config["namedPeers"],
+        serde_json::json!([
+            {"name":"white","url":"http://white:3456"},
+            {"name":"mba","url":"http://mba.wg:3457"},
+            {"name":"clinic","url":"http://clinic:3456"},
+        ])
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// #874's concrete user exposure: `MAW_HOME` set without `MAW_CONFIG_DIR` makes
+/// `inherit_singleton_configs_for_maw_home` add the singleton config as a
+/// scope_rank-10 layer (deliberate, documented). A personal instance layer at
+/// weight 51 then used to erase every peer that inheritance brought in.
+#[test]
+fn maw_home_inherited_named_peers_survive_a_higher_weight_instance_layer() {
+    let root = temp_root("named-peers-maw-home");
+    let home = root.join("home");
+    let env = MawXdgEnv::with_vars(
+        &home,
+        [
+            ("MAW_HOME", root.join("instance").display().to_string()),
+            ("XDG_CONFIG_HOME", root.join("xdg").display().to_string()),
+        ],
+    );
+    write_json(
+        &root.join("xdg/maw/maw.config.50.json"),
+        r#"{"namedPeers":[{"name":"white","url":"http://white:3456"}]}"#,
+    );
+    write_json(
+        &root.join("instance/config/maw.config.51.json"),
+        r#"{"namedPeers":[{"name":"black","url":"http://black:3456"}]}"#,
+    );
+
+    let loaded = load_merged_config_in_dir(&env, &root);
+
+    assert_eq!(
+        loaded
+            .sources
+            .iter()
+            .map(|source| (source.weight, source.scope_rank))
+            .collect::<Vec<_>>(),
+        vec![(50, 10), (51, 20)]
+    );
+    assert_eq!(
+        loaded.config["namedPeers"],
+        serde_json::json!([
+            {"name":"white","url":"http://white:3456"},
+            {"name":"black","url":"http://black:3456"},
+        ])
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// #874 scoping guard: name-keyed merging is deliberately limited to
+/// `namedPeers`. Every other array-valued key — including one whose elements
+/// happen to carry a `name` — keeps wholesale replacement, and the
+/// weight-then-scope_rank ordering that decides who wins is untouched: at equal
+/// weight the higher scope_rank still wins, now per *entry* rather than per list.
+#[test]
+fn only_named_peers_merges_by_name_and_scope_rank_still_breaks_weight_ties() {
+    let root = temp_root("named-peers-scope");
+    let home = root.join("home");
+    let env = MawXdgEnv::with_vars(
+        &home,
+        [
+            ("MAW_HOME", root.join("instance").display().to_string()),
+            ("XDG_CONFIG_HOME", root.join("xdg").display().to_string()),
+        ],
+    );
+    write_json(
+        &root.join("xdg/maw/maw.config.50.json"),
+        r#"{"namedPeers":[{"name":"white","url":"singleton"}],"widgets":[{"name":"alpha"},{"name":"beta"}],"peers":["http://a"],"arr":[1]}"#,
+    );
+    write_json(
+        &root.join("instance/config/maw.config.50.json"),
+        r#"{"namedPeers":[{"name":"white","url":"instance"}],"widgets":[{"name":"gamma"}],"peers":["http://b"],"arr":[2]}"#,
+    );
+
+    let loaded = load_merged_config_in_dir(&env, &root);
+
+    // Same weight, scope_rank 10 then 20 — unchanged ordering.
+    assert_eq!(
+        loaded
+            .sources
+            .iter()
+            .map(|source| (source.weight, source.scope_rank))
+            .collect::<Vec<_>>(),
+        vec![(50, 10), (50, 20)]
+    );
+    // namedPeers: the tie-break still decides, per entry.
+    assert_eq!(
+        loaded.config["namedPeers"],
+        serde_json::json!([{"name":"white","url":"instance"}])
+    );
+    // Every other array — named elements or not — is still replaced wholesale.
+    assert_eq!(
+        loaded.config["widgets"],
+        serde_json::json!([{"name":"gamma"}])
+    );
+    assert_eq!(loaded.config["peers"], serde_json::json!(["http://b"]));
+    assert_eq!(loaded.config["arr"], serde_json::json!([2]));
+    let _ = fs::remove_dir_all(root);
+}
+
+/// #874 escape hatch: the existing `null` deletion rule is the way to drop
+/// inherited peers wholesale, and it still applies to `namedPeers`. Without
+/// this a layered user could add peers but never remove one.
+#[test]
+fn a_null_named_peers_layer_still_clears_the_inherited_list() {
+    let root = temp_root("named-peers-null");
+    let home = root.join("home");
+    let env = MawXdgEnv::with_vars(
+        &home,
+        [("MAW_CONFIG_DIR", root.join("cfg").display().to_string())],
+    );
+    write_json(
+        &root.join("cfg/maw.config.50.json"),
+        r#"{"namedPeers":[{"name":"white","url":"http://white:3456"}]}"#,
+    );
+    write_json(&root.join("cfg/maw.config.51.json"), r#"{"namedPeers":null}"#);
+
+    let loaded = load_merged_config_in_dir(&env, &root);
+
+    assert!(loaded.config.get("namedPeers").is_none());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// #874: `namedPeers` also has an object form (`{"<name>": "<url>"}`), which
+/// the object branch already deep-merges correctly. Switching *forms* between
+/// layers must not try to key an array against an object — the later form wins
+/// whole, as it did before.
+#[test]
+fn named_peers_object_form_deep_merges_and_form_switches_replace() {
+    let root = temp_root("named-peers-object");
+    let home = root.join("home");
+    let env = MawXdgEnv::with_vars(
+        &home,
+        [("MAW_CONFIG_DIR", root.join("cfg").display().to_string())],
+    );
+    write_json(
+        &root.join("cfg/maw.config.50.json"),
+        r#"{"namedPeers":{"white":"http://white:3456","mba":"http://mba:3456"}}"#,
+    );
+    write_json(
+        &root.join("cfg/maw.config.51.json"),
+        r#"{"namedPeers":{"mba":"http://mba.wg:3457"}}"#,
+    );
+    assert_eq!(
+        load_merged_config_in_dir(&env, &root).config["namedPeers"],
+        serde_json::json!({"white":"http://white:3456","mba":"http://mba.wg:3457"})
+    );
+
+    write_json(
+        &root.join("cfg/maw.config.52.json"),
+        r#"{"namedPeers":[{"name":"clinic","url":"http://clinic:3456"}]}"#,
+    );
+    assert_eq!(
+        load_merged_config_in_dir(&env, &root).config["namedPeers"],
+        serde_json::json!([{"name":"clinic","url":"http://clinic:3456"}])
+    );
+    let _ = fs::remove_dir_all(root);
+}
