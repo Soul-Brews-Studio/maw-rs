@@ -4,7 +4,10 @@ impl MawWasmHost {
             return err;
         }
         let mut client = TmuxClient::new(CommandTmuxRunner::new());
-        HostResult::ok(json!({"sessions": tmux_sessions_json(client.list_all())}))
+        match client.list_all() {
+            Ok(sessions) => HostResult::ok(json!({"sessions": tmux_sessions_json(sessions)})),
+            Err(error) => HostResult::err(HostErrorCode::IoError, error.message),
+        }
     }
 
     fn tmux_capture(&self, input: &str) -> HostResult<Value> {

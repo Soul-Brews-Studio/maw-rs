@@ -16,7 +16,7 @@ impl ActivityTmux for ActivityEnvTmux {
         }
     }
 
-    fn list_all(&mut self) -> Vec<TmuxSession> { Vec::new() }
+    fn list_all(&mut self) -> Result<Vec<TmuxSession>, String> { Ok(Vec::new()) }
 }
 
 #[derive(Debug)]

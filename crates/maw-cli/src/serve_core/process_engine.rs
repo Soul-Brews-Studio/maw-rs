@@ -141,7 +141,9 @@ pub(crate) fn serveengine_tmux_capture_lines(
         return Ok(serveengine_tail_capture_lines(capture, lines));
     }
     let mut tmux = maw_tmux::TmuxClient::local();
-    let sessions = tmux.list_all();
+    let sessions = tmux
+        .list_all()
+        .map_err(|error| format!("tmux unreachable: {error}"))?;
     let resolved = serveengine_resolve_capture_target(&target, &sessions);
     let capture_lines = lines.filter(|line_count| *line_count > 50);
     tmux.capture(&resolved, capture_lines)
