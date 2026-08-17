@@ -3,146 +3,205 @@
 [![CI](https://github.com/Soul-Brews-Studio/maw-rs/actions/workflows/ci.yml/badge.svg?branch=alpha)](https://github.com/Soul-Brews-Studio/maw-rs/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/Soul-Brews-Studio/maw-rs?include_prereleases)](https://github.com/Soul-Brews-Studio/maw-rs/releases/latest)
 
-Distributed terminal multiplexing & fleet management for AI agent oracles — Rust port of maw-js.
+**Run a fleet of AI coding agents across tmux sessions and machines, from one command line.**
 
-## Install maw-rs
+Each agent — an *oracle* — lives in its own repo and tmux window. `maw` wakes them, routes
+messages between them, moves their panes around, and reaches the ones running on other hosts.
 
-On macOS Apple Silicon, install the stable prebuilt binary and zsh completions without a
-Rust toolchain:
+```bash
+maw ls                          # what is alive right now
+maw wake reviewer               # start an oracle in its repo
+maw hey reviewer "check PR 12"  # message it, locally or across machines
+maw a reviewer                  # attach to its pane
+```
+
+---
+
+## Install
+
+**macOS (Apple Silicon)** — binary and zsh completions, no Rust toolchain:
 
 ```bash
 brew install soul-brews-studio/maw/maw
 ```
 
-See [`docs/install.md`](docs/install.md) for upgrades, pinned CI installs, the release
-installer, and source builds.
-
-macOS Apple Silicon and Linux x86_64 prebuilt binaries are published on tagged releases.
-The installer downloads the matching asset, verifies its `.sha256` sidecar, backs
-up any existing `maw`, and installs to `~/.local/bin/maw` by default.
-
-Stable release installer:
+**Any supported platform** — stable installer:
 
 ```bash
 curl -fsSL https://github.com/Soul-Brews-Studio/maw-rs/releases/latest/download/install.sh | sh
 ```
 
-Bleeding-edge installer from `alpha`:
+Installs to `~/.local/bin/maw`, verifies the release `.sha256`, and backs up any existing
+binary. Add `~/.local/bin` to your `PATH` if it isn't there.
+
+<details>
+<summary>Bleeding edge, pinned versions, and install options</summary>
 
 ```bash
+# latest alpha
 curl -fsSL https://raw.githubusercontent.com/Soul-Brews-Studio/maw-rs/alpha/install.sh | sh
-```
 
-Pin the installer and binary to a specific release (day-based CalVer tags, e.g. `v26.7.16`):
-
-```bash
+# pin to a release (day-based CalVer, e.g. v26.7.16)
 curl -fsSL https://github.com/Soul-Brews-Studio/maw-rs/releases/download/v26.7.16/install.sh | MAW_VERSION=v26.7.16 sh
-```
 
-Options:
-
-```bash
-MAW_VERSION=v26.7.16 sh install.sh
+# choose a target directory
 INSTALL_DIR="$HOME/bin" sh install.sh
 sh install.sh --version v26.7.16 --install-dir "$HOME/bin"
 ```
 
-Supported prebuilt platforms:
+Already installed? `maw update` handles upgrades on either channel:
 
-- `maw-rs-macos-arm64` — macOS Apple Silicon
-- `maw-rs-linux-x86_64-gnu` — Linux x86_64, dynamic (glibc host); resolves `.local`/mDNS
-- `maw-rs-linux-x86_64-musl` — Linux x86_64, static and portable; **cannot** resolve `.local`/mDNS
+```bash
+maw update --check              # is anything newer?
+maw update                      # stable
+maw update alpha                # alpha channel
+```
 
-Linux ships both. The installer autodetects the host C library and prefers the
-glibc build, falling back to musl when glibc is not proven; `MAW_LIBC=gnu` or
-`MAW_LIBC=musl` forces the choice. musl has no glibc NSS, so a musl build never
-loads `mdns4_minimal` from `/etc/nsswitch.conf` and cannot resolve `*.local`
-peer names at all — pick `-gnu` on any host that federates over `.local`.
+</details>
 
-Manual fallback:
+<details>
+<summary>Platforms, and the one Linux choice that matters</summary>
 
-1. Download the matching binary and `.sha256` sidecar from a release.
-2. Verify the SHA-256 hash.
-3. `chmod +x` the binary and move or symlink it as `maw` in your `PATH`.
+| Asset | Platform |
+| --- | --- |
+| `maw-rs-macos-arm64` | macOS Apple Silicon |
+| `maw-rs-linux-x86_64-gnu` | Linux x86_64, dynamic — **resolves `.local`/mDNS** |
+| `maw-rs-linux-x86_64-musl` | Linux x86_64, static and portable — **cannot** resolve `.local`/mDNS |
 
-If `~/.local/bin` is not on `PATH`, add it to your shell profile. If macOS
-Gatekeeper blocks the binary, run:
+The installer autodetects your C library and prefers glibc, falling back to musl only when
+glibc isn't proven. Force it with `MAW_LIBC=gnu` or `MAW_LIBC=musl`.
+
+**If your fleet federates over `.local` names, you need `-gnu`.** A musl build has no glibc
+NSS, so it never loads `mdns4_minimal` from `/etc/nsswitch.conf` and cannot resolve `*.local`
+peers at all.
+
+Manual install: download the binary and its `.sha256`, verify the hash, `chmod +x`, and put
+it on your `PATH` as `maw`. If macOS Gatekeeper blocks it:
 
 ```bash
 xattr -d com.apple.quarantine ~/.local/bin/maw
 ```
 
-`maw-rs` is intentionally starting with deterministic, side-effect-free crates.
-Each crate copies the same JSON fixture contract from `maw-js/test/spec/` and
-must pass those fixtures in Rust before runtime IO, transports, or CLI commands
-move over.
+</details>
 
-## Plugin build/dev support
+---
 
-`maw-rs` supports native Rust-WASM plugin builds. The supported authoring path is:
+## What it does
+
+**Wake and attach.** Oracles sleep as registry entries and wake into tmux windows on demand.
+
+```bash
+maw wake reviewer               # launch its engine pane in its repo
+maw a reviewer                  # attach (wakes first if needed)
+maw ls                          # live sessions;  --json, --watch, --compact
+maw sleep reviewer              # stop one oracle gracefully
+```
+
+**Talk between agents — including across machines.** `maw hey` delivers over federation, so
+the target can be on another host.
+
+```bash
+maw hey reviewer "rebase onto alpha"
+maw hey other-box:reviewer "..."   # a peer on another host
+maw peek reviewer                  # read a local pane without attaching
+```
+
+> `maw peek` is local-only today — it takes a tmux target, not a `<node>:<agent>` form.
+> The HTTP API already serves cross-node capture; the CLI verb for it does not exist yet
+> ([#820](https://github.com/Soul-Brews-Studio/maw-rs/issues/820)).
+
+**Drive panes directly** when you want to type into an agent rather than message it.
+
+```bash
+maw run reviewer "cargo test"   # type it and press Enter
+maw send reviewer "partial"     # type without submitting
+maw send-enter reviewer         # submit later
+maw send-key reviewer C-c       # one allowlisted key
+```
+
+**Work on repos and issues.** `maw work` opens a workspace, optionally seeded with task
+context; `maw done` finishes and cleans up the worktree.
+
+```bash
+maw work .                      # a window for this repo
+maw work owner/repo 42          # ...seeded with issue 42
+maw done                        # save state, kill window, remove worktree
+```
+
+**Run teams.** Several agents on one problem, side by side.
+
+```bash
+maw swarm                       # three claude panes (the default)
+maw swarm --count 5 --tiled     # five, tiled
+maw squad start                 # lead-centric team flow
+maw bring reviewer              # pull an oracle into your current session
+```
+
+**Grow the fleet.** New oracles bud from existing ones.
+
+```bash
+maw bud newname                 # create the workspace
+maw awaken newname              # bud + wake + first trigger
+```
+
+**Background work** that outlives the current pane:
+
+```bash
+maw bg "cargo build --release" --name build
+```
+
+`maw help --all` lists every verb — there are ~195, plus installed plugins.
+
+---
+
+## Plugins
+
+Native Rust→WASM plugins, loaded through Extism:
 
 ```bash
 maw plugin create --rust my-plugin
 cd my-plugin
-maw plugin build
+maw plugin build                # → wasm32-unknown-unknown + dist/plugin.json
+maw plugin ls -v                # what is installed
+maw x <source-spec> --sha256 <hex>   # run one, pin-verified
 ```
 
-That path builds a `wasm32-unknown-unknown` artifact with Cargo, writes a
-`dist/plugin.json` artifact contract, and is loaded through the native Extism
-WASM runtime.
+The ship-tier WASM builder does not compile JS/TS source — it vendors no JS-to-WASM compiler
+and the pinned host has no Bun subprocess fallback. This is a boundary of that deployment
+path, not a ban on Bun: Bun/JS fleet plugins and dev-tier surfaces remain first-class. A JS/TS
+plugin entering the ship-tier host must supply a prebuilt artifact with `target = "wasm"` and
+a relative `wasm` path in `plugin.json`.
 
-The `maw-rs` ship-tier WASM builder does not yet compile JS/TS source: it vendors
-no JS-to-WASM compiler, and the pinned host has no Bun subprocess fallback. This
-is a boundary of that deployment path, not a ban on Bun; Bun/JS fleet plugins and
-dev-tier surfaces remain first-class alongside Rust. A JS/TS plugin entering the
-ship-tier WASM host must currently provide a prebuilt artifact with `target =
-"wasm"` and a relative `wasm` path in `plugin.json`. A future Javy/QuickJS-style
-toolchain would need a separate design and security review.
+---
 
-## Phase 1 status
-
-Cargo workspace scaffolded and pushed to `main`.
-
-| Crate | maw-js source | Portable fixture |
-| --- | --- | --- |
-| `maw-matcher` | `src/core/matcher/resolve-target.ts`, `normalize-target.ts` | `matcher-resolve-target.fixtures.json`, `normalize-target.fixtures.json` |
-| [`maw-calver`](https://github.com/Soul-Brews-Studio/maw-calver) (external repo since 2026-07-15, consumed as a pinned git dependency) | `scripts/calver.ts` | `calver.fixtures.json` |
-| `maw-policy` | `src/plugin/default-active.ts`, `src/plugin/tier.ts`, `src/plugin/manifest-constants.ts` | `plugin-policy.fixtures.json` |
-| `maw-worktree` | `src/core/fleet/worktree-window-match.ts` | `worktree-window-match.fixtures.json` |
-| `maw-transport` | `src/core/transport/transport.ts` | `transport-router.fixtures.json` |
-| `maw-routing` | `src/core/routing.ts` | `routing.fixtures.json` |
-| `maw-identity` | `src/core/fleet/session-name.ts`, `src/core/fleet/node-identity.ts`, `src/core/fleet/validate.ts` | `canonical-session-name.fixtures.json`, `canonical-node-identity.fixtures.json`, `test/validate-oracle-name.test.ts` |
-| `maw-bring` | `src/commands/shared/bring-flags.ts` | `bring-to-flag.fixtures.json`, `bring-to-target.fixtures.json`, `bring-self-guard.fixtures.json` |
-| `maw-split` | `src/vendor/mpr-plugins/split/impl.ts`, `src/commands/plugins/tmux/safety.ts` | `split-policy.fixtures.json` |
-| `maw-peer` | `src/commands/shared/peer-sources.ts` | `peer-source-resolver.fixtures.json` |
-| `maw-tmux` | `src/core/transport/tmux-class.ts`, `src/commands/shared/discover-live-state.ts` | tmux parser unit tests, `discover-tmux-live-state.fixtures.json` |
-| `maw-hub` | `src/transports/hub-config.ts` | `test/isolated/hub-config.test.ts`, hub config loader coverage |
-| `maw-feed` | `src/lib/feed.ts` | `test/isolated/feed-lib-coverage.test.ts` |
-| `maw-auth` | `src/lib/federation-auth.ts` | federation auth pure helper and O6 decision tests |
-| `maw-xdg` | `src/core/xdg.ts`, `src/core/paths.ts`, `src/cli/instance-preset.ts` | `test/core-xdg.test.ts`, `test/paths.test.ts`, `test/00-resolve-home.test.ts` |
-| `maw-bind` | `src/core/bind-host.ts` | `test/bind-heuristic.test.ts` |
-| `maw-fuzzy` | `src/core/util/fuzzy.ts` | `test/fuzzy-match.test.ts` |
-| `maw-plugin-scaffold` | `src/commands/shared/plugin-create-scaffold.ts` | `test/plugin-create.test.ts` (pure validation/manifest cases) |
-| `maw-plugin-manifest` | `src/plugin/manifest-validate.ts` | `test/plugin-manifest-validate-edges.test.ts` (cli/api validators) |
-
-Current local gates:
+## Build from source
 
 ```bash
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
+git clone https://github.com/Soul-Brews-Studio/maw-rs
+cd maw-rs
+cargo build --release           # binary at target/release/maw
 ```
 
-## Phase 2 plan
+The toolchain is pinned by `rust-toolchain.toml`, including the `wasm32-unknown-unknown`
+target. Don't `rustup update` to fix a build — edit the pin.
 
-1. Add side-effecting transport implementations behind the `maw-transport` policy:
-   - tmux via the `tmux` CLI
-   - HTTP federation via injectable IO first; runtime HTTP client wiring later
-   - Zenoh via the Rust stylos/themion ecosystem
-2. Add runtime adapters for fleet/worktree/session discovery around the pure crates.
-3. Keep maw-js and maw-rs running side-by-side until command parity is proven.
+```bash
+scripts/gate.sh quick           # fmt + clippy + affected tests
+scripts/gate.sh full            # the pre-merge bar (all CI dimensions)
+```
 
-## Phase 3 plan
+---
 
-1. Add a `maw-rs` CLI with `clap`.
-2. Port high-value fast-path commands first: `ls`, `hey`, `peek`, and target resolution helpers.
-3. Validate each command against maw-js fixtures or captured golden outputs before replacing any default `maw` entrypoint.
+## Docs
+
+| | |
+| --- | --- |
+| [`docs/install.md`](docs/install.md) | upgrades, pinned CI installs, source builds |
+| [`docs/guides/gating.md`](docs/guides/gating.md) | gate tiers, warm cache, merge trains |
+| [`docs/`](docs/) | parity matrix, wire protocol, adding a command, WASM design |
+| [`CLAUDE.md`](CLAUDE.md) · [`AGENTS.md`](AGENTS.md) | conventions for agents working in this repo |
+
+**Contributing:** PRs target `alpha`, never `main`. `scripts/gate.sh full` must pass before
+merge. Releases use day-based CalVer (`v<YY>.<M>.<DD>`, alpha suffixed `-alpha.<HMM>`).
+
+Rust port of maw-js. BUSL-1.1.
