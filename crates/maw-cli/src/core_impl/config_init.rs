@@ -238,3 +238,102 @@ fn init_port_usage() -> String {
     "maw init [--non-interactive --node <name> --token <t> --federate --peer <url> --peer-name <name> --federation-token <hex> --force]\n\nInteractive 3-question wizard. Writes ~/.config/maw/maw.config.json.\n".to_owned()
 }
 fn init_port_error(message: &str) -> CliOutput { CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") } }
+
+/// `maw init --federate` is the one non-loader caller of `deep_merge_config`
+/// (`init_write_config` merges the generated block over the config already on
+/// disk), so #874's name-keyed `namedPeers` merge reaches this call site too.
+///
+/// Nothing pinned the behavior here before #874 either way, and the shared
+/// merge function is exactly what this repo has been burned by reasoning about
+/// from a distance — `update.rs`'s own comment records the maw-js updater
+/// wiping `namedPeers`/`federationToken`. So assert it at the call site rather
+/// than inferring it from `maw-xdg`'s unit tests.
+#[cfg(test)]
+mod config_init_federate_tests {
+    use super::*;
+
+    fn init_federate_argv(name: &str, url: &str, force: bool) -> Vec<String> {
+        let mut argv = vec![
+            "--non-interactive".to_owned(),
+            "--node".to_owned(),
+            "lead".to_owned(),
+            "--federate".to_owned(),
+            "--peer".to_owned(),
+            url.to_owned(),
+            "--peer-name".to_owned(),
+            name.to_owned(),
+        ];
+        if force {
+            argv.push("--force".to_owned());
+        }
+        argv
+    }
+
+    fn init_written_named_peers(path: &std::path::Path) -> serde_json::Value {
+        let raw = std::fs::read_to_string(path).expect("written config");
+        serde_json::from_str::<serde_json::Value>(&raw).expect("config json")["namedPeers"].clone()
+    }
+
+    #[test]
+    fn init_federate_rerun_keeps_peers_an_earlier_run_defined() {
+        let _lock = env_test_lock();
+        let (_state, _restores) = cli_dispatch_test_env();
+        let _config_dir = EnvVarRestore::capture("MAW_CONFIG_DIR");
+        let root = std::env::temp_dir().join(format!(
+            "maw-rs-init-federate-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_nanos())
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("config dir");
+        std::env::set_var("MAW_CONFIG_DIR", &root);
+        let path = root.join("maw.config.json");
+
+        let first = init_run_non_interactive(&init_federate_argv(
+            "alpha",
+            "http://alpha.example:3456",
+            false,
+        ));
+        assert_eq!(first.code, 0, "first init failed: {}", first.stderr);
+        assert_eq!(
+            init_written_named_peers(&path),
+            serde_json::json!([{"name":"alpha","url":"http://alpha.example:3456"}])
+        );
+
+        // A second run naming a DIFFERENT peer must add it, not substitute its
+        // one-entry list for the stored one. Before #874 `alpha` vanished here.
+        let second = init_run_non_interactive(&init_federate_argv(
+            "beta",
+            "http://beta.example:3456",
+            true,
+        ));
+        assert_eq!(second.code, 0, "second init failed: {}", second.stderr);
+        assert_eq!(
+            init_written_named_peers(&path),
+            serde_json::json!([
+                {"name":"alpha","url":"http://alpha.example:3456"},
+                {"name":"beta","url":"http://beta.example:3456"},
+            ])
+        );
+
+        // Re-running with an EXISTING name still repoints that peer whole and
+        // leaves the others alone, so "update a peer's address" is unchanged.
+        let third = init_run_non_interactive(&init_federate_argv(
+            "alpha",
+            "https://alpha.wg:3457",
+            true,
+        ));
+        assert_eq!(third.code, 0, "third init failed: {}", third.stderr);
+        assert_eq!(
+            init_written_named_peers(&path),
+            serde_json::json!([
+                {"name":"alpha","url":"https://alpha.wg:3457"},
+                {"name":"beta","url":"http://beta.example:3456"},
+            ])
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}

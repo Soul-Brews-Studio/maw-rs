@@ -33,6 +33,12 @@ new `url` with the previous host's key. To drop inherited peers instead of
 adding to them, use the `null` rule: `"namedPeers": null` in a later layer
 clears the key, and a layer above that can define a fresh list.
 
+The same rule reaches `maw init --federate --peer <url> --peer-name <name>`,
+which merges its generated block over the config already on disk: a re-run
+**adds** the named peer and repoints an existing one of the same name, instead of
+replacing the stored list with just the peers on that command line. Dropping a
+peer is therefore a config edit (the `null` rule above), not a flag.
+
 Every other array-valued key still replaces wholesale, so trimming or reordering
 a list in a later layer works as written. That is deliberate per key, not a
 fallthrough: `peers` and `hooks.postWake` are ordered lists of scalars (and
