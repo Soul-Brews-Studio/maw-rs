@@ -431,8 +431,6 @@ async fn federation_fleet_sessions(
     map
 }
 
-/// Fetch one peer's `/api/sessions` and keep just the session names, plus the
-/// error string when it did not succeed — so `agents: []` is never ambiguous.
 /// The headers that authenticate this node's fleet sweep to a peer, or an empty
 /// list when this node cannot sign (no identity / peer key / federation token).
 /// Signing is best-effort by design: an unsignable node still sweeps, and an
@@ -444,6 +442,8 @@ fn federation_signed_sessions_headers() -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
+/// Fetch one peer's `/api/sessions` and keep just the session names, plus the
+/// error string when it did not succeed — so `agents: []` is never ambiguous.
 async fn federation_fetch_peer_sessions(
     client: &reqwest::Client,
     url: &str,
