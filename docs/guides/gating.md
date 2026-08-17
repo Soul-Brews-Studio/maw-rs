@@ -81,6 +81,24 @@ no cargo, no network, seconds to run — in the same style as
 `scripts/test-install-resolve.sh`. Run it after touching `gate.sh`'s preflight
 or bumping the pin.
 
+## The repository-hygiene preflight (#888)
+
+Before the toolchain check, `quick` and `full` refuse when a tracked file
+matches the repository-controlled root `.gitignore`. Ignore rules do not stop
+Git tracking a path that a stale branch reintroduces; tests can then append to
+runtime state such as `.maw/audit.jsonl` and leave each worktree that runs the
+tests dirty. The check fails before cargo and tells the author to untrack the
+path or narrow the rule. `batch` gets the same protection from the merged
+train's inner `full`.
+
+Only the root `.gitignore` defines this repository invariant. Developer-local
+`.git/info/exclude` and global ignore files cannot change the verdict, while
+the committed `!**/.maw/teams/` exception keeps team charters trackable. The
+toolchain-drift escape hatch does not bypass repository hygiene.
+
+`scripts/test-gate-preflight.sh` pins the quick/full refusal, fail-closed Git
+errors, the team-charter exception, and local-exclude non-interference.
+
 The quick tier deliberately runs **less** — that is fine for iteration, but
 the full set must still run somewhere before anything is promoted: either
 `gate.sh full` on your branch or a `gate.sh batch` train that includes it.

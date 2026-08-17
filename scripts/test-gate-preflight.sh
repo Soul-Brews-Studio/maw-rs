@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test-gate-preflight.sh — behavioural test for gate.sh's toolchain preflight (#823).
+# test-gate-preflight.sh — behavioural tests for gate.sh's preflight checks.
 #
 # Run it directly:  scripts/test-gate-preflight.sh
 #
@@ -139,6 +139,46 @@ marker_exists() { [ -f "$WORK/$1/cargo-was-invoked" ]; }
 gate_exit() { cat "$WORK/$1/exit"; }
 gate_stderr() { cat "$WORK/$1/stderr" "$WORK/$1/stdout"; }
 
+# Build an isolated repository around the real gate script. Repo-hygiene cases
+# must not mutate this checkout or the common .git/info/exclude shared by its
+# linked worktrees.
+make_gate_repo() {
+    local dir="$WORK/$1" repo="$WORK/$1/repo"
+    mkdir -p "$repo/scripts"
+    cp "$GATE" "$repo/scripts/gate.sh"
+    cp "$ROOT/.gitignore" "$ROOT/rust-toolchain.toml" "$repo/"
+    git -C "$repo" init -q
+    git -C "$repo" config user.name "gate preflight test"
+    git -C "$repo" config user.email "gate-preflight@example.invalid"
+    git -C "$repo" config commit.gpgsign false
+    git -C "$repo" config core.hooksPath /dev/null
+    git -C "$repo" add -f .gitignore rust-toolchain.toml scripts/gate.sh
+    git -C "$repo" commit --no-verify -qm baseline
+}
+
+# $1 case name, $2 tier. The repository must already exist via make_gate_repo.
+run_gate_in_repo() {
+    local tier="$2" dir="$WORK/$1" repo="$WORK/$1/repo"
+    local bin
+    bin="$(make_shims "$dir" "$PINNED" yes "$PINNED")"
+    (
+        cd "$repo" || exit 9
+        PATH="$bin:$PATH" \
+            GATE_TARGET_DIR="$dir/target-gate" \
+            MAW_GATE_CACHE="$dir/no-such-cache" \
+            "$repo/scripts/gate.sh" "$tier"
+    ) >"$dir/stdout" 2>"$dir/stderr"
+    echo "$?" >"$dir/exit"
+}
+
+assert_tracked() {
+    local case_name="$1" path="$2"
+    if ! git -C "$WORK/$case_name/repo" ls-files --error-unmatch -- "$path" \
+        >/dev/null 2>&1; then
+        fail "$case_name setup: $path never entered the isolated index"
+    fi
+}
+
 # ---- case 1: wasm32 target missing → refuse BEFORE any cargo runs ------------
 run_gate missing-wasm quick "$PINNED" no ""
 if [ "$(gate_exit missing-wasm)" = 0 ]; then
@@ -248,6 +288,89 @@ if marker_exists channel-pin; then
     pass "channel-style pin: accepted by active-toolchain name"
 else
     fail "channel-style pin: refused a machine that IS running the pin"
+fi
+
+# ---- case 8: tracked files matching .gitignore fail before cargo ------------
+# Exercise both public tiers. A stale branch can reintroduce a runtime artifact
+# even though the ignore rule is already correct; Git keeps tracking it until a
+# gate checks the index explicitly (#888).
+for tier in quick full; do
+    case_name="tracked-ignored-$tier"
+    make_gate_repo "$case_name"
+    mkdir -p "$WORK/$case_name/repo/crates/maw-cli/.maw"
+    printf '{"runtime":true}\n' >"$WORK/$case_name/repo/crates/maw-cli/.maw/audit.jsonl"
+    git -C "$WORK/$case_name/repo" add -f crates/maw-cli/.maw/audit.jsonl
+    assert_tracked "$case_name" crates/maw-cli/.maw/audit.jsonl
+    run_gate_in_repo "$case_name" "$tier"
+    if [ "$(gate_exit "$case_name")" = 0 ]; then
+        fail "$tier tier, tracked ignored file: gate.sh exited 0 (must fail)"
+    else
+        pass "$tier tier, tracked ignored file: gate.sh fails early"
+    fi
+    if gate_stderr "$case_name" | grep -Fq 'crates/maw-cli/.maw/audit.jsonl'; then
+        pass "$tier tier, tracked ignored file: message names the path"
+    else
+        fail "$tier tier, tracked ignored file: message must name the path"
+    fi
+    if gate_stderr "$case_name" | grep -Fq 'git rm --cached'; then
+        pass "$tier tier, tracked ignored file: message gives the untrack fix"
+    else
+        fail "$tier tier, tracked ignored file: message must give the untrack fix"
+    fi
+    if marker_exists "$case_name"; then
+        fail "$tier tier, tracked ignored file: cargo RAN — the preflight is too late"
+    else
+        pass "$tier tier, tracked ignored file: no cargo step ran"
+    fi
+done
+
+# ---- case 9: deliberately tracked team charters remain allowed --------------
+make_gate_repo teams-visible
+mkdir -p "$WORK/teams-visible/repo/.maw/teams"
+printf 'name: example\n' >"$WORK/teams-visible/repo/.maw/teams/t.yaml"
+git -C "$WORK/teams-visible/repo" add -f .maw/teams/t.yaml
+assert_tracked teams-visible .maw/teams/t.yaml
+run_gate_in_repo teams-visible quick
+if [ "$(gate_exit teams-visible)" = 0 ] && marker_exists teams-visible; then
+    pass "team charter re-inclusion: gate proceeds to cargo"
+else
+    fail "team charter re-inclusion: gate must allow .maw/teams/t.yaml"
+fi
+
+# ---- case 10: developer-local excludes do not change the repo invariant ------
+# Only the repository-controlled root .gitignore defines this check. Using
+# --exclude-standard would make one developer's .git/info/exclude fail a gate
+# that stays green everywhere else.
+make_gate_repo local-exclude
+printf 'local\n' >"$WORK/local-exclude/repo/local-only.txt"
+git -C "$WORK/local-exclude/repo" add -f local-only.txt
+assert_tracked local-exclude local-only.txt
+printf 'local-only.txt\n' >>"$WORK/local-exclude/repo/.git/info/exclude"
+run_gate_in_repo local-exclude quick
+if [ "$(gate_exit local-exclude)" = 0 ] && marker_exists local-exclude; then
+    pass "developer-local exclude: repository-controlled .gitignore remains authoritative"
+else
+    fail "developer-local exclude: .git/info/exclude must not change the gate verdict"
+fi
+
+# ---- case 11: a missing root policy fails closed ----------------------------
+make_gate_repo missing-ignore
+git -C "$WORK/missing-ignore/repo" rm -q .gitignore
+run_gate_in_repo missing-ignore quick
+if [ "$(gate_exit missing-ignore)" = 0 ]; then
+    fail "missing root .gitignore: gate.sh exited 0 (must fail closed)"
+else
+    pass "missing root .gitignore: gate.sh fails closed"
+fi
+if gate_stderr missing-ignore | grep -Fq 'could not inspect tracked files'; then
+    pass "missing root .gitignore: message names the failed inspection"
+else
+    fail "missing root .gitignore: message must explain the failed inspection"
+fi
+if marker_exists missing-ignore; then
+    fail "missing root .gitignore: cargo RAN — an unverified policy must stop early"
+else
+    pass "missing root .gitignore: no cargo step ran"
 fi
 
 echo

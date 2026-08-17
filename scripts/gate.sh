@@ -103,12 +103,32 @@ run_step() {
 # Covered by scripts/test-gate-preflight.sh (standalone; run it after touching
 # anything below or after bumping the pin). It deliberately is NOT wired into
 # gate.sh — the test drives gate.sh, so calling it from here would recurse.
+tracked_ignored_check() {
+    local tracked
+    if ! tracked="$(git -C "$REPO_ROOT" ls-files -ci \
+        --exclude-from="$REPO_ROOT/.gitignore")"; then
+        echo "gate.sh: could not inspect tracked files against $REPO_ROOT/.gitignore" >&2
+        echo "  Repository hygiene is unverified; refusing before cargo runs." >&2
+        return 1
+    fi
+    [ -n "$tracked" ] || return 0
+
+    echo "gate.sh: tracked files match the repository .gitignore:" >&2
+    while IFS= read -r path; do
+        printf '  %s\n' "$path" >&2
+    done <<<"$tracked"
+    echo "  Ignored runtime state can still be mutated while it remains tracked." >&2
+    echo "  Fix: untrack it with 'git rm --cached <path>', or narrow .gitignore." >&2
+    return 1
+}
+
 pinned_channel() {
     sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
         "$TOOLCHAIN_FILE" 2>/dev/null | head -1
 }
 
 preflight() {
+    tracked_ignored_check || exit 5
     PINNED_CHANNEL="$(pinned_channel)"
     # A missing pin is a REPO bug, not a machine state — no escape hatch.
     if [ -z "$PINNED_CHANNEL" ]; then
