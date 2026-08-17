@@ -106,6 +106,10 @@ fn team_t5b_send_fixed_maw(runner: &mut TeamT5bTmuxRunner128, target: &str, args
 }
 
 fn team_t5b_run_maw_wake(args: &[String]) -> Result<(), String> {
+    team_t5b_run_maw_wake_for("team up", args)
+}
+
+fn team_t5b_run_maw_wake_for(context: &str, args: &[String]) -> Result<(), String> {
     if let Ok(log) = std::env::var("MAW_RS_TEAM_FAKE_SPAWN_LOG") {
         let record = serde_json::json!({"program":team_t5b_self_bin()?.display().to_string(),"args":args});
         let path = std::path::Path::new(&log);
@@ -117,16 +121,16 @@ fn team_t5b_run_maw_wake(args: &[String]) -> Result<(), String> {
     let output = std::process::Command::new(team_t5b_self_bin()?)
         .args(args)
         .output()
-        .map_err(|error| format!("team up: maw wake failed: {error}"))?;
+        .map_err(|error| format!("{context}: maw wake failed: {error}"))?;
     if output.status.success() {
         Ok(())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stderr = stderr.trim();
         if stderr.is_empty() {
-            Err(format!("team up: maw wake exited with {}", output.status))
+            Err(format!("{context}: maw wake exited with {}", output.status))
         } else {
-            Err(format!("team up: maw wake failed: {stderr}"))
+            Err(format!("{context}: maw wake failed: {stderr}"))
         }
     }
 }

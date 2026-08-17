@@ -132,7 +132,9 @@ fn swarm_tmux_family_guards_run_before_host_tmux() {
     assert!(!worktree_flag.status.success());
     let stderr = String::from_utf8(worktree_flag.stderr).expect("stderr");
     assert!(stderr.contains("unknown flag for swarm: --wt"));
-    assert!(stderr.contains("maw wake <oracle> --wt <slot> --split -e <engine>"));
+    assert!(stderr.contains("maw work <repo> --wt <slot> -e <engine>"));
+    assert!(!stderr.contains("maw wake"));
+    assert!(!stderr.contains("--split"));
 }
 
 #[test]
