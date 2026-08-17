@@ -145,7 +145,7 @@ fn peers_cmd_add(argv: &[String], positional: &[&str]) -> Result<CliOutput, Stri
     // and it's the only way to set identity.oracle at all when the peer is
     // unreachable at add time (--allow-unreachable skips the probe
     // entirely) or the probe fails/predates /api/identity.
-    if let Some(oracle) = &oracle { peers_set_identity_oracle(&mut peer, oracle); }
+    if let Some(oracle) = &oracle { peers_set_identity_oracle(&mut peer, oracle, peers_node_freshly_probed(probe.as_ref())); }
     store.peers.insert(alias.to_owned(), peer.clone());
     peers_save_store(&store)?;
     let mut stdout = String::new();
@@ -162,31 +162,49 @@ fn peers_cmd_add(argv: &[String], positional: &[&str]) -> Result<CliOutput, Stri
 
 fn peers_validate_oracle(oracle: &str) -> Result<(), String> { peers_validate_alias(oracle).map_err(|_| format!("invalid --oracle \"{oracle}\"")) }
 
-/// Sets `identity.oracle` (and backfills `identity.node` from `peer.node`
-/// when the identity object doesn't already carry one) so the resulting
-/// shape matches what `serve.rs`'s `identity_from_object` needs to pin a
-/// sender's pubkey under `oracle:node` (#794) — an `identity` with an empty
-/// or missing `oracle` can never satisfy that lookup, which is exactly what
-/// left signed cross-node `hey` permanently 401ing after the documented
-/// `peers add` workaround.
-fn peers_set_identity_oracle(peer: &mut PeersPeerNative, oracle: &str) {
+/// `true` only when `peer.node` was just set from a successful, node-bearing
+/// probe THIS invocation — i.e. `peers_apply_probe_result` actually reached
+/// its `if let Some(node) = &probe.node { peer.node = ... }` line, not merely
+/// that a probe was attempted.
+///
+/// #819 round 2 trusted `probe.is_some()` as that signal and over-fired
+/// twice: `--allow-unreachable` skips the probe entirely (`probe` is `None`,
+/// so `peer.node` is still the raw, unvalidated `--node` flag), and even on
+/// the reachable path a real peer whose `/info` succeeds but simply omits
+/// `node` leaves `peer.node` exactly as unvalidated (`peers_apply_probe_result`
+/// only writes it `if let Some(node) = &probe.node`) — `probe.is_some()` is
+/// `true` in both the success-without-node and the outright-error case, so it
+/// can't tell "we probed" from "we actually got a fresh node back". Checking
+/// `probe.error.is_none() && probe.node.is_some()` directly is the same
+/// condition `peers_apply_probe_result` itself gates that line on.
+fn peers_node_freshly_probed(probe: Option<&maw_peer::ProbePeerResult>) -> bool {
+    probe.is_some_and(|result| result.error.is_none() && result.node.is_some())
+}
+
+/// Sets `identity.oracle` (and refreshes `identity.node` from `peer.node`)
+/// so the resulting shape matches what `serve.rs`'s `identity_from_object`
+/// needs to pin a sender's pubkey under `oracle:node` (#794) — an `identity`
+/// with an empty or missing `oracle` can never satisfy that lookup, which is
+/// exactly what left signed cross-node `hey` permanently 401ing after the
+/// documented `peers add` workaround.
+///
+/// `node_freshly_probed` (see [`peers_node_freshly_probed`]) gates whether an
+/// already-pinned `node` may be overwritten. When `false`, an existing
+/// `node` key is preserved untouched and only backfilled if absent — so a
+/// re-add with an unvalidated `--node` guess (or a probe that omitted
+/// `node`) can never silently replace a previously-verified value. That's
+/// the exact "two halves from different invocations" fabrication #819 exists
+/// to kill, just mirrored: `node` stale instead of `oracle`.
+fn peers_set_identity_oracle(peer: &mut PeersPeerNative, oracle: &str, node_freshly_probed: bool) {
     let mut map = match peer.identity.take() {
         Some(serde_json::Value::Object(map)) => map,
         _ => serde_json::Map::new(),
     };
     map.insert("oracle".to_owned(), serde_json::Value::String(oracle.to_owned()));
-    // #819: refresh, don't just backfill. The caller (peers_cmd_add) already
-    // ran peers_apply_probe_result before this, which sets peer.node from the
-    // CURRENT probe -- so peer.node here is never stale, it's this
-    // invocation's fresh answer. Backfilling only when the map's "node" key
-    // was absent left a re-add of an already-pinned peer free to keep an OLD
-    // node alongside this invocation's --oracle, fabricating a pair whose two
-    // halves came from different probes -- the same defect class #819 exists
-    // to kill, just mirrored (new-oracle:old-node instead of
-    // old-oracle:new-node). If we have no fresh node to write, leave whatever
-    // was there rather than deleting it.
-    if let Some(node) = &peer.node {
-        map.insert("node".to_owned(), serde_json::Value::String(node.clone()));
+    if node_freshly_probed || !map.contains_key("node") {
+        if let Some(node) = &peer.node {
+            map.insert("node".to_owned(), serde_json::Value::String(node.clone()));
+        }
     }
     peer.identity = Some(serde_json::Value::Object(map));
 }
@@ -963,43 +981,100 @@ mod peers_tests {
         })
     }
 
-    // #819: re-adding an already-pinned peer whose node genuinely drifted (rename,
-    // reinstall) must not leave the identity map's "node" stuck on the OLD probe
-    // while "oracle" takes THIS invocation's fresh value -- that fabricates a pair
-    // whose two halves never came from the same probe, which is exactly the
-    // disease #819 exists to kill, just mirrored (new-oracle:old-node instead of
-    // old-oracle:new-node). peer.node is already current by the time this runs --
-    // peers_cmd_add calls peers_apply_probe_result (which sets it from the fresh
-    // probe) before peers_set_identity_oracle -- so refreshing unconditionally is
+    // #819 round 2: re-adding an already-pinned peer whose node genuinely
+    // drifted (rename, reinstall) must not leave the identity map's "node"
+    // stuck on the OLD probe while "oracle" takes THIS invocation's fresh
+    // value -- that fabricates a pair whose two halves never came from the
+    // same probe, exactly the disease #819 exists to kill, just mirrored
+    // (new-oracle:old-node instead of old-oracle:new-node). `node: true` here
+    // means peers_node_freshly_probed determined this invocation's peer.node
+    // really did come from a successful, node-bearing probe -- refreshing is
     // safe, not a new source of staleness.
     #[test]
-    fn peers_set_identity_oracle_refreshes_a_stale_node_instead_of_preserving_it() {
+    fn peers_set_identity_oracle_refreshes_a_stale_node_when_freshly_probed() {
         let mut peer = PeersPeerNative {
             url: "http://black.test:3467".to_owned(),
             node: Some("black".to_owned()), // this invocation's fresh probe result
             identity: Some(serde_json::json!({"oracle": "arra", "node": "old-node"})),
             ..PeersPeerNative::default()
         };
-        peers_set_identity_oracle(&mut peer, "new-oracle");
+        peers_set_identity_oracle(&mut peer, "new-oracle", true);
         assert_eq!(
             peer.identity,
             Some(serde_json::json!({"oracle": "new-oracle", "node": "black"})),
-            "node must refresh to this invocation's probe, not keep the stale prior pin"
+            "a freshly-probed node must refresh the stale prior pin"
         );
     }
 
-    // Companion case: no fresh node this time (unreachable/allow-unreachable) --
-    // must not DELETE a node the identity map already had.
+    // Companion case: no probe.node at all this time (unreachable, or a probe
+    // that ran but returned none) -- must not DELETE a node the identity map
+    // already had.
     #[test]
-    fn peers_set_identity_oracle_keeps_existing_node_when_this_probe_found_none() {
+    fn peers_set_identity_oracle_keeps_existing_node_when_no_probe_node_available() {
         let mut peer = PeersPeerNative {
             url: "http://black.test:3467".to_owned(),
             node: None,
             identity: Some(serde_json::json!({"oracle": "arra", "node": "old-node"})),
             ..PeersPeerNative::default()
         };
-        peers_set_identity_oracle(&mut peer, "new-oracle");
+        peers_set_identity_oracle(&mut peer, "new-oracle", false);
         assert_eq!(peer.identity, Some(serde_json::json!({"oracle": "new-oracle", "node": "old-node"})));
+    }
+
+    // #819 round 3, the actual rejection shape at the unit level: `peer.node`
+    // IS present but came from an unvalidated source (the raw `--node` flag
+    // under `--allow-unreachable`, or a probe that succeeded without
+    // reporting a node) -- `node_freshly_probed: false` must mean this value
+    // is never trusted enough to overwrite an already-pinned node, unlike the
+    // `None` companion case above which merely proves nothing gets deleted.
+    #[test]
+    fn peers_set_identity_oracle_does_not_clobber_pinned_node_with_unvalidated_guess() {
+        let mut peer = PeersPeerNative {
+            url: "http://black.test:3467".to_owned(),
+            node: Some("totally-wrong-guess".to_owned()), // present, but NOT freshly probed
+            identity: Some(serde_json::json!({"oracle": "old-oracle", "node": "black-real"})),
+            ..PeersPeerNative::default()
+        };
+        peers_set_identity_oracle(&mut peer, "new-oracle", false);
+        assert_eq!(
+            peer.identity,
+            Some(serde_json::json!({"oracle": "new-oracle", "node": "black-real"})),
+            "an unvalidated peer.node must never clobber a probe-verified pinned node"
+        );
+    }
+
+    // #794 compatibility: a genuinely first-time add (no prior identity, so
+    // no "node" key to protect) via `--allow-unreachable --node X --oracle Y`
+    // must still populate node from the operator's own explicit flag --
+    // there's no prior trusted value being silently replaced, so the
+    // not-fresh gate must fall back to backfill-when-absent rather than
+    // refusing to ever write node at all.
+    #[test]
+    fn peers_set_identity_oracle_backfills_absent_node_even_when_not_freshly_probed() {
+        let mut peer = PeersPeerNative {
+            url: "http://black.test:3467".to_owned(),
+            node: Some("black".to_owned()),
+            identity: None,
+            ..PeersPeerNative::default()
+        };
+        peers_set_identity_oracle(&mut peer, "artifacts-oracle", false);
+        assert_eq!(peer.identity, Some(serde_json::json!({"oracle": "artifacts-oracle", "node": "black"})));
+    }
+
+    #[test]
+    fn peers_node_freshly_probed_requires_error_free_node_bearing_probe() {
+        let failed_probe = maw_peer::ProbePeerResult {
+            node: Some("black".to_owned()),
+            error: Some(maw_peer::ProbeLastError { code: maw_peer::ProbeErrorCode::Timeout, message: "timed out".to_owned(), at: "1700000000000".to_owned() }),
+            ..Default::default()
+        };
+        let node_omitted_probe = maw_peer::ProbePeerResult { node: None, ..Default::default() };
+        let fresh_probe = maw_peer::ProbePeerResult { node: Some("black".to_owned()), ..Default::default() };
+
+        assert!(!peers_node_freshly_probed(None), "--allow-unreachable: no probe attempted at all");
+        assert!(!peers_node_freshly_probed(Some(&failed_probe)), "probe attempted but failed: the error path returns before peer.node is ever touched");
+        assert!(!peers_node_freshly_probed(Some(&node_omitted_probe)), "probe succeeded but /info simply omitted node: peers_apply_probe_result leaves peer.node untouched");
+        assert!(peers_node_freshly_probed(Some(&fresh_probe)), "probe succeeded and reported a node: this is the one case peer.node is actually fresh");
     }
 
     #[test]
@@ -1153,6 +1228,50 @@ mod peers_tests {
         let identity = peer.identity.as_ref().expect("identity set");
         assert_eq!(identity["oracle"], "artifacts-oracle");
         assert_eq!(identity["node"], "black");
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    // #819 round 3, reproduced end-to-end through the real `peers_cmd_add`
+    // path (not just the isolated helper) -- the exact shape the adversarial
+    // verifier used to reject round 2: seed an already-pinned peer from a
+    // real prior probe (node "black-real"), then re-add it with
+    // `--allow-unreachable` and a hand-typed `--node` that does NOT match.
+    // `--allow-unreachable` skips the probe entirely, so `--node`'s value is
+    // never validated against anything real; it must not overwrite the
+    // previously-verified node just because `--oracle` was also given.
+    #[test]
+    fn peers_add_allow_unreachable_does_not_clobber_pinned_node_with_unvalidated_guess() {
+        let _guard = env_test_lock();
+        let _restore = EnvVarRestore::capture("PEERS_FILE");
+        let root = peers_env_root("819-round3");
+        std::fs::create_dir_all(&root).expect("root");
+        let peers_path = root.join("peers.json");
+        std::env::set_var("PEERS_FILE", &peers_path);
+
+        let mut seed = PeersStoreNative { version: 1, peers: std::collections::BTreeMap::new() };
+        seed.peers.insert(
+            "black".to_owned(),
+            PeersPeerNative {
+                url: "https://black.example:3456".to_owned(),
+                node: Some("black-real".to_owned()),
+                added_at: "1700000000000".to_owned(),
+                identity: Some(serde_json::json!({"oracle": "old-oracle", "node": "black-real"})),
+                ..PeersPeerNative::default()
+            },
+        );
+        std::fs::write(&peers_path, serde_json::to_string(&seed).expect("seed json")).expect("write seed");
+
+        let out = peers_run_command(&peers_args(&[
+            "add", "black", "https://black.example:3456", "--node", "totally-wrong-guess", "--oracle", "new-oracle", "--allow-unreachable",
+        ]));
+        assert_eq!(out.code, 0, "{}", out.stderr);
+
+        let store: PeersStoreNative = serde_json::from_str(&std::fs::read_to_string(&peers_path).expect("read")).expect("json");
+        let peer = store.peers.get("black").expect("peer present");
+        let identity = peer.identity.as_ref().expect("identity set");
+        assert_eq!(identity["oracle"], "new-oracle", "the explicit --oracle flag still wins");
+        assert_eq!(identity["node"], "black-real", "an unvalidated --allow-unreachable --node guess must not clobber the probe-verified pin");
 
         let _ = std::fs::remove_dir_all(root);
     }
