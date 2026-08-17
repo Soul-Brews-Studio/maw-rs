@@ -67,8 +67,20 @@ where
         runner.run("send-keys", &maw_tmux::tmux_send_keys_literal_args(target, text))?;
     }
     sleep(std::time::Duration::from_millis(maw_tmux::SEND_SETTLE_MS));
-    let (enter_attempts, warned_pending) =
-        sendtext_submit_with_confirm(runner, target, text, &mut sleep)?;
+    // Snapshot an opaque TUI rendering before Enter; capture failure leaves
+    // no baseline, preserving the fail-stop behavior for different input.
+    let buffered_pending = if used_buffer {
+        sendtext_pending_input(runner, target)
+    } else {
+        None
+    };
+    let (enter_attempts, warned_pending) = sendtext_submit_with_confirm(
+        runner,
+        target,
+        text,
+        buffered_pending.as_deref(),
+        &mut sleep,
+    )?;
     Ok(maw_tmux::SendTextReport {
         used_buffer,
         enter_attempts,
@@ -112,6 +124,7 @@ fn sendtext_submit_with_confirm<R, F>(
     runner: &mut R,
     target: &str,
     text: &str,
+    buffered_pending: Option<&str>,
     sleep: &mut F,
 ) -> Result<(u32, bool), maw_tmux::TmuxError>
 where
@@ -121,7 +134,13 @@ where
     for attempt in 1..=maw_tmux::MAX_SUBMIT_ATTEMPTS {
         runner.run("send-keys", &maw_tmux::tmux_send_enter_args(target))?;
         sleep(std::time::Duration::from_millis(maw_tmux::SUBMIT_CONFIRM_MS));
-        match sendtext_pending_state_after_grace(runner, target, text, sleep) {
+        match sendtext_pending_state_after_grace(
+            runner,
+            target,
+            text,
+            buffered_pending,
+            sleep,
+        ) {
             maw_tmux::PendingInputState::Cleared => return Ok((attempt, false)),
             maw_tmux::PendingInputState::DifferentInput => return Ok((attempt, true)),
             maw_tmux::PendingInputState::MatchesSent => {}
@@ -134,26 +153,31 @@ fn sendtext_pending_state_after_grace<R, F>(
     runner: &mut R,
     target: &str,
     text: &str,
+    buffered_pending: Option<&str>,
     sleep: &mut F,
 ) -> maw_tmux::PendingInputState
 where
     R: maw_tmux::TmuxRunner,
     F: FnMut(std::time::Duration),
 {
-    let _confirm_state = sendtext_pending_input_state(runner, target, text);
+    let _confirm_state = sendtext_pending_input_state(runner, target, text, buffered_pending);
     sleep(std::time::Duration::from_millis(maw_tmux::SUBMIT_GRACE_MS));
-    sendtext_pending_input_state(runner, target, text)
+    sendtext_pending_input_state(runner, target, text, buffered_pending)
 }
 
 fn sendtext_pending_input_state<R: maw_tmux::TmuxRunner>(
     runner: &mut R,
     target: &str,
     text: &str,
+    buffered_pending: Option<&str>,
 ) -> maw_tmux::PendingInputState {
     let Some(pending) = sendtext_pending_input(runner, target) else {
         return maw_tmux::PendingInputState::Cleared;
     };
-    if maw_tmux::pending_input_matches_sent(&pending, text) {
+    if maw_tmux::pending_input_matches_sent(&pending, text)
+        || buffered_pending
+            .is_some_and(|baseline| maw_tmux::pending_input_matches_sent(&pending, baseline))
+    {
         maw_tmux::PendingInputState::MatchesSent
     } else {
         maw_tmux::PendingInputState::DifferentInput
@@ -337,6 +361,33 @@ mod sendtext_tests {
         sendtext_with_runner_and_sleeper(argv, runner, |_| {})
     }
 
+    const SENDTEXT_BUFFERED_TEXT: &str = "deploy\nnow";
+    const SENDTEXT_BUFFERED_PLACEHOLDER: &str = "❯ [Pasted Content 10 chars]";
+
+    fn sendtext_buffered_case(
+        mut after_paste: Vec<Result<&str, &str>>,
+    ) -> (CliOutput, SendtextMockTmux, usize) {
+        let _lock = super::env_test_lock();
+        let _env = SendtextEnvGuard::sendtext_new();
+        let mut responses = vec![Ok("0"), Ok(""), Ok("")];
+        responses.append(&mut after_paste);
+        let mut tmux = SendtextMockTmux::sendtext_with_responses(responses);
+        let output = sendtext_with_no_sleep(
+            &[String::from("%9"), SENDTEXT_BUFFERED_TEXT.to_owned()],
+            &mut tmux,
+        )
+        .expect("send text ok");
+        let enter_count = tmux
+            .calls
+            .iter()
+            .filter(|(command, args)| {
+                command == "send-keys" && args.last().is_some_and(|arg| arg == "Enter")
+            })
+            .count();
+        assert!(output.stdout.contains("(buffer)"));
+        (output, tmux, enter_count)
+    }
+
     #[test]
     fn sendtext_dispatch_registers_send_text() {
         assert_eq!(DISPATCH_84.len(), 1);
@@ -377,6 +428,67 @@ mod sendtext_tests {
             tmux.stdin_calls,
             vec![("load-buffer".to_owned(), vec!["-".to_owned()], long_text)]
         );
+    }
+
+    #[test]
+    fn sendtext_retries_buffered_placeholder_until_capture_clears() {
+        let (output, tmux, enter_count) = sendtext_buffered_case(vec![
+            Ok(SENDTEXT_BUFFERED_PLACEHOLDER),
+            Ok(""),
+            Ok("❯ "),
+            Ok(SENDTEXT_BUFFERED_PLACEHOLDER),
+            Ok(""),
+            Ok("❯ "),
+            Ok("❯ "),
+        ]);
+
+        assert!(!output.stdout.contains("pending input after Enter retries"));
+        assert_eq!(enter_count, 2);
+        assert_eq!(tmux.calls[1].0, "paste-buffer");
+        assert_eq!(tmux.calls[2].0, "capture-pane");
+        assert_eq!(tmux.calls[3].0, "send-keys");
+    }
+
+    #[test]
+    fn sendtext_retries_buffered_literal_echo_until_capture_clears() {
+        let (output, _, enter_count) = sendtext_buffered_case(vec![
+            Ok("❯ deploy"),
+            Ok(""),
+            Ok("❯ deploy"),
+            Ok("❯ deploy"),
+            Ok(""),
+            Ok("❯ "),
+            Ok("❯ "),
+        ]);
+
+        assert!(!output.stdout.contains("pending input after Enter retries"));
+        assert_eq!(enter_count, 2);
+    }
+
+    #[test]
+    fn sendtext_buffered_baseline_does_not_retry_different_input() {
+        let (output, _, enter_count) = sendtext_buffered_case(vec![
+            Ok(SENDTEXT_BUFFERED_PLACEHOLDER),
+            Ok(""),
+            Ok("❯ different queued input"),
+            Ok("❯ different queued input"),
+        ]);
+
+        assert!(output.stdout.contains("pending input after Enter retries"));
+        assert_eq!(enter_count, 1);
+    }
+
+    #[test]
+    fn sendtext_buffered_baseline_capture_failure_fails_closed() {
+        let (output, _, enter_count) = sendtext_buffered_case(vec![
+            Err("capture failed"),
+            Ok(""),
+            Ok(SENDTEXT_BUFFERED_PLACEHOLDER),
+            Ok(SENDTEXT_BUFFERED_PLACEHOLDER),
+        ]);
+
+        assert!(output.stdout.contains("pending input after Enter retries"));
+        assert_eq!(enter_count, 1);
     }
 
     #[test]
