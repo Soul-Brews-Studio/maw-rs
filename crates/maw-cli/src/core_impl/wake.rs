@@ -50,6 +50,7 @@ struct WakeResolvedNative {
     oracle: String,
     session: String,
     window: String,
+    base_repo_path: std::path::PathBuf,
     repo_path: std::path::PathBuf,
     repo_fuzzy_match: Option<String>,
     repo_warning: Option<String>,
@@ -236,9 +237,10 @@ fn wake_run_options(options: &WakeOptionsNative, sessions: &[TmuxSession], tmux:
     }
     let mut out = String::new();
     let started = std::time::Instant::now();
-    let resolved = wake_resolve(options, sessions)?;
+    let mut resolved = wake_resolve(options, sessions)?;
     wake_record_phase(&resolved, "resolve", wake_elapsed_ms(started), &mut out, true);
-    if options.dry_run { return Ok((0, wake_render_dry_run(options, &resolved))); }
+    if options.dry_run { return Ok((0, wake_render_dry_run(options, &resolved)?)); }
+    wake_prepare_worktree(options, sessions, &mut resolved, &mut out)?;
     wake_apply(options, &resolved, tmux, &mut out)?;
     Ok((0, out))
 }
@@ -248,6 +250,7 @@ fn wake_attach_live_registry_session(
     sessions: &[TmuxSession],
     tmux: &mut impl WakeTmuxNative,
 ) -> Option<Result<(i32, String), String>> {
+    if options.wt.is_some() || options.task.is_some() { return None; }
     let requested_session = options.parent.as_deref()?;
     if !options.attach || options.dry_run || options.target != requested_session {
         return None;
@@ -456,7 +459,10 @@ fn wake_resolve(options: &WakeOptionsNative, sessions: &[TmuxSession]) -> Result
     let matched_window = typed.as_ref().and_then(|resolution| resolution.matched_window.clone());
     let oracle = typed.as_ref().map_or_else(|| initial_oracle.clone(), |resolution| resolution.oracle.clone());
     let repo = typed.map_or_else(|| wake_repo_path(options, &oracle, &fleet_entries), |resolution| Ok(resolution.repo))?;
-    let repo_path = repo.path;
+    let mut repo_path = repo.path;
+    if options.wt.is_some() || options.task.is_some() {
+        repo_path = workon_resolve_repo_from_path(&repo_path).map_or(repo_path.clone(), |repo| repo.repo_path);
+    }
     let session_hint = typed_session_hint.or_else(|| wake_registry_session_hint(&initial_oracle, &repo_path, &fleet_entries, sessions));
     let session = options
         .parent
@@ -465,13 +471,15 @@ fn wake_resolve(options: &WakeOptionsNative, sessions: &[TmuxSession]) -> Result
         .or(session_hint)
         .or_else(|| wake_detect_session_from_fleet_registry(&oracle, &repo_path, &fleet_entries))
         .unwrap_or_else(|| wake_session_name(&oracle, sessions));
-    let window = wake_window_name(options, &oracle, matched_window.as_deref());
+    let window = wake_window_name(options, &oracle, matched_window.as_deref())?;
     let target = format!("{session}:{window}");
-    let (command, command_warnings) = wake_command(&window, &repo_path, options);
+    let (command, mut command_warnings) = wake_command(&window, &repo_path, options);
+    if let Some(warning) = wake_worktree_priority_warning(options) { command_warnings.push(warning); }
     Ok(WakeResolvedNative {
         oracle,
         session,
         window,
+        base_repo_path: repo_path.clone(),
         repo_path,
         repo_fuzzy_match: repo.fuzzy_match,
         repo_warning: repo.warning,
@@ -537,7 +545,7 @@ fn wake_resolve(options: &WakeOptionsNative, sessions: &[TmuxSession]) -> Result
 
 
 
-fn wake_render_dry_run(options: &WakeOptionsNative, resolved: &WakeResolvedNative) -> String {
+fn wake_render_dry_run(options: &WakeOptionsNative, resolved: &WakeResolvedNative) -> Result<String, String> {
     let mut out = String::new();
     if let Some(warning) = &resolved.repo_warning { let _ = writeln!(out, "\x1b[33mwarning:\x1b[0m {warning}"); }
     for warning in &resolved.command_warnings { let _ = writeln!(out, "\x1b[33mwarning:\x1b[0m {warning}"); }
@@ -552,10 +560,10 @@ fn wake_render_dry_run(options: &WakeOptionsNative, resolved: &WakeResolvedNativ
     // `commands.default` instead of their per-agent entry. Print the launch
     // line wake would actually send.
     let _ = writeln!(out, "  command: {}", resolved.command);
-    if options.task.is_some() || options.wt.is_some() {
-        let _ = writeln!(out, "\x1b[33m⚡\x1b[0m would wake worktree/task: {}", options.wt.as_deref().or(options.task.as_deref()).unwrap_or_default());
+    if let Some(slug) = wake_worktree_slug(options)? {
+        let _ = writeln!(out, "\x1b[33m⚡\x1b[0m would wake worktree/task: {slug}");
     }
-    out
+    Ok(out)
 }
 
 fn wake_elapsed_ms(started: std::time::Instant) -> u64 { u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX) }
@@ -581,6 +589,86 @@ fn wake_write_phase_audit(resolved: &WakeResolvedNative, phase: &str, ms: u64) {
         "version": MAW_RS_BUILD_VERSION,
     });
     let _ = append_jsonl_atomic(&audit_jsonl_path(&current_xdg_env()), &row);
+}
+
+fn wake_prepare_worktree(
+    options: &WakeOptionsNative,
+    sessions: &[TmuxSession],
+    resolved: &mut WakeResolvedNative,
+    out: &mut String,
+) -> Result<(), String> {
+    let Some(slug) = wake_worktree_slug(options)? else { return Ok(()) };
+    let repo = workon_resolve_repo_from_path(&resolved.base_repo_path)
+        .map_err(|error| wake_worktree_error(&error, &resolved.oracle))?;
+    resolved.base_repo_path.clone_from(&repo.repo_path);
+    let layout = if options.layout.as_deref() == Some("legacy") { WorkonLayout::Legacy } else { WorkonLayout::Nested };
+    let worktrees = workon_find_worktrees(&repo.parent_dir, &repo.repo_name);
+    let branches = workon_agent_branches(&repo.repo_path).map_err(|error| wake_worktree_error(&error, &resolved.oracle))?;
+    let request = WorkonResolvedWorktreeName { slug, named: false };
+    let plan = workon_plan_worktree(&repo, &request, options.fresh, layout, &worktrees, &branches)
+        .map_err(|error| wake_worktree_error(&error, &resolved.oracle))?;
+    let planned_path = match &plan {
+        WorkonWorktreePlan::Reuse { path } => path,
+        WorkonWorktreePlan::Create { wt_path, .. } => wt_path,
+    };
+    wake_require_worktree_window_cwd(sessions, resolved, planned_path)?;
+    resolved.repo_path = match plan {
+        WorkonWorktreePlan::Reuse { path } => {
+            let _ = writeln!(out, "\x1b[33m⚡\x1b[0m reusing worktree: {}", path.display());
+            path
+        }
+        WorkonWorktreePlan::Create { wt_path, branch, branch_exists, .. } => {
+            workon_create_worktree(&repo, &wt_path, &branch, branch_exists, layout)
+                .map_err(|error| wake_worktree_error(&error, &resolved.oracle))?;
+            let suffix = if branch_exists { ", reused branch" } else { "" };
+            let _ = writeln!(out, "\x1b[32m+\x1b[0m worktree: {} ({branch}{suffix})", wt_path.display());
+            wt_path
+        }
+    };
+    (resolved.command, resolved.command_warnings) = wake_command(&resolved.window, &resolved.repo_path, options);
+    if let Some(warning) = wake_worktree_priority_warning(options) { resolved.command_warnings.push(warning); }
+    Ok(())
+}
+
+fn wake_require_worktree_window_cwd(
+    sessions: &[TmuxSession],
+    resolved: &WakeResolvedNative,
+    planned_path: &std::path::Path,
+) -> Result<(), String> {
+    let Some(window) = sessions
+        .iter()
+        .find(|session| session.name == resolved.session)
+        .and_then(|session| session.windows.iter().find(|window| window.name == resolved.window))
+    else { return Ok(()) };
+    let Some(cwd) = window.cwd.as_deref() else {
+        return Err(format!("wake: existing window '{}' has no reported cwd; close it with `maw done {}` and retry", resolved.target, resolved.target));
+    };
+    let cwd = std::path::Path::new(cwd);
+    let actual = workon_resolve_repo_from_path(cwd)
+        .map_or_else(|_| cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf()), |repo| repo.repo_path.canonicalize().unwrap_or(repo.repo_path));
+    let planned = planned_path.canonicalize().unwrap_or_else(|_| planned_path.to_path_buf());
+    if actual == planned { return Ok(()) }
+    Err(format!(
+        "wake: existing window '{}' uses '{}', not planned worktree '{}'; close it with `maw done {}` and retry",
+        resolved.target,
+        cwd.display(),
+        planned_path.display(),
+        resolved.target
+    ))
+}
+
+fn wake_worktree_error(error: &str, oracle: &str) -> String {
+    let hint = format!("maw wake {oracle} --wt <exact-worktree>");
+    let detail = error
+        .strip_prefix("workon: ")
+        .unwrap_or(error)
+        .replace("maw workon <repo> <exact-worktree>", &hint);
+    format!("wake: {detail}")
+}
+
+fn wake_worktree_priority_warning(options: &WakeOptionsNative) -> Option<String> {
+    (options.wt.is_some() && options.task.is_some())
+        .then(|| "wake: both --wt and --task were supplied; --wt takes priority over --task".to_owned())
 }
 
 fn wake_apply(
@@ -758,11 +846,14 @@ fn wake_registry_windows(
     // recomputing it that way on every wake call would keep re-breaking a
     // sibling window each time a *different* window on the same repo is the
     // one being freshly touched (#783). Windows on other repos are untouched.
-    let kind = Some(wake_registration_kind(&resolved.repo_path, &resolved.window));
-    if let Some(repo) = fleet_repo_slug_from_path(&resolved.repo_path, None) {
+    let kind = Some(wake_registration_kind(&resolved.base_repo_path, &resolved.window));
+    if let Some(repo) = fleet_repo_slug_from_path(&resolved.base_repo_path, None) {
         let repo_key = fleet_repo_canonical_key(&repo);
         for window in &mut windows {
-            if fleet_repo_canonical_key(&window.repo) == repo_key {
+            if window.name == resolved.window {
+                window.repo.clone_from(&repo);
+                window.kind = kind;
+            } else if fleet_repo_canonical_key(&window.repo) == repo_key {
                 window.kind = kind;
             }
         }
@@ -786,4 +877,3 @@ fn wake_registration_kind(repo_path: &std::path::Path, window_name: &str) -> Nat
     let repo_name = repo_path.file_name().and_then(std::ffi::OsStr::to_str).unwrap_or(window_name);
     if native_repo_shape_looks_like_oracle(repo_path, repo_name) { NativeRepoKind::Oracle } else { NativeRepoKind::Project }
 }
-
