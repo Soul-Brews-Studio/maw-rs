@@ -12,7 +12,9 @@ usage: maw hey <target> <message> [--inbox] [--force deprecated] [--approve] [--
     <session>:<window>[.<pane>]  paste a TARGET from maw ls -v
     <node>:<session>             canonical cross-node form (window 1)
     <node>:<session>:<window>    target a specific tmux window (#410)
+    peer:<node>:<target>         force the peer when <node> also names a local session (#818)
   e.g. maw hey mawjs-oracle "hello from neo"
        maw hey local:mawjs "hello from neo"
+       maw hey peer:white:11-white "hello white"
        maw hey phaith:01-hojo:3 "hello hojo-hermes"
        run `maw locate <agent>` to enumerate across federation
