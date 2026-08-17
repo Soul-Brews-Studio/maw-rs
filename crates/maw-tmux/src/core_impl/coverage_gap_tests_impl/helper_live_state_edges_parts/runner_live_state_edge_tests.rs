@@ -84,7 +84,7 @@
         let mut client = TmuxClient::new(ListAllRunner);
 
         assert_eq!(
-            client.list_all(),
+            client.list_all().expect("list_all parse"),
             vec![TmuxSession {
                 name: "demo".to_owned(),
                 windows: vec![TmuxWindow {
