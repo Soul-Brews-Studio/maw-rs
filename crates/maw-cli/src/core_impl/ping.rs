@@ -231,11 +231,11 @@ mod ping_tests133 {
 
     fn args(values: &[&str]) -> Vec<String> { values.iter().map(|value| (*value).to_owned()).collect() }
 
-    fn ping_no_peer_store_env() -> (std::sync::MutexGuard<'static, ()>, EnvVarRestore) {
+    fn ping_no_peer_store_env() -> (EnvVarRestore, crate::test_env::EnvLockGuard) {
         let lock = env_test_lock();
         let restore = EnvVarRestore::capture("PEERS_FILE");
         std::env::set_var("PEERS_FILE", "/tmp/maw-rs-ping-native-no-peers.json");
-        (lock, restore)
+        (restore, lock)
     }
 
     fn now() -> u128 { 42 }

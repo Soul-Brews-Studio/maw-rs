@@ -1431,8 +1431,7 @@ mod tests {
     async fn godui_post_routes_persist_json_and_return_ok() {
         let root = godui_test_root("post");
         fs::create_dir_all(&root).expect("root");
-        let original_state_dir = std::env::var_os("MAW_GODUI_STATE_DIR");
-        std::env::set_var("MAW_GODUI_STATE_DIR", &root);
+        let _env = EnvGuard::set("MAW_GODUI_STATE_DIR", &root);
         let router = servecore_mount_core_routes(Router::new());
         let router = servecore_mount_modules(router, &["god-ui".to_owned()]);
         let router = servecore_with_shared_state(router, ServecoreSharedState::default());
@@ -1467,11 +1466,6 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(godui_asks_payload(), json!([{"id": 1}]));
 
-        if let Some(original_state_dir) = original_state_dir {
-            std::env::set_var("MAW_GODUI_STATE_DIR", original_state_dir);
-        } else {
-            std::env::remove_var("MAW_GODUI_STATE_DIR");
-        }
         fs::remove_dir_all(root).ok();
     }
 

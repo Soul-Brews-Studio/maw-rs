@@ -1013,7 +1013,7 @@ mod kill_tests {
 
     struct KillEnvGuard {
         saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
-        _lock: std::sync::MutexGuard<'static, ()>,
+        _lock: crate::test_env::EnvLockGuard,
         dir: std::path::PathBuf,
     }
 

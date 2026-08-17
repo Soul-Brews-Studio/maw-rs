@@ -11,13 +11,6 @@ mod plugin_install_tests {
         classify_plugin_install_source, verify_package_dir, verify_plugin_install_pin,
         InstallSource, ResolvedPackage,
     };
-    use std::sync::{Mutex, OnceLock};
-
-    fn lock_guard() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
     fn temp_existing_dir(label: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "maw-rs-plugin-install-classifier-{label}-{}",
@@ -155,10 +148,8 @@ mod plugin_install_tests {
 
     #[test]
     fn pin_verifier_matches_mismatches_warns_and_checks_lock() {
-        let _guard = lock_guard();
-        let old = std::env::var_os("MAW_PLUGINS_LOCK");
         let path = temp_existing_dir("lock").join("plugins.lock");
-        std::env::set_var("MAW_PLUGINS_LOCK", &path);
+        let _guard = crate::test_env::EnvVarGuard::set("MAW_PLUGINS_LOCK", &path);
         let sha = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         let matched = verify_plugin_install_pin("demo", "0.1.0", Some(sha), Some(sha), true, false).expect("match");
         assert_eq!(matched.warning, None);
@@ -177,15 +168,12 @@ mod plugin_install_tests {
         // explicit --sha256 contradiction stays fatal even with --force.
         let err = verify_plugin_install_pin("demo", "0.1.0", Some(locked), Some(sha), false, true).expect_err("explicit pin mismatch");
         assert!(err.contains("sha256 mismatch"), "{err}");
-        match old { Some(value) => std::env::set_var("MAW_PLUGINS_LOCK", value), None => std::env::remove_var("MAW_PLUGINS_LOCK") }
     }
 
     #[test]
     fn lock_writer_creates_file_preserves_entries_and_lists_names() {
-        let _guard = lock_guard();
-        let old = std::env::var_os("MAW_PLUGINS_LOCK");
         let path = temp_existing_dir("lock-write").join("nested").join("plugins.lock");
-        std::env::set_var("MAW_PLUGINS_LOCK", &path);
+        let _guard = crate::test_env::EnvVarGuard::set("MAW_PLUGINS_LOCK", &path);
         let summary = maw_plugin_manifest::PluginInstallSummary {
             name: "demo".to_owned(),
             version: "0.1.0".to_owned(),
@@ -218,7 +206,6 @@ mod plugin_install_tests {
         names.sort();
         assert_eq!(names, vec!["demo".to_owned(), "other".to_owned()]);
         assert!(super::read_plugin_lock_entry_full("demo").expect("read").is_some());
-        match old { Some(value) => std::env::set_var("MAW_PLUGINS_LOCK", value), None => std::env::remove_var("MAW_PLUGINS_LOCK") }
     }
 
     fn write_wasm_package_manifest(
@@ -247,10 +234,9 @@ mod plugin_install_tests {
 
     #[test]
     fn verify_package_dir_accepts_matching_pin_and_resolves_sha() {
-        let _guard = lock_guard();
-        let old = std::env::var_os("MAW_PLUGINS_LOCK");
         let root = temp_existing_dir("verify-pin-match");
-        std::env::set_var("MAW_PLUGINS_LOCK", root.join("plugins.lock"));
+        let _guard =
+            crate::test_env::EnvVarGuard::set("MAW_PLUGINS_LOCK", root.join("plugins.lock"));
         let package = root.join("pkg");
         let sha256 = write_wasm_package_fixture(&package, "verify-match-demo");
 
@@ -270,7 +256,6 @@ mod plugin_install_tests {
         };
         assert_eq!(verification.resolved_sha256.as_deref(), Some(sha256.as_str()));
 
-        match old { Some(value) => std::env::set_var("MAW_PLUGINS_LOCK", value), None => std::env::remove_var("MAW_PLUGINS_LOCK") }
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -325,25 +310,22 @@ mod plugin_install_tests {
 
     #[test]
     fn verify_package_dir_explicit_sha256_mismatch_fatal_even_with_force() {
-        let _guard = lock_guard();
-        let old = std::env::var_os("MAW_PLUGINS_LOCK");
         let root = temp_existing_dir("verify-force-proof");
-        std::env::set_var("MAW_PLUGINS_LOCK", root.join("plugins.lock"));
+        let _guard =
+            crate::test_env::EnvVarGuard::set("MAW_PLUGINS_LOCK", root.join("plugins.lock"));
         let package = root.join("pkg");
         write_wasm_package_fixture(&package, "verify-force-proof-demo");
         let wrong = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
         let error = verify_package_dir(&package, Some(wrong), false, true).expect_err("refused");
         assert!(error.contains("sha256 mismatch — refusing to install"), "{error}");
-        match old { Some(value) => std::env::set_var("MAW_PLUGINS_LOCK", value), None => std::env::remove_var("MAW_PLUGINS_LOCK") }
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
     fn verify_package_dir_warn_unpinned_semantics() {
-        let _guard = lock_guard();
-        let old = std::env::var_os("MAW_PLUGINS_LOCK");
         let root = temp_existing_dir("verify-warn-unpinned");
-        std::env::set_var("MAW_PLUGINS_LOCK", root.join("plugins.lock"));
+        let _guard =
+            crate::test_env::EnvVarGuard::set("MAW_PLUGINS_LOCK", root.join("plugins.lock"));
         let package = root.join("pkg");
         let sha256 = write_wasm_package_fixture(&package, "verify-warn-demo");
 
@@ -363,7 +345,6 @@ mod plugin_install_tests {
         };
         assert_eq!(verification.warning, None);
 
-        match old { Some(value) => std::env::set_var("MAW_PLUGINS_LOCK", value), None => std::env::remove_var("MAW_PLUGINS_LOCK") }
         let _ = std::fs::remove_dir_all(root);
     }
 

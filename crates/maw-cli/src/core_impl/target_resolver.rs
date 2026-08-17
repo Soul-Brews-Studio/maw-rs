@@ -526,9 +526,9 @@ mod target_resolver_tests {
     }
 
     struct PeersFileGuard {
-        _lock: std::sync::MutexGuard<'static, ()>,
         _restore: EnvVarRestore,
         path: std::path::PathBuf,
+        _lock: crate::test_env::EnvLockGuard,
     }
 
     impl PeersFileGuard {
@@ -541,7 +541,7 @@ mod target_resolver_tests {
                 std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos())
             ));
             std::env::set_var("PEERS_FILE", &path);
-            Self { _lock: lock, _restore: restore, path }
+            Self { _restore: restore, path, _lock: lock }
         }
 
         fn with_peer(label: &str, alias: &str, url: &str) -> Self {

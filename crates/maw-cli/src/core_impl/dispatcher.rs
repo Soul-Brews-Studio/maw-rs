@@ -119,16 +119,11 @@ fn merged_config_value_for_env(env: &MawXdgEnv) -> serde_json::Value {
 
 /// Serializes process-env mutation (HOME/XDG/PATH/…) across tests.
 ///
-/// Returns the guard directly and recovers from poison: the lock only
-/// serializes env access, and each test restores the env via RAII guards
-/// (`EnvVarRestore`), so a panicking test leaves no state worth propagating.
-/// Without recovery, one panic while holding the guard poisons the mutex and
-/// every later acquisition panics too — a `PoisonError` cascade that fails
-/// dozens of unrelated tests under default (parallel) test threads.
+/// Delegates to the crate-wide lock so `core_impl` and `serve_core` cannot
+/// race while changing the same process environment.
 #[cfg(test)]
-fn env_test_lock() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+fn env_test_lock() -> crate::test_env::EnvLockGuard {
+    crate::test_env::env_test_lock()
 }
 
 /// Redirects HOME/XDG/MAW_* at process-env scope to a throwaway per-test root
@@ -310,6 +305,12 @@ mod dispatcher_fragment_tests {
         "hey", "send", "serve", "health", "ls", "wake", "tmux", "init", "reply", "run",
         "attach", "bud", "buddy",
     ];
+
+    #[test]
+    fn core_impl_uses_the_crate_wide_env_lock() {
+        let _guard = env_test_lock();
+        assert!(crate::test_env::env_test_lock_is_held_by_current_thread());
+    }
 
     #[test]
     fn generated_dispatcher_fragments_are_unique_reachable_and_keep_core_commands() {

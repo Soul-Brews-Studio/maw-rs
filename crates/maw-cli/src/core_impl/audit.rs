@@ -249,7 +249,7 @@ mod audit_tests {
         path
     }
 
-    fn audit_seed_env(name: &str) -> (std::sync::MutexGuard<'static, ()>, std::path::PathBuf, Vec<AuditEnvRestore>) {
+    fn audit_seed_env(name: &str) -> (crate::test_env::EnvLockGuard, std::path::PathBuf, Vec<AuditEnvRestore>) {
         let lock = super::env_test_lock();
         let root = audit_temp_root(name);
         let restores = ["HOME", "XDG_STATE_HOME", "MAW_STATE_DIR", "MAW_HOME", "MAW_XDG", "TMUX"]
