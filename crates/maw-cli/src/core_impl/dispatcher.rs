@@ -3,6 +3,11 @@
 // This crate intentionally starts with plan-only output so command parity can
 // be tested against maw-js parser contracts before host IO is wired.
 
+use maw_activity::{
+    classify_snapshots as classify_activity_snapshots,
+    normalize_snapshot as normalize_activity_snapshot, ActivityResult, ActivitySample,
+    ActivityState,
+};
 use maw_auth::{
     apply_consent_expiry, approve_consent_plan, build_from_sign_payload,
     build_legacy_from_sign_payload, consent_request_id_from_bytes, generate_pair_code_from_bytes,
