@@ -349,7 +349,15 @@ fn hey_forced_peer_route(
             detail: format!(
                 "'peer' is both the peer:<node>:<target> keyword and the name of a real peer or session — refusing to guess whether '{query}' means the keyword or that peer's own address"
             ),
-            hint: Some(format!("rename the peer, or use local:peer:{rest} for the local session named 'peer'")),
+            // NOT `local:peer:{rest}` (round 3's own regression, caught on adversarial
+            // review of round 3 itself): `rest` is "<node>:<target>", so that hint would
+            // read "local:peer:<node>:<target>" -- and maw-routing's local resolver
+            // (`resolve_target_with_current_session` -> `find_window`) only splits the
+            // post-"local:" remainder on the FIRST colon, so it goes looking for a
+            // window literally named "<node>:<target>", which never exists. `target`
+            // alone (what's actually being addressed once "peer" is understood as the
+            // session) is the one that resolves.
+            hint: Some(format!("rename the peer, or use local:peer:{target} for the local session named 'peer'")),
         });
     }
     Some(hey_peer_url_for_node(node, config).map_or_else(
@@ -706,7 +714,7 @@ mod target_resolver_tests {
         let RouteResult::Error { reason, detail, hint } = &refusal else { panic!("expected an error: {refusal:?}") };
         assert_eq!(reason, "ambiguous_peer_keyword");
         assert!(detail.contains("'peer'"), "{detail}");
-        assert!(hint.as_deref().is_some_and(|h| h.contains("local:peer:01-hojo:3")), "{hint:?}");
+        assert!(hint.as_deref().is_some_and(|h| h.contains("local:peer:3")), "{hint:?}");
 
         // Same ambiguity when "peer" is a live LOCAL session rather than a
         // registered peer -- both sources of a real "peer" must trigger it.
@@ -719,6 +727,39 @@ mod target_resolver_tests {
         // still works exactly as round 2 fixed it.
         let clean_config = hey_config_with_named_peers(vec![hey_named_peer("white", "http://192.168.1.164:3456")]);
         assert!(hey_forced_peer_route("hey", "peer:white:white", &[], &clean_config).is_some());
+    }
+
+    // Adversarial review of round 3 itself (the fix above) found that its hint
+    // text told the operator to type an address that does not resolve:
+    // `local:peer:01-hojo:3` looks fine to a human, but maw-routing's local
+    // resolver only splits the post-"local:" remainder on the FIRST colon, so
+    // it searches for a window literally named "01-hojo:3" (never exists).
+    // This test drives the ACTUAL local resolver with the hint text this
+    // function emits, proving the recovery advice is followable, not just
+    // that it contains the right substring.
+    #[test]
+    fn ambiguous_peer_keyword_hint_actually_resolves_locally() {
+        let sessions = vec![RouteSession {
+            name: "peer".to_owned(),
+            windows: vec![RouteWindow { index: 3, name: "01-hojo".to_owned(), active: true, kind: None }],
+            source: None,
+        }];
+        let config = RouteConfig::default();
+
+        let refusal = hey_forced_peer_route("hey", "peer:01-hojo:3", &sessions, &config).expect("ambiguous keyword error");
+        let RouteResult::Error { hint, .. } = &refusal else { panic!("expected an error: {refusal:?}") };
+        let hint = hint.as_deref().expect("hint present");
+        let suggested = hint
+            .split_whitespace()
+            .find(|word| word.starts_with("local:peer:"))
+            .unwrap_or_else(|| panic!("hint has no local:peer: suggestion: {hint}"));
+
+        let resolved = resolve_route_target(suggested, &config, &sessions);
+        assert_eq!(
+            resolved,
+            RouteResult::SelfNode { target: "peer:3".to_owned() },
+            "the hint's own suggested address ('{suggested}') must resolve to the local session it names"
+        );
     }
 
     // Case-insensitivity must match on both sides of the collision guard, or a
