@@ -206,7 +206,7 @@ mod tmux_open_tests {
     struct TmuxOpenEnvGuard {
         tmux: Option<std::ffi::OsString>,
         tmux_pane: Option<std::ffi::OsString>,
-        _lock: std::sync::MutexGuard<'static, ()>,
+        _lock: crate::test_env::EnvLockGuard,
     }
 
     impl TmuxOpenEnvGuard {

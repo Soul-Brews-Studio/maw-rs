@@ -297,29 +297,6 @@ mod archive_tests {
         fn soulsync_now(&mut self) -> String { self.now.clone() }
     }
 
-    struct ArchiveEnvRestore {
-        key: &'static str,
-        old: Option<std::ffi::OsString>,
-    }
-
-    impl ArchiveEnvRestore {
-        fn set(key: &'static str, value: &str) -> Self {
-            let old = std::env::var_os(key);
-            std::env::set_var(key, value);
-            Self { key, old }
-        }
-    }
-
-    impl Drop for ArchiveEnvRestore {
-        fn drop(&mut self) {
-            if let Some(value) = self.old.take() {
-                std::env::set_var(self.key, value);
-            } else {
-                std::env::remove_var(self.key);
-            }
-        }
-    }
-
     fn archive_session(name: &str, repo: &str, peers: &[&str]) -> NativeFleetSession {
         NativeFleetSession {
             name: name.to_owned(),
@@ -371,7 +348,7 @@ mod archive_tests {
 
     #[test]
     fn archive_soul_sync_copies_new_memory_only_matches_golden_without_js_ref() {
-        let _env = ArchiveEnvRestore::set("MAW_JS_REF_DIR", "/nonexistent");
+        let _env = crate::test_env::EnvVarGuard::set("MAW_JS_REF_DIR", "/nonexistent");
         let root = archive_temp_root("soul-sync-golden");
         let github_root = root.join("github.com");
         let neo = github_root.join("org/neo-oracle");

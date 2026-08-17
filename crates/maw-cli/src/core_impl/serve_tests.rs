@@ -1377,7 +1377,7 @@ mod serve_tests {
     }
 
     struct ServeInboxManifestEnv {
-        _guard: std::sync::MutexGuard<'static, ()>,
+        _guard: crate::test_env::EnvLockGuard,
         root: std::path::PathBuf,
         config: std::path::PathBuf,
         cache: std::path::PathBuf,

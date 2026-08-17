@@ -45,6 +45,12 @@ pub(crate) fn env_test_lock() -> EnvLockGuard {
     EnvLockGuard { _held: held }
 }
 
+/// Test probe used to prove that callers entered this lock rather than a
+/// look-alike mutex in another module.
+pub(crate) fn env_test_lock_is_held_by_current_thread() -> bool {
+    DEPTH.with(|depth| depth.get() > 0)
+}
+
 /// RAII handle for [`env_test_lock`]. Releases the mutex when the outermost
 /// guard on this thread drops.
 pub(crate) struct EnvLockGuard {

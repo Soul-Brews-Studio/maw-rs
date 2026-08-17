@@ -3102,6 +3102,11 @@ mod tests {
                     ws.next().await.expect("ack frame").expect("ack ok")
                 {
                     let value = serde_json::from_str::<serde_json::Value>(&text).expect("json");
+                    assert_ne!(
+                        value["type"], "error",
+                        "PTY attach failed: {}",
+                        value["error"]
+                    );
                     if value["type"] == "attached" {
                         assert_eq!(value["target"], "demo:1");
                         break;

@@ -452,9 +452,10 @@ mod team_invite_tests125 {
 
     #[test]
     fn team_invite_unknown_peer_does_not_write() {
+        let _guard = env_test_lock();
         let mut fs = FakeFs125::default(); seed_manifest(&mut fs); let trust = FakeTrust125::default(); let mut consent = FakeConsent125::default(); let mut http = FakeHttp125::default();
         let err = team_invite_with(&args(&["invite", "alpha", "ghost"]), &config(), &mut fs, &trust, &mut consent, &mut http).unwrap_err();
-        assert!(err.contains("unknown peer 'ghost'")); assert_eq!(fs.writes, 0); assert!(http.posts.is_empty());
+        assert!(err.contains("unknown peer 'ghost'"), "{err}"); assert_eq!(fs.writes, 0); assert!(http.posts.is_empty());
     }
 
     #[test]
