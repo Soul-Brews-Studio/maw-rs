@@ -1524,7 +1524,7 @@ checksum = "0e7465ac9959cc2b1404e8e2367b43684a6d13790fe23056cc8c6c5a6b7bcb94"
 [[package]]
 name = "maw-activity"
 version = "0.1.0-alpha.1"
-source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=fca1129df488ba80180bda567b3e0c2952e9f0f5#fca1129df488ba80180bda567b3e0c2952e9f0f5"
+source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=a0fdbe1aa2ea083c7c8f921e82f448d29789f1b0#a0fdbe1aa2ea083c7c8f921e82f448d29789f1b0"
 
 [[package]]
 name = "maw-auth"
@@ -1539,17 +1539,17 @@ dependencies = [
 [[package]]
 name = "maw-auto-wake"
 version = "0.1.0-alpha.1"
-source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=fca1129df488ba80180bda567b3e0c2952e9f0f5#fca1129df488ba80180bda567b3e0c2952e9f0f5"
+source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=a0fdbe1aa2ea083c7c8f921e82f448d29789f1b0#a0fdbe1aa2ea083c7c8f921e82f448d29789f1b0"
 
 [[package]]
 name = "maw-bind"
 version = "0.1.0-alpha.1"
-source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=fca1129df488ba80180bda567b3e0c2952e9f0f5#fca1129df488ba80180bda567b3e0c2952e9f0f5"
+source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=a0fdbe1aa2ea083c7c8f921e82f448d29789f1b0#a0fdbe1aa2ea083c7c8f921e82f448d29789f1b0"
 
 [[package]]
 name = "maw-bring"
 version = "0.1.0-alpha.1"
-source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=fca1129df488ba80180bda567b3e0c2952e9f0f5#fca1129df488ba80180bda567b3e0c2952e9f0f5"
+source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=a0fdbe1aa2ea083c7c8f921e82f448d29789f1b0#a0fdbe1aa2ea083c7c8f921e82f448d29789f1b0"
 
 [[package]]
 name = "maw-calver"
@@ -1600,17 +1600,17 @@ dependencies = [
 [[package]]
 name = "maw-feed"
 version = "0.1.0-alpha.1"
-source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=fca1129df488ba80180bda567b3e0c2952e9f0f5#fca1129df488ba80180bda567b3e0c2952e9f0f5"
+source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=a0fdbe1aa2ea083c7c8f921e82f448d29789f1b0#a0fdbe1aa2ea083c7c8f921e82f448d29789f1b0"
 
 [[package]]
 name = "maw-fuzzy"
 version = "0.1.0-alpha.1"
-source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=fca1129df488ba80180bda567b3e0c2952e9f0f5#fca1129df488ba80180bda567b3e0c2952e9f0f5"
+source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=a0fdbe1aa2ea083c7c8f921e82f448d29789f1b0#a0fdbe1aa2ea083c7c8f921e82f448d29789f1b0"
 
 [[package]]
 name = "maw-hub"
 version = "0.1.0-alpha.1"
-source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=fca1129df488ba80180bda567b3e0c2952e9f0f5#fca1129df488ba80180bda567b3e0c2952e9f0f5"
+source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=a0fdbe1aa2ea083c7c8f921e82f448d29789f1b0#a0fdbe1aa2ea083c7c8f921e82f448d29789f1b0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1619,15 +1619,12 @@ dependencies = [
 [[package]]
 name = "maw-identity"
 version = "0.1.0-alpha.1"
-source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=fca1129df488ba80180bda567b3e0c2952e9f0f5#fca1129df488ba80180bda567b3e0c2952e9f0f5"
+source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=a0fdbe1aa2ea083c7c8f921e82f448d29789f1b0#a0fdbe1aa2ea083c7c8f921e82f448d29789f1b0"
 
 [[package]]
 name = "maw-matcher"
 version = "0.1.0-alpha.1"
-dependencies = [
- "serde",
- "serde_json",
-]
+source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=a0fdbe1aa2ea083c7c8f921e82f448d29789f1b0#a0fdbe1aa2ea083c7c8f921e82f448d29789f1b0"
 
 [[package]]
 name = "maw-peer"
@@ -1660,7 +1657,7 @@ dependencies = [
 [[package]]
 name = "maw-plugin-scaffold"
 version = "0.1.0-alpha.1"
-source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=fca1129df488ba80180bda567b3e0c2952e9f0f5#fca1129df488ba80180bda567b3e0c2952e9f0f5"
+source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=a0fdbe1aa2ea083c7c8f921e82f448d29789f1b0#a0fdbe1aa2ea083c7c8f921e82f448d29789f1b0"
 dependencies = [
  "serde_json",
 ]
@@ -1668,17 +1665,17 @@ dependencies = [
 [[package]]
 name = "maw-policy"
 version = "0.1.0-alpha.1"
-source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=fca1129df488ba80180bda567b3e0c2952e9f0f5#fca1129df488ba80180bda567b3e0c2952e9f0f5"
+source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=a0fdbe1aa2ea083c7c8f921e82f448d29789f1b0#a0fdbe1aa2ea083c7c8f921e82f448d29789f1b0"
 
 [[package]]
 name = "maw-routing"
 version = "0.1.0-alpha.1"
-source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=fca1129df488ba80180bda567b3e0c2952e9f0f5#fca1129df488ba80180bda567b3e0c2952e9f0f5"
+source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=a0fdbe1aa2ea083c7c8f921e82f448d29789f1b0#a0fdbe1aa2ea083c7c8f921e82f448d29789f1b0"
 
 [[package]]
 name = "maw-schedule"
 version = "0.1.0-alpha.1"
-source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=fca1129df488ba80180bda567b3e0c2952e9f0f5#fca1129df488ba80180bda567b3e0c2952e9f0f5"
+source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=a0fdbe1aa2ea083c7c8f921e82f448d29789f1b0#a0fdbe1aa2ea083c7c8f921e82f448d29789f1b0"
 dependencies = [
  "serde",
  "toml",
@@ -1704,7 +1701,7 @@ dependencies = [
 [[package]]
 name = "maw-split"
 version = "0.1.0-alpha.1"
-source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=fca1129df488ba80180bda567b3e0c2952e9f0f5#fca1129df488ba80180bda567b3e0c2952e9f0f5"
+source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=a0fdbe1aa2ea083c7c8f921e82f448d29789f1b0#a0fdbe1aa2ea083c7c8f921e82f448d29789f1b0"
 
 [[package]]
 name = "maw-tmux"

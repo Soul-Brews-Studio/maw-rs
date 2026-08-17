@@ -13,10 +13,9 @@ struct NormalizeFixture {
 
 #[test]
 fn normalize_plan_json_matches_maw_js_fixtures() {
-    let fixtures: Vec<NormalizeFixture> = serde_json::from_str(include_str!(
-        "../../maw-matcher/tests/fixtures/normalize-target.fixtures.json"
-    ))
-    .expect("valid normalize fixtures");
+    let fixtures: Vec<NormalizeFixture> =
+        serde_json::from_str(maw_matcher::NORMALIZE_TARGET_FIXTURES_JSON)
+            .expect("valid normalize fixtures");
 
     assert_eq!(fixtures.len(), 12, "maw-js normalize fixture count changed");
     for fixture in fixtures {
