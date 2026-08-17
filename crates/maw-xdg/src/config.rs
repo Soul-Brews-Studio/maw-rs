@@ -124,10 +124,20 @@ pub fn load_merged_config_in_dir(env: &MawXdgEnv, cwd: &Path) -> MergedMawConfig
 /// defined, surfacing far downstream as `node '<name>' not in namedPeers or
 /// peers`.
 ///
-/// This list is deliberately one key long. It is the only maw config key that is
-/// an array of records with an identity field; membership here is a statement
-/// about a key's *semantics*, not a shape heuristic, so a new key earns a place
-/// only by being a keyed collection too.
+/// This list is deliberately one key long, and the rule for joining it is
+/// *semantic*, not a shape heuristic — "array of objects" is not the test, or
+/// the other array-valued config keys would qualify and should not:
+///
+/// - `peers` and `hooks.postWake` are ordered lists of scalars with no identity
+///   field, and `postWake` runs in the order written.
+/// - `locate.orgs` treats an explicit empty array as meaningful ("no orgs",
+///   distinct from unset), which union-merging would make unsayable.
+/// - `tokenPool.<group>` is a rotation pool: its `label` is optional, defaults
+///   to a shared value, and duplicates are legitimate, so it has no identity.
+/// - `triggers` elements carry a `name` only because `maw on` writes one for
+///   display; the read model ignores it, and several triggers may share an `on`.
+///   Keying on a field no reader uses would be fragile, so it stays wholesale
+///   until a real report asks otherwise.
 const NAME_KEYED_ARRAY_KEYS: &[&str] = &["namedPeers"];
 
 pub fn deep_merge_config(target: &mut Value, layer: &Value) {

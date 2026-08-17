@@ -33,8 +33,14 @@ new `url` with the previous host's key. To drop inherited peers instead of
 adding to them, use the `null` rule: `"namedPeers": null` in a later layer
 clears the key, and a layer above that can define a fresh list.
 
-Every other array — `peers` (a list of URLs) included — still replaces
-wholesale, so trimming or reordering a list in a later layer works as written.
+Every other array-valued key still replaces wholesale, so trimming or reordering
+a list in a later layer works as written. That is deliberate per key, not a
+fallthrough: `peers` and `hooks.postWake` are ordered lists of scalars (and
+`postWake` runs in written order); `locate.orgs` uses an explicit empty array to
+mean "no orgs", which union-merging would make unsayable; `tokenPool.<group>` is
+a rotation pool where duplicates are legitimate; and `triggers` entries carry a
+`name` only because `maw on` writes one for display — no reader uses it, and
+several triggers may share an `on`.
 
 `maw work` and `maw wake` both resolve config against the **resolved target
 repo/worktree path**, not the invoking shell's cwd — `maw wake myrepo` run

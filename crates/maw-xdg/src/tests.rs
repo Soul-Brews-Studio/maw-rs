@@ -247,7 +247,7 @@ fn named_peers_merge_by_name_across_weighted_layers() {
 
 /// #874's concrete user exposure: `MAW_HOME` set without `MAW_CONFIG_DIR` makes
 /// `inherit_singleton_configs_for_maw_home` add the singleton config as a
-/// scope_rank-10 layer (deliberate, documented). A personal instance layer at
+/// `scope_rank`-10 layer (deliberate, documented). A personal instance layer at
 /// weight 51 then used to erase every peer that inheritance brought in.
 #[test]
 fn maw_home_inherited_named_peers_survive_a_higher_weight_instance_layer() {
@@ -292,8 +292,9 @@ fn maw_home_inherited_named_peers_survive_a_higher_weight_instance_layer() {
 /// #874 scoping guard: name-keyed merging is deliberately limited to
 /// `namedPeers`. Every other array-valued key — including one whose elements
 /// happen to carry a `name` — keeps wholesale replacement, and the
-/// weight-then-scope_rank ordering that decides who wins is untouched: at equal
-/// weight the higher scope_rank still wins, now per *entry* rather than per list.
+/// weight-then-`scope_rank` ordering that decides who wins is untouched: at
+/// equal weight the higher `scope_rank` still wins, now per *entry* rather than
+/// per list.
 #[test]
 fn only_named_peers_merges_by_name_and_scope_rank_still_breaks_weight_ties() {
     let root = temp_root("named-peers-scope");
@@ -355,7 +356,10 @@ fn a_null_named_peers_layer_still_clears_the_inherited_list() {
         &root.join("cfg/maw.config.50.json"),
         r#"{"namedPeers":[{"name":"white","url":"http://white:3456"}]}"#,
     );
-    write_json(&root.join("cfg/maw.config.51.json"), r#"{"namedPeers":null}"#);
+    write_json(
+        &root.join("cfg/maw.config.51.json"),
+        r#"{"namedPeers":null}"#,
+    );
 
     let loaded = load_merged_config_in_dir(&env, &root);
 
