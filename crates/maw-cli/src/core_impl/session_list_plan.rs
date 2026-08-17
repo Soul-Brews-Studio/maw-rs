@@ -218,11 +218,30 @@ fn ls_watch_error(message: &str) -> CliOutput {
     }
 }
 
+/// #860: distinct, non-zero-exit error for a genuine tmux connect failure --
+/// deliberately worded differently from "No active sessions." so a stale
+/// socket can never be mistaken for an empty server.
+fn ls_tmux_unreachable_output(error: &maw_tmux::TmuxError) -> CliOutput {
+    CliOutput {
+        code: 1,
+        stdout: String::new(),
+        stderr: format!("tmux unreachable: {error}\n"),
+    }
+}
+
 fn render_ls_plan(options: &LsPlanOptions) -> CliOutput {
     let mut live_options;
     let effective_options = if options.panes.is_empty() {
         let mut client = TmuxClient::local();
-        let live_panes = client.list_panes();
+        // #860: a tmux connect failure (e.g. a stale/orphaned socket) must
+        // never fall through to the "no active sessions" empty-panes path --
+        // that collapses "tmux is unreachable" and "tmux is reachable and
+        // genuinely empty" into the same false-negative message. Bail out
+        // here with a distinct error instead.
+        let live_panes = match client.list_panes() {
+            Ok(panes) => panes,
+            Err(error) => return ls_tmux_unreachable_output(&error),
+        };
         live_options = options.clone();
         live_options.panes = live_panes;
         if live_options.now.is_none() {

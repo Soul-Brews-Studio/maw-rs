@@ -33,7 +33,10 @@ async fn forwarderror_run_async_impl(raw_args: &[String]) -> CliOutput {
     let message = forwarderror_message(&captured);
     let config = load_hey_config();
     let mut tmux = TmuxClient::local();
-    let sessions = route_sessions_from_tmux(&mut tmux);
+    let sessions = match route_sessions_from_tmux(&mut tmux) {
+        Ok(sessions) => sessions,
+        Err(message) => return forwarderror_error(1, &message),
+    };
     match resolve_route_target(&target, &config.route, &sessions) {
         RouteResult::Local { target: pane } | RouteResult::SelfNode { target: pane } => {
             forwarderror_local(&mut tmux, &pane, &target, &message, args.last, &config)

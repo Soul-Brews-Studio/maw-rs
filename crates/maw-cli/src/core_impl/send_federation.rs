@@ -87,7 +87,16 @@ async fn run_send_like_async_with_args(
     let config = load_hey_config();
     let sender_oracle = resolve_hey_sender_oracle_for_from(&config, send_args.from.as_deref());
     let mut tmux = TmuxClient::local();
-    let sessions = route_sessions_from_tmux(&mut tmux);
+    let sessions = match route_sessions_from_tmux(&mut tmux) {
+        Ok(sessions) => sessions,
+        Err(message) => {
+            return CliOutput {
+                code: 1,
+                stdout: String::new(),
+                stderr: format!("{command}: {message}\n"),
+            }
+        }
+    };
     let routing_target = if command == "hey" {
         match hey_picker_target(&send_args.target, &config.route, &sessions) {
             Ok(target) => target,

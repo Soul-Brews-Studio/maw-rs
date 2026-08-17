@@ -184,7 +184,7 @@ impl ServeReceiverInbox for ServeSystemReceiverInbox {
 impl ServeDelivery for ServeSystemDelivery {
     fn route_sessions(&self) -> Result<Vec<RouteSession>, String> {
         let mut tmux = TmuxClient::local();
-        Ok(route_sessions_from_tmux(&mut tmux))
+        route_sessions_from_tmux(&mut tmux)
     }
 
     fn send_literal_enter(&self, target: &str, text: &str) -> Result<(), String> {
@@ -1172,13 +1172,30 @@ async fn api_feed_post(
 async fn api_sessions(Query(query): Query<SessionsQuery>) -> impl IntoResponse {
     let _local = query.local.unwrap_or(false);
     let mut tmux = TmuxClient::local();
-    let panes = tmux.list_panes();
-    let sessions = tmux
-        .list_all()
-        .into_iter()
-        .map(|session| serve_tmux_session_json(&session, &panes))
-        .collect::<Vec<_>>();
-    Json(sessions)
+    let panes = match tmux.list_panes() {
+        Ok(panes) => panes,
+        Err(error) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"error": format!("tmux unreachable: {error}")})),
+            )
+                .into_response();
+        }
+    };
+    let sessions = match tmux.list_all() {
+        Ok(sessions) => sessions,
+        Err(error) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"error": format!("tmux unreachable: {error}")})),
+            )
+                .into_response();
+        }
+    }
+    .into_iter()
+    .map(|session| serve_tmux_session_json(&session, &panes))
+    .collect::<Vec<_>>();
+    Json(sessions).into_response()
 }
 
 async fn api_capture(Query(query): Query<CaptureQuery>) -> impl IntoResponse {
@@ -1202,7 +1219,14 @@ fn serve_resolve_capture_target(
     if target.trim().is_empty() || target.starts_with('%') {
         return target.to_owned();
     }
-    let sessions = route_sessions_from_tmux(tmux);
+    // #860: tmux-unreachable here degrades the same way an unresolved route
+    // already did (Peer/Error arms below) — fall through to the raw target
+    // rather than erroring, since this helper has no response channel of its
+    // own to report through; the caller (`api_capture`) still surfaces the
+    // real tmux error from the subsequent `.capture()` call.
+    let Ok(sessions) = route_sessions_from_tmux(tmux) else {
+        return target.to_owned();
+    };
     match resolve_route_target(target, &load_hey_config().route, &sessions) {
         RouteResult::Local { target } | RouteResult::SelfNode { target } => target,
         RouteResult::Peer { .. } | RouteResult::Error { .. } => target.to_owned(),
