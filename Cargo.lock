@@ -1727,10 +1727,9 @@ dependencies = [
 [[package]]
 name = "maw-worktree"
 version = "0.1.0-alpha.1"
+source = "git+https://github.com/Soul-Brews-Studio/maw-worktree?rev=1449cff00fbbc03eef82de4daa710c194a1e14de#1449cff00fbbc03eef82de4daa710c194a1e14de"
 dependencies = [
  "maw-matcher",
- "serde",
- "serde_json",
 ]
 
 [[package]]
