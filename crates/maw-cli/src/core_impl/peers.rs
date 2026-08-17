@@ -175,10 +175,18 @@ fn peers_set_identity_oracle(peer: &mut PeersPeerNative, oracle: &str) {
         _ => serde_json::Map::new(),
     };
     map.insert("oracle".to_owned(), serde_json::Value::String(oracle.to_owned()));
-    if !map.contains_key("node") {
-        if let Some(node) = &peer.node {
-            map.insert("node".to_owned(), serde_json::Value::String(node.clone()));
-        }
+    // #819: refresh, don't just backfill. The caller (peers_cmd_add) already
+    // ran peers_apply_probe_result before this, which sets peer.node from the
+    // CURRENT probe -- so peer.node here is never stale, it's this
+    // invocation's fresh answer. Backfilling only when the map's "node" key
+    // was absent left a re-add of an already-pinned peer free to keep an OLD
+    // node alongside this invocation's --oracle, fabricating a pair whose two
+    // halves came from different probes -- the same defect class #819 exists
+    // to kill, just mirrored (new-oracle:old-node instead of
+    // old-oracle:new-node). If we have no fresh node to write, leave whatever
+    // was there rather than deleting it.
+    if let Some(node) = &peer.node {
+        map.insert("node".to_owned(), serde_json::Value::String(node.clone()));
     }
     peer.identity = Some(serde_json::Value::Object(map));
 }
@@ -953,6 +961,45 @@ mod peers_tests {
             auth_ok: None,
             auth_error: None,
         })
+    }
+
+    // #819: re-adding an already-pinned peer whose node genuinely drifted (rename,
+    // reinstall) must not leave the identity map's "node" stuck on the OLD probe
+    // while "oracle" takes THIS invocation's fresh value -- that fabricates a pair
+    // whose two halves never came from the same probe, which is exactly the
+    // disease #819 exists to kill, just mirrored (new-oracle:old-node instead of
+    // old-oracle:new-node). peer.node is already current by the time this runs --
+    // peers_cmd_add calls peers_apply_probe_result (which sets it from the fresh
+    // probe) before peers_set_identity_oracle -- so refreshing unconditionally is
+    // safe, not a new source of staleness.
+    #[test]
+    fn peers_set_identity_oracle_refreshes_a_stale_node_instead_of_preserving_it() {
+        let mut peer = PeersPeerNative {
+            url: "http://black.test:3467".to_owned(),
+            node: Some("black".to_owned()), // this invocation's fresh probe result
+            identity: Some(serde_json::json!({"oracle": "arra", "node": "old-node"})),
+            ..PeersPeerNative::default()
+        };
+        peers_set_identity_oracle(&mut peer, "new-oracle");
+        assert_eq!(
+            peer.identity,
+            Some(serde_json::json!({"oracle": "new-oracle", "node": "black"})),
+            "node must refresh to this invocation's probe, not keep the stale prior pin"
+        );
+    }
+
+    // Companion case: no fresh node this time (unreachable/allow-unreachable) --
+    // must not DELETE a node the identity map already had.
+    #[test]
+    fn peers_set_identity_oracle_keeps_existing_node_when_this_probe_found_none() {
+        let mut peer = PeersPeerNative {
+            url: "http://black.test:3467".to_owned(),
+            node: None,
+            identity: Some(serde_json::json!({"oracle": "arra", "node": "old-node"})),
+            ..PeersPeerNative::default()
+        };
+        peers_set_identity_oracle(&mut peer, "new-oracle");
+        assert_eq!(peer.identity, Some(serde_json::json!({"oracle": "new-oracle", "node": "old-node"})));
     }
 
     #[test]
