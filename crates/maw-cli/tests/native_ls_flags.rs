@@ -76,9 +76,9 @@ fn write_fake_tmux(bin_dir: &Path) {
     let tmux = bin_dir.join("tmux");
     fs::write(
         &tmux,
-        r#"#!/bin/sh
+        r"#!/bin/sh
 exit 0
-"#,
+",
     )
     .expect("write fake tmux");
     chmod_exec(&tmux);
