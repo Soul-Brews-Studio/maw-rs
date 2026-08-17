@@ -160,7 +160,7 @@ fn fleet_run_gather(
     let members = entry.session.members.as_deref().unwrap_or_default();
     if members.is_empty() { return Err(format!("fleet gather: squad {group} has no members")); }
     let registered = fleet_sweep_targets(state);
-    let live = runtime.fleet_list_all().into_iter().map(|session| session.name).collect::<BTreeSet<_>>();
+    let live = runtime.fleet_list_all()?.into_iter().map(|session| session.name).collect::<BTreeSet<_>>();
     let plan = members.iter().map(|member| {
         let session = fleet_member_session(&member.handle, &registered);
         let live_session = session.filter(|candidate| live.contains(&candidate.name));

@@ -60,8 +60,8 @@ mod fleet_tests {
             }
         }
 
-        fn fleet_list_all(&mut self) -> Vec<TmuxSession> {
-            self.sessions.clone()
+        fn fleet_list_all(&mut self) -> Result<Vec<TmuxSession>, String> {
+            Ok(self.sessions.clone())
         }
     }
 

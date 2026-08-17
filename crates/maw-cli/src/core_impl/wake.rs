@@ -65,7 +65,7 @@ struct WakeResolvedNative {
 
 
 trait WakeTmuxNative {
-    fn wake_list(&mut self) -> Vec<TmuxSession>;
+    fn wake_list(&mut self) -> Result<Vec<TmuxSession>, String>;
     fn wake_has_session(&mut self, name: &str) -> bool;
     fn wake_new_session(&mut self, name: &str, window: &str, cwd: &std::path::Path) -> Result<(), String>;
     fn wake_new_window(&mut self, session: &str, window: &str, cwd: &std::path::Path) -> Result<(), String>;
@@ -84,7 +84,11 @@ trait WakeTmuxNative {
 struct WakeNativeTmux;
 
 impl WakeTmuxNative for WakeNativeTmux {
-    fn wake_list(&mut self) -> Vec<TmuxSession> { TmuxClient::local().list_all() }
+    fn wake_list(&mut self) -> Result<Vec<TmuxSession>, String> {
+        TmuxClient::local()
+            .list_all()
+            .map_err(|error| format!("tmux unreachable: {error}"))
+    }
 
     fn wake_has_session(&mut self, name: &str) -> bool { TmuxClient::local().has_session(name) }
 
@@ -207,7 +211,10 @@ fn run_wake_command_with(
         Ok(options) => options,
         Err(message) => return CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") },
     };
-    let sessions = tmux.wake_list();
+    let sessions = match tmux.wake_list() {
+        Ok(sessions) => sessions,
+        Err(message) => return CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") },
+    };
     if let Some(output) = wake_picker_output(&options, &sessions, tmux, fleet_wake) { return output; }
     match wake_run_options(&options, &sessions, tmux) {
         Ok((code, stdout)) => CliOutput { code, stdout, stderr: String::new() },
@@ -217,7 +224,7 @@ fn run_wake_command_with(
 
 fn wake_run(argv: &[String], tmux: &mut impl WakeTmuxNative) -> Result<(i32, String), String> {
     let options = wake_parse_args(argv)?;
-    let sessions = tmux.wake_list();
+    let sessions = tmux.wake_list()?;
     wake_run_options(&options, &sessions, tmux)
 }
 
@@ -689,7 +696,7 @@ fn wake_create_or_reuse_window(
     tmux: &mut impl WakeTmuxNative,
     out: &mut String,
 ) -> Result<bool, String> {
-    let windows = tmux.wake_list().into_iter().find(|session| session.name == resolved.session).map(|session| session.windows).unwrap_or_default();
+    let windows = tmux.wake_list()?.into_iter().find(|session| session.name == resolved.session).map(|session| session.windows).unwrap_or_default();
     let mut self_pane_launch = false;
     if !options.new_window && windows.iter().any(|window| window.name == resolved.window) {
         self_pane_launch = wake_target_is_current_pane(tmux, &resolved.target);
@@ -722,7 +729,7 @@ fn wake_register_fleet_session(
     resolved: &WakeResolvedNative,
     tmux: &mut impl WakeTmuxNative,
 ) -> Result<(), String> {
-    let windows = wake_registry_windows(resolved, tmux);
+    let windows = wake_registry_windows(resolved, tmux)?;
     if windows.is_empty() {
         return Ok(());
     }
@@ -734,9 +741,9 @@ fn wake_register_fleet_session(
 fn wake_registry_windows(
     resolved: &WakeResolvedNative,
     tmux: &mut impl WakeTmuxNative,
-) -> Vec<FleetWindowSummary> {
+) -> Result<Vec<FleetWindowSummary>, String> {
     let mut windows = tmux
-        .wake_list()
+        .wake_list()?
         .into_iter()
         .find(|session| session.name == resolved.session)
         .map_or_else(Vec::new, |session| fleet_registry_windows_from_tmux(&session.windows, None));
@@ -763,7 +770,7 @@ fn wake_registry_windows(
             windows.push(FleetWindowSummary { name: resolved.window.clone(), repo, kind });
         }
     }
-    windows
+    Ok(windows)
 }
 
 // #783: the window name alone (`resolved.window`) is oracle-derived and has

@@ -182,7 +182,16 @@ struct LocateOracleCacheEntry {
 
 fn run_locate_command(argv: &[String]) -> CliOutput {
     let mut tmux = TmuxClient::local();
-    run_locate_command_with_sessions(argv, &tmux.list_all(), &mut LocateSystemGithub)
+    match tmux.list_all() {
+        Ok(sessions) => {
+            run_locate_command_with_sessions(argv, &sessions, &mut LocateSystemGithub)
+        }
+        Err(error) => CliOutput {
+            code: 1,
+            stdout: String::new(),
+            stderr: format!("tmux unreachable: {error}\n"),
+        },
+    }
 }
 
 fn run_locate_command_with_sessions(

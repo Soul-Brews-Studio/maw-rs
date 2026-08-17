@@ -56,7 +56,9 @@ fn run_about_command(argv: &[String]) -> CliOutput {
 fn render_about(oracle: &str) -> Result<String, String> {
     let name = oracle.to_lowercase();
     let mut tmux = TmuxClient::local();
-    let sessions = tmux.list_all();
+    let sessions = tmux
+        .list_all()
+        .map_err(|error| format!("tmux unreachable: {error}"))?;
     let repo = resolve_about_oracle_safe(&name)?;
     let session_name = detect_about_session(&name, &sessions);
     let fleet = about_fleet_entry(&name);
