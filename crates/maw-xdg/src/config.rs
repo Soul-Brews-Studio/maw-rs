@@ -110,6 +110,36 @@ pub fn load_merged_config_in_dir(env: &MawXdgEnv, cwd: &Path) -> MergedMawConfig
     }
 }
 
+/// Config keys whose array value is a *set of named records*, not an ordered
+/// list of values (#874).
+///
+/// Arrays are replaced wholesale by default, and for genuinely list-shaped keys
+/// (`peers`, an ordered list of URLs) that is right — a later layer reordering
+/// or trimming a list must not have the earlier list's entries reappear. But
+/// `namedPeers` is a *keyed* collection that happens to be spelled as an array:
+/// each element is `{"name": ..., "url": ...}` and `name` is its identity (the
+/// resolver looks entries up by name, and the accepted alternative spelling is
+/// literally an object keyed by name, which already deep-merges). Replacing it
+/// wholesale meant a higher-weight layer silently deleted peers a lower layer
+/// defined, surfacing far downstream as `node '<name>' not in namedPeers or
+/// peers`.
+///
+/// This list is deliberately one key long, and the rule for joining it is
+/// *semantic*, not a shape heuristic — "array of objects" is not the test, or
+/// the other array-valued config keys would qualify and should not:
+///
+/// - `peers` and `hooks.postWake` are ordered lists of scalars with no identity
+///   field, and `postWake` runs in the order written.
+/// - `locate.orgs` treats an explicit empty array as meaningful ("no orgs",
+///   distinct from unset), which union-merging would make unsayable.
+/// - `tokenPool.<group>` is a rotation pool: its `label` is optional, defaults
+///   to a shared value, and duplicates are legitimate, so it has no identity.
+/// - `triggers` elements carry a `name` only because `maw on` writes one for
+///   display; the read model ignores it, and several triggers may share an `on`.
+///   Keying on a field no reader uses would be fragile, so it stays wholesale
+///   until a real report asks otherwise.
+const NAME_KEYED_ARRAY_KEYS: &[&str] = &["namedPeers"];
+
 pub fn deep_merge_config(target: &mut Value, layer: &Value) {
     let (Some(target_map), Some(layer_map)) = (target.as_object_mut(), layer.as_object()) else {
         *target = layer.clone();
@@ -126,10 +156,47 @@ pub fn deep_merge_config(target: &mut Value, layer: &Value) {
             let mut child = Value::Object(serde_json::Map::new());
             deep_merge_config(&mut child, value);
             target_map.insert(key.clone(), child);
+        } else if let (true, Some(base), Some(items)) = (
+            NAME_KEYED_ARRAY_KEYS.contains(&key.as_str()),
+            target_map.get(key).and_then(Value::as_array),
+            value.as_array(),
+        ) {
+            let merged = merge_by_name(base, items);
+            target_map.insert(key.clone(), Value::Array(merged));
         } else {
             target_map.insert(key.clone(), value.clone());
         }
     }
+}
+
+/// Overlay `layer` onto `base` keyed by each element's `name` (#874).
+///
+/// A layer entry whose `name` matches an existing one replaces it *whole* rather
+/// than deep-merging into it: a peer's `url`, `pubKey` and token are one
+/// coherent credential set, and field-wise merging could pair a newly pointed
+/// `url` with the previous host's stale key. Entries the layer does not name
+/// keep their position and value; entries it introduces are appended, so the
+/// result is stable and independent of map iteration order. Elements with no
+/// string `name` have no identity to key on and are appended as-is rather than
+/// dropped.
+///
+/// To discard inherited peers wholesale rather than add to them, the existing
+/// `null` rule still applies: `"namedPeers": null` in a layer removes the key.
+fn merge_by_name(base: &[Value], layer: &[Value]) -> Vec<Value> {
+    let mut out = base.to_vec();
+    for item in layer {
+        let name = item.get("name").and_then(Value::as_str);
+        let slot = name.and_then(|name| {
+            out.iter_mut()
+                .find(|existing| existing.get("name").and_then(Value::as_str) == Some(name))
+        });
+        if let Some(slot) = slot {
+            *slot = item.clone();
+        } else {
+            out.push(item.clone());
+        }
+    }
+    out
 }
 
 fn scan_config_dir(

@@ -12,6 +12,42 @@ scope. Higher `<NN>` wins across scopes; at equal `<NN>`, Project beats User
 and `.local.json` beats the plain file; a `null` value in a later layer
 deletes the key (so a repo can also *unset* a user default).
 
+### How each value type merges
+
+| Value type | Later layer does |
+| --- | --- |
+| scalar (string / number / bool) | replaces |
+| object | deep-merges key by key |
+| `null` | **deletes** the key |
+| array | replaces wholesale |
+| `namedPeers` array | merges **by peer `name`** (#874) |
+
+`namedPeers` is the one array-valued key that is a keyed collection rather than
+an ordered list: each element is `{"name": …, "url": …}` and the resolver looks
+entries up by `name` (the accepted alternative spelling is literally an object
+keyed by name). So a later layer *adds* peers and overrides same-named ones
+entry-for-entry, and peers only the earlier layer defined survive. An override
+replaces the matched entry whole rather than field by field — a peer's `url`,
+`pubKey` and token are one credential set, and half-merging them could pair a
+new `url` with the previous host's key. To drop inherited peers instead of
+adding to them, use the `null` rule: `"namedPeers": null` in a later layer
+clears the key, and a layer above that can define a fresh list.
+
+The same rule reaches `maw init --federate --peer <url> --peer-name <name>`,
+which merges its generated block over the config already on disk: a re-run
+**adds** the named peer and repoints an existing one of the same name, instead of
+replacing the stored list with just the peers on that command line. Dropping a
+peer is therefore a config edit (the `null` rule above), not a flag.
+
+Every other array-valued key still replaces wholesale, so trimming or reordering
+a list in a later layer works as written. That is deliberate per key, not a
+fallthrough: `peers` and `hooks.postWake` are ordered lists of scalars (and
+`postWake` runs in written order); `locate.orgs` uses an explicit empty array to
+mean "no orgs", which union-merging would make unsayable; `tokenPool.<group>` is
+a rotation pool where duplicates are legitimate; and `triggers` entries carry a
+`name` only because `maw on` writes one for display — no reader uses it, and
+several triggers may share an `on`.
+
 `maw work` and `maw wake` both resolve config against the **resolved target
 repo/worktree path**, not the invoking shell's cwd — `maw wake myrepo` run
 from anywhere honors `myrepo/.maw/maw.config.<NN>.json` (engine `commands`,
