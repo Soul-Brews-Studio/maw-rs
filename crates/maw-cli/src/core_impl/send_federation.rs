@@ -97,34 +97,43 @@ async fn run_send_like_async_with_args(
         send_args.target.clone()
     };
     let mut runner = maw_tmux::CommandTmuxRunner::new();
-    let result = resolve_send_route_target(
-        &routing_target,
-        &config.route,
-        &sessions,
-        std::env::var_os("TMUX").is_some(),
-        &mut runner,
-    );
-    // #681: a target namedPeers doesn't know but ~/.maw/peers.json does
-    // should still route, not fail as "unknown node".
-    let result = if command == "hey" {
-        hey_peers_json_fallback_route(&routing_target, &config.route, &sessions, result)
+    // #818: `peer:<node>:<target>` is the unambiguous cross-node form, so it
+    // must bypass local-session matching entirely rather than be re-derived
+    // from a result the local matcher has already claimed.
+    let result = if let Some(forced) = hey_forced_peer_route(command, &routing_target, &sessions, &config.route) {
+        forced
     } else {
-        result
+        let result = resolve_send_route_target(
+            &routing_target,
+            &config.route,
+            &sessions,
+            std::env::var_os("TMUX").is_some(),
+            &mut runner,
+        );
+        // #681: a target namedPeers doesn't know but ~/.maw/peers.json does
+        // should still route, not fail as "unknown node".
+        if command == "hey" {
+            hey_peers_json_fallback_route(&routing_target, &config.route, &sessions, result)
+        } else {
+            result
+        }
     };
     let result =
         route_result_prefer_pane_zero_for_ambiguous_agent(&send_args.target, result, &mut runner);
+    // #818/#790: a node name that matches both a local session and a peer is
+    // refused here — before the dry-run report, so `--dry-run` reports the
+    // ambiguity too instead of confirming the local guess.
+    if let Some(refusal) =
+        hey_local_peer_collision_refusal(command, &routing_target, &sessions, &config.route, &result)
+    {
+        return refusal;
+    }
     if send_args.dry_run {
         return send_dry_run_output(command, &send_args, &result);
     }
     if let Some(refusal) = send_route_gate(command, &send_args.target, &send_args.text, &result) {
         return refusal;
     }
-    // #790: surface it when the query's node/session part also names a
-    // federation peer, so a local-only result (success or error) is never
-    // silently misread as evidence the remote host was reached.
-    let collision_note = (command == "hey")
-        .then(|| hey_local_peer_collision_note(&routing_target, &sessions, &config.route))
-        .flatten();
     match result {
         RouteResult::Local { target } | RouteResult::SelfNode { target } if send_args.inbox == Some(true) => {
             send_local_inbox_only(
@@ -155,7 +164,7 @@ async fn run_send_like_async_with_args(
                 send_args.from.as_deref(),
                 &audit_args,
             );
-            for note in [collision_note.as_deref(), agent_note.as_deref()].into_iter().flatten() {
+            if let Some(note) = agent_note.as_deref() {
                 output.stderr = format!("{note}{}", output.stderr);
             }
             output
@@ -178,13 +187,11 @@ async fn run_send_like_async_with_args(
             )
             .await
         }
-        RouteResult::Error { detail, hint, .. } => {
-            let mut stderr = send_route_error(command, &send_args.target, &detail, hint.as_deref());
-            if let Some(note) = &collision_note {
-                stderr = format!("{note}{stderr}");
-            }
-            CliOutput { code: send_error_code(command), stdout: String::new(), stderr }
-        }
+        RouteResult::Error { detail, hint, .. } => CliOutput {
+            code: send_error_code(command),
+            stdout: String::new(),
+            stderr: send_route_error(command, &send_args.target, &detail, hint.as_deref()),
+        },
     }
 }
 
@@ -383,7 +390,7 @@ fn send_usage_error(command: &str, message: &str) -> CliOutput {
 // help from making it, and names both routes so neither looks durable.
 fn send_usage(command: &str) -> String {
     if command == "hey" {
-        return "usage: maw hey <target> <message> [--inbox] [--force deprecated] [--approve] [--trust]\n       maw hey <target> -f <file>   read message from file (bytes-through; no shell)\n       maw hey <target> -           read message from stdin\n  default: inject into the target pane only — no inbox is written on either\n           the local route or the cross-node one (#787)\n  --inbox: write receiver inbox only; skip pane injection\n  --force: deprecated compatibility alias; delivery is already forced by default\n  target forms:\n    <oracle-window>              same-node window name (local-only)\n    local:<agent>                explicit same-node target\n    <session>:<window>[.<pane>]  paste a TARGET from maw ls -v\n    <node>:<session>             canonical cross-node form (window 1)\n    <node>:<session>:<window>    target a specific tmux window (#410)\n  e.g. maw hey mawjs-oracle \"hello from neo\"\n       maw hey local:mawjs \"hello from neo\"\n       maw hey phaith:01-hojo:3 \"hello hojo-hermes\"\n       run `maw locate <agent>` to enumerate across federation".to_owned();
+        return "usage: maw hey <target> <message> [--inbox] [--force deprecated] [--approve] [--trust]\n       maw hey <target> -f <file>   read message from file (bytes-through; no shell)\n       maw hey <target> -           read message from stdin\n  default: inject into the target pane only — no inbox is written on either\n           the local route or the cross-node one (#787)\n  --inbox: write receiver inbox only; skip pane injection\n  --force: deprecated compatibility alias; delivery is already forced by default\n  target forms:\n    <oracle-window>              same-node window name (local-only)\n    local:<agent>                explicit same-node target\n    <session>:<window>[.<pane>]  paste a TARGET from maw ls -v\n    <node>:<session>             canonical cross-node form (window 1)\n    <node>:<session>:<window>    target a specific tmux window (#410)\n    peer:<node>:<target>         force the peer when <node> also names a local session (#818)\n  e.g. maw hey mawjs-oracle \"hello from neo\"\n       maw hey local:mawjs \"hello from neo\"\n       maw hey peer:white:11-white \"hello white\"\n       maw hey phaith:01-hojo:3 \"hello hojo-hermes\"\n       run `maw locate <agent>` to enumerate across federation".to_owned();
     }
     format!(
         "usage: maw-rs {command} <target> <message> [--inbox|--no-inbox] [--from <oracle:node>] [--approve] [--trust] [--dry-run]\n       maw-rs {command} <target> -f <file> | -   read message from file or stdin (no shell interpolation)"
