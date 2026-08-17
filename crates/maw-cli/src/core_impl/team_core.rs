@@ -258,7 +258,24 @@ fn team_state_dir() -> std::path::PathBuf {
     std::env::var_os("MAW_STATE_DIR").map_or_else(team_maw_home_dir, std::path::PathBuf::from)
 }
 
+// #826: this used to check ONLY `MAW_RS_TEAM_PSI`, a private override nothing else
+// in the CLI reads, while `team_state_dir()` (used for the sibling `tool_config`
+// write in the SAME `TeamPaths122` struct) honours `MAW_STATE_DIR`/`MAW_HOME`. A
+// test that isolated itself the way every other test in this crate does -- by
+// setting `MAW_STATE_DIR`/`MAW_HOME`/`XDG_CONFIG_HOME` -- silently kept writing
+// the vault manifest into the REAL repo's `ψ/`, because vault resolution never
+// looked at the variable it had set.
+//
+// Checking `MAW_STATE_DIR` here, before the cwd/ψ fallback, is additive: real
+// usage (nobody sets MAW_STATE_DIR explicitly) is byte-for-byte unchanged, so
+// this does not reopen the destructive #826-rejection over-fire (guard and write
+// target pointing at different files) -- both `vault_manifest` and `tool_config`
+// are fields on the same `TeamPaths122`, read from the same `team_paths()` call,
+// so they cannot diverge; there's only one path here to get right.
 fn team_psi_dir() -> std::path::PathBuf {
+    if let Some(state_dir) = std::env::var_os("MAW_STATE_DIR") {
+        return std::path::PathBuf::from(state_dir).join("team-vault");
+    }
     std::env::var_os("MAW_RS_TEAM_PSI").map_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")).join("ψ"), std::path::PathBuf::from)
 }
 
