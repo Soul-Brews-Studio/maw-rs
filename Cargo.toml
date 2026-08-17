@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/maw-matcher", "crates/maw-worktree", "crates/maw-transport", "crates/maw-schedule", "crates/maw-schedule-launchd", "crates/maw-schedule-runner", "crates/maw-tmux", "crates/maw-peer", "crates/maw-auth", "crates/maw-xdg", "crates/maw-plugin-manifest", "crates/maw-cli"]
+members = ["crates/maw-matcher", "crates/maw-worktree", "crates/maw-transport", "crates/maw-schedule-launchd", "crates/maw-schedule-runner", "crates/maw-tmux", "crates/maw-peer", "crates/maw-auth", "crates/maw-xdg", "crates/maw-plugin-manifest", "crates/maw-cli"]
 resolver = "2"
 
 [workspace.package]

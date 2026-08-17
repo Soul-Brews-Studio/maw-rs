@@ -76,12 +76,12 @@ Layered Cargo workspace:
 
 - **Leaf crates** — self-contained, deterministic, side-effect-free core
   logic (matching, routing, identity, transport, plugin manifest, …) with no
-  internal dependencies. Eleven single-consumer leaves (auto-wake, bind,
-  bring, feed, fuzzy, hub, identity, plugin-scaffold, policy, routing, split)
-  were extracted to the external
+  internal dependencies. Thirteen leaves (activity, auto-wake, bind, bring,
+  feed, fuzzy, hub, identity, plugin-scaffold, policy, routing, schedule,
+  split) were extracted to the external
   [Soul-Brews-Studio/maw-crates](https://github.com/Soul-Brews-Studio/maw-crates)
-  repo (2026-07-16, repo split phase 3 batch) and are consumed by `maw-cli`
-  as rev-pinned Cargo git dependencies, like `maw-calver`. `maw-discord`
+  repo (2026-07 to 2026-08) and are consumed as rev-pinned Cargo git
+  dependencies, like `maw-calver`. `maw-discord`
   (Discord bot connectivity, zero internal `maw-*` deps) was extracted the
   same way to
   [Soul-Brews-Studio/maw-discord](https://github.com/Soul-Brews-Studio/maw-discord)
