@@ -3,40 +3,6 @@ const ACTIVITY_PEEK_LINES: u32 = 80;
 const ACTIVITY_ALL_CONCURRENCY: usize = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ActivityState {
-    Busy,
-    Idle,
-    Stuck,
-}
-
-impl ActivityState {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Busy => "busy",
-            Self::Idle => "idle",
-            Self::Stuck => "stuck",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ActivityConfidence {
-    Low,
-    Medium,
-    High,
-}
-
-impl ActivityConfidence {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Low => "low",
-            Self::Medium => "medium",
-            Self::High => "high",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ActivitySampler {
     Peek,
     Follow,
@@ -60,23 +26,6 @@ struct ParsedActivityOptions {
     window_ms: u64,
     samples: u32,
     sampler: ActivitySampler,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct ActivityResult {
-    pane: String,
-    state: ActivityState,
-    confidence: ActivityConfidence,
-    samples: u32,
-    diff_samples: u32,
-    last_change_ago_seconds: f64,
-    sample_window_seconds: f64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ActivitySample {
-    text: String,
-    at_ms: u64,
 }
 
 trait ActivityTmux {
@@ -493,133 +442,6 @@ fn sample_resolved_activity(
     Ok(classify_activity_snapshots(pane, &samples, parsed.window_ms))
 }
 
-#[allow(clippy::cast_precision_loss)]
-fn classify_activity_snapshots(pane: &str, raw_samples: &[ActivitySample], window_ms: u64) -> ActivityResult {
-    let normalized = raw_samples
-        .iter()
-        .map(|sample| normalize_activity_snapshot(&sample.text))
-        .collect::<Vec<_>>();
-    let mut changed_indexes = BTreeSet::new();
-    let mut last_change_at = None;
-    for index in 1..normalized.len() {
-        if normalized[index] != normalized[index - 1] {
-            changed_indexes.insert(index - 1);
-            changed_indexes.insert(index);
-            last_change_at = raw_samples.get(index).map(|sample| sample.at_ms);
-        }
-    }
-    let end = raw_samples.last().map_or(0, |sample| sample.at_ms);
-    let state = if changed_indexes.is_empty() {
-        if raw_samples.last().is_some_and(|sample| is_stuck_activity_snapshot(&sample.text)) {
-            ActivityState::Stuck
-        } else {
-            ActivityState::Idle
-        }
-    } else {
-        ActivityState::Busy
-    };
-    let sample_window_seconds = round_seconds(window_ms as f64 / 1000.0);
-    let last_change_ago_seconds = last_change_at.map_or(sample_window_seconds, |changed| {
-        round_seconds(end.saturating_sub(changed) as f64 / 1000.0)
-    });
-    ActivityResult {
-        pane: pane.to_owned(),
-        state,
-        confidence: confidence_for_activity(raw_samples.len()),
-        samples: u32::try_from(raw_samples.len()).unwrap_or(u32::MAX),
-        diff_samples: u32::try_from(changed_indexes.len()).unwrap_or(u32::MAX),
-        last_change_ago_seconds,
-        sample_window_seconds,
-    }
-}
-
-fn normalize_activity_snapshot(input: &str) -> String {
-    strip_activity_ansi(input)
-        .replace('\r', "\n")
-        .split('\n')
-        .map(str::trim_end)
-        .collect::<Vec<_>>()
-        .join("\n")
-        .trim()
-        .to_owned()
-}
-
-fn strip_activity_ansi(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    let mut chars = input.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch != '\u{1b}' {
-            out.push(ch);
-            continue;
-        }
-        match chars.peek().copied() {
-            Some('[') => {
-                let _ = chars.next();
-                for next in chars.by_ref() {
-                    if ('@'..='~').contains(&next) {
-                        break;
-                    }
-                }
-            }
-            Some(']') => {
-                let _ = chars.next();
-                while let Some(next) = chars.next() {
-                    if next == '\u{7}' {
-                        break;
-                    }
-                    if next == '\u{1b}' && chars.peek() == Some(&'\\') {
-                        let _ = chars.next();
-                        break;
-                    }
-                }
-            }
-            Some('(' | ')') => {
-                let _ = chars.next();
-                let _ = chars.next();
-            }
-            _ => {}
-        }
-    }
-    out
-}
-
-fn is_stuck_activity_snapshot(input: &str) -> bool {
-    let normalized = normalize_activity_snapshot(input);
-    let lines = normalized
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .rev()
-        .take(10)
-        .collect::<Vec<_>>();
-    if lines.iter().any(|line| {
-        matches!(*line, ">" | "$" | "#" | "❯" | "›" | "λ")
-            || matches!(*line, "> ▌" | "$ ▌" | "# ▌" | "❯ ▌" | "› ▌" | "λ ▌")
-    }) {
-        return true;
-    }
-    let lower = normalized.to_ascii_lowercase();
-    lower.ends_with("type a message")
-        || lower.ends_with("send a message")
-        || lower.ends_with("what can i help with?")
-        || lower.ends_with("what can i help with")
-        || lower.contains("claude code") && lower.ends_with('>')
-}
-
-const fn confidence_for_activity(samples: usize) -> ActivityConfidence {
-    if samples >= 3 {
-        ActivityConfidence::High
-    } else if samples == 2 {
-        ActivityConfidence::Medium
-    } else {
-        ActivityConfidence::Low
-    }
-}
-
-fn round_seconds(value: f64) -> f64 {
-    (value * 1000.0).round() / 1000.0
-}
-
 fn filter_activity_results(results: &[ActivityResult], opts: &ActivityOptions) -> Vec<ActivityResult> {
     results
         .iter()
@@ -832,6 +654,33 @@ mod activity_tests {
     }
 
     #[test]
+    fn activity_normalization_matches_exported_maw_js_fixtures() {
+        let fixtures: serde_json::Value =
+            serde_json::from_str(maw_activity::ACTIVITY_CLASSIFICATION_FIXTURES_JSON)
+                .expect("activity fixtures");
+        for case in fixtures["normalize"].as_array().expect("normalize cases") {
+            assert_eq!(
+                normalize_activity_snapshot(case["input"].as_str().expect("input")),
+                case["expected"].as_str().expect("expected"),
+                "{}",
+                case["name"]
+            );
+        }
+        for case in fixtures["stuck"].as_array().expect("stuck cases") {
+            let sample = ActivitySample {
+                text: case["input"].as_str().expect("input").to_owned(),
+                at_ms: 0,
+            };
+            assert_eq!(
+                classify_activity_snapshots("fixture", &[sample], 0).state == ActivityState::Stuck,
+                case["expected"].as_bool().expect("expected"),
+                "{}",
+                case["name"]
+            );
+        }
+    }
+
+    #[test]
     fn activity_classifies_busy_idle_and_stuck_like_maw_js_shape() {
         let busy = classify_activity_snapshots(
             "s:1",
@@ -843,7 +692,7 @@ mod activity_tests {
             30_000,
         );
         assert_eq!(busy.state, ActivityState::Busy);
-        assert_eq!(busy.confidence, ActivityConfidence::High);
+        assert_eq!(busy.confidence, maw_activity::ActivityConfidence::High);
         assert_eq!(busy.diff_samples, 2);
         assert_eq!(format_activity_human(&busy), "s:1: 🟢 BUSY (last change 1s ago, 2/3 samples diff)");
 
@@ -856,7 +705,7 @@ mod activity_tests {
             2_000,
         );
         assert_eq!(idle.state, ActivityState::Idle);
-        assert_eq!(idle.confidence, ActivityConfidence::Medium);
+        assert_eq!(idle.confidence, maw_activity::ActivityConfidence::Medium);
 
         let stuck = classify_activity_snapshots(
             "s:1",
