@@ -2832,12 +2832,26 @@ mod serve_tests {
         );
     }
 
+    /// Pull the headers back out of a curl argv (`-H`, `name: value` pairs).
+    ///
+    /// Reading them off the ARGV rather than off the signer is the point: it is
+    /// the last thing peek builds before `kill_spawn_curl`, so what this returns
+    /// is what the peer actually receives, argv assembly included.
+    fn headers_from_curl_argv(argv: &[String]) -> BTreeMap<String, String> {
+        argv.windows(2)
+            .filter(|pair| pair[0] == "-H")
+            .filter_map(|pair| pair[1].split_once(": "))
+            .map(|(name, value)| (name.to_owned(), value.to_owned()))
+            .collect()
+    }
+
     // The peek half of the caller audit. `maw peek <peer>:<target>` (#820) is
     // the ONLY cross-node caller of `/api/capture`, and it signed the path WITH
     // the query string -- headers that were attached and never verified while
-    // the route was unprotected. Drives peek's real signing helper and feeds its
-    // output to the real router, so reverting `PEEK_CAPTURE_AUTH_PATH` to the
-    // query form turns this red instead of breaking peek in production.
+    // the route was unprotected. Drives peek's REAL argv builder (#878: signing
+    // now goes through the shared `federation_signed_get_headers_at`) and feeds
+    // the headers it produces to the real router, so a signing change that stops
+    // authenticating turns this red instead of breaking peek in production.
     #[tokio::test]
     async fn serve_peek_signed_capture_headers_authenticate_against_the_real_router() {
         let now = i64::try_from(current_epoch_seconds()).unwrap_or(i64::MAX);
@@ -2846,12 +2860,23 @@ mod serve_tests {
             let _guard = env_test_lock();
             let _token = EnvVarRestore::capture("MAW_FEDERATION_TOKEN");
             let _peer_key = EnvVarRestore::capture("MAW_PEER_KEY");
+            let _sender = EnvVarRestore::capture("MAW_SENDER");
             std::env::set_var("MAW_FEDERATION_TOKEN", KEY);
             std::env::set_var("MAW_PEER_KEY", KEY);
-            peek_signed_capture_headers(FROM, now)
-                .expect("peek signing must work")
-                .to_btree_map()
+            // MAW_SENDER is human-ordered node:oracle; the wire form is
+            // oracle:node, i.e. FROM. peek derives its own identity now instead
+            // of being handed one, so it has to be pinned here.
+            std::env::set_var("MAW_SENDER", "sender-node:sender-oracle");
+            headers_from_curl_argv(&peek_signed_capture_argv(
+                "http://peer.test:3456",
+                "nova:1.0",
+                now,
+            ))
         };
+        assert!(
+            !map.is_empty(),
+            "peek signing must work -- an empty header set means it went out bare"
+        );
 
         let mut builder = axum::http::Request::builder()
             .method("GET")
@@ -2871,6 +2896,101 @@ mod serve_tests {
             response.status(),
             StatusCode::FORBIDDEN,
             "#866: maw peek's signed capture must authenticate, not 403 -- it signs the query-less path"
+        );
+    }
+
+    // #878: the anti-drift net. `maw peek` no longer canonicalizes its own
+    // federated GET -- it routes through `federation_signed_get_headers`, the
+    // same helper `ls_fetch_peer_sessions` and the serve-side fleet sweep use.
+    // This asserts the ACTUAL WIRE STRING peek emits, byte for byte, against
+    // what that helper produces for the SAME inputs.
+    //
+    // Why byte equality and not "the request succeeded": the sibling test above
+    // drives peek's headers at the real router, and it would stay green with the
+    // `X-Maw-From` halves swapped, because `validate_wire_from` only checks for
+    // two non-empty colon-separated parts and never checks their ORDER -- the
+    // peer would simply file us under the wrong identity, forever, silently. A
+    // status assertion cannot see that. A byte assertion can.
+    //
+    // The negative controls at the bottom are what give the equality teeth: they
+    // reproduce the two divergences a forked implementation actually produces --
+    // signing the query-bearing path (what #820 shipped) and emitting the human
+    // `node:oracle` ordering -- and prove each one moves these bytes.
+    #[test]
+    fn peek_signs_the_same_wire_bytes_as_the_shared_federation_helper() {
+        // A time far from `now` so nothing here can accidentally agree by
+        // reading the same wall clock twice: both sides are handed this.
+        const SIGNED_AT: i64 = 1_782_277_200;
+
+        let _guard = env_test_lock();
+        let _token = EnvVarRestore::capture("MAW_FEDERATION_TOKEN");
+        let _peer_key = EnvVarRestore::capture("MAW_PEER_KEY");
+        let _sender = EnvVarRestore::capture("MAW_SENDER");
+        std::env::set_var("MAW_FEDERATION_TOKEN", KEY);
+        std::env::set_var("MAW_PEER_KEY", KEY);
+        std::env::set_var("MAW_SENDER", "sender-node:sender-oracle");
+
+        // peek's real production path: the argv `peek_fetch_remote` hands to curl.
+        let argv = peek_signed_capture_argv("http://peer.test:3456", "nova:1.0", SIGNED_AT);
+        let peek_wire = headers_from_curl_argv(&argv);
+        let shared_wire = federation_signed_get_headers_at("/api/capture", SIGNED_AT)
+            .expect("shared helper must sign")
+            .to_btree_map();
+        assert_eq!(
+            peek_wire, shared_wire,
+            "#878: peek must emit the shared helper's bytes exactly -- a second canonicalization has appeared"
+        );
+
+        // The ordering `validate_wire_from` does not check. Pinned as a literal
+        // so a swap is a failure here rather than a mystery in a peer's ACL.
+        assert_eq!(
+            peek_wire.get("x-maw-from").map(String::as_str),
+            Some(FROM),
+            "#878: the wire identity is oracle:node ({FROM}), not the human node:oracle ordering"
+        );
+
+        // The URL still carries the query -- it is just not part of what was signed.
+        assert!(
+            argv.iter()
+                .any(|arg| arg == "http://peer.test:3456/api/capture?target=nova%3A1.0"),
+            "{argv:?}"
+        );
+
+        // Negative control 1: the divergence peek actually shipped in #820.
+        // Signing the query-bearing path yields different bytes, so the equality
+        // above is load-bearing and not two constants agreeing about nothing.
+        let query_signed = federation_signed_get_headers_at(
+            "/api/capture?target=nova%3A1.0",
+            SIGNED_AT,
+        )
+        .expect("query-path signing")
+        .to_btree_map();
+        assert_ne!(
+            query_signed, shared_wire,
+            "the #820 bug this test exists to catch no longer reproduces"
+        );
+
+        // Negative control 2: the identity halves swapped. Same shape, accepted
+        // by `validate_wire_from`, different bytes -- exactly what a status-only
+        // test cannot see.
+        let swapped = sign_headers_v3_at(
+            KEY,
+            KEY,
+            "sender-node:sender-oracle",
+            "GET",
+            "/api/capture",
+            Some(b""),
+            SIGNED_AT,
+        )
+        .expect("swapped signing")
+        .to_btree_map();
+        assert!(
+            validate_wire_from("sender-node:sender-oracle").is_ok(),
+            "the swap must be ACCEPTED by validate_wire_from -- that is why it needs pinning here"
+        );
+        assert_ne!(
+            swapped, shared_wire,
+            "a swapped x-maw-from must change the wire bytes, or this assertion proves nothing"
         );
     }
 

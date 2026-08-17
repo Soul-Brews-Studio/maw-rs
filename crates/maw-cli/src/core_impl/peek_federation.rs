@@ -167,7 +167,11 @@ fn peek_lookup_peer(alias: &str) -> Option<PeekPeer> {
 /// never a raw newline for exactly this reason
 /// (`KILL_PEER_HTTP_STATUS_MARKER`); this should have reused that constant
 /// instead of re-deriving the same idea worse.
-fn peek_capture_curl_argv(peer_url: &str, target: &str, headers: &Headers) -> Vec<String> {
+fn peek_capture_curl_argv(
+    peer_url: &str,
+    target: &str,
+    headers: &BTreeMap<String, String>,
+) -> Vec<String> {
     let mut argv = vec![
         "-sS".to_owned(),
         "--max-time".to_owned(),
@@ -175,7 +179,7 @@ fn peek_capture_curl_argv(peer_url: &str, target: &str, headers: &Headers) -> Ve
         "-w".to_owned(),
         format!("{KILL_PEER_HTTP_STATUS_MARKER}%{{http_code}}"),
     ];
-    for (name, value) in headers.to_btree_map() {
+    for (name, value) in headers {
         argv.push("-H".to_owned());
         argv.push(format!("{name}: {value}"));
     }
@@ -186,57 +190,44 @@ fn peek_capture_curl_argv(peer_url: &str, target: &str, headers: &Headers) -> Ve
     argv
 }
 
-/// The path a `/api/capture` GET is SIGNED over.
+/// The exact argv — signing included — that a cross-node `maw peek` puts on the
+/// wire, so a test can assert those bytes without a live peer.
 ///
-/// Must be the path the receiver verifies against, which is
-/// `servecore_api_auth_path(uri.path())` — query stripped, `/api` optional
-/// (`from_verify_candidate_paths` accepts both forms). Signing
-/// `/api/capture?target=…`, which this originally did, produces a v3
-/// from-signature AND a fleet-token signature that match neither candidate, so
-/// the request can never verify. That was invisible while `/capture` was
-/// unprotected — the headers were attached and never checked — and became a
-/// hard 403 the moment #866 put the route on the protected allowlist. The query
-/// still travels in the URL; it is simply not part of what is signed.
-const PEEK_CAPTURE_AUTH_PATH: &str = "/api/capture";
-
-/// Build the signed headers for a cross-node capture, separated from the network
-/// call so a test can prove they authenticate against the real router.
-fn peek_signed_capture_headers(from: &str, timestamp: i64) -> Result<Headers, String> {
-    let federation_token = load_federation_token()?;
-    let peer_key = load_peer_key()?;
-    sign_headers_v3_at(
-        &federation_token,
-        &peer_key,
-        from,
-        "GET",
-        PEEK_CAPTURE_AUTH_PATH,
-        Some(b""),
-        timestamp,
-    )
+/// Signing is `federation_signed_get_headers_at`, the ONE place that knows what
+/// the receiver verifies: `servecore_api_auth_path(uri.path())`, query stripped,
+/// `/api` optional (`from_verify_candidate_paths` accepts both forms). peek used
+/// to hold a second copy of that rule (a `PEEK_CAPTURE_AUTH_PATH` const plus its
+/// own `sign_headers_v3_at` call) — and the first version of that copy signed
+/// `/api/capture?target=…` *with* the query, which matches neither candidate and
+/// can never verify. It was invisible only because `/capture` was unprotected:
+/// the headers were attached and never checked, right up until #866 put the route
+/// behind the gate and turned it into a hard 403 on a just-shipped feature (#820).
+/// The identity, the query-stripped path, the empty-body hash and the timestamp
+/// are now derived exactly once, for every federated GET (#878). The query still
+/// travels in the URL; it is simply not part of what is signed.
+///
+/// `timestamp` is a parameter rather than a clock read so a test can pin it and
+/// compare these bytes to the shared helper's for the SAME inputs; production
+/// passes `federation_signing_timestamp()`, the one wall clock every federated
+/// signature uses.
+///
+/// An unsignable node (no identity / peer key / federation token) sends BARE,
+/// matching `ls_fetch_peer_sessions` and the serve-side sweep: an unpatched peer
+/// still answers, and a patched one refuses with a message peek turns into
+/// "rejected our credentials", which beats refusing to run at all.
+fn peek_signed_capture_argv(peer_url: &str, target: &str, timestamp: i64) -> Vec<String> {
+    let headers = federation_signed_get_headers_at("/api/capture", timestamp)
+        .map(|headers| headers.to_btree_map())
+        .unwrap_or_default();
+    peek_capture_curl_argv(peer_url, target, &headers)
 }
 
 /// GET the peer's `/api/capture`, signed the way every other federated call is.
-fn peek_fetch_remote(peer: &PeekPeer, target: &str, from: &str) -> Result<String, String> {
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|error| format!("peek: clock before epoch: {error}"))?
-        .as_secs()
-        .try_into()
-        .map_err(|_| "peek: timestamp out of range".to_owned())?;
-    let headers = peek_signed_capture_headers(from, timestamp)?;
-    let argv = peek_capture_curl_argv(&peer.url, target, &headers);
+fn peek_fetch_remote(peer: &PeekPeer, target: &str) -> Result<String, String> {
+    let argv = peek_signed_capture_argv(&peer.url, target, federation_signing_timestamp());
     let output = kill_spawn_curl(&argv)?;
     let (status, body) = kill_split_peer_http_output(&output)?;
     peek_parse_capture_response(&peer.alias, status, &body)
-}
-
-/// Our wire identity for a federated call, resolved exactly as `kill --peer` and
-/// `hey` resolve it — one sender identity for every federated verb, so a peer's
-/// ACL sees the same `from` no matter which command reached it.
-fn peek_sender_address() -> String {
-    let config = load_hey_config();
-    let sender_oracle = resolve_hey_sender_oracle(&config);
-    resolve_hey_wire_from(None, &config, &sender_oracle).unwrap_or_default()
 }
 
 /// Live local tmux session names, used only to detect the peer/session collision.
@@ -259,7 +250,8 @@ fn peek_local_session_names<R: maw_tmux::TmuxRunner>(runner: &mut R) -> Vec<Stri
     // and separately proves the OLD shape would have failed it.
     #[test]
     fn peek_capture_curl_argv_passes_kill_validate_curl_argv() {
-        let headers = Headers::new([("x-maw-from", "white:oracle"), ("x-maw-sig", "deadbeef")]);
+        let headers =
+            Headers::new([("x-maw-from", "white:oracle"), ("x-maw-sig", "deadbeef")]).to_btree_map();
         let argv = peek_capture_curl_argv("http://black.test:3467", "16-thclaws:0", &headers);
         assert!(kill_validate_curl_argv(&argv).is_ok(), "{argv:?}");
         assert!(argv.iter().any(|arg| arg.starts_with(KILL_PEER_HTTP_STATUS_MARKER)), "{argv:?}");
