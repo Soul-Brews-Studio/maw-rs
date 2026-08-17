@@ -186,18 +186,44 @@ fn peek_capture_curl_argv(peer_url: &str, target: &str, headers: &Headers) -> Ve
     argv
 }
 
-/// GET the peer's `/api/capture`, signed the way every other federated call is.
-fn peek_fetch_remote(peer: &PeekPeer, target: &str, from: &str) -> Result<String, String> {
-    let path = format!("/api/capture?target={}", peek_percent_encode(target));
+/// The path a `/api/capture` GET is SIGNED over.
+///
+/// Must be the path the receiver verifies against, which is
+/// `servecore_api_auth_path(uri.path())` — query stripped, `/api` optional
+/// (`from_verify_candidate_paths` accepts both forms). Signing
+/// `/api/capture?target=…`, which this originally did, produces a v3
+/// from-signature AND a fleet-token signature that match neither candidate, so
+/// the request can never verify. That was invisible while `/capture` was
+/// unprotected — the headers were attached and never checked — and became a
+/// hard 403 the moment #866 put the route on the protected allowlist. The query
+/// still travels in the URL; it is simply not part of what is signed.
+const PEEK_CAPTURE_AUTH_PATH: &str = "/api/capture";
+
+/// Build the signed headers for a cross-node capture, separated from the network
+/// call so a test can prove they authenticate against the real router.
+fn peek_signed_capture_headers(from: &str, timestamp: i64) -> Result<Headers, String> {
     let federation_token = load_federation_token()?;
     let peer_key = load_peer_key()?;
+    sign_headers_v3_at(
+        &federation_token,
+        &peer_key,
+        from,
+        "GET",
+        PEEK_CAPTURE_AUTH_PATH,
+        Some(b""),
+        timestamp,
+    )
+}
+
+/// GET the peer's `/api/capture`, signed the way every other federated call is.
+fn peek_fetch_remote(peer: &PeekPeer, target: &str, from: &str) -> Result<String, String> {
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|error| format!("peek: clock before epoch: {error}"))?
         .as_secs()
         .try_into()
         .map_err(|_| "peek: timestamp out of range".to_owned())?;
-    let headers = sign_headers_v3_at(&federation_token, &peer_key, from, "GET", &path, None, timestamp)?;
+    let headers = peek_signed_capture_headers(from, timestamp)?;
     let argv = peek_capture_curl_argv(&peer.url, target, &headers);
     let output = kill_spawn_curl(&argv)?;
     let (status, body) = kill_split_peer_http_output(&output)?;

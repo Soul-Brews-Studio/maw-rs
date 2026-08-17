@@ -539,7 +539,7 @@ pub fn is_protected(path: &str, method: &str) -> bool {
     matches!(
         (method.as_str(), normalized.as_str()),
         ("POST", "/triggers/fire" | "/worktrees/cleanup" | "/orchestration/workon" | "/trust" | "/trust/revoke")
-            | ("GET", "/trust")
+            | ("GET", "/trust" | "/sessions" | "/capture")
     ) || (method == "POST" && normalized.starts_with("/plugins/"))
 }
 

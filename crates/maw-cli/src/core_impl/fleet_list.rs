@@ -298,8 +298,22 @@ fn ls_fetch_peer_sessions(peer_url: &str) -> Result<Vec<serde_json::Value>, Stri
     // healthy peers (#676). /api/sessions returns a bare session array whose
     // {name, windows:[…]} shape this renderer already reads.
     let url = format!("{}/api/sessions", peer_url.trim_end_matches('/'));
-    let output = std::process::Command::new("curl")
-        .args(["-fsS", "--max-time", "2", "--"])
+    // #866 put GET /sessions behind the signed-peer gate, so this call — which
+    // had always gone out bare — now has to carry credentials or every patched
+    // peer answers 403. Signed over `/api/sessions` (no query), which is what
+    // the receiver verifies against. Unsignable (no identity/key/token) still
+    // sends bare rather than failing locally: an old peer serves it, and a
+    // patched peer refuses it with a message, which is strictly better than
+    // this command refusing to run at all.
+    let mut command = std::process::Command::new("curl");
+    command.args(["-fsS", "--max-time", "2"]);
+    if let Some(headers) = federation_signed_get_headers("/api/sessions") {
+        for (name, value) in headers.to_btree_map() {
+            command.arg("-H").arg(format!("{name}: {value}"));
+        }
+    }
+    let output = command
+        .arg("--")
         .arg(&url)
         .output()
         .map_err(|error| format!("peer ls failed: {error}"))?;

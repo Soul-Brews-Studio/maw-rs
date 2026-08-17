@@ -113,6 +113,37 @@ fn load_federation_token() -> Result<String, String> {
         .ok_or_else(|| "federationToken is required for peer federation auth".to_owned())
 }
 
+/// Sign a read-only federated GET the way every other federated call is signed,
+/// returning the headers to attach (or `None` when this node has no identity,
+/// peer key or federation token — the caller then sends unsigned and lets the
+/// peer decide, exactly as it did before signing existed).
+///
+/// `auth_path` MUST be the path the *receiver* verifies against, which is
+/// `servecore_api_auth_path(uri.path())`: no query string, and either with or
+/// without the `/api` prefix (`from_verify_candidate_paths` accepts both). This
+/// is the sharp edge — `sign_headers_v3_at` signs both the v3 from-signature and
+/// the fleet-token `X-Maw-Signature` over whatever path it is handed, so passing
+/// a query string here produces two signatures that can never verify. That was a
+/// latent no-op while these routes were unprotected (#866); it is a hard 403 now.
+pub(crate) fn federation_signed_get_headers(auth_path: &str) -> Option<Headers> {
+    let config = load_hey_config();
+    let sender_oracle = resolve_hey_sender_oracle_for_from(&config, None);
+    let from = resolve_hey_wire_from(None, &config, &sender_oracle).ok()?;
+    let peer_key = load_peer_key().ok()?;
+    let federation_token = load_federation_token().ok()?;
+    let timestamp = i64::try_from(current_epoch_seconds()).unwrap_or(i64::MAX);
+    sign_headers_v3_at(
+        &federation_token,
+        &peer_key,
+        &from,
+        "GET",
+        auth_path,
+        Some(b""),
+        timestamp,
+    )
+    .ok()
+}
+
 /// Read-only auth probe used by `maw peers` to learn whether OUR signed
 /// requests are trusted by a peer, without delivering anything: sign a
 /// `POST /api/probe` (the peer verifies the v3 from-signature and returns
