@@ -50,7 +50,18 @@ case "$1" in
   capture-pane)
     printf '%s\n' '$ '
     ;;
-  load-buffer|paste-buffer)
+  load-buffer)
+    # Real tmux `load-buffer -` consumes stdin, so the parent's write_all always
+    # lands. This fake must too. With an empty arm the shell exits as soon as it
+    # has logged the line; if the parent is descheduled for the ~1ms that takes,
+    # its write hits a closed pipe -> EPIPE -> send_text fails -> talk-to prints
+    # "thread #N updated" with exit 0, so the status assert passes and the
+    # "+ sent -> %42" assert reddens with no code change (#875). Drain with a
+    # shell builtin -- `cat` is not on the test's restricted PATH. Same scar and
+    # same fix as native_assign_plugin.rs (bc8e27fb).
+    while read -r _; do :; done
+    ;;
+  paste-buffer)
     ;;
   send-keys)
     ;;
