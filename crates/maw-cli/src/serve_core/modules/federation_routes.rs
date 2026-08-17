@@ -404,11 +404,18 @@ async fn federation_fleet_sessions(
                 .collect();
         }
     };
+    // Signed once per sweep, not once per peer: the credentials are identical
+    // for every peer and assembling them touches the config/peer-key files.
+    // #866 gated GET /sessions behind the signed-peer check, so an unsigned
+    // sweep would read 403 from every patched peer and render the whole fleet
+    // as unreachable.
+    let signed_headers = federation_signed_sessions_headers();
     let fetches = urls.iter().cloned().map(|url| {
         let client = client.clone();
         let pin = resolved.get(&url).copied();
+        let headers = signed_headers.clone();
         async move {
-            let outcome = federation_fetch_peer_sessions(&client, &url, pin).await;
+            let outcome = federation_fetch_peer_sessions(&client, &url, pin, &headers).await;
             (url, outcome)
         }
     });
@@ -424,12 +431,24 @@ async fn federation_fleet_sessions(
     map
 }
 
+/// The headers that authenticate this node's fleet sweep to a peer, or an empty
+/// list when this node cannot sign (no identity / peer key / federation token).
+/// Signing is best-effort by design: an unsignable node still sweeps, and an
+/// unpatched peer still answers, so the failure mode is a clear 403 from a
+/// patched peer rather than a serve that cannot sweep at all.
+fn federation_signed_sessions_headers() -> Vec<(String, String)> {
+    crate::core_impl::federation_signed_get_headers("/api/sessions")
+        .map(|headers| headers.to_btree_map().into_iter().collect())
+        .unwrap_or_default()
+}
+
 /// Fetch one peer's `/api/sessions` and keep just the session names, plus the
 /// error string when it did not succeed — so `agents: []` is never ambiguous.
 async fn federation_fetch_peer_sessions(
     client: &reqwest::Client,
     url: &str,
     pin: Option<std::net::IpAddr>,
+    signed_headers: &[(String, String)],
 ) -> FleetOutcome {
     // `pin` was resolved once, up front, off the blocking DNS path — a zone-less
     // link-local IPv6 (which getaddrinfo may return first) can't silently sink
@@ -440,7 +459,11 @@ async fn federation_fetch_peer_sessions(
     };
     let target = endpoint.to_string();
     let started = std::time::Instant::now();
-    let response = match client.get(endpoint).send().await {
+    let mut request = client.get(endpoint);
+    for (name, value) in signed_headers {
+        request = request.header(name, value);
+    }
+    let response = match request.send().await {
         Ok(response) => response,
         // Never got a response → not connected → not reachable, no latency.
         Err(error) => return FleetOutcome::failed(federation_send_error(&target, &error), false),

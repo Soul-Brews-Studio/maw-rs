@@ -2449,6 +2449,451 @@ mod serve_tests {
         let _ = std::fs::remove_file(path);
     }
 
+    // #866: `/api/sessions` and `/api/capture` returned 200 to any
+    // unauthenticated peer that could reach the bound port (default
+    // `0.0.0.0`). Unlike `/api/trust`, they were never added to
+    // `is_protected`'s allowlist, so Mechanism B (the peer-signature
+    // default-deny gate) never covered them -- and Mechanism A (the
+    // bearer-token gate, `serve_api_token_gate`) falls open for all of
+    // `/api/*` whenever no `serve.token` is configured, which is the default
+    // state exercised by `serve_test_app` (`ServeApiTokenAuth::open()`).
+    /// `serve_test_app`, but with the auth clock set to `now` instead of the
+    /// fixture's pinned `1_782_277_200`. Needed whenever the REAL client-side
+    /// signer produces the headers: it stamps the real wall clock, which is
+    /// ~54 days outside the pinned fixture's 300s window (`WINDOW_SEC`), so a
+    /// correctly signed request would 403 for a reason that has nothing to do
+    /// with what the test is checking.
+    fn serve_test_app_at(trust_store_path: std::path::PathBuf, now: i64) -> Router {
+        serve_router(ServeState {
+            cached_pubkey: Some(KEY.to_owned()),
+            peer_pubkeys: HotReload::frozen(Vec::new()),
+            workspace_key: Some(KEY.to_owned()),
+            workspaces: Mutex::new(WorkspaceStore::default()),
+            requests: Mutex::new(RequestReplyStore::default()),
+            delivery: serve_test_delivery(),
+            receiver_inbox: serve_test_receiver_inbox(),
+            wake: serve_test_wake(),
+            delivery_idempotency: Mutex::new(DeliveryIdempotencyStore::default()),
+            feed: Mutex::new(Vec::new()),
+            peer_addr_override: Some(NON_LOOPBACK_TEST_PEER),
+            now_override: Some(now),
+            serve_core_state_override: None,
+            trust_store_path,
+            plugin_serve_routes: Vec::new(),
+            api_token_auth: ServeApiTokenAuth::open(),
+            bound_port: DEFAULT_SERVE_PORT,
+        })
+    }
+
+    /// A signed cross-node GET, built the way a real federated client builds one:
+    /// `sign_headers_v3_at` emits BOTH the v3 from-signature and the fleet-token
+    /// `X-Maw-Signature` over the same `auth_path`, so this takes one path rather
+    /// than letting the two signatures disagree (which is exactly the peek bug).
+    fn signed_peer_get(uri: &str, auth_path: &str) -> axum::http::Request<Body> {
+        let headers = sign_headers_v3_at(KEY, KEY, FROM, "GET", auth_path, Some(b""), 1_782_277_200)
+            .expect("sign peer get");
+        let mut builder = axum::http::Request::builder().method("GET").uri(uri);
+        for (name, value) in headers.to_btree_map() {
+            builder = builder.header(name, value);
+        }
+        let mut request = builder.body(Body::empty()).expect("request");
+        request.extensions_mut().insert(ConnectInfo(NON_LOOPBACK_TEST_PEER));
+        request
+    }
+
+    /// What an auth test on these routes must prove is that AUTH did not refuse
+    /// the request — NOT that tmux happened to answer.
+    ///
+    /// #860/#879 changed `api_sessions` to return 503 when tmux is unreachable
+    /// instead of collapsing the error into an empty 200. Pinning `OK` here
+    /// couples an auth assertion to whether a tmux server exists — true on a
+    /// dev box, false in CI — and because that landed on `alpha` while this
+    /// branch was in review, both branches were green alone and red merged.
+    /// Asserting the auth property directly is both more honest and immune to
+    /// that coupling; the handler's own 200-vs-503 behavior is #860's to test.
+    fn assert_auth_allowed(status: StatusCode, label: &str) {
+        assert_ne!(status, StatusCode::FORBIDDEN, "{label}: auth refused with 403");
+        assert_ne!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "{label}: auth refused with 401"
+        );
+    }
+
+    fn loopback_get(uri: &str) -> axum::http::Request<Body> {
+        let mut request = axum::http::Request::builder()
+            .method("GET")
+            .uri(uri)
+            .body(Body::empty())
+            .expect("loopback request");
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 51_000)));
+        request
+    }
+
+    #[tokio::test]
+    async fn serve_sessions_requires_signed_peer_auth_but_stays_loopback_open() {
+        let app = serve_test_app(serve_test_trust_store_path("sessions-auth"));
+
+        // The hole itself, asserted on the wire: an unsigned GET from a
+        // NON-loopback peer must not be served. Pre-fix this is a 200 carrying
+        // every session/window/cwd/PID on the box.
+        let denied = app
+            .clone()
+            .oneshot(unsigned_trust_request("GET", "/api/sessions", ""))
+            .await
+            .expect("denied sessions");
+        assert_eq!(
+            denied.status(),
+            StatusCode::FORBIDDEN,
+            "#866: unsigned GET /api/sessions from a non-loopback peer must be refused, not served"
+        );
+
+        // A validly signed peer request is accepted -- the route is gated, not
+        // closed. Signed over the path the server verifies against (`/sessions`),
+        // which is `servecore_api_auth_path`: no query, no `/api` prefix.
+        let signed = app
+            .clone()
+            .oneshot(signed_peer_get("/api/sessions", "/sessions"))
+            .await
+            .expect("signed sessions");
+        assert_auth_allowed(
+            signed.status(),
+            "#866: a correctly signed peer must still reach /api/sessions",
+        );
+
+        // Loopback stays open: `verify_serve_request` (maw-auth) exempts a
+        // loopback peer before it ever checks for a signature -- independent of
+        // the bearer-token gate's own (separate) `loopback_exempt` flag. A local
+        // dashboard/CLI on 127.0.0.1 must keep working unsigned.
+        let loopback = app
+            .oneshot(loopback_get("/api/sessions"))
+            .await
+            .expect("loopback sessions");
+        assert_auth_allowed(
+            loopback.status(),
+            "#866: an unsigned loopback caller must not be refused",
+        );
+
+        assert!(maw_auth::is_protected("/sessions", "GET"));
+    }
+
+    #[tokio::test]
+    async fn serve_capture_requires_signed_peer_auth_but_stays_loopback_open() {
+        let app = serve_test_app(serve_test_trust_store_path("capture-auth"));
+
+        // Pre-fix this reaches the handler and answers on tmux's behalf (200 with
+        // verbatim pane content, or 400 when the target does not resolve in the
+        // test env); either way it is NOT refused, which is the defect.
+        let denied = app
+            .clone()
+            .oneshot(unsigned_trust_request("GET", "/api/capture?target=nova:1.0", ""))
+            .await
+            .expect("denied capture");
+        assert_eq!(
+            denied.status(),
+            StatusCode::FORBIDDEN,
+            "#866: unsigned GET /api/capture from a non-loopback peer must be refused, not reach tmux"
+        );
+
+        // Signed peers still get through the gate. The handler itself may 400 on
+        // an unresolvable target with no tmux server in the test env -- what is
+        // asserted here is that auth no longer refuses it.
+        let signed = app
+            .clone()
+            .oneshot(signed_peer_get("/api/capture?target=nova:1.0", "/capture"))
+            .await
+            .expect("signed capture");
+        assert_ne!(
+            signed.status(),
+            StatusCode::FORBIDDEN,
+            "#866: a correctly signed peer must not be refused on /api/capture"
+        );
+
+        let loopback = app
+            .oneshot(loopback_get("/api/capture?target=nova:1.0"))
+            .await
+            .expect("loopback capture");
+        assert_ne!(loopback.status(), StatusCode::FORBIDDEN);
+        assert_ne!(loopback.status(), StatusCode::UNAUTHORIZED);
+
+        assert!(maw_auth::is_protected("/capture", "GET"));
+    }
+
+    // #866 follow-up: axum's `get(handler)` serves HEAD from the SAME handler,
+    // but `is_protected` compares a literal method string, so a HEAD request
+    // reached the handler while the gate asked `is_protected(.., "HEAD")` and
+    // got false. That bypassed the allowlist for EVERY entry on it, not just
+    // the two routes this PR adds -- `HEAD /api/trust` answered 200 from a
+    // non-loopback address while `GET /api/trust` answered 403. HEAD must be
+    // gated exactly as its GET counterpart is.
+    #[tokio::test]
+    async fn serve_head_requests_are_gated_exactly_like_their_get_counterparts() {
+        let app = serve_test_app(serve_test_trust_store_path("head-alias"));
+
+        for uri in ["/api/trust", "/api/sessions", "/api/capture?target=nova:1.0"] {
+            let denied = app
+                .clone()
+                .oneshot(unsigned_trust_request("HEAD", uri, ""))
+                .await
+                .expect("head response");
+            assert_eq!(
+                denied.status(),
+                StatusCode::FORBIDDEN,
+                "#866: unsigned HEAD {uri} from a non-loopback peer must be refused like GET is"
+            );
+        }
+
+        // The normalization is HEAD->GET only: it must not quietly promote a
+        // method that genuinely is not on the allowlist.
+        assert!(maw_auth::is_protected("/sessions", "HEAD"));
+        assert!(maw_auth::is_protected("/capture", "HEAD"));
+        assert!(maw_auth::is_protected("/trust", "HEAD"));
+        assert!(!maw_auth::is_protected("/sessions", "DELETE"));
+        assert!(!maw_auth::is_protected("/sessions", "OPTIONS"));
+    }
+
+    // #866 follow-up: `auth_normalize_protected_path` only strips `/api` and the
+    // query, so any path that axum still ROUTES to a protected handler but that
+    // normalizes to something off the allowlist would be an equivalent-path
+    // escape -- the same trap class as HEAD-aliases-onto-GET, and as the
+    // `/api/agent` vs `/api/agents` near-miss.
+    //
+    // The guarantee asserted here is deliberately the weak, robust one: for each
+    // variant the response must never be a SERVED 200. Either axum refuses to
+    // route it (404 -- it never reaches the handler, so normalization is moot)
+    // or the gate refuses it (403). Asserting a specific one of those two would
+    // pin axum's router behavior, which is not ours to pin; asserting "never
+    // served" is what actually matters for auth.
+    #[tokio::test]
+    async fn serve_protected_routes_have_no_equivalent_path_escape() {
+        let app = serve_test_app(serve_test_trust_store_path("near-miss"));
+
+        for uri in [
+            "/api/sessions/",       // trailing slash
+            "//api/sessions",       // doubled leading slash
+            "/api//sessions",       // doubled interior slash
+            "/API/sessions",        // upper-case prefix
+            "/api/SESSIONS",        // upper-case segment
+            "/api/%73essions",      // percent-encoded first letter
+            "/api/sessions/.",      // dot segment
+            "/api/x/../sessions",   // dot-dot traversal
+            "/api/sessions%20",     // encoded trailing space
+            "/api/sessions.",       // trailing dot
+            "/api/capture/",        // same set for the other new route
+            "/api/CAPTURE?target=nova:1.0",
+            "/api/%63apture?target=nova:1.0",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(unsigned_trust_request("GET", uri, ""))
+                .await
+                .expect("near-miss response");
+            // Measured 2026-08-17: every variant below answers 404 — axum's
+            // router is exact-match (no trailing-slash redirect, no case
+            // folding, no percent-decoding before matching, no dot-segment
+            // normalization), so the canonical path is the only way to reach
+            // the handler and it normalizes exactly onto the allowlist entry.
+            assert_ne!(
+                response.status(),
+                StatusCode::OK,
+                "#866: {uri} must not be SERVED unauthenticated -- either 404 (not routed) or 403 (gated)"
+            );
+        }
+
+        // Positive control: the canonical path IS routed, so the assertions
+        // above are not passing merely because everything 404s. What this must
+        // prove is "reached a handler", i.e. NOT 404 — the handler may answer
+        // 200 or, with tmux unreachable, 503 (#860).
+        let canonical = app
+            .oneshot(loopback_get("/api/sessions"))
+            .await
+            .expect("canonical");
+        assert_ne!(
+            canonical.status(),
+            StatusCode::NOT_FOUND,
+            "#866: the canonical path must route to a handler, or the near-miss assertions above prove nothing"
+        );
+    }
+
+    // The caller half of #866. The two cross-node readers of `/api/sessions`
+    // (`ls_fetch_peer_sessions` for `maw ls --federation`, and the serve-side
+    // `federation_fetch_peer_sessions` sweep) both went out BARE before this
+    // change, so protecting the route would have 403'd them against every
+    // patched peer. Both now sign via `federation_signed_get_headers`; this
+    // drives that real client-side helper and feeds its output to the real
+    // router, so a signing change that stops authenticating fails here rather
+    // than in production between two nodes.
+    #[tokio::test]
+    async fn serve_federation_signed_get_headers_authenticate_against_the_real_router() {
+        // The env lock is released before the first `.await`: signing reads the
+        // environment, the router does not, so the guard has no business being
+        // held across an await point (clippy::await_holding_lock).
+        let map = {
+            let _guard = env_test_lock();
+            let _token = EnvVarRestore::capture("MAW_FEDERATION_TOKEN");
+            let _peer_key = EnvVarRestore::capture("MAW_PEER_KEY");
+            let _sender = EnvVarRestore::capture("MAW_SENDER");
+            // serve_test_app trusts KEY as both the workspace key and the cached
+            // pubkey, and FROM ("sender-oracle:sender-node") as the identity.
+            // MAW_SENDER is human-ordered node:oracle.
+            std::env::set_var("MAW_FEDERATION_TOKEN", KEY);
+            std::env::set_var("MAW_PEER_KEY", KEY);
+            std::env::set_var("MAW_SENDER", "sender-node:sender-oracle");
+            federation_signed_get_headers("/api/sessions")
+                .expect("client-side signing must work")
+                .to_btree_map()
+        };
+
+        // Assert the ACTUAL wire string, not just that the request succeeds.
+        // `validate_wire_from` accepts any two non-empty colon-separated parts
+        // WITHOUT checking their order, and the fallback builds the value as
+        // `{oracle}:{node}` while MAW_SENDER is human-ordered `{node}:{oracle}`
+        // -- so a swap is silently accepted and the peer just files us under the
+        // wrong identity. A status-only assertion would pass with the halves
+        // swapped; this one does not.
+        let wire_from = map
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("x-maw-from"))
+            .map(|(_, value)| value.clone())
+            .expect("signed headers must carry x-maw-from");
+        assert_eq!(
+            wire_from, FROM,
+            "wire identity must be oracle:node ({FROM}), not the human node:oracle ordering"
+        );
+
+        let mut builder = axum::http::Request::builder()
+            .method("GET")
+            .uri("/api/sessions");
+        for (name, value) in map.clone() {
+            builder = builder.header(name, value);
+        }
+        let mut request = builder.body(Body::empty()).expect("request");
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(NON_LOOPBACK_TEST_PEER));
+
+        let now = i64::try_from(current_epoch_seconds()).unwrap_or(i64::MAX);
+        let app = serve_test_app_at(serve_test_trust_store_path("caller-signing"), now);
+        let response = app
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("signed caller response");
+        assert_auth_allowed(
+            response.status(),
+            "#866: the headers our federated callers now send must authenticate, not 403",
+        );
+
+        // Forward compatibility with peers on an OLD build. There, `/sessions`
+        // is not on the protected allowlist, so `servecore_auth_default_deny`
+        // returns `next.run(req)` before reading a single header -- the added
+        // signing headers are inert. `/api/feed` is unprotected on THIS build
+        // too, so sending the same signed headers at it reproduces exactly that
+        // old-peer path: extra headers must not turn a served route into a
+        // refusal. (Mechanism A is unaffected either way: `token_matches` only
+        // ever reads `Authorization: Bearer` / `x-maw-token`.)
+        let mut old_peer_builder = axum::http::Request::builder().method("GET").uri("/api/feed");
+        for (name, value) in map {
+            old_peer_builder = old_peer_builder.header(name, value);
+        }
+        let mut old_peer_request = old_peer_builder.body(Body::empty()).expect("request");
+        old_peer_request
+            .extensions_mut()
+            .insert(ConnectInfo(NON_LOOPBACK_TEST_PEER));
+        let old_peer = app
+            .oneshot(old_peer_request)
+            .await
+            .expect("old-peer response");
+        assert_eq!(
+            old_peer.status(),
+            StatusCode::OK,
+            "#866: signing headers must be inert on an unprotected route -- that is what an old peer sees"
+        );
+    }
+
+    // The peek half of the caller audit. `maw peek <peer>:<target>` (#820) is
+    // the ONLY cross-node caller of `/api/capture`, and it signed the path WITH
+    // the query string -- headers that were attached and never verified while
+    // the route was unprotected. Drives peek's real signing helper and feeds its
+    // output to the real router, so reverting `PEEK_CAPTURE_AUTH_PATH` to the
+    // query form turns this red instead of breaking peek in production.
+    #[tokio::test]
+    async fn serve_peek_signed_capture_headers_authenticate_against_the_real_router() {
+        let now = i64::try_from(current_epoch_seconds()).unwrap_or(i64::MAX);
+        // Env lock released before the first `.await` — see the sibling test.
+        let map = {
+            let _guard = env_test_lock();
+            let _token = EnvVarRestore::capture("MAW_FEDERATION_TOKEN");
+            let _peer_key = EnvVarRestore::capture("MAW_PEER_KEY");
+            std::env::set_var("MAW_FEDERATION_TOKEN", KEY);
+            std::env::set_var("MAW_PEER_KEY", KEY);
+            peek_signed_capture_headers(FROM, now)
+                .expect("peek signing must work")
+                .to_btree_map()
+        };
+
+        let mut builder = axum::http::Request::builder()
+            .method("GET")
+            // The real peek URL: query present here, absent from what was signed.
+            .uri("/api/capture?target=nova%3A1.0");
+        for (name, value) in map {
+            builder = builder.header(name, value);
+        }
+        let mut request = builder.body(Body::empty()).expect("request");
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(NON_LOOPBACK_TEST_PEER));
+
+        let app = serve_test_app_at(serve_test_trust_store_path("peek-signing"), now);
+        let response = app.oneshot(request).await.expect("peek signed response");
+        assert_ne!(
+            response.status(),
+            StatusCode::FORBIDDEN,
+            "#866: maw peek's signed capture must authenticate, not 403 -- it signs the query-less path"
+        );
+    }
+
+    // #866 fallout, found while auditing callers: the server verifies a signature
+    // over `servecore_api_auth_path(uri.path())` -- QUERY STRIPPED, `/api`
+    // stripped (candidates: `/capture`, `/api/capture`). `maw peek` signed
+    // `/api/capture?target=...` *including the query*, which matches neither.
+    // That never surfaced because `/capture` was unprotected, so the signature
+    // was attached and never checked. Protecting the route turns that latent
+    // mismatch into a live 403 on a just-shipped feature (#820), so peek now
+    // signs the query-less path. This pins both halves of that decision.
+    #[tokio::test]
+    async fn serve_capture_signature_covers_path_without_query_like_peek_now_sends() {
+        let app = serve_test_app(serve_test_trust_store_path("capture-sigpath"));
+
+        // What peek sent before this fix: signed over the path WITH the query.
+        let with_query = app
+            .clone()
+            .oneshot(signed_peer_get(
+                "/api/capture?target=nova:1.0",
+                "/api/capture?target=nova:1.0",
+            ))
+            .await
+            .expect("query-signed capture");
+        assert_eq!(
+            with_query.status(),
+            StatusCode::FORBIDDEN,
+            "signing the query string does not match what the server verifies -- this is why peek had to change"
+        );
+
+        // What peek sends now: signed over the query-less path.
+        let without_query = app
+            .oneshot(signed_peer_get("/api/capture?target=nova:1.0", "/capture"))
+            .await
+            .expect("path-signed capture");
+        assert_ne!(
+            without_query.status(),
+            StatusCode::FORBIDDEN,
+            "the query-less signed path is what the server accepts"
+        );
+    }
+
     #[test]
     fn serve_default_bind_matches_maw_js_parity_and_ignores_maw_host() {
         let _guard = env_test_lock();
