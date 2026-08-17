@@ -86,11 +86,14 @@ Layered Cargo workspace:
   same way to
   [Soul-Brews-Studio/maw-discord](https://github.com/Soul-Brews-Studio/maw-discord)
   (2026-08-13, repo split).
-- **Mid crates** — compose the leaf crates (e.g. `maw-peer`, `maw-tmux`, and
-  the schedule adapters). `maw-worktree` (portable worktree-to-window
+- **Mid crates** — compose the leaf crates (e.g. `maw-peer` and `maw-tmux`).
+  `maw-worktree` (portable worktree-to-window
   matching, composed over `maw-matcher`) lives in the dedicated external
   [Soul-Brews-Studio/maw-worktree](https://github.com/Soul-Brews-Studio/maw-worktree)
-  repo (2026-08-18) and is consumed through an exact revision.
+  repo (2026-08-18). The `maw-schedule-launchd` and `maw-schedule-runner`
+  adapters live in
+  [Soul-Brews-Studio/maw-schedule-runtime](https://github.com/Soul-Brews-Studio/maw-schedule-runtime)
+  (2026-08-18). All three are consumed through exact revisions.
 - **Top crate** — `maw-cli`, the binary, depends on the rest of the workspace.
 
 Run `cargo tree` for the current, authoritative dependency graph.
