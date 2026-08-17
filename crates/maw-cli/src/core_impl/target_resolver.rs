@@ -158,7 +158,7 @@ fn route_split_pane_suffix(value: &str) -> (&str, Option<&str>) {
     (value, None)
 }
 
-// --- #790/#681: local-vs-remote ambiguity for `<node>:<session>` targets ---
+// --- #790/#681/#818: local-vs-remote ambiguity for `<node>:<session>` ---
 //
 // `resolve_target_with_current_session` (maw-routing) always tries an
 // explicit local `session:window` match before ever considering the query's
@@ -167,11 +167,13 @@ fn route_split_pane_suffix(value: &str) -> (&str, Option<&str>) {
 // local tmux session and a federation peer can share a name, and the local
 // session always wins — including when the local match then fails (e.g. "no
 // such window"), which reads as a local-only problem when it is actually
-// silently preempting a cross-node send. The helpers below detect that
-// collision so callers can surface it, and separately widen peer lookup to
-// `~/.maw/peers.json` (populated by `maw peers add`/pairing) so a peer that
-// is reachable there but absent from `maw.config.json`'s `namedPeers` is not
-// reported as unroutable.
+// preempting a cross-node send. #790 made that collision visible with a note;
+// #818 stops `hey` from resolving it at all (the note lost against a delivery
+// confirmation) and adds the `peer:` prefix as the way out. The helpers below
+// detect the collision, build the refusal, and force the peer route, and
+// separately widen peer lookup to `~/.maw/peers.json` (populated by `maw peers
+// add`/pairing) so a peer that is reachable there but absent from
+// `maw.config.json`'s `namedPeers` is not reported as unroutable.
 
 /// Strip a leading `<digits>-` fleet-numbering prefix, matching how
 /// maw-routing's local session matcher treats `31-black` as also answering to
@@ -182,59 +184,149 @@ fn hey_strip_numeric_fleet_prefix(name: &str) -> &str {
         .map_or(name, |(_, rest)| rest)
 }
 
-/// True when `node` names a live local tmux session — i.e. the case where
-/// maw-routing's explicit-local-target step will claim the query before any
-/// peer lookup is even attempted.
-fn hey_session_matches_node(sessions: &[RouteSession], node: &str) -> bool {
+/// The live local tmux session `node` names, if any — i.e. the session whose
+/// existence makes maw-routing's explicit-local-target step claim the query
+/// before any peer lookup is even attempted. Returns the session's real name
+/// so a refusal can print the pane it would actually have hit.
+fn hey_local_session_matching_node<'a>(sessions: &'a [RouteSession], node: &str) -> Option<&'a str> {
     let wanted = node.to_lowercase();
-    sessions.iter().any(|session| {
-        let name = session.name.to_lowercase();
-        name == wanted || hey_strip_numeric_fleet_prefix(&name) == wanted
-    })
+    sessions
+        .iter()
+        .find(|session| {
+            let name = session.name.to_lowercase();
+            name == wanted || hey_strip_numeric_fleet_prefix(&name) == wanted
+        })
+        .map(|session| session.name.as_str())
+}
+
+fn hey_session_matches_node(sessions: &[RouteSession], node: &str) -> bool {
+    hey_local_session_matching_node(sessions, node).is_some()
 }
 
 /// Peer URL for `node`, consulting `maw.config.json`'s `namedPeers` first
 /// (what the resolver itself uses) and falling back to `~/.maw/peers.json`
 /// (#681 — the store `maw peers add`/pairing actually write, and the more
 /// authoritative one per the issue).
+///
+/// Case-insensitive, matching [`hey_local_session_matching_node`]'s own
+/// lowercasing. It was exact-match before: a node typed with different
+/// capitalization than the configured peer name (`White` vs a peer
+/// registered as `white`) found no peer here, so the collision guard never
+/// fired and the query fell through to local delivery — reopening #818
+/// itself, on a capitalization mismatch, in the fix meant to close it.
 fn hey_peer_url_for_node(node: &str, config: &RouteConfig) -> Option<String> {
+    let wanted = node.to_lowercase();
     config
         .named_peers
         .iter()
-        .find(|peer| peer.name == node)
+        .find(|peer| peer.name.to_lowercase() == wanted)
         .map(|peer| peer.url.clone())
-        .or_else(|| peers_load_store().peers.get(node).map(|peer| peer.url.clone()))
+        .or_else(|| {
+            peers_load_store()
+                .peers
+                .iter()
+                .find(|(alias, _)| alias.to_lowercase() == wanted)
+                .map(|(_, peer)| peer.url.clone())
+        })
 }
 
 /// Like [`hey_peer_url_for_node`] but only returns a hit when it comes from
 /// `peers.json` specifically — i.e. `namedPeers` does not already claim
 /// `node` (the resolver would have routed it already if it did). Used to
-/// decide when the peers.json fallback route (#681) applies.
+/// decide when the peers.json fallback route (#681) applies. Case-insensitive
+/// for the same #818 reason as `hey_peer_url_for_node`.
 fn hey_peer_url_for_node_stored_only(node: &str, config: &RouteConfig) -> Option<String> {
-    if config.named_peers.iter().any(|peer| peer.name == node) {
+    let wanted = node.to_lowercase();
+    if config.named_peers.iter().any(|peer| peer.name.to_lowercase() == wanted) {
         return None;
     }
-    peers_load_store().peers.get(node).map(|peer| peer.url.clone())
+    peers_load_store()
+        .peers
+        .iter()
+        .find(|(alias, _)| alias.to_lowercase() == wanted)
+        .map(|(_, peer)| peer.url.clone())
 }
 
-/// #790: when `query` is `<node>:<rest>` and `node` names both a local
-/// session and a federation peer, local resolution always wins (and can even
-/// fail loudly, e.g. "no window 'x' in session 'node'") without ever
-/// mentioning the same-named peer. Returns a note to surface that ambiguity
-/// at the exact point someone would otherwise misread a local error as
-/// evidence about the remote host. Local-first precedence is unchanged —
-/// this only makes the collision visible.
-fn hey_local_peer_collision_note(query: &str, sessions: &[RouteSession], config: &RouteConfig) -> Option<String> {
+/// The `<node>` half of a `<node>:<rest>` query that names BOTH a live local
+/// session and a known federation peer: `(local session name, peer url)`.
+/// `local:`/`me` are explicit same-node forms, never a collision, and the
+/// `peer:` escape hatch below is resolved before this is ever consulted.
+fn hey_local_peer_collision(
+    query: &str,
+    sessions: &[RouteSession],
+    config: &RouteConfig,
+) -> Option<(String, String)> {
     let (node, rest) = query.split_once(':')?;
     if node.is_empty() || rest.is_empty() || node.eq_ignore_ascii_case("local") || node.eq_ignore_ascii_case("me") {
         return None;
     }
-    if !hey_session_matches_node(sessions, node) {
+    let session = hey_local_session_matching_node(sessions, node)?;
+    let peer_url = hey_peer_url_for_node(node, config)?;
+    Some((session.to_owned(), peer_url))
+}
+
+/// #818: local-first precedence used to *win* this collision — the message
+/// landed in a local pane, `hey` exited 0 with a delivery confirmation, and
+/// the only contrary signal was the #790 prose note. Every other signal
+/// (exit code, "delivered →" line, real text in a real pane) confirmed the
+/// operator's "I paired this peer, I sent to it" model, so the misroute only
+/// surfaced when the *remote* side was checked and found empty — during a
+/// bring-up, which is exactly when peer names are newest and most likely to
+/// collide. Guessing is the defect, so refuse and name both candidates plus
+/// both unambiguous forms. Peer routes are exempt: nothing was shadowed.
+fn hey_local_peer_collision_refusal(
+    command: &str,
+    query: &str,
+    sessions: &[RouteSession],
+    config: &RouteConfig,
+    result: &RouteResult,
+) -> Option<CliOutput> {
+    if command != "hey" || matches!(result, RouteResult::Peer { .. }) {
         return None;
     }
-    let peer_url = hey_peer_url_for_node(node, config)?;
-    Some(format!(
-        "note: '{node}' also matches peer {node} ({peer_url}); resolved locally — the peer was not contacted\n"
+    let (node, rest) = query.split_once(':')?;
+    let (session, peer_url) = hey_local_peer_collision(query, sessions, config)?;
+    Some(CliOutput {
+        code: send_error_code(command),
+        stdout: String::new(),
+        stderr: format!(
+            "{command}: refusing to guess — '{node}' names both the local tmux session '{session}' and federation peer '{node}' ({peer_url}); delivering locally would NOT contact the peer (#818)\n  peer:   maw {command} peer:{node}:{rest} <message>\n  local:  maw {command} local:{node}:{rest} <message>\n"
+        ),
+    })
+}
+
+/// #818 escape hatch: `peer:<node>:<target>` addresses a federation peer
+/// unambiguously, so a peer may keep the natural name of the machine it runs
+/// on instead of being renamed to something that cannot collide with a local
+/// session. Mirrors the `local:` prefix maw-routing already honours for the
+/// other side of the same ambiguity, and resolves before local matching so
+/// no local session can shadow it.
+///
+/// Only claims a query SHAPED like `peer:<node>:<target>` (two colons) —
+/// never unconditionally on the literal string `"peer:"`. The first version
+/// claimed every `hey` target starting with that string, so an ORDINARY
+/// session literally named "peer" (`maw hey peer:oracle` — one colon, an
+/// entirely normal `<session>:<window>` form with zero peers configured
+/// anywhere) became permanently unreachable via `hey`, erroring with advice
+/// that could not fix the caller's actual problem. Real tmux targets never
+/// have a second colon (panes use `.`, not `:`), so a one-colon `rest` falls
+/// through silently — it was never this escape hatch's business — while a
+/// genuine two-colon shape with an unknown node still gets the helpful
+/// "no peer named X" error, because that shape overwhelmingly means the
+/// caller DID intend the escape hatch and likely has a typo, not a session.
+fn hey_forced_peer_route(command: &str, query: &str, config: &RouteConfig) -> Option<RouteResult> {
+    if command != "hey" {
+        return None;
+    }
+    let rest = query.strip_prefix("peer:")?;
+    let (node, target) = rest.split_once(':').filter(|(node, target)| !node.is_empty() && !target.is_empty())?;
+    Some(hey_peer_url_for_node(node, config).map_or_else(
+        || RouteResult::Error {
+            reason: "unknown_node".to_owned(),
+            detail: format!("no peer named '{node}' in namedPeers or the peer store"),
+            hint: Some("check `maw peers list`".to_owned()),
+        },
+        |peer_url| RouteResult::Peer { peer_url, target: target.to_owned(), node: node.to_owned() },
     ))
 }
 
@@ -423,46 +515,175 @@ mod target_resolver_tests {
         }
     }
 
-    #[test]
-    fn collision_note_fires_when_node_matches_both_local_session_and_peer() {
-        let sessions = hey_sessions(&["31-black", "other"]);
-        let config = hey_config_with_named_peers(vec![hey_named_peer("black", "http://10.10.0.6:3456")]);
-
-        let note = hey_local_peer_collision_note("black:oracle", &sessions, &config)
-            .expect("collision note");
-        assert!(note.contains("black"), "note should name the colliding peer: {note}");
-        assert!(note.contains("http://10.10.0.6:3456"), "note should include the peer url: {note}");
-        assert!(note.contains("resolved locally"), "note should say local won: {note}");
-
-        // The numeric-fleet-prefix alias ("31-black" answering to "black")
-        // must also be recognised, matching maw-routing's own local matcher.
-        assert!(hey_local_peer_collision_note("black:oracle", &sessions, &config).is_some());
+    /// #818's field report verbatim: local session `11-white` (window
+    /// `white`) and a peer *also* named `white`.
+    fn hey_818_sessions() -> Vec<RouteSession> {
+        vec![RouteSession {
+            name: "11-white".to_owned(),
+            windows: vec![RouteWindow { index: 3, name: "white".to_owned(), active: true, kind: None }],
+            source: None,
+        }]
     }
 
     #[test]
-    fn collision_note_is_silent_without_a_real_collision() {
+    fn colliding_node_name_refuses_instead_of_delivering_locally() {
+        let sessions = hey_818_sessions();
+        let config = hey_config_with_named_peers(vec![hey_named_peer("white", "http://192.168.1.164:3456")]);
+
+        // The misroute itself, unchanged: maw-routing hands back a LOCAL pane
+        // for a query that names a peer, so nothing downstream ever contacts
+        // it. This is the state `hey` used to deliver into with exit 0.
+        let result = resolve_route_target("white:white", &config, &sessions);
+        assert_eq!(result, RouteResult::Local { target: "11-white:3".to_owned() });
+
+        let refusal = hey_local_peer_collision_refusal("hey", "white:white", &sessions, &config, &result)
+            .expect("#818: an ambiguous peer/session name must refuse, not deliver locally");
+        assert_ne!(refusal.code, 0, "a refusal must not exit 0");
+        assert!(refusal.stdout.is_empty(), "nothing was delivered: {}", refusal.stdout);
+        // Both candidates named, and both unambiguous forms offered.
+        assert!(refusal.stderr.contains("11-white"), "{}", refusal.stderr);
+        assert!(refusal.stderr.contains("http://192.168.1.164:3456"), "{}", refusal.stderr);
+        assert!(refusal.stderr.contains("peer:white:white"), "{}", refusal.stderr);
+        assert!(refusal.stderr.contains("local:white:white"), "{}", refusal.stderr);
+    }
+
+    #[test]
+    fn collision_refusal_is_silent_without_a_real_collision() {
         let sessions = hey_sessions(&["31-black"]);
         let config = hey_config_with_named_peers(vec![hey_named_peer("black", "http://10.10.0.6:3456")]);
+        let local = RouteResult::Local { target: "31-black:0".to_owned() };
+        let refuse = |query: &str, sessions: &[RouteSession]| {
+            hey_local_peer_collision_refusal("hey", query, sessions, &config, &local)
+        };
 
         // No peer named "other" — no collision to report.
-        assert!(hey_local_peer_collision_note("other:oracle", &sessions, &config).is_none());
+        assert!(refuse("other:oracle", &sessions).is_none());
         // "black" is a peer, but no local session named "phaith" exists.
-        assert!(hey_local_peer_collision_note("phaith:oracle", &hey_sessions(&[]), &config).is_none());
+        assert!(refuse("phaith:oracle", &hey_sessions(&[])).is_none());
         // The explicit local escape hatch is never a "collision".
-        assert!(hey_local_peer_collision_note("local:oracle", &sessions, &config).is_none());
+        assert!(refuse("local:oracle", &sessions).is_none());
         // Bare (no ':') targets are handled by the picker, not this helper.
-        assert!(hey_local_peer_collision_note("black", &sessions, &config).is_none());
+        assert!(refuse("black", &sessions).is_none());
+        // `send` keeps its historical routing; only `hey` gained the refusal.
+        assert!(hey_local_peer_collision_refusal("send", "black:oracle", &sessions, &config, &local).is_none());
+        // A route that already reached the peer shadowed nothing.
+        let peer = RouteResult::Peer {
+            peer_url: "http://10.10.0.6:3456".to_owned(),
+            target: "oracle".to_owned(),
+            node: "black".to_owned(),
+        };
+        assert!(hey_local_peer_collision_refusal("hey", "black:oracle", &sessions, &config, &peer).is_none());
     }
 
     #[test]
-    fn collision_note_checks_peers_json_when_named_peers_has_no_match() {
+    fn collision_refusal_checks_peers_json_when_named_peers_has_no_match() {
         let _guard = PeersFileGuard::with_peer("collision", "black", "http://10.10.0.6:3456");
         let sessions = hey_sessions(&["31-black"]);
         let config = RouteConfig::default(); // namedPeers empty — peers.json is the only source
+        let local = RouteResult::Local { target: "31-black:0".to_owned() };
 
-        let note = hey_local_peer_collision_note("black:oracle", &sessions, &config)
-            .expect("collision note from peers.json");
-        assert!(note.contains("http://10.10.0.6:3456"));
+        let refusal = hey_local_peer_collision_refusal("hey", "black:oracle", &sessions, &config, &local)
+            .expect("collision refusal from peers.json");
+        assert!(refusal.stderr.contains("http://10.10.0.6:3456"), "{}", refusal.stderr);
+    }
+
+    #[test]
+    fn forced_peer_prefix_routes_past_a_same_named_local_session() {
+        let sessions = hey_818_sessions();
+        let config = hey_config_with_named_peers(vec![hey_named_peer("white", "http://192.168.1.164:3456")]);
+
+        // The escape hatch resolves before local matching, so the local
+        // session that shadowed "white:white" cannot claim this form...
+        let forced = hey_forced_peer_route("hey", "peer:white:white", &config).expect("forced peer route");
+        assert_eq!(
+            forced,
+            RouteResult::Peer {
+                peer_url: "http://192.168.1.164:3456".to_owned(),
+                target: "white".to_owned(),
+                node: "white".to_owned(),
+            }
+        );
+        // ...and being a Peer route, it is exempt from the collision refusal.
+        assert!(hey_local_peer_collision_refusal("hey", "peer:white:white", &sessions, &config, &forced).is_none());
+
+        // A multi-colon target keeps its window suffix (#410 form).
+        assert_eq!(
+            hey_forced_peer_route("hey", "peer:white:01-hojo:3", &config),
+            Some(RouteResult::Peer {
+                peer_url: "http://192.168.1.164:3456".to_owned(),
+                target: "01-hojo:3".to_owned(),
+                node: "white".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn forced_peer_prefix_errors_clearly_and_leaves_other_targets_alone() {
+        let _guard = PeersFileGuard::empty("forced");
+        let config = hey_config_with_named_peers(vec![hey_named_peer("white", "http://192.168.1.164:3456")]);
+
+        let unknown = hey_forced_peer_route("hey", "peer:ghost:oracle", &config).expect("unknown peer error");
+        let RouteResult::Error { reason, detail, .. } = &unknown else { panic!("expected an error: {unknown:?}") };
+        assert_eq!(reason, "unknown_node");
+        assert!(detail.contains("ghost"), "{detail}");
+
+        // Untouched: ordinary targets, and every non-`hey` verb.
+        assert!(hey_forced_peer_route("hey", "white:white", &config).is_none());
+        assert!(hey_forced_peer_route("send", "peer:white:white", &config).is_none());
+    }
+
+    // #818 rejection, round 2: `hey_forced_peer_route` used to claim ANY query
+    // starting with the literal string "peer:", so an ordinary local session
+    // named "peer" (one colon, e.g. `peer:oracle` -- a ✔ordinary
+    // <session>:<window> form) became permanently unreachable via `hey`, with
+    // zero peers configured anywhere. Real tmux targets never have a SECOND
+    // colon (panes use `.`), so the fix only claims the two-colon shape.
+    #[test]
+    fn forced_peer_prefix_falls_through_on_an_ordinary_one_colon_session_named_peer() {
+        let config = hey_config_with_named_peers(vec![hey_named_peer("white", "http://192.168.1.164:3456")]);
+
+        // The exact reported over-fire: a session literally named "peer",
+        // zero relevant peers configured. Must fall through, not error.
+        assert!(hey_forced_peer_route("hey", "peer:oracle", &config).is_none());
+
+        // Same shape with a dot-form pane suffix -- still one colon.
+        assert!(hey_forced_peer_route("hey", "peer:reviewer.0", &config).is_none());
+
+        // A genuine two-colon shape with an unknown node is still a likely
+        // TYPO of the escape hatch, not an ordinary local target (tmux
+        // targets don't have two colons) -- keeps the helpful error rather
+        // than silently falling through to a worse, unrelated failure.
+        let _guard = PeersFileGuard::empty("forced-typo");
+        let typo = hey_forced_peer_route("hey", "peer:withe:oracle", &config).expect("unknown peer error");
+        let RouteResult::Error { reason, .. } = &typo else { panic!("expected an error: {typo:?}") };
+        assert_eq!(reason, "unknown_node");
+    }
+
+    // Case-insensitivity must match on both sides of the collision guard, or a
+    // capitalization mismatch on `hey`'s node reopens #818 itself: the local
+    // side already lowercases (hey_local_session_matching_node), so the peer
+    // side must too.
+    #[test]
+    fn hey_peer_url_for_node_matches_case_insensitively() {
+        let config = hey_config_with_named_peers(vec![hey_named_peer("white", "http://192.168.1.164:3456")]);
+        assert_eq!(hey_peer_url_for_node("White", &config).as_deref(), Some("http://192.168.1.164:3456"));
+        assert_eq!(hey_peer_url_for_node("WHITE", &config).as_deref(), Some("http://192.168.1.164:3456"));
+        assert_eq!(hey_peer_url_for_node("white", &config).as_deref(), Some("http://192.168.1.164:3456"));
+    }
+
+    // End-to-end: before this fix, `White:white` (peer configured lowercase
+    // "white") found no peer at the collision guard -- case-sensitive lookup
+    // -- so the guard never fired and the query delivered locally, exit 0,
+    // silently. That is #818 itself, reopened by a capitalization mismatch in
+    // the very fix meant to close it.
+    #[test]
+    fn colliding_node_name_refuses_even_with_a_capitalization_mismatch() {
+        let sessions = hey_818_sessions();
+        let config = hey_config_with_named_peers(vec![hey_named_peer("white", "http://192.168.1.164:3456")]);
+        let result = resolve_route_target("White:white", &config, &sessions);
+        let refusal = hey_local_peer_collision_refusal("hey", "White:white", &sessions, &config, &result)
+            .expect("case mismatch must still refuse, not silently deliver locally");
+        assert!(refusal.stderr.contains("11-white"), "{}", refusal.stderr);
     }
 
     #[test]
