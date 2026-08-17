@@ -3,7 +3,7 @@ const DISPATCH_134: &[DispatcherEntry] = &[DispatcherEntry {
     handler: Handler::Sync(peek_run_command),
 }];
 
-const PEEK_USAGE: &str = "usage: maw peek <tmux-target> [--lines N] [--history]\n       maw peek [--lines N]\n";
+const PEEK_USAGE: &str = "usage: maw peek <tmux-target> [--lines N] [--history]\n       maw peek <peer>:<target> [--lines N]   read a pane on another node (#820)\n       maw peek ./<target>                    force a local reading of a name that is also a peer\n       maw peek [--lines N]\n";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PeekOptions {
@@ -39,7 +39,30 @@ fn peek_with_runner<R: maw_tmux::TmuxRunner>(
     runner: &mut R,
 ) -> Result<CliOutput, (i32, String)> {
     let options = peek_parse(argv)?;
-    if let Some(target) = options.target.as_deref() {
+    if let Some(raw_target) = options.target.as_deref() {
+        // #820: `<peer>:<target>` reads a pane on another node. Decide which
+        // reading applies BEFORE validating as a tmux target, since a peer form
+        // is not a tmux target and would be rejected by that validator.
+        match peek_route_for(raw_target, &peek_lookup_peer, &mut || peek_local_session_names(runner)) {
+            PeekRoute::Ambiguous { alias, target } => {
+                return Err((1, peek_ambiguous_message(&alias, &target)));
+            }
+            PeekRoute::Remote { peer, target } => {
+                let from = peek_sender_address();
+                let content = peek_fetch_remote(&peer, &target, &from).map_err(|message| (1, message))?;
+                return Ok(CliOutput {
+                    code: 0,
+                    stdout: format!(
+                        "\x1b[36m--- {}:{target} ---\x1b[0m\n{}",
+                        peer.alias,
+                        peek_trim_trailing_blank_lines(&content)
+                    ),
+                    stderr: String::new(),
+                });
+            }
+            PeekRoute::Local => {}
+        }
+        let target = peek_strip_local_marker(raw_target);
         peek_validate_tmux_target(target).map_err(|message| (1, message))?;
         let (resolved, content) = peek_resolve_and_capture(runner, target, options.lines, options.history)
             .map_err(|message| (1, message))?;
