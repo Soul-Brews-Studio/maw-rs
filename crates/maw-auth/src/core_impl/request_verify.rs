@@ -534,13 +534,30 @@ fn auth_reject(reason: &str) -> RequestAuthDecision {
 
 #[must_use]
 pub fn is_protected(path: &str, method: &str) -> bool {
-    let method = method.to_ascii_uppercase();
+    let method = auth_normalize_protected_method(method);
     let normalized = auth_normalize_protected_path(path);
     matches!(
         (method.as_str(), normalized.as_str()),
         ("POST", "/triggers/fire" | "/worktrees/cleanup" | "/orchestration/workon" | "/trust" | "/trust/revoke")
             | ("GET", "/trust" | "/sessions" | "/capture")
     ) || (method == "POST" && normalized.starts_with("/plugins/"))
+}
+
+/// HEAD is GET without a response body (RFC 9110), and axum's `get(handler)`
+/// serves HEAD from the SAME handler — so the authorization answer for the two
+/// has to be identical. Comparing the raw method string meant `HEAD /api/trust`
+/// answered 200 from a non-loopback address while `GET /api/trust` answered
+/// 403, bypassing EVERY entry on the allowlist rather than any single route.
+/// Normalizing here rather than in the middleware keeps `is_protected` — the
+/// function that answers "is this protected?" — correct for every caller,
+/// present and future, instead of leaving the authority wrong and patching one
+/// consumer.
+fn auth_normalize_protected_method(method: &str) -> String {
+    let method = method.to_ascii_uppercase();
+    if method == "HEAD" {
+        return "GET".to_owned();
+    }
+    method
 }
 
 fn auth_normalize_protected_path(path: &str) -> String {
@@ -811,6 +828,20 @@ mod tests {
         assert!(!super::is_protected("/api/plugins", "GET"));
         assert!(!super::is_protected("/api/identity", "GET"));
         assert!(!super::is_protected("/api/triggers", "GET"));
+
+        // #866: the read routes, and the HEAD alias. axum's `get(handler)`
+        // serves HEAD from the same handler, so HEAD must answer exactly as
+        // GET does — otherwise every entry on this list is bypassable by
+        // swapping the verb.
+        assert!(super::is_protected("/api/sessions", "GET"));
+        assert!(super::is_protected("/api/capture?target=x", "GET"));
+        assert!(super::is_protected("/api/sessions", "HEAD"));
+        assert!(super::is_protected("/api/capture", "head"));
+        assert!(super::is_protected("/api/trust", "HEAD"));
+        // Normalization is HEAD->GET only; it must not promote other verbs.
+        assert!(!super::is_protected("/api/sessions", "DELETE"));
+        assert!(!super::is_protected("/api/sessions", "OPTIONS"));
+        assert!(!super::is_protected("/api/sessions", "POST"));
     }
 
     #[test]

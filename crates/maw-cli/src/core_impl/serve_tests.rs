@@ -2600,6 +2600,96 @@ mod serve_tests {
         assert!(maw_auth::is_protected("/capture", "GET"));
     }
 
+    // #866 follow-up: axum's `get(handler)` serves HEAD from the SAME handler,
+    // but `is_protected` compares a literal method string, so a HEAD request
+    // reached the handler while the gate asked `is_protected(.., "HEAD")` and
+    // got false. That bypassed the allowlist for EVERY entry on it, not just
+    // the two routes this PR adds -- `HEAD /api/trust` answered 200 from a
+    // non-loopback address while `GET /api/trust` answered 403. HEAD must be
+    // gated exactly as its GET counterpart is.
+    #[tokio::test]
+    async fn serve_head_requests_are_gated_exactly_like_their_get_counterparts() {
+        let app = serve_test_app(serve_test_trust_store_path("head-alias"));
+
+        for uri in ["/api/trust", "/api/sessions", "/api/capture?target=nova:1.0"] {
+            let denied = app
+                .clone()
+                .oneshot(unsigned_trust_request("HEAD", uri, ""))
+                .await
+                .expect("head response");
+            assert_eq!(
+                denied.status(),
+                StatusCode::FORBIDDEN,
+                "#866: unsigned HEAD {uri} from a non-loopback peer must be refused like GET is"
+            );
+        }
+
+        // The normalization is HEAD->GET only: it must not quietly promote a
+        // method that genuinely is not on the allowlist.
+        assert!(maw_auth::is_protected("/sessions", "HEAD"));
+        assert!(maw_auth::is_protected("/capture", "HEAD"));
+        assert!(maw_auth::is_protected("/trust", "HEAD"));
+        assert!(!maw_auth::is_protected("/sessions", "DELETE"));
+        assert!(!maw_auth::is_protected("/sessions", "OPTIONS"));
+    }
+
+    // #866 follow-up: `auth_normalize_protected_path` only strips `/api` and the
+    // query, so any path that axum still ROUTES to a protected handler but that
+    // normalizes to something off the allowlist would be an equivalent-path
+    // escape -- the same trap class as HEAD-aliases-onto-GET, and as the
+    // `/api/agent` vs `/api/agents` near-miss.
+    //
+    // The guarantee asserted here is deliberately the weak, robust one: for each
+    // variant the response must never be a SERVED 200. Either axum refuses to
+    // route it (404 -- it never reaches the handler, so normalization is moot)
+    // or the gate refuses it (403). Asserting a specific one of those two would
+    // pin axum's router behavior, which is not ours to pin; asserting "never
+    // served" is what actually matters for auth.
+    #[tokio::test]
+    async fn serve_protected_routes_have_no_equivalent_path_escape() {
+        let app = serve_test_app(serve_test_trust_store_path("near-miss"));
+
+        for uri in [
+            "/api/sessions/",       // trailing slash
+            "//api/sessions",       // doubled leading slash
+            "/api//sessions",       // doubled interior slash
+            "/API/sessions",        // upper-case prefix
+            "/api/SESSIONS",        // upper-case segment
+            "/api/%73essions",      // percent-encoded first letter
+            "/api/sessions/.",      // dot segment
+            "/api/x/../sessions",   // dot-dot traversal
+            "/api/sessions%20",     // encoded trailing space
+            "/api/sessions.",       // trailing dot
+            "/api/capture/",        // same set for the other new route
+            "/api/CAPTURE?target=nova:1.0",
+            "/api/%63apture?target=nova:1.0",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(unsigned_trust_request("GET", uri, ""))
+                .await
+                .expect("near-miss response");
+            // Measured 2026-08-17: every variant below answers 404 — axum's
+            // router is exact-match (no trailing-slash redirect, no case
+            // folding, no percent-decoding before matching, no dot-segment
+            // normalization), so the canonical path is the only way to reach
+            // the handler and it normalizes exactly onto the allowlist entry.
+            assert_ne!(
+                response.status(),
+                StatusCode::OK,
+                "#866: {uri} must not be SERVED unauthenticated -- either 404 (not routed) or 403 (gated)"
+            );
+        }
+
+        // Positive control: the canonical paths ARE routed, so the assertions
+        // above are not passing merely because everything 404s.
+        let canonical = app
+            .oneshot(loopback_get("/api/sessions"))
+            .await
+            .expect("canonical");
+        assert_eq!(canonical.status(), StatusCode::OK);
+    }
+
     // The caller half of #866. The two cross-node readers of `/api/sessions`
     // (`ls_fetch_peer_sessions` for `maw ls --federation`, and the serve-side
     // `federation_fetch_peer_sessions` sweep) both went out BARE before this
