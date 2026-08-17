@@ -2501,6 +2501,25 @@ mod serve_tests {
         request
     }
 
+    /// What an auth test on these routes must prove is that AUTH did not refuse
+    /// the request — NOT that tmux happened to answer.
+    ///
+    /// #860/#879 changed `api_sessions` to return 503 when tmux is unreachable
+    /// instead of collapsing the error into an empty 200. Pinning `OK` here
+    /// couples an auth assertion to whether a tmux server exists — true on a
+    /// dev box, false in CI — and because that landed on `alpha` while this
+    /// branch was in review, both branches were green alone and red merged.
+    /// Asserting the auth property directly is both more honest and immune to
+    /// that coupling; the handler's own 200-vs-503 behavior is #860's to test.
+    fn assert_auth_allowed(status: StatusCode, label: &str) {
+        assert_ne!(status, StatusCode::FORBIDDEN, "{label}: auth refused with 403");
+        assert_ne!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "{label}: auth refused with 401"
+        );
+    }
+
     fn loopback_get(uri: &str) -> axum::http::Request<Body> {
         let mut request = axum::http::Request::builder()
             .method("GET")
@@ -2539,10 +2558,9 @@ mod serve_tests {
             .oneshot(signed_peer_get("/api/sessions", "/sessions"))
             .await
             .expect("signed sessions");
-        assert_eq!(
+        assert_auth_allowed(
             signed.status(),
-            StatusCode::OK,
-            "#866: a correctly signed peer must still be able to read /api/sessions"
+            "#866: a correctly signed peer must still reach /api/sessions",
         );
 
         // Loopback stays open: `verify_serve_request` (maw-auth) exempts a
@@ -2553,7 +2571,10 @@ mod serve_tests {
             .oneshot(loopback_get("/api/sessions"))
             .await
             .expect("loopback sessions");
-        assert_eq!(loopback.status(), StatusCode::OK);
+        assert_auth_allowed(
+            loopback.status(),
+            "#866: an unsigned loopback caller must not be refused",
+        );
 
         assert!(maw_auth::is_protected("/sessions", "GET"));
     }
@@ -2681,13 +2702,19 @@ mod serve_tests {
             );
         }
 
-        // Positive control: the canonical paths ARE routed, so the assertions
-        // above are not passing merely because everything 404s.
+        // Positive control: the canonical path IS routed, so the assertions
+        // above are not passing merely because everything 404s. What this must
+        // prove is "reached a handler", i.e. NOT 404 — the handler may answer
+        // 200 or, with tmux unreachable, 503 (#860).
         let canonical = app
             .oneshot(loopback_get("/api/sessions"))
             .await
             .expect("canonical");
-        assert_eq!(canonical.status(), StatusCode::OK);
+        assert_ne!(
+            canonical.status(),
+            StatusCode::NOT_FOUND,
+            "#866: the canonical path must route to a handler, or the near-miss assertions above prove nothing"
+        );
     }
 
     // The caller half of #866. The two cross-node readers of `/api/sessions`
@@ -2754,10 +2781,9 @@ mod serve_tests {
             .oneshot(request)
             .await
             .expect("signed caller response");
-        assert_eq!(
+        assert_auth_allowed(
             response.status(),
-            StatusCode::OK,
-            "#866: the headers our federated callers now send must authenticate, not 403"
+            "#866: the headers our federated callers now send must authenticate, not 403",
         );
 
         // Forward compatibility with peers on an OLD build. There, `/sessions`
