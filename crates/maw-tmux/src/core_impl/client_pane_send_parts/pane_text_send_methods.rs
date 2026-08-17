@@ -154,8 +154,19 @@ where
             self.send_keys_literal(target, text)?;
         }
         sleep(std::time::Duration::from_millis(SEND_SETTLE_MS));
-        let (enter_attempts, warned_pending) =
-            self.submit_with_confirm(target, text, &mut sleep)?;
+        // Snapshot an opaque TUI rendering before Enter; capture failure leaves
+        // no baseline, preserving the fail-stop behavior for different input.
+        let buffered_pending = if used_buffer {
+            self.pane_pending_input(target)
+        } else {
+            None
+        };
+        let (enter_attempts, warned_pending) = self.submit_with_confirm(
+            target,
+            text,
+            buffered_pending.as_deref(),
+            &mut sleep,
+        )?;
         Ok(SendTextReport {
             used_buffer,
             enter_attempts,
@@ -167,6 +178,7 @@ where
         &mut self,
         target: &str,
         text: &str,
+        buffered_pending: Option<&str>,
         sleep: &mut F,
     ) -> Result<(u32, bool), TmuxError>
     where
@@ -175,7 +187,7 @@ where
         for attempt in 1..=MAX_SUBMIT_ATTEMPTS {
             self.send_enter(target)?;
             sleep(std::time::Duration::from_millis(SUBMIT_CONFIRM_MS));
-            match self.submit_pending_state_after_grace(target, text, sleep) {
+            match self.submit_pending_state_after_grace(target, text, buffered_pending, sleep) {
                 PendingInputState::Cleared => return Ok((attempt, false)),
                 PendingInputState::DifferentInput => return Ok((attempt, true)),
                 PendingInputState::MatchesSent => {}
@@ -188,21 +200,30 @@ where
         &mut self,
         target: &str,
         text: &str,
+        buffered_pending: Option<&str>,
         sleep: &mut F,
     ) -> PendingInputState
     where
         F: FnMut(std::time::Duration),
     {
-        let _confirm_state = self.pending_input_state(target, text);
+        let _confirm_state = self.pending_input_state(target, text, buffered_pending);
         sleep(std::time::Duration::from_millis(SUBMIT_GRACE_MS));
-        self.pending_input_state(target, text)
+        self.pending_input_state(target, text, buffered_pending)
     }
 
-    fn pending_input_state(&mut self, target: &str, text: &str) -> PendingInputState {
+    fn pending_input_state(
+        &mut self,
+        target: &str,
+        text: &str,
+        buffered_pending: Option<&str>,
+    ) -> PendingInputState {
         self.pane_pending_input(target).map_or(
             PendingInputState::Cleared,
             |pending| {
-                if pending_input_matches_sent(&pending, text) {
+                if pending_input_matches_sent(&pending, text)
+                    || buffered_pending
+                        .is_some_and(|baseline| pending_input_matches_sent(&pending, baseline))
+                {
                     PendingInputState::MatchesSent
                 } else {
                     PendingInputState::DifferentInput

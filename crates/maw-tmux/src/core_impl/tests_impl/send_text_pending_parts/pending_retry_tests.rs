@@ -89,6 +89,92 @@
         );
     }
 
+    const BUFFERED_TEXT: &str = "deploy\nnow";
+    const BUFFERED_PLACEHOLDER: &str = "❯ [Pasted Content 10 chars]";
+
+    fn send_text_buffered_case(
+        mut after_paste: Vec<Result<&str, TmuxError>>,
+    ) -> (SendTextReport, FakeRunner) {
+        let mut responses = vec![Ok("0"), Ok(""), Ok("")];
+        responses.append(&mut after_paste);
+        let runner = FakeRunner::with_responses(responses);
+        let mut client = TmuxClient::new(runner);
+        let report = client
+            .send_text_with_sleeper("sess:oracle.0", BUFFERED_TEXT, |_| {})
+            .expect("send text ok");
+        let enter_count = client
+            .runner
+            .calls
+            .iter()
+            .filter(|(subcommand, args)| {
+                subcommand == "send-keys" && args.last().is_some_and(|arg| arg == "Enter")
+            })
+            .count();
+        assert!(report.used_buffer);
+        assert_eq!(
+            enter_count,
+            usize::try_from(report.enter_attempts).expect("attempt count fits usize")
+        );
+        (report, client.runner)
+    }
+
+    #[test]
+    fn send_text_retries_buffered_placeholder_until_capture_clears() {
+        let (report, runner) = send_text_buffered_case(vec![
+            Ok(BUFFERED_PLACEHOLDER),
+            Ok(""),
+            Ok("❯ "),
+            Ok(BUFFERED_PLACEHOLDER),
+            Ok(""),
+            Ok("❯ "),
+            Ok("❯ "),
+        ]);
+
+        assert_eq!((report.enter_attempts, report.warned_pending), (2, false));
+        assert_eq!(runner.calls[1].0, "paste-buffer");
+        assert_eq!(runner.calls[2].0, "capture-pane");
+        assert_eq!(runner.calls[3].0, "send-keys");
+    }
+
+    #[test]
+    fn send_text_retries_buffered_literal_echo_until_capture_clears() {
+        let (report, _) = send_text_buffered_case(vec![
+            Ok("❯ deploy"),
+            Ok(""),
+            Ok("❯ deploy"),
+            Ok("❯ deploy"),
+            Ok(""),
+            Ok("❯ "),
+            Ok("❯ "),
+        ]);
+
+        assert_eq!((report.enter_attempts, report.warned_pending), (2, false));
+    }
+
+    #[test]
+    fn send_text_buffered_baseline_does_not_retry_different_input() {
+        let (report, _) = send_text_buffered_case(vec![
+            Ok(BUFFERED_PLACEHOLDER),
+            Ok(""),
+            Ok("❯ different queued input"),
+            Ok("❯ different queued input"),
+        ]);
+
+        assert_eq!((report.enter_attempts, report.warned_pending), (1, true));
+    }
+
+    #[test]
+    fn send_text_buffered_baseline_capture_failure_fails_closed() {
+        let (report, _) = send_text_buffered_case(vec![
+            Err(TmuxError::new("capture failed")),
+            Ok(""),
+            Ok(BUFFERED_PLACEHOLDER),
+            Ok(BUFFERED_PLACEHOLDER),
+        ]);
+
+        assert_eq!((report.enter_attempts, report.warned_pending), (1, true));
+    }
+
     #[test]
     fn send_text_waits_out_matching_redraw_before_retrying() {
         let runner = FakeRunner::with_responses(vec![
