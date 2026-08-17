@@ -34,6 +34,12 @@ async fn native_send_posts_signed_api_send_to_configured_peer() {
     let addr = listener.local_addr().expect("addr");
     env.write_config(&format!("http://{addr}"));
     std::env::set_var("MAW_HOME", &env.root);
+    // #869: the isolated fixture above must win over any real config
+    // inherited from the host's `~/.config/maw/` (a deliberate feature --
+    // see `inherit_singleton_configs_for_maw_home` in maw-xdg's config.rs --
+    // that otherwise activates whenever MAW_HOME is set but MAW_CONFIG_DIR
+    // is not). MAW_TEST_MODE=1 is the loader's own documented opt-out.
+    std::env::set_var("MAW_TEST_MODE", "1");
     std::env::set_var("MAW_PEER_KEY", peer_key);
 
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -92,6 +98,7 @@ async fn native_wake_posts_signed_api_wake_to_configured_peer() {
     let addr = listener.local_addr().expect("addr");
     env.write_config(&format!("http://{addr}"));
     std::env::set_var("MAW_HOME", &env.root);
+    std::env::set_var("MAW_TEST_MODE", "1"); // #869: see comment above
     std::env::set_var("MAW_PEER_KEY", peer_key);
 
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -137,6 +144,7 @@ async fn native_wake_surfaces_receiver_failure_instead_of_false_woke() {
     let addr = listener.local_addr().expect("addr");
     env.write_config(&format!("http://{addr}"));
     std::env::set_var("MAW_HOME", &env.root);
+    std::env::set_var("MAW_TEST_MODE", "1"); // #869: see comment above
     std::env::set_var("MAW_PEER_KEY", peer_key);
 
     tokio::spawn(async move {
@@ -305,6 +313,7 @@ impl Drop for TestEnv {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.root);
         std::env::remove_var("MAW_HOME");
+        std::env::remove_var("MAW_TEST_MODE");
         std::env::remove_var("MAW_PEER_KEY");
     }
 }
