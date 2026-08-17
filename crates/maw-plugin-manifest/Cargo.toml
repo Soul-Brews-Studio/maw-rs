@@ -13,7 +13,7 @@ wasm-host = ["dep:extism"]
 [dependencies]
 base64 = "0.22"
 extism = { version = "1.30.0", optional = true }
-maw-policy = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "fca1129df488ba80180bda567b3e0c2952e9f0f5" }
+maw-policy = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "a0fdbe1aa2ea083c7c8f921e82f448d29789f1b0" }
 maw-tmux = { path = "../maw-tmux" }
 maw-transport = { path = "../maw-transport" }
 maw-xdg = { path = "../maw-xdg" }

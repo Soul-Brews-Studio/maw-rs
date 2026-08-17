@@ -59,10 +59,9 @@ fn args(values: &[String]) -> Vec<String> {
 
 #[test]
 fn resolve_plan_json_matches_maw_js_matcher_fixtures() {
-    let fixtures: Vec<ResolveFixture> = serde_json::from_str(include_str!(
-        "../../maw-matcher/tests/fixtures/matcher-resolve-target.fixtures.json"
-    ))
-    .expect("valid matcher fixtures");
+    let fixtures: Vec<ResolveFixture> =
+        serde_json::from_str(maw_matcher::MATCHER_RESOLVE_TARGET_FIXTURES_JSON)
+            .expect("valid matcher fixtures");
 
     assert_eq!(fixtures.len(), 16, "maw-js matcher fixture count changed");
     for fixture in fixtures {
