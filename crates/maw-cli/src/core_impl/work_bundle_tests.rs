@@ -165,9 +165,9 @@ mod work_bundle_tests {
     }
 
     impl PromoteTmuxNative for PromoteFakeTmux {
-        fn promote_list_all(&mut self) -> Vec<TmuxSession> {
+        fn promote_list_all(&mut self) -> Result<Vec<TmuxSession>, String> {
             self.calls.push("list-all".to_owned());
-            self.sessions.clone()
+            Ok(self.sessions.clone())
         }
 
         fn promote_list_windows(&mut self, session: &str) -> Result<Vec<maw_tmux::TmuxWindow>, String> {
