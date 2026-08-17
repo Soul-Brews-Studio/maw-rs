@@ -44,10 +44,9 @@ enum ExpectedResolution {
 
 #[test]
 fn worktree_window_plan_cli_matches_maw_js_fixtures() {
-    let fixtures: Vec<Fixture> = serde_json::from_str(include_str!(
-        "../../maw-worktree/tests/fixtures/worktree-window-match.fixtures.json"
-    ))
-    .expect("valid worktree fixtures");
+    let fixtures: Vec<Fixture> =
+        serde_json::from_str(maw_worktree::WORKTREE_WINDOW_MATCH_FIXTURES_JSON)
+            .expect("valid worktree fixtures");
 
     for fixture in fixtures {
         let mut argv = vec![
