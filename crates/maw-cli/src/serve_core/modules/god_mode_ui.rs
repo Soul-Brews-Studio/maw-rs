@@ -1048,6 +1048,19 @@ mod tests {
     #[tokio::test]
     async fn godui_ws_route_streams_sessions_and_recent_from_module() {
         super::super::agent_status::agentstatus_reset_global();
+        // #889: make the former cross-test race deterministic by priming the
+        // throttled global with a snapshot for a different session shape.
+        let stale_sessions =
+            super::super::agent_status::agentstatus_sessions_from_tmux(&[TmuxSession {
+                name: "99-stale".to_owned(),
+                windows: vec![maw_tmux::TmuxWindow {
+                    index: 1,
+                    name: "stale-oracle".to_owned(),
+                    active: true,
+                    cwd: None,
+                }],
+            }]);
+        let _stale_snapshot = super::super::agent_status::agentstatus_poll_global(&stale_sessions);
         let state = ServecoreSharedState::default().servecore_with_tmux_sessions_snapshot(vec![
             TmuxSession {
                 name: "142-athena".to_owned(),
