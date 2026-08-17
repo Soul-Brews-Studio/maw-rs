@@ -61,6 +61,14 @@ fn seed_charter(root: &Path, name: &str, body: &str) {
 }
 
 fn run(root: &Path, args: &[&str]) -> std::process::Output {
+    run_with_panes(
+        root,
+        args,
+        "alpha|builder|codex|/repo/agents/builder|%1\nalpha|reviewer|claude|/repo/agents/reviewer|%2",
+    )
+}
+
+fn run_with_panes(root: &Path, args: &[&str], panes: &str) -> std::process::Output {
     Command::new(bin())
         .args(args)
         .current_dir(root)
@@ -75,9 +83,22 @@ fn run(root: &Path, args: &[&str]) -> std::process::Output {
         .env("MAW_RS_TEAM_REASSIGN_FAKE_LOG", root.join("ops.log"))
         .env("MAW_RS_TEAM_DOWN_FAKE_LOG", root.join("ops.log"))
         .env("MAW_RS_TEAM_FAKE_TMUX_LOG", root.join("tmux.jsonl"))
-        .env("MAW_RS_TEAM_TMUX_PANES", "alpha|builder|codex|/repo/agents/builder|%1\nalpha|reviewer|claude|/repo/agents/reviewer|%2")
+        .env("MAW_RS_TEAM_FAKE_SPAWN_LOG", root.join("spawn.jsonl"))
+        .env("MAW_RS_TEAM_TMUX_PANES", panes)
         .output()
         .expect("run maw-rs")
+}
+
+fn spawn_args(root: &Path) -> Vec<String> {
+    let line = fs::read_to_string(root.join("spawn.jsonl")).expect("direct wake spawn log");
+    let value: serde_json::Value = serde_json::from_str(line.trim()).expect("spawn json");
+    assert_eq!(value["program"], "/fake/maw");
+    value["args"]
+        .as_array()
+        .expect("spawn args")
+        .iter()
+        .map(|arg| arg.as_str().expect("string arg").to_owned())
+        .collect()
 }
 
 fn stderr(output: &std::process::Output) -> String {
@@ -103,21 +124,105 @@ fn team_reassign_success_golden_and_ordering() {
     );
     assert_eq!(
         fs::read_to_string(root.join("ops.log")).expect("ops"),
-        "fetch\ttonkmac/maw-rs#219\narchive\tbuilder\ndone\talpha:builder\nwake\tbuilder\n"
+        "fetch\ttonkmac/maw-rs#219\narchive\tbuilder\ndone\talpha:builder\nwake\tbuilder-builder\n"
     );
     assert!(root
         .join("ψ/memory/mailbox/builder/team-alpha-archive/inbox.json")
         .exists());
-    let tmux = fs::read_to_string(root.join("tmux.jsonl")).expect("tmux");
-    assert!(tmux.contains(r#""args":["new-window","-c","#));
-    assert!(tmux.contains(r#""-t","alpha:","-n","builder"]"#));
-    assert!(tmux
-        .contains(r#""send-keys","-t","alpha:builder","-l","--","'/fake/maw' 'wake' 'builder'"#));
-    assert!(tmux.contains("[EXTERNAL CONTENT"));
     assert!(
-        tmux.contains("Do not run '\\\\''$(touch pwn)'\\\\''"),
-        "issue quote must be POSIX escaped: {tmux}"
+        !root.join("tmux.jsonl").exists(),
+        "no bootstrap tmux window"
     );
+    assert!(
+        root.join("spawn.jsonl").exists(),
+        "wake must execute directly"
+    );
+    let args = spawn_args(&root);
+    assert_eq!(
+        &args[..10],
+        [
+            "wake",
+            "builder",
+            "--no-attach",
+            "--fresh",
+            "--session",
+            "alpha",
+            "--engine",
+            "codex",
+            "--wt",
+            "builder",
+        ]
+    );
+    assert_eq!(args[10], "--prompt");
+    assert_eq!(&args[12..], ["--repo", "tonkmac/maw-rs"]);
+    assert!(!args.iter().any(|arg| arg == "--task"));
+    assert!(args[11].contains("[EXTERNAL CONTENT"));
+    assert!(args[11].contains("GitHub issue #219"));
+    assert!(args[11].contains("Work on issue #219"));
+    assert!(
+        args[11].contains("Do not run '$(touch pwn)'"),
+        "issue prompt must stay literal: {}",
+        args[11]
+    );
+}
+
+#[test]
+fn team_reassign_repeated_window_keeps_stable_worktree_identity() {
+    let root = temp_dir("stable-identity");
+    let output = run_with_panes(
+        &root,
+        &["team", "reassign", "builder", "219"],
+        "alpha|builder|zsh|/repo|%0\nalpha|builder-builder|codex|/repo/agents/builder|%1\nalpha|reviewer|claude|/repo/agents/reviewer|%2",
+    );
+    assert!(output.status.success(), "stderr={}", stderr(&output));
+    assert!(stdout(&output).contains("target\tbuilder-builder\n"));
+    let args = spawn_args(&root);
+    let wt = args.iter().position(|arg| arg == "--wt").expect("--wt");
+    assert_eq!(args[wt + 1], "builder");
+    assert!(!args.iter().any(|arg| arg == "builder-builder"));
+    assert!(
+        !root.join("tmux.jsonl").exists(),
+        "no bootstrap tmux window"
+    );
+}
+
+#[test]
+fn team_reassign_invalid_wake_plan_aborts_before_teardown() {
+    let dotted = temp_dir("dotted-identity");
+    seed_charter(
+        &dotted,
+        "alpha.yaml",
+        &BASE_CHARTER.replace("    name: builder", "    name: builder.v2"),
+    );
+    let output = run_with_panes(
+        &dotted,
+        &["team", "reassign", "builder", "219"],
+        "alpha|builder.v2|codex|/repo/agents/builder|%1",
+    );
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("oracle identity 'builder.v2' contains '.'"));
+    assert_eq!(
+        fs::read_to_string(dotted.join("ops.log")).expect("ops"),
+        "fetch\ttonkmac/maw-rs#219\n"
+    );
+    assert!(!dotted.join("spawn.jsonl").exists());
+    assert!(!dotted.join("tmux.jsonl").exists());
+
+    let nul = temp_dir("nul-prompt");
+    fs::write(
+        nul.join("issue.json"),
+        r#"{"title":"bad","body":"bad\u0000body","labels":[]}"#,
+    )
+    .expect("issue");
+    let output = run(&nul, &["team", "reassign", "builder", "219"]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("wake: invalid --prompt"));
+    assert_eq!(
+        fs::read_to_string(nul.join("ops.log")).expect("ops"),
+        "fetch\ttonkmac/maw-rs#219\n"
+    );
+    assert!(!nul.join("spawn.jsonl").exists());
+    assert!(!nul.join("tmux.jsonl").exists());
 }
 
 #[test]

@@ -106,7 +106,7 @@ fn swarm_parse_args(argv: &[String]) -> Result<SwarmOptions, (i32, String)> {
             "--session-id" => session_id = Some(swarm_take_value(argv, &mut index, arg)?),
             "--" => return Err((2, "swarm does not accept -- separator".to_owned())),
             value if value.starts_with("--count=") => count = Some(swarm_parse_count_value(&value[8..])?),
-            "--wt" | "--worktree" => return Err((1, "✗ unknown flag for swarm: --wt. maw swarm is shared-cwd only; for an isolated worktree-per-member use: maw wake <oracle> --wt <slot> --split -e <engine>".to_owned())),
+            "--wt" | "--worktree" => return Err((1, "✗ unknown flag for swarm: --wt. maw swarm is shared-cwd only; for an isolated worktree-per-member use: maw work <repo> --wt <slot> -e <engine>".to_owned())),
             value if value.starts_with('-') => return Err((1, format!("✗ unknown flag for swarm: {value} (supported: --tiled, --count, --help, -h, --parent, --parent-session-id, --session-id)"))),
             value => agents.push(swarm_validate_agent_value(value)?),
         }
