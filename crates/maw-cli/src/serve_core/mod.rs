@@ -91,6 +91,24 @@ impl ServecoreEngine for ServecoreStubEngine {
     }
 }
 
+/// Injectable read of the local tmux pane list, used by `maw serve` handlers.
+///
+/// Production wires this to `TmuxClient::local()`; tests inject a fixed
+/// snapshot -- or a deliberate failure (#880) -- without needing a tmux binary.
+pub type ServecoreAgentPanesSource =
+    Arc<dyn Fn() -> Result<Vec<ServecoreAgentPane>, String> + Send + Sync>;
+
+/// Injectable read of the local tmux session list. See [`ServecoreAgentPanesSource`].
+pub type ServecoreTmuxSessionsSource =
+    Arc<dyn Fn() -> Result<Vec<TmuxSession>, String> + Send + Sync>;
+
+/// The one place the `maw serve` surface spells the tmux-unreachable message,
+/// so every handler in this daemon reports a dead tmux exactly the way
+/// `/api/sessions` does (#860, #880).
+fn servecore_tmux_unreachable(error: &impl std::fmt::Display) -> String {
+    format!("tmux unreachable: {error}")
+}
+
 #[derive(Clone)]
 pub struct ServecoreSharedState {
     pub engine: Arc<dyn ServecoreEngine>,
@@ -101,8 +119,8 @@ pub struct ServecoreSharedState {
     pub hub_workspaces: Arc<Vec<WorkspaceConfig>>,
     pub agents_node: Option<String>,
     pub agents_oracle: Option<String>,
-    pub agents_snapshot: Option<Arc<Vec<ServecoreAgentPane>>>,
-    pub tmux_sessions_snapshot: Option<Arc<Vec<TmuxSession>>>,
+    pub agents_source: Option<ServecoreAgentPanesSource>,
+    pub tmux_sessions_source: Option<ServecoreTmuxSessionsSource>,
     pub auth_workspace_key: Option<String>,
     pub auth_cached_pubkey: Option<String>,
     pub auth_ed25519_pins: maw_auth::Ed25519TofuPins,
@@ -120,8 +138,8 @@ impl Default for ServecoreSharedState {
             hub_workspaces: Arc::new(Vec::new()),
             agents_node: None,
             agents_oracle: None,
-            agents_snapshot: None,
-            tmux_sessions_snapshot: None,
+            agents_source: None,
+            tmux_sessions_source: None,
             auth_workspace_key: None,
             auth_cached_pubkey: None,
             auth_ed25519_pins: Arc::new(Mutex::new(maw_auth::Ed25519TofuStore::default())),
@@ -151,46 +169,87 @@ impl ServecoreSharedState {
 
     #[must_use]
     pub fn servecore_with_agents_snapshot(mut self, panes: Vec<ServecoreAgentPane>) -> Self {
-        self.agents_snapshot = Some(Arc::new(panes));
+        let panes = Arc::new(panes);
+        self.agents_source = Some(Arc::new(move || Ok(panes.as_ref().clone())));
         self
     }
 
     #[must_use]
     pub fn servecore_with_tmux_sessions_snapshot(mut self, sessions: Vec<TmuxSession>) -> Self {
-        self.tmux_sessions_snapshot = Some(Arc::new(sessions));
+        let sessions = Arc::new(sessions);
+        self.tmux_sessions_source = Some(Arc::new(move || Ok(sessions.as_ref().clone())));
         self
     }
 
-    // #860: these two accessors back six call sites across HTTP/websocket
-    // handlers (`agent_routes`, `god_mode_ui`, `people_routes`,
-    // `process_engine`) in the long-running `maw serve` daemon. A tmux
-    // connect failure here degrading to an empty snapshot -- rather than
-    // Result-ifying the accessor and pushing error handling into every one
-    // of those handlers -- is a deliberate, scoped-down choice for this PR:
-    // a transient tmux hiccup should not 500 the whole HTTP layer. Making
-    // this genuinely correct (distinct tmux-unreachable responses from each
-    // handler) is real, separable follow-up work, not a silent regression --
-    // tracked against #860.
+    /// #880 seam: makes both tmux reads fail as if the local tmux server were
+    /// unreachable, so handler behaviour under a dead tmux can be asserted
+    /// without a real -- or stubbed -- tmux binary on `PATH`.
     #[must_use]
-    pub fn servecore_agents_panes(&self) -> Vec<ServecoreAgentPane> {
-        if let Some(snapshot) = &self.agents_snapshot {
-            return snapshot.as_ref().clone();
-        }
-        let mut tmux = TmuxClient::local();
-        tmux.list_panes()
-            .unwrap_or_default()
-            .into_iter()
-            .map(ServecoreAgentPane::from)
-            .collect()
+    pub fn servecore_with_tmux_unreachable(mut self, error: &str) -> Self {
+        let message = servecore_tmux_unreachable(&error);
+        let panes_message = message.clone();
+        self.agents_source = Some(Arc::new(move || Err(panes_message.clone())));
+        self.tmux_sessions_source = Some(Arc::new(move || Err(message.clone())));
+        self
     }
 
+    /// #880 seam: a tmux session read that can change its answer between
+    /// calls, so "tmux was alive at connect and died while the dashboard
+    /// websocket was open" is reproducible.
     #[must_use]
-    pub fn servecore_tmux_sessions(&self) -> Vec<TmuxSession> {
-        if let Some(snapshot) = &self.tmux_sessions_snapshot {
-            return snapshot.as_ref().clone();
+    pub fn servecore_with_tmux_sessions_source(
+        mut self,
+        source: ServecoreTmuxSessionsSource,
+    ) -> Self {
+        self.tmux_sessions_source = Some(source);
+        self
+    }
+
+    // #880 (follow-up to #860): these two accessors back six HTTP/websocket
+    // handlers in the long-running `maw serve` daemon -- `/api/agents`,
+    // `/api/people/analyze`, `/api/teams`, the god-mode `/ws` initial
+    // snapshot, its refresh tick, and the engine `/ws/pty` attach. They used
+    // to `.unwrap_or_default()` a tmux connect failure into an empty
+    // snapshot, which is precisely the #860 defect: an unreachable tmux read
+    // back as a confidently empty fleet. They now hand the error up, and each
+    // of the six handlers makes its own explicit, commented decision about
+    // what to do with it -- five surface it, one (the refresh tick) degrades
+    // on purpose without lying. See each call site.
+
+    /// Reads the local tmux pane list.
+    ///
+    /// # Errors
+    ///
+    /// Returns `tmux unreachable: <error>` when the local tmux server cannot
+    /// be reached, so callers can tell that apart from a reachable server
+    /// that genuinely has no panes (#860).
+    pub fn servecore_agents_panes(&self) -> Result<Vec<ServecoreAgentPane>, String> {
+        if let Some(source) = &self.agents_source {
+            return source();
         }
         let mut tmux = TmuxClient::local();
-        tmux.list_all().unwrap_or_default()
+        Ok(tmux
+            .list_panes()
+            .map_err(|error| servecore_tmux_unreachable(&error))?
+            .into_iter()
+            .map(ServecoreAgentPane::from)
+            .collect())
+    }
+
+    /// Reads the local tmux session list.
+    ///
+    /// # Errors
+    ///
+    /// Returns `tmux unreachable: <error>` when the local tmux server cannot
+    /// be reached, so callers can tell that apart from a reachable server
+    /// that genuinely has no sessions (#860).
+    pub fn servecore_tmux_sessions(&self) -> Result<Vec<TmuxSession>, String> {
+        if let Some(source) = &self.tmux_sessions_source {
+            return source();
+        }
+        let mut tmux = TmuxClient::local();
+        tmux.list_all()
+            .map_err(|error| servecore_tmux_unreachable(&error))
     }
 
     #[must_use]
@@ -3075,6 +3134,64 @@ mod tests {
         ))
         .await
         .expect("detach");
+    }
+
+    /// #880: resolving a bare `attach` target (no `session:window`) walks the
+    /// live pane list and then the session list. With tmux unreachable both
+    /// came back empty, resolution silently fell through to the raw string,
+    /// and the client got `{"type":"attached","target":"demo"}` for a pane
+    /// nobody had verified exists. This websocket already has a typed error
+    /// channel, so the tmux failure now travels down it.
+    #[tokio::test]
+    async fn servecore880_ws_pty_attach_reports_unreachable_tmux_instead_of_guessing_a_target() {
+        let _guard = EnvGuard::set("MAW_RS_SERVECORE_PTY_PROGRAM", "/bin/cat");
+        let addr = servecore_spawn_ws_test_server(
+            ServecoreSharedState::default().servecore_with_tmux_unreachable(
+                "error connecting to /tmp/tmux-1028/default (No such file or directory)",
+            ),
+            modules::websocket_routes::WsConfig {
+                idle_timeout: Duration::from_secs(5),
+                heartbeat_interval: Duration::from_secs(5),
+                capture_interval: Duration::from_secs(2),
+                previews_interval: Duration::from_secs(2),
+                send_timeout: Duration::from_secs(2),
+                max_frame_bytes: 1024,
+                max_connections: 8,
+            },
+        )
+        .await;
+        let (mut ws, _response) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws/pty"))
+            .await
+            .expect("connect pty websocket");
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(
+            r#"{"type":"attach","target":"demo","cols":80,"rows":24}"#.to_owned(),
+        ))
+        .await
+        .expect("attach");
+
+        let frame = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if let tokio_tungstenite::tungstenite::Message::Text(text) =
+                    ws.next().await.expect("reply frame").expect("reply ok")
+                {
+                    return serde_json::from_str::<serde_json::Value>(&text).expect("json");
+                }
+            }
+        })
+        .await
+        .expect("reply frame");
+
+        assert_eq!(
+            frame["type"], "error",
+            "attaching through an unreachable tmux must not report success: {frame}"
+        );
+        assert!(
+            frame["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("tmux unreachable"),
+            "the error frame must name the real cause: {frame}"
+        );
     }
 
     #[tokio::test]

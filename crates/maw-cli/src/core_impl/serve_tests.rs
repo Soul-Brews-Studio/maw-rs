@@ -1965,7 +1965,26 @@ mod serve_tests {
             feed: Mutex::new(Vec::new()),
             peer_addr_override: Some(NON_LOOPBACK_TEST_PEER),
             now_override: Some(1_782_277_200),
-            serve_core_state_override: None,
+            // #880: mirrors what `serve_core_state` builds in production --
+            // native engine, same workspace key, same frozen clock -- but
+            // pins a reachable-but-empty tmux for both reads. Tests built on
+            // this server assert routing, auth and websocket protocol
+            // (`/api/agents` is public rather than gated; `/ws` acks a
+            // subscribe), and they used to hold on a tmux-less machine only
+            // because an unreachable tmux was silently swallowed into an
+            // empty listing. Now that a failed read answers 503 and closes
+            // the dashboard socket, those assertions would depend on whether
+            // the host happens to be running tmux -- so the tmux reads are
+            // made hermetic and the assertions go back to testing what they
+            // are named for.
+            serve_core_state_override: Some(
+                crate::serve_core::ServecoreSharedState::default()
+                    .servecore_with_engine(Arc::new(crate::serve_core::ServecoreNativeEngine))
+                    .servecore_with_auth(Some(KEY.to_owned()), None)
+                    .servecore_with_auth_now(1_782_277_200)
+                    .servecore_with_agents_snapshot(Vec::new())
+                    .servecore_with_tmux_sessions_snapshot(Vec::new()),
+            ),
             trust_store_path: serve_test_trust_store_path("server"),
             plugin_serve_routes: Vec::new(),
             api_token_auth: ServeApiTokenAuth::open(),

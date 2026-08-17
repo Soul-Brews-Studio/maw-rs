@@ -96,7 +96,8 @@ async fn people_analyze_with_delivery(
     };
     let intent = match people_intent_from_request(&state, payload) {
         Ok(intent) => intent,
-        Err(error) => return people_bad_request(&error),
+        Err(PeopleIntentError::BadRequest(error)) => return people_bad_request(&error),
+        Err(PeopleIntentError::TmuxUnreachable(error)) => return people_tmux_unreachable(&error),
     };
     if !people_dedupe_accept(&intent) {
         return (
@@ -143,16 +144,29 @@ fn people_delivery_failed(reason: &str) -> Response {
         .into_response()
 }
 
+/// #880: separates "the caller sent something wrong" (400) from "I could not
+/// read tmux, so I cannot answer" (503). Before this split both collapsed
+/// into one `String` and the endpoint answered 400 for either.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PeopleIntentError {
+    BadRequest(String),
+    TmuxUnreachable(String),
+}
+
 fn people_intent_from_request(
     state: &ServecoreSharedState,
     request: PeopleAnalyzeRequest,
-) -> Result<PeopleIntent, String> {
+) -> Result<PeopleIntent, PeopleIntentError> {
     if request.intent != "analyze_thread" {
-        return Err("intent must equal analyze_thread".to_owned());
+        return Err(PeopleIntentError::BadRequest(
+            "intent must equal analyze_thread".to_owned(),
+        ));
     }
     if request.thread_id.is_empty() || !request.thread_id.bytes().all(|byte| byte.is_ascii_digit())
     {
-        return Err("thread_id must be ASCII digits only".to_owned());
+        return Err(PeopleIntentError::BadRequest(
+            "thread_id must be ASCII digits only".to_owned(),
+        ));
     }
     Ok(PeopleIntent {
         target: people_resolve_oracle(state, &request.oracle)?,
@@ -160,17 +174,28 @@ fn people_intent_from_request(
         oracle: request.oracle,
     })
 }
-fn people_resolve_oracle(state: &ServecoreSharedState, oracle: &str) -> Result<String, String> {
+
+// #880: PROPAGATE. This resolves an oracle name against the live pane list.
+// When tmux was unreachable the list came back empty and every lookup missed,
+// so the endpoint asserted `oracle '<x>' is not live` -- a confident verdict
+// about a pane nobody had managed to look at. A caller that believes it will
+// stop retrying and may reroute work away from a perfectly healthy oracle, so
+// the tmux failure has to stay distinguishable all the way out to the wire.
+fn people_resolve_oracle(
+    state: &ServecoreSharedState,
+    oracle: &str,
+) -> Result<String, PeopleIntentError> {
     let needle = people_normalize_oracle(oracle);
     state
         .servecore_agents_panes()
+        .map_err(PeopleIntentError::TmuxUnreachable)?
         .into_iter()
         .find(|pane| {
             pane.target.to_ascii_lowercase().contains("oracle")
                 && people_normalize_oracle(&pane.target) == needle
         })
         .map(|pane| pane.target)
-        .ok_or_else(|| format!("oracle '{oracle}' is not live"))
+        .ok_or_else(|| PeopleIntentError::BadRequest(format!("oracle '{oracle}' is not live")))
 }
 
 fn people_normalize_oracle(value: &str) -> String {
@@ -206,6 +231,17 @@ fn people_bad_request(reason: &str) -> Response {
     (
         StatusCode::BAD_REQUEST,
         Json(json!({"ok":false,"error":"bad_request","reason":reason})),
+    )
+        .into_response()
+}
+
+/// #880: `error` carries the same `tmux unreachable: <error>` string
+/// `/api/sessions` returns, so one client-side check covers every `maw serve`
+/// endpoint that can fail this way.
+fn people_tmux_unreachable(reason: &str) -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({"ok":false,"error":reason})),
     )
         .into_response()
 }
@@ -278,15 +314,20 @@ mod tests {
         .is_err());
         assert_eq!(
             people_intent_from_request(&state, req("talk", "1", "people")).unwrap_err(),
-            "intent must equal analyze_thread"
+            PeopleIntentError::BadRequest("intent must equal analyze_thread".to_owned())
         );
         assert_eq!(
             people_intent_from_request(&state, req("analyze_thread", "1x", "people")).unwrap_err(),
-            "thread_id must be ASCII digits only"
+            PeopleIntentError::BadRequest("thread_id must be ASCII digits only".to_owned())
         );
+        // #880: a miss against a *reachable* tmux is still a client error --
+        // only an unreachable tmux escalates to 503.
         let err =
             people_intent_from_request(&state, req("analyze_thread", "1", "missing")).unwrap_err();
-        assert!(err.contains("is not live"));
+        assert!(matches!(
+            &err,
+            PeopleIntentError::BadRequest(reason) if reason.contains("is not live")
+        ));
         let dupe = people_intent_from_request(&state, req("analyze_thread", "765", "people"))
             .expect("intent");
         assert!(people_dedupe_accept(&dupe) && !people_dedupe_accept(&dupe));
@@ -366,6 +407,45 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    /// #880: `people_resolve_oracle` scans the live pane list. When tmux was
+    /// unreachable the pane list came back empty and the endpoint answered
+    /// `400 bad_request: oracle '<x>' is not live` -- a confident claim about
+    /// an oracle nobody could actually see. It now answers 503 with the typed
+    /// tmux-unreachable body instead, so the caller retries rather than
+    /// concluding the oracle is gone.
+    #[tokio::test]
+    async fn people880_unreachable_tmux_is_503_not_oracle_is_not_live() {
+        let _dedupe_guard = reset_dedupe().await;
+        let state = ServecoreSharedState::default().servecore_with_tmux_unreachable(
+            "error connecting to /tmp/tmux-1028/default (No such file or directory)",
+        );
+        let response = people_analyze_with_delivery(
+            Arc::new(state),
+            analyze_request("772", "people"),
+            |_, _| panic!("delivery must not be attempted when tmux is unreachable"),
+        )
+        .await;
+
+        assert_eq!(
+            response.status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "an unreachable tmux is not a client error"
+        );
+        let body = to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .expect("body bytes");
+        let payload = serde_json::from_slice::<serde_json::Value>(&body).expect("json body");
+        let error = payload["error"].as_str().unwrap_or_default();
+        assert!(
+            error.contains("tmux unreachable"),
+            "503 body must carry the typed tmux-unreachable error: {payload}"
+        );
+        assert!(
+            !payload.to_string().contains("is not live"),
+            "an unreachable tmux must not be reported as a dead oracle: {payload}"
+        );
     }
 
     #[test]
