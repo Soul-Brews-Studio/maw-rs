@@ -624,16 +624,17 @@ fn wake_slot(oracle: &str) -> u32 {
     10 + (hash % 80)
 }
 
-fn wake_window_name(options: &WakeOptionsNative, oracle: &str, matched_window: Option<&str>) -> String {
-    let suffix = options.wt.as_deref().or(options.task.as_deref()).map(wake_sanitize_branch);
-    match suffix {
+fn wake_window_name(options: &WakeOptionsNative, oracle: &str, matched_window: Option<&str>) -> Result<String, String> {
+    Ok(match wake_worktree_slug(options)? {
         // `--wt`/`--task` asks for a derived window, not the one that was
         // matched -- oracle-derived naming applies regardless of a match.
         Some(task) => format!("{oracle}-{task}"),
         None => matched_window.map_or_else(|| oracle.to_owned(), str::to_owned),
-    }
+    })
 }
 
-fn wake_sanitize_branch(value: &str) -> String {
-    value.chars().map(|ch| if ch.is_ascii_alphanumeric() || ch == '-' { ch } else { '-' }).collect()
+fn wake_worktree_slug(options: &WakeOptionsNative) -> Result<Option<String>, String> {
+    let Some(raw) = options.wt.as_deref().or(options.task.as_deref()) else { return Ok(None) };
+    let slug = workon_sanitize_task_slug(raw);
+    if slug.is_empty() { Err("wake: worktree slug collapsed to empty".to_owned()) } else { Ok(Some(slug)) }
 }

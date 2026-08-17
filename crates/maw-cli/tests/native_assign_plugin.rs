@@ -82,6 +82,21 @@ esac
     )
     .expect("write fake tmux");
     chmod_exec(&tmux);
+
+    let git = bin_dir.join("git");
+    fs::write(
+        &git,
+        r#"#!/bin/sh
+case "$3" in
+  rev-parse) printf '%s\n' "$2" ;;
+  for-each-ref) ;;
+  worktree) /bin/mkdir -p "$5"; printf 'gitdir: test\n' > "$5/.git" ;;
+  *) exit 1 ;;
+esac
+"#,
+    )
+    .expect("write fake git");
+    chmod_exec(&git);
 }
 
 fn seed_config(root: &Path) {

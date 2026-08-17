@@ -172,7 +172,7 @@ mod wake_tests {
         // the window keeps the identity's own name -- `team enter`/`team
         // shutdown` refuse on a window whose name is not the member's, so
         // wake must not invent an `-oracle` suffix the roster never asked for.
-        assert_eq!(wake_window_name(&options, "Colophon", None), "Colophon");
+        assert_eq!(wake_window_name(&options, "Colophon", None).as_deref(), Ok("Colophon"));
     }
 
     #[derive(Debug, Default)]
@@ -274,6 +274,19 @@ mod wake_tests {
     }
 
     fn wake_strings(values: &[&str]) -> Vec<String> { values.iter().map(|value| (*value).to_owned()).collect() }
+
+    fn wake_git(repo: &std::path::Path, args: &[&str]) -> String {
+        let output = std::process::Command::new("git").arg("-C").arg(repo).args(args).output().expect("run git");
+        assert!(output.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&output.stderr));
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
+    fn wake_init_git(repo: &std::path::Path) {
+        wake_git(repo, &["init", "-q"]);
+        std::fs::write(repo.join("README.md"), "seed\n").expect("seed file");
+        wake_git(repo, &["add", "README.md"]);
+        wake_git(repo, &["-c", "user.name=maw-test", "-c", "user.email=maw@test.invalid", "commit", "-qm", "seed"]);
+    }
 
     /// #839: removes the fixture on drop.
     ///
@@ -1030,6 +1043,75 @@ mod wake_tests {
     }
 
     #[test]
+    fn wake_wt_creates_nested_worktree_and_launches_from_it() {
+        wake_with_fixture(|root| {
+            let repo = root.join("ghq/github.com/acme/neo-oracle");
+            wake_init_git(&repo);
+            let subdir = repo.join("nested");
+            std::fs::create_dir(&subdir).expect("nested repo dir");
+            let subdir = subdir.to_string_lossy().into_owned();
+            let mut tmux = WakeMockTmux::default();
+
+            wake_run(&wake_strings(&["neo", "--repo-path", &subdir, "--wt", "Scratch", "--no-attach"]), &mut tmux).expect("wake wt");
+
+            let wt = repo.join("agents/scratch");
+            assert!(wt.join(".git").exists(), "worktree missing: {}", wt.display());
+            assert_eq!(wake_git(&wt, &["branch", "--show-current"]).trim(), "agents/scratch");
+            assert!(tmux.actions.iter().any(|action| action.starts_with("new-session") && action.contains(&wt.display().to_string())), "{:?}", tmux.actions);
+            let (_, reused) = wake_run(&wake_strings(&["neo", "--wt", "scratch", "--no-attach"]), &mut tmux).expect("reuse wt");
+            assert!(reused.contains("reusing worktree"), "{reused}");
+            let fresh = wake_run(&wake_strings(&["neo", "--wt", "scratch", "--fresh", "--no-attach"]), &mut tmux).expect_err("fresh window collision");
+            assert!(fresh.contains("not planned worktree") && !repo.join("agents/1-scratch").exists(), "{fresh}");
+
+            let legacy = repo.parent().expect("repo parent").join("neo-oracle.wt-old");
+            wake_run(&wake_strings(&["neo", "--wt", "old", "--layout", "legacy", "--no-attach"]), &mut tmux).expect("legacy wt");
+            assert!(legacy.join(".git").exists(), "legacy worktree missing: {}", legacy.display());
+        });
+    }
+
+    #[test]
+    fn wake_reports_wt_priority_when_task_is_also_supplied() {
+        wake_with_fixture(|_| {
+            let mut tmux = WakeMockTmux::default();
+            let (_, stdout) = wake_run(
+                &wake_strings(&["neo", "--wt", "builder", "--task", "issue-885", "--dry-run"]),
+                &mut tmux,
+            )
+            .expect("dry run");
+            assert!(stdout.contains("--wt takes priority over --task"), "{stdout}");
+            assert!(stdout.contains("would wake window 'neo-builder'"), "{stdout}");
+        });
+    }
+
+    #[test]
+    fn wake_wt_git_failure_precedes_every_tmux_mutation() {
+        wake_with_fixture(|_| {
+            let mut tmux = WakeMockTmux::default();
+            let error = wake_run(&wake_strings(&["neo", "--wt", "scratch", "--no-attach"]), &mut tmux)
+                .expect_err("non-git repo must fail");
+            assert!(error.starts_with("wake:"), "{error}");
+            assert!(tmux.actions.is_empty(), "{:?}", tmux.actions);
+        });
+    }
+
+    #[test]
+    fn wake_wt_refuses_stale_window_before_git_or_tmux_mutation() {
+        wake_with_fixture(|root| {
+            let repo = root.join("ghq/github.com/acme/neo-oracle");
+            wake_init_git(&repo);
+            let session = wake_session_name("neo", &[]);
+            let mut tmux = wake_mock_tmux_with_existing_window(&session, "neo-scratch");
+            tmux.sessions[0].windows[0].cwd = Some(repo.display().to_string());
+
+            let error = wake_run(&wake_strings(&["neo", "--session", &session, "--wt", "scratch", "--no-attach"]), &mut tmux)
+                .expect_err("stale main-checkout window must fail closed");
+            assert!(error.contains("not planned worktree") && error.contains(&format!("maw done {session}:neo-scratch")), "{error}");
+            assert!(!repo.join("agents/scratch").exists());
+            assert!(tmux.actions.is_empty(), "{:?}", tmux.actions);
+        });
+    }
+
+    #[test]
     fn wake_reuses_workon_github_url_resolver_without_double_prefix_or_peer_route() {
         wake_with_fixture(|root| {
             let repo = root.join("ghq/github.com/Soul-Brews-Studio/maw-fleetpad");
@@ -1646,6 +1728,16 @@ mod wake_tests {
 
             assert_eq!(output.code, 0, "{}", output.stderr);
             assert_eq!(tmux.actions, vec!["select 88-mother:mother"]);
+
+            tmux.actions.clear();
+            let with_worktree = run_wake_command_with(
+                &wake_strings(&[session, "--attach", "--session", session, "--wt", "scratch"]),
+                &mut tmux,
+                &mut fleet_wake,
+            );
+            assert_eq!(with_worktree.code, 1);
+            assert!(with_worktree.stderr.contains("registry entry for 88-mother"), "{}", with_worktree.stderr);
+            assert!(tmux.actions.is_empty(), "{:?}", tmux.actions);
         });
     }
 
@@ -1937,6 +2029,8 @@ mod wake_tests {
         wake_with_fixture(|root| {
             let _now = EnvVarRestore::capture("MAW_RS_FLEET_REGISTRY_NOW");
             std::env::set_var("MAW_RS_FLEET_REGISTRY_NOW", "2026-07-03T02:03:04.000Z");
+            let repo = root.join("ghq/github.com/acme/neo-oracle");
+            wake_init_git(&repo);
             let mut tmux = WakeMockTmux::default();
 
             let (code, stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("first wake");
@@ -1964,7 +2058,15 @@ mod wake_tests {
             assert_eq!(windows.len(), 2);
             assert!(windows.iter().any(|window| window["name"] == "neo"));
             assert!(windows.iter().any(|window| window["name"] == "neo-issue-90"));
+            assert!(
+                windows.iter().all(|window| window["repo"] == "acme/neo-oracle"),
+                "{windows:?}"
+            );
             assert!(windows.iter().all(|window| window["kind"] == "oracle"), "{windows:?}");
+            let worktree = repo.join("agents/issue-90");
+            assert!(tmux.actions.iter().any(|action| {
+                action.starts_with("new-window") && action.contains(&worktree.display().to_string())
+            }), "{:?}", tmux.actions);
             assert_eq!(updated["created_at"], "2026-07-03T02:03:04.000Z");
         });
     }
