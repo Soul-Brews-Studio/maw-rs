@@ -554,14 +554,21 @@ fn serveengine_pty_resolve_target(
     if target.contains(':') {
         return Ok(target);
     }
-    for pane in state.servecore_agents_panes() {
+    // #880: PROPAGATE. Resolving a bare name into `session:window.pane` is
+    // entirely a question about live tmux state. With the reads swallowed,
+    // an unreachable tmux made both lookups miss, resolution fell through to
+    // the raw string, and the client got `{"type":"attached"}` for a target
+    // nobody had verified -- a successful-looking attach to a pane that may
+    // not exist. This socket already carries a typed error frame
+    // (`serveengine_ws_error`), so the failure travels down it for free.
+    for pane in state.servecore_agents_panes()? {
         if pane.id == target || pane.title == target {
             return serveengine_ws_validate_target(&pane.target);
         }
     }
     Ok(serveengine_resolve_capture_target(
         &target,
-        &state.servecore_tmux_sessions(),
+        &state.servecore_tmux_sessions()?,
     ))
 }
 

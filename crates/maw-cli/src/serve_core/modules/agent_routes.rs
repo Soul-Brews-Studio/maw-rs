@@ -41,7 +41,21 @@ async fn agents_get(
 ) -> impl IntoResponse {
     match agents_parse_query(&query) {
         Ok(options) => {
-            let panes = state.servecore_agents_panes();
+            // #880: PROPAGATE. This endpoint's entire product is the pane
+            // listing, so an unreachable tmux has nothing truthful to return.
+            // 503 with the typed body `/api/sessions` established lets a
+            // client distinguish "no agents are running" from "I could not
+            // look" -- the distinction #860 was filed over.
+            let panes = match state.servecore_agents_panes() {
+                Ok(panes) => panes,
+                Err(error) => {
+                    return (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        Json(json!({"error": error})),
+                    )
+                        .into_response()
+                }
+            };
             let total = panes.len();
             let agents = agents_render(&panes, state.agents_node.as_deref(), options.all);
             Json(json!({
@@ -279,5 +293,75 @@ mod tests {
         assert_eq!(unfiltered_payload["count"], 2);
         assert_eq!(unfiltered_payload["total"], 2);
         assert_eq!(unfiltered_payload["filtered_by"], "none (?all=1)");
+    }
+
+    /// #880: inside `maw serve`, an unreachable tmux used to render as
+    /// `{"agents":[],"count":0,"total":0}` -- HTTP 200, indistinguishable
+    /// from a node that genuinely has no agents. That is the #860 defect on
+    /// the daemon surface. `/api/agents` now answers 503 with the same typed
+    /// body `/api/sessions` uses, so a client can tell "nothing running" from
+    /// "I cannot see".
+    #[tokio::test]
+    async fn agents880_unreachable_tmux_is_503_not_an_empty_agent_list() {
+        let state = ServecoreSharedState::default()
+            .servecore_with_agents_node(Some("node-a".to_owned()))
+            .servecore_with_tmux_unreachable(
+                "error connecting to /tmp/tmux-1028/default (No such file or directory)",
+            );
+        let addr = agents_spawn(state).await;
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .expect("client");
+        let response = client
+            .get(format!("http://{addr}/api/agents"))
+            .send()
+            .await
+            .expect("agents");
+
+        assert_eq!(
+            response.status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "an unreachable tmux must not be reported as a successful empty listing"
+        );
+        let payload = response.json::<serde_json::Value>().await.expect("json");
+        let error = payload["error"].as_str().unwrap_or_default();
+        assert!(
+            error.contains("tmux unreachable"),
+            "503 body must carry the typed tmux-unreachable error: {payload}"
+        );
+        assert!(
+            error.contains("/tmp/tmux-1028/default"),
+            "the underlying tmux error must stay visible for debugging: {payload}"
+        );
+        assert!(
+            payload.get("agents").is_none() && payload.get("count").is_none(),
+            "a failed read must not also ship a fleet listing: {payload}"
+        );
+    }
+
+    /// True-negative guard for #880: a reachable tmux with no panes is still a
+    /// perfectly good 200 with an empty list. The fix must not turn every
+    /// empty answer into an error.
+    #[tokio::test]
+    async fn agents880_reachable_and_genuinely_empty_still_answers_200() {
+        let state = ServecoreSharedState::default()
+            .servecore_with_agents_node(Some("node-a".to_owned()))
+            .servecore_with_agents_snapshot(Vec::new());
+        let addr = agents_spawn(state).await;
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .expect("client");
+        let response = client
+            .get(format!("http://{addr}/api/agents"))
+            .send()
+            .await
+            .expect("agents");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = response.json::<serde_json::Value>().await.expect("json");
+        assert_eq!(payload["count"], 0);
+        assert_eq!(payload["total"], 0);
     }
 }
