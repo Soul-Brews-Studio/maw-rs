@@ -2170,6 +2170,72 @@ mod serve_tests {
         assert_eq!(plugin.status(), StatusCode::OK);
     }
 
+    fn serve_ws_upgrade_request(uri: &str) -> axum::http::request::Builder {
+        axum::http::Request::get(uri)
+            .header("connection", "Upgrade")
+            .header("upgrade", "websocket")
+            .header("sec-websocket-version", "13")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+    }
+
+    // #828: /ws reaches `tmux send-keys`, but the gate only looked at `/api/`,
+    // so an unauthenticated upgrade got past it (verified live: 101 from the LAN
+    // while /api/feed answered 401 on the same daemon).
+    #[tokio::test]
+    async fn serve_ws_upgrade_is_gated_by_the_api_token() {
+        let app = serve_test_app_with_api_auth(ServeApiTokenAuth {
+            token: Some("secret-token".to_owned()),
+            loopback_exempt: false,
+            forced_open: false,
+        });
+
+        for uri in ["/ws?target=nova:1.0", "/ws/tmux", "/ws/pty"] {
+            let denied = app
+                .clone()
+                .oneshot(serve_ws_upgrade_request(uri).body(Body::empty()).unwrap())
+                .await
+                .expect("ws denied");
+            assert_eq!(denied.status(), StatusCode::UNAUTHORIZED, "{uri} unauthenticated");
+        }
+
+        // The credentialed upgrade still reaches the handler; oneshot has no
+        // connection to hand over, so it stops at the extractor, not the gate.
+        let allowed = app
+            .oneshot(
+                serve_ws_upgrade_request("/ws?target=nova:1.0")
+                    .header("x-maw-token", "secret-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("ws token");
+        assert_ne!(allowed.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // Open mode leaves the token unset, which is exactly when the old gate fell
+    // open. A keystroke-injecting socket has to fail closed instead.
+    #[tokio::test]
+    async fn serve_ws_upgrade_refuses_when_no_token_is_configured() {
+        let app = serve_test_app_with_api_auth(ServeApiTokenAuth::open());
+
+        let feed = app
+            .clone()
+            .oneshot(axum::http::Request::get("/api/feed").body(Body::empty()).unwrap())
+            .await
+            .expect("open mode feed");
+        assert_eq!(feed.status(), StatusCode::OK);
+
+        let ws = app
+            .oneshot(
+                serve_ws_upgrade_request("/ws?target=nova:1.0")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("open mode ws");
+        assert_eq!(ws.status(), StatusCode::UNAUTHORIZED);
+    }
+
     #[tokio::test]
     async fn serve_api_token_auth_open_mode_is_backward_compatible() {
         let app = serve_test_app_with_api_auth(ServeApiTokenAuth::open());

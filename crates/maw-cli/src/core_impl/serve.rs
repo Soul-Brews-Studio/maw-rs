@@ -538,13 +538,26 @@ fn serve_router(state: ServeState) -> Router {
     router.with_state(state)
 }
 
+/// `/ws` and `/ws/*` carry a `send` frame that reaches `tmux send-keys` (#828),
+/// so the websocket surface never gets the `/api/` fall-open: an absent or
+/// `authMode:"open"` token refuses the upgrade instead of accepting it.
+fn serve_path_is_websocket(path: &str) -> bool {
+    path == "/ws" || path.starts_with("/ws/")
+}
+
 async fn serve_api_token_gate(
     State(auth): State<ServeApiTokenAuth>,
     req: Request<Body>,
     next: Next,
 ) -> Response {
     let path = req.uri().path();
-    if !path.starts_with("/api/") || path == "/api/health" || auth.forced_open || auth.token.is_none() {
+    let websocket = serve_path_is_websocket(path);
+    if !websocket
+        && (!path.starts_with("/api/")
+            || path == "/api/health"
+            || auth.forced_open
+            || auth.token.is_none())
+    {
         return next.run(req).await;
     }
     if auth.loopback_exempt {
@@ -554,7 +567,9 @@ async fn serve_api_token_gate(
             }
         }
     }
-    if auth.token_matches(req.headers()) {
+    // `token_matches` answers true for an unconfigured token; on the websocket
+    // path that would reinstate the very fall-open this gate exists to close.
+    if auth.token.is_some() && auth.token_matches(req.headers()) {
         return next.run(req).await;
     }
     (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized", "auth": "maw-serve-token"}))).into_response()
