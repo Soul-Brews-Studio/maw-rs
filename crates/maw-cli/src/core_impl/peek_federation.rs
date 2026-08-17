@@ -155,6 +155,37 @@ fn peek_lookup_peer(alias: &str) -> Option<PeekPeer> {
     Some(PeekPeer { alias: alias.to_owned(), url: url.to_owned() })
 }
 
+/// Build the curl argv for a signed `/api/capture` GET.
+///
+/// Pure and separated from `peek_fetch_remote` specifically so it can be
+/// checked against `kill_validate_curl_argv` without a live peer. The first
+/// version inlined a raw `"\n%{http_code}"` as the `-w` value — a real newline,
+/// not a marker string — and `kill_validate_curl_argv` (reused below via
+/// `kill_spawn_curl`) rejects EVERY argv entry containing a control character;
+/// Rust's `is_control()` counts `\n` as one. That passed review and clippy and
+/// failed on the first live call to a real peer. `kill`'s own `-w` value was
+/// never a raw newline for exactly this reason
+/// (`KILL_PEER_HTTP_STATUS_MARKER`); this should have reused that constant
+/// instead of re-deriving the same idea worse.
+fn peek_capture_curl_argv(peer_url: &str, target: &str, headers: &Headers) -> Vec<String> {
+    let mut argv = vec![
+        "-sS".to_owned(),
+        "--max-time".to_owned(),
+        "10".to_owned(),
+        "-w".to_owned(),
+        format!("{KILL_PEER_HTTP_STATUS_MARKER}%{{http_code}}"),
+    ];
+    for (name, value) in headers.to_btree_map() {
+        argv.push("-H".to_owned());
+        argv.push(format!("{name}: {value}"));
+    }
+    // `--` before the URL, like kill: without it a peer URL beginning with '-'
+    // would be parsed by curl as a flag. kill_validate_curl_argv enforces it.
+    argv.push("--".to_owned());
+    argv.push(peek_capture_url(peer_url, target));
+    argv
+}
+
 /// GET the peer's `/api/capture`, signed the way every other federated call is.
 fn peek_fetch_remote(peer: &PeekPeer, target: &str, from: &str) -> Result<String, String> {
     let path = format!("/api/capture?target={}", peek_percent_encode(target));
@@ -167,21 +198,7 @@ fn peek_fetch_remote(peer: &PeekPeer, target: &str, from: &str) -> Result<String
         .try_into()
         .map_err(|_| "peek: timestamp out of range".to_owned())?;
     let headers = sign_headers_v3_at(&federation_token, &peer_key, from, "GET", &path, None, timestamp)?;
-    let mut argv = vec![
-        "-sS".to_owned(),
-        "--max-time".to_owned(),
-        "10".to_owned(),
-        "-w".to_owned(),
-        "\n%{http_code}".to_owned(),
-    ];
-    for (name, value) in headers.to_btree_map() {
-        argv.push("-H".to_owned());
-        argv.push(format!("{name}: {value}"));
-    }
-    // `--` before the URL, like kill: without it a peer URL beginning with '-'
-    // would be parsed by curl as a flag. kill_validate_curl_argv enforces it.
-    argv.push("--".to_owned());
-    argv.push(peek_capture_url(&peer.url, target));
+    let argv = peek_capture_curl_argv(&peer.url, target, &headers);
     let output = kill_spawn_curl(&argv)?;
     let (status, body) = kill_split_peer_http_output(&output)?;
     peek_parse_capture_response(&peer.alias, status, &body)
@@ -208,6 +225,23 @@ fn peek_local_session_names<R: maw_tmux::TmuxRunner>(runner: &mut R) -> Vec<Stri
         .map(|raw| raw.lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_owned).collect())
         .unwrap_or_default()
 }
+
+    // Pins the live-call failure directly: the first version of peek_capture_curl_argv
+    // built the -w value as "\n%{http_code}" (a raw newline), which passed clippy and
+    // review but failed kill_validate_curl_argv's own control-character check on the
+    // first real request. This asserts the produced argv passes that exact validator,
+    // and separately proves the OLD shape would have failed it.
+    #[test]
+    fn peek_capture_curl_argv_passes_kill_validate_curl_argv() {
+        let headers = Headers::new([("x-maw-from", "white:oracle"), ("x-maw-sig", "deadbeef")]);
+        let argv = peek_capture_curl_argv("http://black.test:3467", "16-thclaws:0", &headers);
+        assert!(kill_validate_curl_argv(&argv).is_ok(), "{argv:?}");
+        assert!(argv.iter().any(|arg| arg.starts_with(KILL_PEER_HTTP_STATUS_MARKER)), "{argv:?}");
+
+        // The exact regression: a raw newline in the -w value is what shipped and broke.
+        let broken = vec!["-w".to_owned(), "\n%{http_code}".to_owned()];
+        assert!(kill_validate_curl_argv(&broken).is_err(), "the bug this test exists to catch no longer reproduces");
+    }
 
 #[cfg(test)]
 mod peek_federation_tests {
