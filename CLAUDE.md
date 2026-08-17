@@ -74,11 +74,11 @@ next run (stale code-sign cache on the reused inode) — `rm` first, then `cp`.
 
 Layered Cargo workspace:
 
-- **Leaf crates** — self-contained, deterministic, side-effect-free core
-  logic (matching, routing, identity, transport, plugin manifest, …) with no
-  internal dependencies. Fourteen leaves (activity, auto-wake, bind, bring,
-  feed, fuzzy, hub, identity, matcher, plugin-scaffold, policy, routing,
-  schedule, split) were extracted to the external
+- **Leaf crates** — self-contained logic with no internal dependencies. Most
+  are deterministic and side-effect-free; filesystem-facing leaves keep I/O
+  within documented boundaries. Fifteen leaves (activity, auto-wake, bind,
+  bring, feed, fuzzy, hub, identity, matcher, plugin-scaffold, policy,
+  routing, schedule, split, xdg) were extracted to the external
   [Soul-Brews-Studio/maw-crates](https://github.com/Soul-Brews-Studio/maw-crates)
   repo (2026-07 to 2026-08) and are consumed as rev-pinned Cargo git
   dependencies, like `maw-calver`. `maw-discord`

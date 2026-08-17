@@ -90,12 +90,14 @@ git diff --name-only | grep '^ψ/' || true
 
 ## Workspace map
 
-- Leaf crates: deterministic, side-effect-free core logic with no internal deps.
+- Leaf crates: self-contained logic with no internal deps. Most are deterministic and
+  side-effect-free; filesystem-facing leaves contain I/O within documented boundaries.
 - Mid crates: compose leaves, such as peer/tmux/worktree layers.
 - Top crate: `maw-cli`, the binary and integration surface.
 
-New logic belongs in the lowest layer that can hold it. Keep I/O out of leaf crates. Use
-`cargo tree` as the authoritative dependency graph.
+New logic belongs in the lowest layer that can hold it. Keep I/O out of pure core leaves;
+explicit filesystem-facing leaf adapters must contain and test their I/O. Use `cargo tree`
+as the authoritative dependency graph.
 
 ## No raw tmux
 

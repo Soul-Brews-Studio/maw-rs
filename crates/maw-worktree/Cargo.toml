@@ -7,7 +7,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-maw-matcher = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "a0fdbe1aa2ea083c7c8f921e82f448d29789f1b0" }
+maw-matcher = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "e46932081dfd1a20bb962506086f1befe5525fa4" }
 
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }
