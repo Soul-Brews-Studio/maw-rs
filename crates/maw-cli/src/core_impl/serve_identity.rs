@@ -79,13 +79,44 @@ fn serveidentity_usage_error(message: &str) -> CliOutput {
 }
 
 
-pub(crate) fn serveidentity_http_payload_read_only() -> Result<serde_json::Value, String> {
+/// The identity read-only path can fail two very different ways: a brand-new node that has
+/// never run `maw peers add` has no peer-key file yet (expected, pre-pairing state — #867), or
+/// something is genuinely wrong reading it (permissions, disk fault, corrupt file, …). Callers
+/// (the `/api/identity` route) need to tell these apart to avoid reporting the former as a
+/// server fault.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ServeidentityIdentityError {
+    /// No peer-key file exists yet. The file is created lazily by `maw peers add`, so this is
+    /// the normal state of a node that has never been paired.
+    NotPaired,
+    /// Any other failure reading or validating the peer-key (I/O fault, empty file, …).
+    Failed(String),
+}
+
+impl ServeidentityIdentityError {
+    pub(crate) fn is_not_paired(&self) -> bool {
+        matches!(self, Self::NotPaired)
+    }
+
+    pub(crate) fn message(&self) -> String {
+        match self {
+            Self::NotPaired => {
+                "this node has not been paired yet — run `maw peers add`".to_owned()
+            }
+            Self::Failed(message) => message.clone(),
+        }
+    }
+}
+
+pub(crate) fn serveidentity_http_payload_read_only(
+) -> Result<serde_json::Value, ServeidentityIdentityError> {
     let config = serveidentity_load_config();
     let deps = serveidentity_default_read_only_deps()?;
     Ok(serveidentity_identity_payload(&config, &deps))
 }
 
-fn serveidentity_default_read_only_deps() -> Result<ServeidentityDeps, String> {
+fn serveidentity_default_read_only_deps() -> Result<ServeidentityDeps, ServeidentityIdentityError>
+{
     Ok(ServeidentityDeps {
         version: MAW_RS_BUILD_VERSION.to_owned(),
         uptime_seconds: current_epoch_seconds().saturating_sub(serveidentity_process_started_at()),
@@ -97,7 +128,7 @@ fn serveidentity_default_read_only_deps() -> Result<ServeidentityDeps, String> {
     })
 }
 
-fn serveidentity_read_peer_key() -> Result<String, String> {
+fn serveidentity_read_peer_key() -> Result<String, ServeidentityIdentityError> {
     if let Ok(value) = std::env::var("MAW_PEER_KEY") {
         if !value.is_empty() {
             return Ok(value);
@@ -105,11 +136,20 @@ fn serveidentity_read_peer_key() -> Result<String, String> {
     }
     let env = real_xdg_env();
     let path = maw_state_path(&env, &["peer-key"]);
-    let raw = std::fs::read_to_string(&path)
-        .map_err(|error| format!("failed to read peer-key for identity: {error}"))?;
+    let raw = std::fs::read_to_string(&path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            ServeidentityIdentityError::NotPaired
+        } else {
+            ServeidentityIdentityError::Failed(format!(
+                "failed to read peer-key for identity: {error}"
+            ))
+        }
+    })?;
     let key = raw.trim().to_owned();
     if key.is_empty() {
-        return Err("failed to read peer-key for identity: empty peer-key".to_owned());
+        return Err(ServeidentityIdentityError::Failed(
+            "failed to read peer-key for identity: empty peer-key".to_owned(),
+        ));
     }
     Ok(key)
 }
@@ -398,12 +438,64 @@ mod serveidentity_tests {
         std::env::remove_var("MAW_PEER_KEY");
 
         let missing = serveidentity_http_payload_read_only().expect_err("missing key");
-        assert!(missing.contains("failed to read peer-key"));
+        assert_eq!(missing, ServeidentityIdentityError::NotPaired);
         assert!(!state.join("peer-key").exists());
 
         std::fs::write(state.join("peer-key"), "pub-from-file\n").expect("peer-key");
         let payload = serveidentity_http_payload_read_only().expect("payload");
         assert_eq!(payload["pubkey"], "pub-from-file");
+    }
+
+    // #867: a real I/O fault reading an *existing* peer-key (permissions, not "file absent")
+    // must stay `Failed`, not get folded into the pre-pairing `NotPaired` case — otherwise a
+    // genuine server fault would be misreported as "just not paired yet".
+    #[test]
+    fn serveidentity_permission_denied_on_existing_peer_key_is_not_mistaken_for_not_paired() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = env_test_lock();
+        let _restore_home = EnvVarRestore::capture("HOME");
+        let _restore_maw_home = EnvVarRestore::capture("MAW_HOME");
+        let _restore_maw_state = EnvVarRestore::capture("MAW_STATE_DIR");
+        let _restore_maw_config = EnvVarRestore::capture("MAW_CONFIG_DIR");
+        let _restore_peer = EnvVarRestore::capture("MAW_PEER_KEY");
+        let root = std::env::temp_dir().join(format!(
+            "maw-rs-serveidentity-ioerr-{}",
+            current_epoch_seconds()
+        ));
+        let state = root.join("state");
+        let config = root.join("config");
+        std::fs::create_dir_all(&state).expect("state");
+        std::fs::create_dir_all(&config).expect("config");
+        std::env::set_var("HOME", &root);
+        std::env::set_var("MAW_STATE_DIR", &state);
+        std::env::set_var("MAW_CONFIG_DIR", &config);
+        std::env::remove_var("MAW_HOME");
+        std::env::remove_var("MAW_PEER_KEY");
+
+        let peer_key_path = state.join("peer-key");
+        std::fs::write(&peer_key_path, "pub-from-file\n").expect("peer-key");
+        std::fs::set_permissions(&peer_key_path, std::fs::Permissions::from_mode(0o000))
+            .expect("chmod 000");
+
+        let result = serveidentity_http_payload_read_only();
+
+        // Restore permissions before any assertion can early-return, so the temp dir is always
+        // cleanable regardless of outcome.
+        std::fs::set_permissions(&peer_key_path, std::fs::Permissions::from_mode(0o644))
+            .expect("chmod restore");
+
+        let error = result.expect_err("permission-denied read must fail");
+        assert!(
+            !error.is_not_paired(),
+            "a permission fault on an *existing* file must not read as not_paired: {error:?}"
+        );
+        match error {
+            ServeidentityIdentityError::Failed(message) => {
+                assert!(message.starts_with("failed to read peer-key for identity:"));
+            }
+            ServeidentityIdentityError::NotPaired => panic!("expected Failed, got NotPaired"),
+        }
     }
 
     #[test]
