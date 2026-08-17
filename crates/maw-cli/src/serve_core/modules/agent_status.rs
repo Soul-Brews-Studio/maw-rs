@@ -262,21 +262,20 @@ fn agentstatus_snapshot_matches_sessions(
     snapshot: &AgentStatusSnapshot,
     sessions: &[AgentStatusSession],
 ) -> bool {
-    // #889: the throttle may reuse status values, but never for a different
-    // session/window set. The UI combines this snapshot with the fresh
-    // `sessions` argument, so a shape mismatch would serialize null statuses.
-    let expected_len = sessions
+    // #889/#892: the throttle may reuse status values, but never for a
+    // different session/window set. Build the fresh set before comparing so
+    // duplicate synthetic inputs cannot hide an unrelated cached target.
+    let fresh_targets = sessions
         .iter()
-        .map(|session| session.windows.len())
-        .sum::<usize>();
-    expected_len == snapshot.statuses.len()
-        && sessions.iter().all(|session| {
-            session.windows.iter().all(|window| {
-                snapshot
-                    .statuses
-                    .contains_key(&agentstatus_target(&session.name, window.index))
-            })
+        .flat_map(|session| {
+            session
+                .windows
+                .iter()
+                .map(|window| agentstatus_target(&session.name, window.index))
         })
+        .collect::<BTreeSet<_>>();
+    let cached_targets = snapshot.statuses.keys().cloned().collect::<BTreeSet<_>>();
+    fresh_targets == cached_targets
 }
 
 pub(crate) fn agentstatus_feed_history_and_cursor() -> (Vec<AgentStatusFeedEvent>, u64) {
@@ -732,6 +731,29 @@ mod tests {
         fn agentstatus_capture(&mut self, target: &str) -> Option<String> {
             self.captures.get(target).cloned()
         }
+    }
+
+    #[test]
+    fn agentstatus_snapshot_match_rejects_duplicate_target_hiding_stale_key() {
+        let sessions = vec![
+            agentstatus_test_session("duplicate", &[("first", 1)]),
+            agentstatus_test_session("duplicate", &[("second", 1)]),
+        ];
+        let mut snapshot = AgentStatusSnapshot {
+            statuses: BTreeMap::from([
+                ("duplicate:1".to_owned(), AgentStatusKind::Idle),
+                ("stale:1".to_owned(), AgentStatusKind::Idle),
+            ]),
+            agent_targets: BTreeSet::new(),
+        };
+
+        assert!(
+            !agentstatus_snapshot_matches_sessions(&snapshot, &sessions),
+            "duplicate fresh targets must not hide an unrelated cached target"
+        );
+
+        snapshot.statuses.remove("stale:1");
+        assert!(agentstatus_snapshot_matches_sessions(&snapshot, &sessions));
     }
 
     #[test]
