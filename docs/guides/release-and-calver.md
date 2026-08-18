@@ -1,6 +1,6 @@
 # Release and CalVer guide
 
-Condensed from `CLAUDE.md`; keep that file as the detailed Claude-facing release memory.
+This guide is the canonical release memory shared by every agent surface.
 
 ## Version scheme
 

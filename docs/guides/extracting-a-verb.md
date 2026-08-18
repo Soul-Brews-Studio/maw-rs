@@ -183,9 +183,9 @@ cargo clippy --manifest-path packages/NN-<verb>/Cargo.toml \
   --target wasm32-unknown-unknown -- -D warnings
 
 # PR-B
-CARGO_TARGET_DIR=/tmp/maw-rs-target-<worktree> \
+CARGO_TARGET_DIR=/mnt/nvme1/cargo/target-omx-<worktree> \
   cargo test -p maw-cli --test <targeted-parity-test> -- --nocapture
-CARGO_TARGET_DIR=/tmp/maw-rs-target-<worktree> \
+CARGO_TARGET_DIR=/mnt/nvme1/cargo/target-omx-<worktree> \
   cargo clippy -p maw-cli -p maw-plugin-manifest --all-targets -- -D warnings
 ```
 
