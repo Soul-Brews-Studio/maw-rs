@@ -2042,6 +2042,16 @@ mod serve_tests {
                     .servecore_with_engine(Arc::new(crate::serve_core::ServecoreNativeEngine))
                     .servecore_with_auth(Some(KEY.to_owned()), None)
                     .servecore_with_auth_now(1_782_277_200)
+                    .servecore_with_god_config(
+                        crate::serve_core::ServecoreGodConfig::servecore_from_parts(
+                            Some("m5"),
+                            BTreeMap::from([("neo".to_owned(), "local".to_owned())]),
+                            vec![crate::serve_core::ServecoreGodNamedPeer {
+                                name: "white".to_owned(),
+                                url: "http://192.168.1.164:3456".to_owned(),
+                            }],
+                        ),
+                    )
                     .servecore_with_agents_snapshot(Vec::new())
                     .servecore_with_tmux_sessions_snapshot(Vec::new()),
             ),
@@ -3177,20 +3187,35 @@ mod serve_tests {
             .await
             .expect("public request");
         assert_eq!(public.status(), StatusCode::OK);
-        let costs = client
-            .get(format!("http://{addr}/api/costs"))
+        let config = client
+            .get(format!("http://{addr}/api/config"))
             .header("origin", "https://god.buildwithoracle.com")
             .send()
             .await
-            .expect("costs request");
-        assert_eq!(costs.status(), StatusCode::OK, "/api/costs");
+            .expect("config request");
+        assert_eq!(config.status(), StatusCode::OK, "/api/config");
         assert_eq!(
-            costs
+            config
                 .headers()
                 .get("access-control-allow-origin")
                 .and_then(|value| value.to_str().ok()),
             Some("https://god.buildwithoracle.com")
         );
+        assert_eq!(
+            config.json::<Value>().await.expect("config json"),
+            json!({
+                "node": "m5",
+                "agents": {"neo": "local"},
+                "namedPeers": [{"name": "white", "url": "http://192.168.1.164:3456"}]
+            })
+        );
+        let evil = client
+            .get(format!("http://{addr}/api/config"))
+            .header("origin", "https://evil.example")
+            .send()
+            .await
+            .expect("evil-origin config request");
+        assert_eq!(evil.status(), StatusCode::FORBIDDEN);
         let missing = client
             .get(format!("http://{addr}/api/missing-god-ui-route"))
             .header("origin", "https://god.buildwithoracle.com")

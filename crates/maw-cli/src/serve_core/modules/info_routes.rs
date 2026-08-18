@@ -61,6 +61,11 @@ fn info_node_fallback() -> String {
     .clone()
 }
 
+pub(crate) fn info_resolved_node(node: Option<&str>) -> String {
+    node.filter(|value| !value.trim().is_empty())
+        .map_or_else(info_node_fallback, str::to_owned)
+}
+
 /// `hostname -s` — the short hostname, works on macOS and Linux where
 /// `$HOSTNAME`/`/etc/hostname` may be absent. `None` on any failure.
 fn info_hostname_short() -> Option<String> {
@@ -75,9 +80,7 @@ fn info_hostname_short() -> Option<String> {
 }
 
 fn info_payload(node: Option<&str>, oracle: Option<&str>) -> Value {
-    let node = node
-        .filter(|value| !value.trim().is_empty())
-        .map_or_else(info_node_fallback, str::to_owned);
+    let node = info_resolved_node(node);
     let mut payload = json!({
         "node": node,
         "version": crate::core_impl::MAW_RS_BUILD_VERSION,

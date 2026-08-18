@@ -103,6 +103,46 @@ pub type ServecoreAgentPanesSource =
 pub type ServecoreTmuxSessionsSource =
     Arc<dyn Fn() -> Result<Vec<TmuxSession>, String> + Send + Sync>;
 
+/// Secret-incapable startup snapshot used by the hosted God UI connector.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ServecoreGodConfig {
+    pub node: String,
+    pub agents: BTreeMap<String, String>,
+    #[serde(rename = "namedPeers")]
+    pub named_peers: Vec<ServecoreGodNamedPeer>,
+}
+
+impl ServecoreGodConfig {
+    #[must_use]
+    pub fn servecore_from_parts(
+        node: Option<&str>,
+        agents: BTreeMap<String, String>,
+        named_peers: Vec<ServecoreGodNamedPeer>,
+    ) -> Self {
+        Self {
+            node: modules::info_routes::info_resolved_node(node),
+            agents,
+            named_peers,
+        }
+    }
+}
+
+impl Default for ServecoreGodConfig {
+    fn default() -> Self {
+        Self {
+            node: "local".to_owned(),
+            agents: BTreeMap::new(),
+            named_peers: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ServecoreGodNamedPeer {
+    pub name: String,
+    pub url: String,
+}
+
 /// The one place the `maw serve` surface spells the tmux-unreachable message,
 /// so every handler in this daemon reports a dead tmux exactly the way
 /// `/api/sessions` does (#860, #880).
@@ -120,6 +160,7 @@ pub struct ServecoreSharedState {
     pub hub_workspaces: Arc<Vec<WorkspaceConfig>>,
     pub agents_node: Option<String>,
     pub agents_oracle: Option<String>,
+    pub god_config: ServecoreGodConfig,
     pub agents_source: Option<ServecoreAgentPanesSource>,
     pub tmux_sessions_source: Option<ServecoreTmuxSessionsSource>,
     pub auth_workspace_key: Option<String>,
@@ -139,6 +180,7 @@ impl Default for ServecoreSharedState {
             hub_workspaces: Arc::new(Vec::new()),
             agents_node: None,
             agents_oracle: None,
+            god_config: ServecoreGodConfig::default(),
             agents_source: None,
             tmux_sessions_source: None,
             auth_workspace_key: None,
@@ -165,6 +207,12 @@ impl ServecoreSharedState {
     #[must_use]
     pub fn servecore_with_agents_oracle(mut self, oracle: Option<String>) -> Self {
         self.agents_oracle = oracle;
+        self
+    }
+
+    #[must_use]
+    pub fn servecore_with_god_config(mut self, config: ServecoreGodConfig) -> Self {
+        self.god_config = config;
         self
     }
 

@@ -9,6 +9,12 @@
 command-capable WebSocket authentication; it never bypasses it. Missing-Origin native
 clients continue through the existing auth policy.
 
+The God UI connector's `GET /api/config` response is a daemon-start snapshot
+containing exactly `node`, `agents`, and named-peer `{name,url}` rows. It is a
+typed, secret-free projection rather than a config export: query strings are
+rejected and no mutation method is mounted. Missing/blank `node` uses the same
+nonempty machine-name fallback as `/info`.
+
 ## TOP REFRAME
 serve-* are **NOT standalone CLI commands**. They are **serve-lifecycle plugins** that all mount onto the *single* `maw serve` Bun HTTP+WS server. No `maw serve-ws` entrypoint. maw-rs #86-94 → 8 native **modules registering into one shared gateway**, not 8 processes.
 - One server: `startBunGatewayServer` `src/core/server.ts:271-540` → one `Bun.serve({fetch,websocket})` (`:488`).

@@ -12,7 +12,10 @@ use crate::serve_core::{
 };
 use axum::{
     body::{to_bytes, Body},
-    extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
+    extract::{
+        ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
+        RawQuery,
+    },
     http::{Request, StatusCode, Uri},
     response::{IntoResponse, Response},
     routing::get,
@@ -57,6 +60,7 @@ where
     S: Clone + Send + Sync + 'static,
 {
     router
+        .route("/api/config", get(godui_config_get))
         .route("/api/costs", get(godui_costs_get))
         .route("/api/teams", get(godui_teams_get))
         .route(
@@ -71,6 +75,20 @@ where
                 super::websocket_routes::WsConfig::ws_from_process_env(),
             )),
         )
+}
+
+async fn godui_config_get(
+    RawQuery(query): RawQuery,
+    Extension(state): Extension<Arc<ServecoreSharedState>>,
+) -> Response {
+    if query.is_some() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "config_query_not_supported"})),
+        )
+            .into_response();
+    }
+    Json(state.god_config.clone()).into_response()
 }
 
 async fn godui_costs_get() -> impl IntoResponse {
@@ -901,7 +919,7 @@ mod tests {
     use super::*;
     use crate::serve_core::{
         modules::servecore_mount_modules, servecore_apply_pipeline, servecore_mount_core_routes,
-        servecore_with_shared_state,
+        servecore_with_shared_state, ServecoreGodConfig,
     };
     use axum::{
         body::Body,
@@ -1383,6 +1401,98 @@ mod tests {
         assert_eq!(member["backendType"], "in-process");
         assert_eq!(member["model"], "sonnet");
         fs::remove_dir_all(root).ok();
+    }
+
+    #[tokio::test]
+    async fn godui_config_fails_closed_without_mutating_origin_or_auth_policy() {
+        let config =
+            ServecoreGodConfig::servecore_from_parts(Some("  "), BTreeMap::new(), Vec::new());
+        let app = godui_test_app(ServecoreSharedState::default().servecore_with_god_config(config));
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/config")
+                    .header("origin", "https://god.buildwithoracle.com")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value = serde_json::from_slice(
+            &to_bytes(response.into_body(), GODUI_POST_BODY_LIMIT)
+                .await
+                .expect("body"),
+        )
+        .expect("json");
+        assert!(body["node"].as_str().is_some_and(|node| !node.is_empty()));
+        assert_eq!(body["agents"], json!({}));
+        assert_eq!(body["namedPeers"], json!([]));
+
+        for (method, uri, origin, expected) in [
+            (
+                Method::GET,
+                "/api/config?raw=1",
+                Some("https://god.buildwithoracle.com"),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                Method::POST,
+                "/api/config",
+                None,
+                StatusCode::METHOD_NOT_ALLOWED,
+            ),
+            (
+                Method::PUT,
+                "/api/config",
+                None,
+                StatusCode::METHOD_NOT_ALLOWED,
+            ),
+            (
+                Method::PATCH,
+                "/api/config",
+                None,
+                StatusCode::METHOD_NOT_ALLOWED,
+            ),
+            (
+                Method::DELETE,
+                "/api/config",
+                None,
+                StatusCode::METHOD_NOT_ALLOWED,
+            ),
+            (Method::GET, "/api/config", None, StatusCode::OK),
+            (
+                Method::GET,
+                "/api/config",
+                Some("https://evil.example"),
+                StatusCode::FORBIDDEN,
+            ),
+        ] {
+            let mut request = Request::builder().method(method).uri(uri);
+            if let Some(origin) = origin {
+                request = request.header("origin", origin);
+            }
+            let response = app
+                .clone()
+                .oneshot(request.body(Body::empty()).expect("request"))
+                .await
+                .expect("response");
+            assert_eq!(response.status(), expected, "{uri}");
+            if origin == Some("https://evil.example") {
+                assert!(response
+                    .headers()
+                    .get("access-control-allow-origin")
+                    .is_none());
+            }
+        }
+    }
+
+    fn godui_test_app(state: ServecoreSharedState) -> Router {
+        let router = servecore_mount_core_routes(Router::new());
+        let router = servecore_mount_modules(router, &["god-ui".to_owned()]);
+        let router = servecore_with_shared_state(router, state);
+        servecore_apply_pipeline(router)
     }
 
     #[tokio::test]
