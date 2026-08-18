@@ -6,3 +6,9 @@
 !.cargo/**
 !crates/
 !crates/**
+!docker-entrypoint.sh
+**/.maw/**
+**/.omx/**
+**/.env
+**/.env.*
+**/.envrc

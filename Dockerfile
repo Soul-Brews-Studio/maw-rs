@@ -22,6 +22,7 @@ RUN apt-get update \
         /home/maw/.local/share/maw /home/maw/.local/state/maw \
         /home/maw/.cache/maw
 COPY --from=builder /out/maw /usr/local/bin/maw
+COPY --chmod=755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint
 
 ENV HOME=/home/maw MAW_XDG=1 MAW_PORT=3456 GHQ_ROOT=/repos \
     XDG_CONFIG_HOME=/home/maw/.config \
@@ -30,5 +31,5 @@ ENV HOME=/home/maw MAW_XDG=1 MAW_PORT=3456 GHQ_ROOT=/repos \
     XDG_CACHE_HOME=/home/maw/.cache
 USER maw
 WORKDIR /repos
-ENTRYPOINT ["maw"]
+ENTRYPOINT ["docker-entrypoint"]
 CMD ["serve", "--host", "0.0.0.0", "--port", "3456"]

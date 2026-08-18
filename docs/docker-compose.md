@@ -12,7 +12,8 @@ docker compose exec maw maw --version
 ```
 
 The required token makes `docker compose config` fail before startup when it is
-unset or empty. The API binds only to `127.0.0.1:3456` by default. Override with
+unset or empty; the image entrypoint rejects whitespace-only values. The API
+binds only to `127.0.0.1:3456` by default. Override with
 `MAW_BIND_IP` and `MAW_PORT` only when the exposure is intentional.
 
 ```bash
@@ -32,6 +33,7 @@ with `MAW_IMAGE_TAG`. For a deterministic local build, run
 `docker compose build` followed by `docker compose up --build -d`; do not rely
 on registry network or authentication failures falling back to a build.
 Maintainers must verify the GHCR package is public after its first publish.
+`alpha` aliases the canonical SHA build; version-tag images embed that version tag.
 
 The container owns its tmux server and agent processes. It cannot see host tmux,
 the Docker daemon, or host repositories unless content is copied/cloned into
