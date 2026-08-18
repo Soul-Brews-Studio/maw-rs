@@ -181,6 +181,63 @@ mod ws_ticket_tests {
         }
     }
     impl CryptoRng for TestRng {}
+    struct SequenceRng(u64);
+    impl RngCore for SequenceRng {
+        fn next_u32(&mut self) -> u32 {
+            0
+        }
+        fn next_u64(&mut self) -> u64 {
+            0
+        }
+        fn fill_bytes(&mut self, dest: &mut [u8]) {
+            dest.fill(0xa5);
+            dest[..8].copy_from_slice(&self.0.to_le_bytes());
+            self.0 += 1;
+        }
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand_core::Error> {
+            self.fill_bytes(dest);
+            Ok(())
+        }
+    }
+    impl CryptoRng for SequenceRng {}
+    struct FailRng;
+    impl RngCore for FailRng {
+        fn next_u32(&mut self) -> u32 {
+            0
+        }
+        fn next_u64(&mut self) -> u64 {
+            0
+        }
+        fn fill_bytes(&mut self, dest: &mut [u8]) {
+            dest[..4].fill(0xff);
+        }
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand_core::Error> {
+            self.fill_bytes(dest);
+            Err(rand_core::Error::from(
+                std::num::NonZeroU32::new(rand_core::Error::CUSTOM_START).unwrap(),
+            ))
+        }
+    }
+    impl CryptoRng for FailRng {}
+    fn issue_at(
+        store: &WsTicketStore,
+        rng: &mut SequenceRng,
+        now: Instant,
+    ) -> Result<WsTicket, WsTicketIssueError> {
+        store.issue("origin", WsTicketPath::Ws, rng, || now)
+    }
+    fn consume_at(store: &WsTicketStore, token: &str, now: Instant) -> WsTicketConsume {
+        store.consume(token, Some("origin"), WsTicketPath::Ws, || now)
+    }
+    fn no_clock() -> Instant {
+        panic!("clock called")
+    }
+    fn instant_without_ttl_room(base: Instant) -> Instant {
+        (0..64).rev().fold(base, |edge, bit| {
+            edge.checked_add(Duration::from_secs(1_u64 << bit))
+                .unwrap_or(edge)
+        })
+    }
 
     #[test]
     fn exact_format_paths_scope_and_replay() {
@@ -238,6 +295,199 @@ mod ws_ticket_tests {
                 },
             ),
             WsTicketConsume::Rejected
+        );
+    }
+
+    #[test]
+    fn origin_and_token_boundaries_do_not_burn() {
+        let now = Instant::now();
+        let store = WsTicketStore::default();
+        let mut rng = SequenceRng(0);
+        let too_long = "x".repeat(2049);
+        for invalid in ["", too_long.as_str()] {
+            assert!(store
+                .issue(invalid, WsTicketPath::Ws, &mut rng, no_clock)
+                .is_err());
+        }
+        let origin = "x".repeat(2048);
+        let ticket = store
+            .issue(&origin, WsTicketPath::Ws, &mut rng, || now)
+            .unwrap();
+        let token = ticket.expose_secret();
+        let uppercase = format!("{PREFIX}{}", token[PREFIX.len()..].to_ascii_uppercase());
+        for (candidate, bound_origin) in [
+            (token.to_owned() + "0", Some(origin.as_str())),
+            (uppercase, Some(origin.as_str())),
+            (token.to_owned(), Some("")),
+            (token.to_owned(), Some(too_long.as_str())),
+        ] {
+            assert_eq!(
+                store.consume(&candidate, bound_origin, WsTicketPath::Ws, || now),
+                WsTicketConsume::Rejected
+            );
+        }
+        assert_eq!(
+            store.consume(token, Some(&origin), WsTicketPath::Ws, || now),
+            WsTicketConsume::Accepted
+        );
+    }
+    #[test]
+    fn capacity_rejects_without_live_eviction_and_expiry_reclaims() {
+        let now = Instant::now();
+        let store = WsTicketStore::default();
+        let mut rng = SequenceRng(0);
+        let tickets: Vec<_> = (0..256)
+            .map(|_| issue_at(&store, &mut rng, now).unwrap())
+            .collect();
+        assert!(issue_at(&store, &mut rng, now).is_err());
+        assert!(tickets
+            .iter()
+            .all(|ticket| consume_at(&store, ticket.expose_secret(), now)
+                == WsTicketConsume::Accepted));
+        let expired: Vec<_> = (0..256)
+            .map(|_| issue_at(&store, &mut rng, now).unwrap())
+            .collect();
+        let reclaimed = issue_at(&store, &mut rng, now + Duration::from_secs(30)).unwrap();
+        let expiry = now + Duration::from_secs(30);
+        assert_eq!(
+            consume_at(&store, expired[0].expose_secret(), expiry),
+            WsTicketConsume::Rejected
+        );
+        assert_eq!(
+            consume_at(&store, reclaimed.expose_secret(), expiry),
+            WsTicketConsume::Accepted
+        );
+    }
+    #[test]
+    fn entropy_failure_and_collision_leave_state_unchanged() {
+        let now = Instant::now();
+        let store = WsTicketStore::default();
+        let original = issue_at(&store, &mut SequenceRng(1), now).unwrap();
+        assert!(store
+            .issue("attacker", WsTicketPath::Pty, &mut FailRng, no_clock)
+            .is_err());
+        let failed_token = format!("{PREFIX}{}{}", "ff".repeat(4), "00".repeat(28));
+        assert_eq!(
+            store.consume(&failed_token, Some("attacker"), WsTicketPath::Pty, || now),
+            WsTicketConsume::Rejected
+        );
+        assert_eq!(
+            consume_at(&store, original.expose_secret(), now),
+            WsTicketConsume::Accepted
+        );
+        let collision_store = WsTicketStore::default();
+        let original = issue_at(&collision_store, &mut SequenceRng(7), now).unwrap();
+        for _ in 0..3 {
+            assert!(collision_store
+                .issue("attacker", WsTicketPath::Pty, &mut SequenceRng(7), || now)
+                .is_err());
+        }
+        assert_eq!(
+            collision_store.consume(
+                original.expose_secret(),
+                Some("attacker"),
+                WsTicketPath::Pty,
+                || now
+            ),
+            WsTicketConsume::Rejected
+        );
+        assert_eq!(
+            consume_at(&collision_store, original.expose_secret(), now),
+            WsTicketConsume::Accepted
+        );
+    }
+    #[test]
+    fn clock_failures_reject_without_mutation_and_recover() {
+        let now = Instant::now();
+        let store = WsTicketStore::default();
+        let ticket = store
+            .issue("origin", WsTicketPath::Ws, &mut SequenceRng(0), || {
+                assert!(store.0.try_lock().is_err());
+                now + Duration::from_secs(1)
+            })
+            .unwrap();
+        assert_eq!(
+            consume_at(&store, ticket.expose_secret(), now),
+            WsTicketConsume::Rejected
+        );
+        let recovery_clock = || {
+            assert!(store.0.try_lock().is_err());
+            now + Duration::from_secs(1)
+        };
+        let recovered = store.consume(
+            ticket.expose_secret(),
+            Some("origin"),
+            WsTicketPath::Ws,
+            recovery_clock,
+        );
+        assert_eq!(recovered, WsTicketConsume::Accepted);
+        let edge = instant_without_ttl_room(now);
+        assert!(edge.checked_add(Duration::from_secs(30)).is_none());
+        let overflow_store = WsTicketStore::default();
+        assert!(issue_at(&overflow_store, &mut SequenceRng(9), edge).is_err());
+        assert_eq!(
+            consume_at(
+                &overflow_store,
+                "mwt1_0900000000000000a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+                edge,
+            ),
+            WsTicketConsume::Rejected
+        );
+    }
+
+    #[test]
+    fn concurrent_consume_has_exactly_one_winner() {
+        let now = Instant::now();
+        let store = std::sync::Arc::new(WsTicketStore::default());
+        let token = issue_at(&store, &mut SequenceRng(0), now)
+            .unwrap()
+            .expose_secret()
+            .to_owned();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                let (store, token, barrier) = (store.clone(), token.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    consume_at(&store, &token, now)
+                })
+            })
+            .collect();
+        let outcomes: Vec<_> = threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .collect();
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|outcome| **outcome == WsTicketConsume::Accepted)
+                .count(),
+            1
+        );
+        assert!(!outcomes.contains(&WsTicketConsume::Unavailable));
+    }
+
+    #[test]
+    fn poisoned_store_fails_closed_without_calling_clock() {
+        let store = std::sync::Arc::new(WsTicketStore::default());
+        let poison = store.clone();
+        assert!(std::thread::spawn(move || {
+            let _guard = poison.0.lock().unwrap();
+            panic!("poison store");
+        })
+        .join()
+        .is_err());
+        assert!(store
+            .issue("origin", WsTicketPath::Ws, &mut SequenceRng(0), no_clock)
+            .is_err());
+        assert_eq!(
+            store.consume(
+                "mwt1_0000000000000000a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+                Some("origin"),
+                WsTicketPath::Ws,
+                no_clock
+            ),
+            WsTicketConsume::Unavailable
         );
     }
 }
