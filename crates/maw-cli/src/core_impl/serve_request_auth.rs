@@ -38,6 +38,9 @@ fn verify_protected_request_outcome(
     headers: &HeaderMap,
     body: &Bytes,
 ) -> ProtectedRequestOutcome {
+    if serve_operator_context_authenticated() {
+        return ProtectedRequestOutcome::Accept;
+    }
     let effective_peer = effective_peer_addr(state, peer);
     if maw_auth::is_loopback(Some(&effective_peer.ip().to_string())) {
         return ProtectedRequestOutcome::Accept;

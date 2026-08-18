@@ -45,6 +45,7 @@ const SERVECORE_PIPELINE_ORDER: &[&str] = &[
 static SERVECORE_WS_CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
 const SERVECORE_ORCHESTRATION_BODY_LIMIT: usize = 64 * 1024;
 const SERVECORE_MAX_ALLOWED_ORIGINS: usize = 16;
+const SERVECORE_MAX_REQUEST_HEADERS_BYTES: usize = 512;
 
 pub trait ServecoreEngine: Send + Sync {
     fn servecore_engine_name(&self) -> &'static str;
@@ -1578,26 +1579,73 @@ fn servecore_validate_path(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-async fn servecore_cors_preflight(req: Request<Body>, next: Next) -> Response {
+pub(crate) async fn servecore_cors_preflight(req: Request<Body>, next: Next) -> Response {
     let origin = req.headers().get("origin").cloned();
     if !servecore_request_origin_allowed(req.headers()) {
         return servecore_forbidden("origin-not-allowed");
     }
-    let allow_headers = req
-        .headers()
-        .get("access-control-request-headers")
-        .cloned()
-        .unwrap_or_else(|| HeaderValue::from_static("Content-Type, Authorization"));
-
     if req.method() == Method::OPTIONS {
+        let (Some(origin), Some(private_network)) = (
+            origin.as_ref(),
+            servecore_preflight_private_network(req.headers()),
+        ) else {
+            return servecore_forbidden("invalid-cors-preflight");
+        };
         let mut response = StatusCode::NO_CONTENT.into_response();
-        servecore_add_cors_headers(response.headers_mut(), origin.as_ref(), &allow_headers);
+        servecore_add_preflight_headers(response.headers_mut(), origin, private_network);
         return response;
     }
 
     let mut response = next.run(req).await;
-    servecore_add_cors_headers(response.headers_mut(), origin.as_ref(), &allow_headers);
+    servecore_add_actual_cors_headers(response.headers_mut(), origin.as_ref());
     response
+}
+
+fn servecore_preflight_private_network(headers: &HeaderMap) -> Option<bool> {
+    let method = servecore_single_header(headers, "access-control-request-method")
+        .ok()??
+        .to_str()
+        .ok()?;
+    if !matches!(method, "GET" | "POST") {
+        return None;
+    }
+    if let Some(value) = servecore_single_header(headers, "access-control-request-headers").ok()? {
+        if value.as_bytes().len() > SERVECORE_MAX_REQUEST_HEADERS_BYTES {
+            return None;
+        }
+        let value = value.to_str().ok()?;
+        let mut names = Vec::new();
+        for name in value.split(',').map(str::trim) {
+            if name.is_empty()
+                || !["authorization", "content-type", "x-maw-token"]
+                    .iter()
+                    .any(|allowed| allowed.eq_ignore_ascii_case(name))
+                || names
+                    .iter()
+                    .any(|seen: &&str| seen.eq_ignore_ascii_case(name))
+            {
+                return None;
+            }
+            names.push(name);
+        }
+    }
+    match servecore_single_header(headers, "access-control-request-private-network").ok()? {
+        None => Some(false),
+        Some(value) if value.as_bytes() == b"true" => Some(true),
+        Some(_) => None,
+    }
+}
+
+fn servecore_single_header<'a>(
+    headers: &'a HeaderMap,
+    name: &str,
+) -> Result<Option<&'a HeaderValue>, ()> {
+    let mut values = headers.get_all(name).iter();
+    let value = values.next();
+    if values.next().is_some() {
+        return Err(());
+    }
+    Ok(value)
 }
 
 pub(crate) fn servecore_request_origin_allowed(headers: &HeaderMap) -> bool {
@@ -1672,25 +1720,40 @@ fn servecore_loopback_origin(origin: &str) -> bool {
         .is_some_and(|host| matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1" | "[::1]"))
 }
 
-fn servecore_add_cors_headers(
-    headers: &mut HeaderMap,
-    origin: Option<&HeaderValue>,
-    allow_headers: &HeaderValue,
-) {
+fn servecore_add_actual_cors_headers(headers: &mut HeaderMap, origin: Option<&HeaderValue>) {
     let Some(origin) = origin else {
         return;
     };
+    headers.insert("access-control-allow-origin", origin.clone());
+    servecore_add_vary_origin(headers);
+}
+
+fn servecore_add_preflight_headers(
+    headers: &mut HeaderMap,
+    origin: &HeaderValue,
+    private_network: bool,
+) {
     headers.insert("access-control-allow-origin", origin.clone());
     headers.insert(
         "access-control-allow-methods",
         HeaderValue::from_static("GET, POST, OPTIONS"),
     );
-    headers.insert("access-control-allow-headers", allow_headers.clone());
     headers.insert(
-        "access-control-allow-private-network",
-        HeaderValue::from_static("true"),
+        "access-control-allow-headers",
+        HeaderValue::from_static("Authorization, Content-Type, X-Maw-Token"),
     );
-    servecore_add_vary_origin(headers);
+    if private_network {
+        headers.insert(
+            "access-control-allow-private-network",
+            HeaderValue::from_static("true"),
+        );
+    }
+    headers.insert(
+        "vary",
+        HeaderValue::from_static(
+            "Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Access-Control-Request-Private-Network",
+        ),
+    );
 }
 
 fn servecore_add_vary_origin(headers: &mut HeaderMap) {
@@ -1725,6 +1788,9 @@ async fn servecore_auth_default_deny(req: Request<Body>, next: Next) -> Response
     let method = req.method().clone();
     let path = servecore_api_auth_path(req.uri().path());
     if !maw_auth::is_protected(&path, method.as_str()) {
+        return next.run(req).await;
+    }
+    if crate::core_impl::serve_operator_authenticated(&req) {
         return next.run(req).await;
     }
 
@@ -2903,7 +2969,11 @@ mod tests {
                     .method(Method::OPTIONS)
                     .uri("/api/costs")
                     .header("origin", "https://god.buildwithoracle.com")
-                    .header("access-control-request-headers", "x-maw-from,content-type")
+                    .header("access-control-request-method", "POST")
+                    .header(
+                        "access-control-request-headers",
+                        "Authorization,content-type",
+                    )
                     .body(Body::empty())
                     .expect("preflight"),
             )
@@ -2929,14 +2999,18 @@ mod tests {
                 .headers()
                 .get("access-control-allow-headers")
                 .and_then(|value| value.to_str().ok()),
-            Some("x-maw-from,content-type")
+            Some("Authorization, Content-Type, X-Maw-Token")
         );
+        assert!(preflight
+            .headers()
+            .get("access-control-allow-private-network")
+            .is_none());
         assert_eq!(
             preflight
                 .headers()
                 .get("vary")
                 .and_then(|value| value.to_str().ok()),
-            Some("Origin")
+            Some("Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Access-Control-Request-Private-Network")
         );
 
         let missing = app
@@ -2961,9 +3035,9 @@ mod tests {
         assert_eq!(
             missing
                 .headers()
-                .get("access-control-allow-headers")
+                .get("vary")
                 .and_then(|value| value.to_str().ok()),
-            Some("Content-Type, Authorization")
+            Some("Origin")
         );
     }
 

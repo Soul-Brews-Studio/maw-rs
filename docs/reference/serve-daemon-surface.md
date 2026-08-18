@@ -6,8 +6,12 @@
 `maw serve` accepts exact `https://god.buildwithoracle.com` or exact `localhost`,
 `127.0.0.1`, and `[::1]` browser origins. Add a comma-separated
 `MAW_SERVE_ALLOWED_ORIGINS` list (16 entries/4 KiB maximum); wildcard, suffix, malformed, and `null` values fail closed. Allowlisting only reaches
-command-capable WebSocket authentication; it never bypasses it. Missing-Origin native
+command-capable WebSocket authentication; Origin allowlisting is not authentication and never bypasses it. Missing-Origin native
 clients continue through the existing auth policy.
+
+For an allowed browser origin, an exact configured `MAW_SERVE_TOKEN` in Bearer or
+`X-Maw-Token` form grants HTTP operator authority. Preflight never invokes a handler,
+and this authority does not extend to WebSockets, query tokens, or an open-token daemon.
 
 The God UI connector's `GET /api/config` response is a daemon-start snapshot
 containing exactly `node`, `agents`, and named-peer `{name,url}` rows. It is a
