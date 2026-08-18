@@ -50,10 +50,10 @@ pipe, before concluding.
 cross-contaminate at test-execution time and produce phantom `FAILED` from the
 other tree. Serialize.
 
-**Local gate ≠ CI gate.** The CLAUDE.md "quick" gate omits `cargo fmt --all
---check` **and** `--features wasm-host`. Run all four dimensions (fmt / test /
-clippy / wasm-host, on stable) before claiming CI-safe. Per Nat, the **local gate
-is the merge decision**; CI only guards — never wait on CI in the dev loop.
+**Quick gate ≠ full gate.** `scripts/gate.sh quick` is the iteration tier;
+`scripts/gate.sh full` runs the same fmt / workspace test / workspace clippy /
+wasm-host dimensions as CI. The **full local gate is the merge decision**; CI
+guards it independently — never wait on CI in the development loop.
 
 **git footguns seen this week.** `git add -- A B` where `B` matches nothing stages
 **neither** (broke alpha once). A stacked PR whose base is declared `alpha` shows

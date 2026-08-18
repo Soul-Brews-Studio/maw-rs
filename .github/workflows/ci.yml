@@ -118,12 +118,8 @@ jobs:
             sleep $((attempt * 15))
           done
 
-      # NOTE: CI is the SOURCE OF TRUTH for `cargo fmt --all -- --check` — the
-      # local Build Gate (CLAUDE.md: `cargo test --workspace` +
-      # `cargo clippy ... -D warnings`) does NOT run it, which is why fmt drift
-      # can be invisible locally and only surface here on the 4h schedule. Run
-      # `cargo fmt --all -- --check` before assuming green. (Recommend adding it
-      # to the local Build Gate so local gating matches CI.)
+      # scripts/gate.sh full runs this same format dimension locally. Keep the
+      # command aligned so local merge evidence and scheduled CI judge the same tree.
       - name: Format check
         run: cargo fmt --all -- --check
 
@@ -277,11 +273,8 @@ jobs:
             sleep $((attempt * 15))
           done
 
-      # NOTE: CI is the SOURCE OF TRUTH for `--features wasm-host` testing — the
-      # local Build Gate (CLAUDE.md) does NOT run it, which is why wasm-host-only
-      # test-isolation failures are invisible locally and only surface here. Run
-      # `cargo test -p maw-cli -p maw-plugin-manifest --features wasm-host`
-      # before assuming green.
+      # scripts/gate.sh full runs this same wasm-host dimension locally. Keep
+      # the command aligned so local merge evidence and CI cover the same feature set.
       - name: Test with wasm-host feature
         env:
           CARGO_BUILD_JOBS: 2
