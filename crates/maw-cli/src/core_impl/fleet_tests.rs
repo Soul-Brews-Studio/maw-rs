@@ -194,12 +194,12 @@ mod fleet_tests {
     #[test]
     fn fleet_doctor_json_reports_seeded_missing_repo_only() {
         fleet_with_fixture(|root| {
-            let output = run_fleet_command(&fleet_strings(&["doctor", "--json"]));
-            assert_eq!(output.code, 1);
-            assert!(output.stderr.is_empty());
-            assert!(output.stdout.contains("\"node\": \"alpha\""));
-            assert!(output.stdout.contains("\"code\": \"missing-repo\""));
-            assert!(output.stdout.contains(&root.join("ghq/github.com/acme/missing").display().to_string()));
+            let mut runtime = FleetFakeRuntime::default();
+            let (code, stdout) = fleet_run_with(&fleet_strings(&["doctor", "--json"]), &mut runtime).expect("doctor");
+            assert_eq!(code, 1);
+            assert!(stdout.contains("\"node\": \"alpha\""));
+            assert!(stdout.contains("\"code\": \"missing-repo\""));
+            assert!(stdout.contains(&root.join("ghq/github.com/acme/missing").display().to_string()));
         });
     }
 

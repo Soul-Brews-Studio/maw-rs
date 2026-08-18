@@ -236,6 +236,11 @@ fn route_worktree_calver_and_ls_tail_edges_are_stable() {
         "calver: --now time must use HH:MM",
     );
 
-    let ls = ok_json(&["ls", "--plan-json"]);
+    let ls = ok_json(&[
+        "ls",
+        "--plan-json",
+        "--pane",
+        "%1|claude|alpha:1.0|alpha|101|/repo|1980",
+    ]);
     assert_eq!(ls["command"], "ls");
 }

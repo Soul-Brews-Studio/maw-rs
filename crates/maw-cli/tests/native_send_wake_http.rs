@@ -285,6 +285,7 @@ fn args(values: &[&str]) -> Vec<String> {
 
 struct TestEnv {
     root: PathBuf,
+    old_path: Option<std::ffi::OsString>,
 }
 
 impl TestEnv {
@@ -295,7 +296,29 @@ impl TestEnv {
             .as_nanos();
         let root = std::env::temp_dir().join(format!("maw-rs-{name}-{nonce}"));
         std::fs::create_dir_all(root.join("config")).expect("config dir");
-        Self { root }
+        let bin = root.join("bin");
+        std::fs::create_dir_all(&bin).expect("bin dir");
+        let tmux = bin.join("tmux");
+        std::fs::write(
+            &tmux,
+            include_str!("fixtures/hermetic-tmux/empty-server.sh"),
+        )
+        .expect("fake tmux");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&tmux, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod fake tmux");
+        }
+        let old_path = std::env::var_os("PATH");
+        let mut path = vec![bin];
+        path.extend(
+            old_path
+                .iter()
+                .flat_map(|value| std::env::split_paths(value).collect::<Vec<_>>()),
+        );
+        std::env::set_var("PATH", std::env::join_paths(path).expect("fake PATH"));
+        Self { root, old_path }
     }
 
     fn write_config(&self, peer_url: &str) {
@@ -315,5 +338,9 @@ impl Drop for TestEnv {
         std::env::remove_var("MAW_HOME");
         std::env::remove_var("MAW_TEST_MODE");
         std::env::remove_var("MAW_PEER_KEY");
+        match self.old_path.take() {
+            Some(path) => std::env::set_var("PATH", path),
+            None => std::env::remove_var("PATH"),
+        }
     }
 }

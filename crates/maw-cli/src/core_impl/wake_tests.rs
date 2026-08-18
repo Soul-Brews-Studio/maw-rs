@@ -1569,12 +1569,20 @@ mod wake_tests {
             )
             .expect("squad registry");
 
-            let output = run_wake_command(&wake_strings(&["3e"]));
+            let mut tmux = WakeMockTmux::default();
+            let mut fleet_calls = Vec::new();
+            let mut fleet_wake = |args: &[String]| {
+                fleet_calls.push(args.to_vec());
+                CliOutput { code: 0, stdout: String::new(), stderr: String::new() }
+            };
+            let output = run_wake_command_with(&wake_strings(&["3e"]), &mut tmux, &mut fleet_wake);
 
             assert_eq!(output.code, 1, "{}{}", output.stdout, output.stderr);
             assert!(output.stdout.contains("fleet squad 3e (2 members)"), "{}", output.stdout);
             assert!(output.stdout.contains("maw fleet wake 3e"), "{}", output.stdout);
             assert!(output.stderr.is_empty(), "{}", output.stderr);
+            assert!(tmux.actions.is_empty(), "{:?}", tmux.actions);
+            assert!(fleet_calls.is_empty(), "{fleet_calls:?}");
         });
     }
 
