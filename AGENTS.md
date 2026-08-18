@@ -53,22 +53,33 @@ Do NOT wait for other cargo processes on the machine — the lead runs full-work
 gates continuously and other coders run in parallel; a machine-wide queue deadlocks
 everyone (observed repeatedly on 2026-07-11: coders stalled 20-45 min for nothing).
 
-Instead, isolate your target dir and run immediately:
+Instead, isolate your target dir on the 4 TB NVMe and run immediately:
 
 ```bash
-CARGO_TARGET_DIR=/tmp/maw-rs-target-<your-worktree-name> cargo test ...
-CARGO_TARGET_DIR=/tmp/maw-rs-target-<your-worktree-name> cargo clippy ...
+CARGO_TARGET_DIR=/mnt/nvme1/cargo/target-omx-<your-worktree-name> cargo test ...
+CARGO_TARGET_DIR=/mnt/nvme1/cargo/target-omx-<your-worktree-name> cargo clippy ...
+GATE_TARGET_DIR=/mnt/nvme1/cargo/target-gate-omx-<your-worktree-name> scripts/gate.sh quick
+GATE_TARGET_DIR=/mnt/nvme1/cargo/target-gate-omx-<your-worktree-name> scripts/gate.sh full
 ```
 
 The only shared resource is the package cache lock, which cargo resolves itself in
 seconds. The 2026-07-06 contention was shared `./target` state — fixed by the
 per-worktree CARGO_TARGET_DIR above, not by queueing.
 
+Never use `/tmp` for an active `CARGO_TARGET_DIR` or `GATE_TARGET_DIR` on this
+machine: `/tmp` is on the constrained root filesystem, while `/mnt/nvme1` is
+the 4 TB build volume. Keep both paths slug-specific so parallel agents cannot
+cross-contaminate artifacts. Gate-owned fixture and retired-cache handling still
+follows `TMPDIR` as documented in `docs/guides/gating.md`; do not move or delete
+those shared paths by hand.
+
 ## Branch and PR rules
 
 - `main` is stable/protected. Never push or merge directly.
 - `alpha` is the integration branch. Open all PRs against `alpha`; squash-merge there.
 - Create work branches from `origin/alpha` as `agents/<type>-<issue>-<slug>`.
+- Never rewrite a published branch: do not use `git push --force` or
+  `git push --force-with-lease`. Push additive follow-up commits instead.
 - Put `Fixes #N` in the PR body.
 - GitHub auto-closes issues only on default-branch merges; close issues by hand after the
   PR lands on `alpha`.
@@ -142,6 +153,22 @@ to raw tmux. The safety hook blocks `tmux send-keys` for this reason.
 
 Observable behavior is validated against maw-js JSON fixtures. When behavior changes,
 update or add fixtures; never delete fixtures just to make tests pass.
+
+## Fleet intelligence principles
+
+Oracle intelligence = engine × written memory × asking the right peer.
+
+1. **SEARCH-FIRST** — before guessing, search the vault / Oracle MCP, or ask the
+   peer that has actually hit the problem.
+2. **WRITE-BACK** — solved something hard? Write the manual or skill immediately.
+   Unwritten knowledge dies at compact; the manual is the next Oracle's way out.
+3. **VERIFY-DONE** — never mark done without running it; dogfood your own tools.
+4. **DONE-CRITERIA TEACHING** — dispatch work with explicit gates and limits.
+   Clear criteria teach the receiver to own the loop.
+5. **HUMILITY-COMPOUND** — model tiers change monthly; written knowledge
+   compounds. The smartest Oracle is the one whose peers never relearn a lesson.
+6. **TEACH-DONT-EDIT** — when helping another Oracle, teach and hand over the
+   commands; never edit a peer's repository yourself.
 
 ## Reporting
 

@@ -163,15 +163,16 @@ Rules the cache lives by:
   test runs on a shared live target dir cross-contaminate at test-execution
   time (phantom FAILEDs from the other tree). gate.sh therefore NEVER shares a
   live target dir: each invocation clones into its own isolated
-  `CARGO_TARGET_DIR` (default `<worktree>/target-gate`) and guards it with a
+  `CARGO_TARGET_DIR` (default `/mnt/nvme1/cargo/target-gate-<worktree>`) and guards it with a
   pid lock — a second gate on the same dir refuses to start.
 - The golden dir itself is only ever a **clone source**, never a build dir
   (the refresh script builds into a `.partial` and renames atomically).
 - **Disk story**: golden dirs are GB-scale, so they live under one dedicated
   root (`~/.maw/gate-cache/`), the refresh keeps only the **2 newest** shas,
-  and retired dirs are `mv`'d to `${TMPDIR:-/tmp}/gate-cache-trash-*` (no
-  `rm`; the July disk crisis was untracked target-dir sprawl). Reap your own
-  merged worktrees' `target-gate` dirs the same way: `mv` to /tmp.
+  and retired cache dirs are `mv`'d to `${TMPDIR:-/tmp}/gate-cache-trash-*` (no
+  `rm`; the July disk crisis was untracked target-dir sprawl). Merge-train
+  active gate dirs stay on NVMe and retire under
+  `/mnt/nvme1/cargo/retired-gates/` when that volume is available.
 - Refresh cadence: on demand, or schedule it (no in-repo `.maw/schedule.toml`
   exists yet), e.g.
   `0 * * * * <repo>/scripts/gate-cache-refresh.sh` or

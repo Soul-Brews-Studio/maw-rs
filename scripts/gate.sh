@@ -11,7 +11,7 @@
 # Warm start: seeds CARGO_TARGET_DIR from the golden cache
 # (~/.maw/gate-cache/<alpha-sha>/target) via APFS clonefile (cp -Rc) when the
 # target dir does not exist yet. Every invocation uses an ISOLATED target dir
-# (default: <worktree>/target-gate) guarded by a lock — two concurrent test
+# (default: /mnt/nvme1/cargo/target-gate-<worktree>) guarded by a lock — two concurrent test
 # runs must never share a live target dir (one-gate-per-target-dir scar,
 # 2026-07-14: phantom FAILEDs from the other tree).
 #
@@ -21,7 +21,7 @@
 # The gate's verdict must not depend on whose machine ran it.
 #
 # Env overrides:
-#   GATE_TARGET_DIR              target dir (default <repo>/target-gate)
+#   GATE_TARGET_DIR              target dir (default NVMe dir keyed by worktree)
 #   MAW_GATE_CACHE               golden cache root (default ~/.maw/gate-cache)
 #   GATE_ALLOW_TOOLCHAIN_DRIFT=1 skip the toolchain preflight and accept that
 #                                this run does not reproduce CI's toolchain
@@ -47,7 +47,8 @@ CACHE_ROOT="${MAW_GATE_CACHE:-$HOME/.maw/gate-cache}"
 # does NOT reach it, and this dir grew to 69G on / and filled the disk
 # (2026-08-16). /mnt/nvme1 has 2.3T free; / holds every oracle's transcripts and
 # logs, so a build filling it takes the whole box down, not just this repo.
-GATE_DEFAULT_TARGET="/mnt/nvme1/cargo/target-gate"
+WORKTREE_SLUG="$(basename "$REPO_ROOT")"
+GATE_DEFAULT_TARGET="/mnt/nvme1/cargo/target-gate-$WORKTREE_SLUG"
 [ -d /mnt/nvme1 ] || GATE_DEFAULT_TARGET="$REPO_ROOT/target-gate"
 TARGET_DIR="${GATE_TARGET_DIR:-$GATE_DEFAULT_TARGET}"
 export CARGO_TARGET_DIR="$TARGET_DIR"
@@ -378,8 +379,14 @@ gate_batch() {
         exit 2
     }
     git -C "$REPO_ROOT" fetch origin alpha
-    local train
+    local train batch_target retired_root
     train="$REPO_ROOT/.claude/worktrees/gate-train-$(date +%y%m%d-%H%M%S)-$$"
+    batch_target="/mnt/nvme1/cargo/target-gate-$(basename "$train")"
+    retired_root="/mnt/nvme1/cargo/retired-gates"
+    if [ ! -d /mnt/nvme1 ]; then
+        batch_target="$train/target-gate"
+        retired_root="${TMPDIR:-/tmp}"
+    fi
     echo "merge-train: worktree $train at origin/alpha + $*"
     git -C "$REPO_ROOT" worktree add --detach "$train" origin/alpha || exit 1
     local br ref
@@ -395,9 +402,10 @@ gate_batch() {
             exit 1
         fi
     done
-    if (cd "$train" && GATE_TARGET_DIR="$train/target-gate" "$train/scripts/gate.sh" full); then
+    if (cd "$train" && GATE_TARGET_DIR="$batch_target" "$train/scripts/gate.sh" full); then
         echo "merge-train: GREEN — the $# branch(es) are safe to land on alpha as a batch."
-        mv "$train/target-gate" "${TMPDIR:-/tmp}/gate-train-target-$$" 2>/dev/null || true
+        mkdir -p "$retired_root"
+        mv "$batch_target" "$retired_root/gate-train-target-$$" 2>/dev/null || true
         git -C "$REPO_ROOT" worktree remove --force "$train"
     else
         echo "merge-train: RED — bisect by re-running with fewer branches. Worktree kept: $train" >&2
