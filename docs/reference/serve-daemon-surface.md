@@ -10,8 +10,11 @@ command-capable WebSocket authentication; Origin allowlisting is not authenticat
 clients continue through the existing auth policy.
 
 For an allowed browser origin, an exact configured `MAW_SERVE_TOKEN` in Bearer or
-`X-Maw-Token` form grants HTTP operator authority. Preflight never invokes a handler,
-and this authority does not extend to WebSockets, query tokens, or an open-token daemon.
+`X-Maw-Token` form grants HTTP operator authority. It can mint an Origin/path-bound,
+one-use credential with `POST /api/auth/ws-ticket` and JSON `{"path":"/ws"}` (also
+`/ws/pty` or `/ws/tmux`); keep the returned ticket in memory. Preflight never mints.
+Ticket consumption and WebSocket subprotocol negotiation land in #937 Phase B, so the
+mint-only endpoint does not yet make browser WebSockets usable.
 
 The God UI connector's `GET /api/config` response is a daemon-start snapshot
 containing exactly `node`, `agents`, and named-peer `{name,url}` rows. It is a
