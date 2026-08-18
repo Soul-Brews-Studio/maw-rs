@@ -1710,7 +1710,6 @@ name = "maw-tmux"
 version = "0.1.0-alpha.1"
 dependencies = [
  "maw-matcher",
- "maw-peer",
  "serde",
  "serde_json",
 ]

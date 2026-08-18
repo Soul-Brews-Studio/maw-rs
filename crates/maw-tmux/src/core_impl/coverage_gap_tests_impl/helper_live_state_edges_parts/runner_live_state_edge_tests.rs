@@ -170,17 +170,17 @@
     #[test]
     fn live_state_match_labels_fall_back_to_node_and_oracle() {
         let peers = vec![
-            maw_peer::PeerTarget {
+            LivePeerTarget {
                 name: None,
                 url: "http://node".to_owned(),
-                source: maw_peer::PeerSourceKind::Scout,
+                source: "scout".to_owned(),
                 node: Some("scratch".to_owned()),
                 oracle: None,
             },
-            maw_peer::PeerTarget {
+            LivePeerTarget {
                 name: None,
                 url: "http://oracle".to_owned(),
-                source: maw_peer::PeerSourceKind::Scout,
+                source: "scout".to_owned(),
                 node: None,
                 oracle: Some("scratch".to_owned()),
             },
