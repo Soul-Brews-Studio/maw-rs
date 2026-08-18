@@ -11,6 +11,7 @@
 #[allow(clippy::redundant_closure_for_method_calls)]
 mod serve_tests {
     use super::*;
+    use rand::SeedableRng;
 
     fn non_agent_pane(target: &str) -> TmuxPane {
         TmuxPane {
@@ -832,11 +833,20 @@ mod serve_tests {
             .header("origin", GOD).header("access-control-request-method", "POST")
             .header("access-control-request-headers", "authorization, content-type")
             .body(Body::empty()).unwrap();
-        assert_eq!(app.clone().oneshot(preflight).await.unwrap().status(), StatusCode::NO_CONTENT);
+        let preflight = app.clone().oneshot(preflight).await.unwrap();
+        assert_eq!(preflight.status(), StatusCode::NO_CONTENT);
+        for (name, value) in [("access-control-allow-origin", GOD), ("access-control-allow-methods", "GET, POST, OPTIONS"), ("access-control-allow-headers", "Authorization, Content-Type, X-Maw-Token"), ("vary", "Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Access-Control-Request-Private-Network")] {
+            assert_eq!(preflight.headers()[name], value);
+        }
+        assert!(axum::body::to_bytes(preflight.into_body(), 1).await.unwrap().is_empty());
         let bad_preflight = Request::builder().method(Method::OPTIONS).uri("/api/auth/ws-ticket")
             .header("origin", GOD).header("access-control-request-method", "DELETE")
             .body(Body::empty()).unwrap();
         assert_eq!(app.clone().oneshot(bad_preflight).await.unwrap().status(), StatusCode::FORBIDDEN);
+        let method = Request::builder().method(Method::GET).uri("/api/auth/ws-ticket").header("origin", GOD).header("x-maw-token", "secret-token").body(Body::empty()).unwrap();
+        let method = app.clone().oneshot(method).await.unwrap();
+        assert_eq!(method.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert!(axum::body::to_bytes(method.into_body(), 1).await.unwrap().is_empty());
         for (path, credential) in [
             ("/ws", ("authorization", "Bearer secret-token")),
             ("/ws/pty", ("x-maw-token", "secret-token")),
@@ -845,12 +855,15 @@ mod serve_tests {
             let body = match path { "/ws" => r#"{"path":"/ws"}"#, "/ws/pty" => r#"{"path":"/ws/pty"}"#, _ => r#"{"path":"/ws/tmux"}"# };
             let mut request = ws_ticket_request("/api/auth/ws-ticket", body, Some(GOD), Some(credential));
             if path == "/ws" { request.extensions_mut().insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 49_152)))); }
+            if path == "/ws/tmux" { request.headers_mut().insert(CONTENT_TYPE, HeaderValue::from_static("application/json; charset=utf-8")); }
             let response = app.clone().oneshot(request).await.unwrap();
             assert_eq!(response.status(), StatusCode::OK);
             assert_eq!(response.headers()["cache-control"], "no-store");
+            assert_eq!(response.headers()["access-control-allow-origin"], GOD);
+            assert_eq!(response.headers()["vary"], "Origin");
             let payload = response_json(response).await;
             assert_eq!(payload.as_object().unwrap().len(), 2);
-            assert_eq!(payload["protocol"], "maw.ws.v1");
+            assert_eq!(payload["protocol"], SERVE_WS_PROTOCOL);
             let ticket = payload["ticket"].as_str().unwrap();
             assert!(ticket.strip_prefix("mwt1_").is_some_and(|hex| hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())));
             assert_eq!(store.consume(ticket, Some(GOD), maw_auth::WsTicketPath::try_from(path).unwrap(), Instant::now), maw_auth::WsTicketConsume::Accepted);
@@ -882,17 +895,25 @@ mod serve_tests {
             ws_ticket_request("/api/auth/ws-ticket", r#"{"path":"/WS"}"#, Some(GOD), Some(("x-maw-token", "secret-token"))),
             ws_ticket_request("/api/auth/ws-ticket", "{}", Some(GOD), Some(("x-maw-token", "secret-token"))),
             ws_ticket_request("/api/auth/ws-ticket", "{", Some(GOD), Some(("x-maw-token", "secret-token"))),
-            Request::builder().method(Method::POST).uri("/api/auth/ws-ticket").header("origin", GOD).header("x-maw-token", "secret-token").body(Body::from(vec![b'x'; 129])).unwrap(),
+            Request::builder().method(Method::POST).uri("/api/auth/ws-ticket").header("origin", GOD).header("x-maw-token", "secret-token").body(Body::from(r#"{"path":"/ws"}"#)).unwrap(),
+            Request::builder().method(Method::POST).uri("/api/auth/ws-ticket").header("origin", GOD).header("x-maw-token", "secret-token").header(CONTENT_TYPE, "text/plain").body(Body::from(r#"{"path":"/ws"}"#)).unwrap(),
+            Request::builder().method(Method::POST).uri("/api/auth/ws-ticket").header("origin", GOD).header("x-maw-token", "secret-token").header(CONTENT_TYPE, "application/json").body(Body::from(vec![b'x'; 129])).unwrap(),
         ] {
             assert_eq!(app.clone().oneshot(bad).await.unwrap().status(), StatusCode::BAD_REQUEST);
         }
-        for denied_auth in [ServeApiTokenAuth::open(), ServeApiTokenAuth { forced_open: true, ..auth }] {
+        for denied_auth in [ServeApiTokenAuth::open(), ServeApiTokenAuth { forced_open: true, ..auth.clone() }] {
             let denied = serve_test_app_with_api_auth(denied_auth).oneshot(ws_ticket_request("/api/auth/ws-ticket", r#"{"path":"/ws"}"#, Some(GOD), Some(("x-maw-token", "secret-token")))).await.unwrap();
             assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
         }
         let mut duplicate_origin = ws_ticket_request("/api/auth/ws-ticket", r#"{"path":"/ws"}"#, Some(GOD), Some(("x-maw-token", "secret-token")));
         duplicate_origin.headers_mut().append("origin", HeaderValue::from_static(GOD));
-        assert_eq!(app.oneshot(duplicate_origin).await.unwrap().status(), StatusCode::FORBIDDEN);
+        assert_eq!(app.clone().oneshot(duplicate_origin).await.unwrap().status(), StatusCode::FORBIDDEN);
+        let full = Arc::new(maw_auth::WsTicketStore::default());
+        let mut rng = rand::rngs::StdRng::seed_from_u64(937);
+        for _ in 0..256 { full.issue(GOD, maw_auth::WsTicketPath::Ws, &mut rng, Instant::now).unwrap(); }
+        let unavailable = serve_test_app_with_api_auth_and_ws_tickets(auth, full).oneshot(ws_ticket_request("/api/auth/ws-ticket", r#"{"path":"/ws"}"#, Some(GOD), Some(("x-maw-token", "secret-token")))).await.unwrap();
+        assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(axum::body::to_bytes(unavailable.into_body(), 1).await.unwrap().is_empty());
     }
 
     #[tokio::test]

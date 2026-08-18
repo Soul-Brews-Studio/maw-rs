@@ -1,7 +1,7 @@
 use axum::{
     body::{Body, Bytes},
     extract::{ws::WebSocketUpgrade, ConnectInfo, Path as AxumPath, Query, State},
-    http::{header::CACHE_CONTROL, HeaderMap, HeaderValue, Method, Request, StatusCode, Uri},
+    http::{header::{CACHE_CONTROL, CONTENT_TYPE}, HeaderMap, HeaderValue, Method, Request, StatusCode, Uri},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{any, get, post},
@@ -24,6 +24,7 @@ use std::net::Ipv4Addr;
 
 const DEFAULT_SERVE_PORT: u16 = 3456;
 const DEFAULT_SERVE_BIND: &str = "0.0.0.0";
+pub(crate) const SERVE_WS_PROTOCOL: &str = "maw.ws.v1";
 const SERVE_FEED_MAX: usize = 200;
 const SERVE_LOG_TEXT_MAX: usize = 2_000;
 const SERVE_LOG_ERROR_MAX: usize = 1_000;
@@ -682,6 +683,11 @@ async fn api_ws_ticket(
         .and_then(|value| value.to_str().ok())
         .map(ToOwned::to_owned);
     let query_present = req.uri().query().is_some();
+    let json_content_type = req.headers().get(CONTENT_TYPE).and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value == "application/json" || value.starts_with("application/json;"));
+    if query_present || !json_content_type {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
     let Ok(body) = axum::body::to_bytes(req.into_body(), 128).await else {
         return StatusCode::BAD_REQUEST.into_response();
     };
@@ -694,9 +700,6 @@ async fn api_ws_ticket(
     ) else {
         return StatusCode::BAD_REQUEST.into_response();
     };
-    if query_present {
-        return StatusCode::BAD_REQUEST.into_response();
-    }
     let Ok(ticket) = store.issue(origin, path, &mut OsRng, Instant::now) else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
@@ -704,7 +707,7 @@ async fn api_ws_ticket(
         [(CACHE_CONTROL, HeaderValue::from_static("no-store"))],
         Json(WsTicketResponse {
             ticket: ticket.expose_secret().to_owned(),
-            protocol: "maw.ws.v1",
+            protocol: SERVE_WS_PROTOCOL,
         }),
     )
         .into_response()
