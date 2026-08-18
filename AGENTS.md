@@ -78,6 +78,8 @@ those shared paths by hand.
 - `main` is stable/protected. Never push or merge directly.
 - `alpha` is the integration branch. Open all PRs against `alpha`; squash-merge there.
 - Create work branches from `origin/alpha` as `agents/<type>-<issue>-<slug>`.
+- Never rewrite a published branch: do not use `git push --force` or
+  `git push --force-with-lease`. Push additive follow-up commits instead.
 - Put `Fixes #N` in the PR body.
 - GitHub auto-closes issues only on default-branch merges; close issues by hand after the
   PR lands on `alpha`.
