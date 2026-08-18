@@ -284,10 +284,32 @@ mod auth_native_tests {
     }
 
     #[test]
-    fn auth_verify_request_d2_ed25519_accepts_in_memory_tofu_first_contact() {
+    fn auth_verify_request_d2_ed25519_rejects_unpinned_first_contact() {
         let output = auth_run_d2(&auth_d2_ed25519_args(None));
         assert_eq!(output.code, 0, "{}", output.stderr);
-        assert!(output.stdout.contains("\"kind\":\"accept\""));
+        assert!(output.stdout.contains("\"kind\":\"reject\""));
+        assert!(output.stdout.contains("\"reason\":\"ed25519-pin-missing\""));
+    }
+
+    #[test]
+    fn auth_verify_request_d2_ed25519_accepts_explicit_cached_pubkey() {
+        let output = auth_run_d2(&auth_d2_ed25519_args(Some(AUTH_D2_ED25519_PUBKEY)));
+        assert_eq!(output.code, 0, "{}", output.stderr);
+        assert!(output.stdout.contains("\"who\":\"ed25519:mawjs:m5\""));
+    }
+
+    #[test]
+    fn auth_verify_request_d2_ed25519_alias_uses_trimmed_explicit_cached_identity() {
+        let mut args = auth_d2_ed25519_args(Some(AUTH_D2_ED25519_PUBKEY));
+        for arg in &mut args {
+            if arg.starts_with("x-maw-from=") {
+                *arg = format!("x-maw-from= {AUTH_D2_FROM} ");
+            } else if arg.starts_with("x-maw-ed25519-signature=") {
+                *arg = format!("x-maw-signature-ed25519={AUTH_D2_ED25519_SIG}");
+            }
+        }
+        let output = auth_run_d2(&args);
+        assert_eq!(output.code, 0, "{}", output.stderr);
         assert!(output.stdout.contains("\"who\":\"ed25519:mawjs:m5\""));
     }
 

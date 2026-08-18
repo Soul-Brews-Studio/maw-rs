@@ -441,15 +441,14 @@ fn verify_ed25519_serve_request(
     if !verified {
         return auth_reject("ed25519-signature-invalid");
     }
-    if let Err(reason) = ed25519_pin_verified_key(parts, &signed.from, &key_hex) {
-        return auth_reject(reason);
-    }
     RequestAuthDecision::Accept {
         who: format!("ed25519:{}", signed.from),
     }
 }
 
 fn ed25519_select_pubkey(parts: &RequestAuthParts, from: &str) -> Result<String, &'static str> {
+    // A request-supplied key may corroborate an existing pin, but it is never
+    // a trust root: unknown identities must be paired out of band first.
     let observed = ed25519_pubkey_header(&parts.headers).map(str::to_owned);
     if let Some(pins) = &parts.ed25519_pins {
         let guard = pins.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -462,39 +461,16 @@ fn ed25519_select_pubkey(parts: &RequestAuthParts, from: &str) -> Result<String,
             }
             return Ok(pinned.to_owned());
         }
-        return observed.ok_or("ed25519-pin-missing");
+        return Err("ed25519-pin-missing");
     }
+    // `cached_pubkey` is a caller-supplied, pre-established trust record. The
+    // request's observed key is deliberately ignored when no pin store exists.
     parts
         .cached_pubkey
         .as_deref()
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
         .ok_or("ed25519-pin-missing")
-}
-
-fn ed25519_pin_verified_key(
-    parts: &RequestAuthParts,
-    from: &str,
-    key_hex: &str,
-) -> Result<(), &'static str> {
-    let Some(pins) = &parts.ed25519_pins else {
-        return Ok(());
-    };
-    let mut guard = pins.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if guard.is_poisoned() {
-        return Err("tofu-store-corrupt");
-    }
-    if let Some(pinned) = guard.pinned(from) {
-        if pinned == key_hex {
-            return Ok(());
-        }
-        return Err("ed25519-pin-mismatch");
-    }
-    if guard.pin_first_contact(from, key_hex) {
-        Ok(())
-    } else {
-        Err("ed25519-pin-mismatch")
-    }
 }
 
 fn verify_ed25519_signature(key_hex: &str, payload: &[u8], signature_hex: &str) -> bool {
