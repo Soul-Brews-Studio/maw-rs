@@ -68,6 +68,17 @@ struct ServeApiTokenAuth {
     forced_open: bool,
 }
 
+#[derive(Clone, Copy)]
+struct ServeOperatorAuth;
+
+tokio::task_local! { static SERVE_OPERATOR_CONTEXT: (); }
+
+fn serve_mark_operator_authenticated(req: &mut Request<Body>) { req.extensions_mut().insert(ServeOperatorAuth); }
+
+pub(crate) fn serve_operator_authenticated(req: &Request<Body>) -> bool { req.extensions().get::<ServeOperatorAuth>().is_some() }
+
+fn serve_operator_context_authenticated() -> bool { SERVE_OPERATOR_CONTEXT.try_with(|()| ()).is_ok() }
+
 impl ServeApiTokenAuth {
     #[cfg(test)]
     fn open() -> Self { Self { token: None, loopback_exempt: true, forced_open: true } }
@@ -552,6 +563,9 @@ fn serve_router(state: ServeState) -> Router {
         state.api_token_auth.clone(),
         serve_api_token_gate,
     ));
+    let router = router.layer(middleware::from_fn(
+        crate::serve_core::servecore_cors_preflight,
+    ));
     let router = crate::serve_core::servecore_with_shared_state(router, serve_core_state);
     router.with_state(state)
 }
@@ -565,7 +579,7 @@ fn serve_path_is_websocket(path: &str) -> bool {
 
 async fn serve_api_token_gate(
     State(auth): State<ServeApiTokenAuth>,
-    req: Request<Body>,
+    mut req: Request<Body>,
     next: Next,
 ) -> Response {
     if !crate::serve_core::servecore_request_origin_allowed(req.headers()) {
@@ -595,6 +609,10 @@ async fn serve_api_token_gate(
     // `token_matches` answers true for an unconfigured token; on the websocket
     // path that would reinstate the very fall-open this gate exists to close.
     if auth.token.is_some() && auth.token_matches(req.headers()) {
+        if !websocket && req.headers().contains_key("origin") {
+            serve_mark_operator_authenticated(&mut req);
+            return SERVE_OPERATOR_CONTEXT.scope((), next.run(req)).await;
+        }
         return next.run(req).await;
     }
     (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized", "auth": "maw-serve-token"}))).into_response()

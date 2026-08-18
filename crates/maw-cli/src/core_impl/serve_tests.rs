@@ -703,6 +703,97 @@ mod serve_tests {
     }
 
     #[tokio::test]
+    async fn serve_browser_operator_preflight_and_credentials_are_bounded() {
+        const GOD: &str = "https://god.buildwithoracle.com";
+        let wake = Arc::new(FakeServeWake::default());
+        let app = serve_test_app_with_wake_and_auth(
+            serve_test_trust_store_path("browser-preflight"),
+            wake.clone(),
+            ServeApiTokenAuth {
+                token: Some("secret-token".to_owned()),
+                loopback_exempt: false,
+                forced_open: false,
+            },
+        );
+        let browser_request = |credential: Option<(&'static str, &'static str)>| {
+            let mut request = unsigned_json_request("POST", "/api/wake", r#"{"target":"capture-agent"}"#);
+            request.headers_mut().insert("origin", HeaderValue::from_static(GOD));
+            if let Some((name, value)) = credential {
+                request.headers_mut().insert(name, HeaderValue::from_static(value));
+            }
+            request
+        };
+        macro_rules! preflight {
+            ($($name:literal => $value:literal),* $(,)?) => {
+                Request::builder().method(Method::OPTIONS).uri("/api/wake").header("origin", GOD)
+                    $(.header($name, $value))* .extension(ConnectInfo(NON_LOOPBACK_TEST_PEER))
+                    .body(Body::empty()).expect("preflight")
+            };
+        }
+        let response = app.clone().oneshot(preflight!(
+            "access-control-request-method" => "POST", "access-control-request-headers" => "authorization, content-type",
+            "access-control-request-private-network" => "true",
+        )).await.expect("preflight response");
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        for (name, value) in [
+            ("access-control-allow-origin", GOD),
+            ("access-control-allow-methods", "GET, POST, OPTIONS"),
+            ("access-control-allow-headers", "Authorization, Content-Type, X-Maw-Token"),
+            ("access-control-allow-private-network", "true"),
+            ("vary", "Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Access-Control-Request-Private-Network"),
+        ] {
+            assert_eq!(response.headers().get(name).and_then(|header| header.to_str().ok()), Some(value));
+        }
+        assert!(wake.wakes().is_empty());
+        for request in [
+            preflight!(),
+            preflight!("access-control-request-method" => "DELETE"),
+            preflight!("access-control-request-method" => "POST,GET"),
+            preflight!("access-control-request-method" => "POST", "access-control-request-method" => "GET"),
+            preflight!("access-control-request-method" => "POST", "access-control-request-headers" => "x-evil"),
+        ] {
+            assert_eq!(app.clone().oneshot(request).await.expect("invalid preflight").status(), StatusCode::FORBIDDEN);
+        }
+        assert!(wake.wakes().is_empty());
+
+        for credential in [
+            None,
+            Some(("authorization", "Bearer wrong-token")),
+            Some(("x-maw-operator-authenticated", "true")),
+        ] {
+            let denied = app.clone().oneshot(browser_request(credential)).await.expect("browser denied");
+            assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(denied.headers()["access-control-allow-origin"], GOD);
+            assert_eq!(denied.headers()["vary"], "Origin");
+            for name in ["access-control-allow-methods", "access-control-allow-headers", "access-control-allow-private-network"] {
+                assert!(!denied.headers().contains_key(name));
+            }
+        }
+        assert!(wake.wakes().is_empty());
+
+        for (header, value) in [
+            ("authorization", "Bearer secret-token"),
+            ("x-maw-token", "secret-token"),
+        ] {
+            let response = app.clone().oneshot(browser_request(Some((header, value)))).await.expect("operator wake");
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        assert_eq!(wake.wakes().len(), 2);
+
+        let mut sessions = unsigned_trust_request("GET", "/api/sessions", "");
+        sessions.headers_mut().insert("origin", HeaderValue::from_static(GOD));
+        sessions.headers_mut().insert("x-maw-token", HeaderValue::from_static("secret-token"));
+        assert_auth_allowed(app.clone().oneshot(sessions).await.expect("operator sessions").status(), "operator sessions");
+
+        let mut no_origin = unsigned_json_request("POST", "/api/wake", r#"{"target":"capture-agent"}"#);
+        no_origin.headers_mut().insert("authorization", HeaderValue::from_static("Bearer secret-token"));
+        assert_eq!(app.clone().oneshot(no_origin).await.expect("native bearer").status(), StatusCode::UNAUTHORIZED);
+        let open = serve_test_app_with_wake_and_auth(serve_test_trust_store_path("browser-open"), wake.clone(), ServeApiTokenAuth::open());
+        assert_eq!(open.oneshot(browser_request(Some(("x-maw-operator-authenticated", "true")))).await.expect("open forged marker").status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(wake.wakes().len(), 2);
+    }
+
+    #[tokio::test]
     async fn serve_wake_surfaces_receiver_failure_not_false_success() {
         let wake = Arc::new(FakeServeWake::default());
         wake.set_error("wake exited 1: wake: repo not found for bare-shell");
