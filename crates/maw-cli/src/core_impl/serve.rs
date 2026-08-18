@@ -550,6 +550,13 @@ async fn serve_api_token_gate(
     req: Request<Body>,
     next: Next,
 ) -> Response {
+    if !crate::serve_core::servecore_request_origin_allowed(req.headers()) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error":"forbidden","reason":"origin-not-allowed"})),
+        )
+            .into_response();
+    }
     let path = req.uri().path();
     let websocket = serve_path_is_websocket(path);
     if !websocket
