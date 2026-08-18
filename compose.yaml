@@ -1,0 +1,43 @@
+services:
+  maw:
+    image: ghcr.io/soul-brews-studio/maw-rs:${MAW_IMAGE_TAG:-alpha}
+    build:
+      context: .
+      args:
+        MAW_BUILD_VERSION: ${MAW_IMAGE_TAG:-alpha}
+    environment:
+      MAW_SERVE_TOKEN: ${MAW_SERVE_TOKEN:?set MAW_SERVE_TOKEN to a non-empty value}
+      HOME: /home/maw
+      MAW_XDG: "1"
+      MAW_PORT: "3456"
+      GHQ_ROOT: /repos
+      XDG_CONFIG_HOME: /home/maw/.config
+      XDG_DATA_HOME: /home/maw/.local/share
+      XDG_STATE_HOME: /home/maw/.local/state
+      XDG_CACHE_HOME: /home/maw/.cache
+    command: ["serve", "--host", "0.0.0.0", "--port", "3456"]
+    ports:
+      - "${MAW_BIND_IP:-127.0.0.1}:${MAW_PORT:-3456}:3456"
+    volumes:
+      - maw-config:/home/maw/.config/maw
+      - maw-data:/home/maw/.local/share/maw
+      - maw-state:/home/maw/.local/state/maw
+      - maw-cache:/home/maw/.cache/maw
+      - maw-repos:/repos
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:3456/api/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+    init: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+volumes:
+  maw-config:
+  maw-data:
+  maw-state:
+  maw-cache:
+  maw-repos:
