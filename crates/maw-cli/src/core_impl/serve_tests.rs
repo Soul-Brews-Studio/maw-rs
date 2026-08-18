@@ -11,6 +11,7 @@
 #[allow(clippy::redundant_closure_for_method_calls)]
 mod serve_tests {
     use super::*;
+    use rand::SeedableRng;
 
     fn non_agent_pane(target: &str) -> TmuxPane {
         TmuxPane {
@@ -408,7 +409,17 @@ mod serve_tests {
     }
 
     fn serve_test_app_with_api_auth(api_token_auth: ServeApiTokenAuth) -> Router {
-        serve_router(ServeState {
+        serve_test_app_with_api_auth_and_ws_tickets(
+            api_token_auth,
+            Arc::new(maw_auth::WsTicketStore::default()),
+        )
+    }
+
+    fn serve_test_app_with_api_auth_and_ws_tickets(
+        api_token_auth: ServeApiTokenAuth,
+        ws_tickets: Arc<maw_auth::WsTicketStore>,
+    ) -> Router {
+        serve_router_with_ws_tickets(ServeState {
             cached_pubkey: Some(KEY.to_owned()),
             peer_pubkeys: HotReload::frozen(Vec::new()),
             workspace_key: Some(KEY.to_owned()),
@@ -435,7 +446,7 @@ mod serve_tests {
             }],
             api_token_auth,
             bound_port: DEFAULT_SERVE_PORT,
-        })
+        }, ws_tickets)
     }
 
     fn serve_test_proxy_route(port: u16, child: Child) -> ServePluginRoute {
@@ -492,6 +503,22 @@ mod serve_tests {
             .await
             .expect("body");
         serde_json::from_slice(&bytes).expect("json")
+    }
+
+    fn ws_ticket_request(
+        uri: &str,
+        body: &'static str,
+        origin: Option<&'static str>,
+        credential: Option<(&'static str, &'static str)>,
+    ) -> Request<Body> {
+        let mut request = unsigned_json_request("POST", uri, body);
+        if let Some(origin) = origin {
+            request.headers_mut().insert("origin", HeaderValue::from_static(origin));
+        }
+        if let Some((name, value)) = credential {
+            request.headers_mut().insert(name, HeaderValue::from_static(value));
+        }
+        request
     }
 
     fn serve_test_app_with_o6_keys(
@@ -791,6 +818,102 @@ mod serve_tests {
         let open = serve_test_app_with_wake_and_auth(serve_test_trust_store_path("browser-open"), wake.clone(), ServeApiTokenAuth::open());
         assert_eq!(open.oneshot(browser_request(Some(("x-maw-operator-authenticated", "true")))).await.expect("open forged marker").status(), StatusCode::UNAUTHORIZED);
         assert_eq!(wake.wakes().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn serve_ws_ticket_mint_uses_one_router_store_for_each_exact_path() {
+        const GOD: &str = "https://god.buildwithoracle.com";
+        let store = Arc::new(maw_auth::WsTicketStore::default());
+        let app = serve_test_app_with_api_auth_and_ws_tickets(ServeApiTokenAuth {
+            token: Some("secret-token".to_owned()),
+            loopback_exempt: true,
+            forced_open: false,
+        }, store.clone());
+        let preflight = Request::builder().method(Method::OPTIONS).uri("/api/auth/ws-ticket")
+            .header("origin", GOD).header("access-control-request-method", "POST")
+            .header("access-control-request-headers", "authorization, content-type")
+            .body(Body::empty()).unwrap();
+        let preflight = app.clone().oneshot(preflight).await.unwrap();
+        assert_eq!(preflight.status(), StatusCode::NO_CONTENT);
+        for (name, value) in [("access-control-allow-origin", GOD), ("access-control-allow-methods", "GET, POST, OPTIONS"), ("access-control-allow-headers", "Authorization, Content-Type, X-Maw-Token"), ("vary", "Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Access-Control-Request-Private-Network")] {
+            assert_eq!(preflight.headers()[name], value);
+        }
+        assert!(axum::body::to_bytes(preflight.into_body(), 1).await.unwrap().is_empty());
+        let bad_preflight = Request::builder().method(Method::OPTIONS).uri("/api/auth/ws-ticket")
+            .header("origin", GOD).header("access-control-request-method", "DELETE")
+            .body(Body::empty()).unwrap();
+        assert_eq!(app.clone().oneshot(bad_preflight).await.unwrap().status(), StatusCode::FORBIDDEN);
+        let method = Request::builder().method(Method::GET).uri("/api/auth/ws-ticket").header("origin", GOD).header("x-maw-token", "secret-token").body(Body::empty()).unwrap();
+        let method = app.clone().oneshot(method).await.unwrap();
+        assert_eq!(method.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert!(axum::body::to_bytes(method.into_body(), 1).await.unwrap().is_empty());
+        for (path, credential) in [
+            ("/ws", ("authorization", "Bearer secret-token")),
+            ("/ws/pty", ("x-maw-token", "secret-token")),
+            ("/ws/tmux", ("authorization", "Bearer secret-token")),
+        ] {
+            let body = match path { "/ws" => r#"{"path":"/ws"}"#, "/ws/pty" => r#"{"path":"/ws/pty"}"#, _ => r#"{"path":"/ws/tmux"}"# };
+            let mut request = ws_ticket_request("/api/auth/ws-ticket", body, Some(GOD), Some(credential));
+            if path == "/ws" { request.extensions_mut().insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 49_152)))); }
+            if path == "/ws/tmux" { request.headers_mut().insert(CONTENT_TYPE, HeaderValue::from_static("application/json; charset=utf-8")); }
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()["cache-control"], "no-store");
+            assert_eq!(response.headers()["access-control-allow-origin"], GOD);
+            assert_eq!(response.headers()["vary"], "Origin");
+            let payload = response_json(response).await;
+            assert_eq!(payload.as_object().unwrap().len(), 2);
+            assert_eq!(payload["protocol"], SERVE_WS_PROTOCOL);
+            let ticket = payload["ticket"].as_str().unwrap();
+            assert!(ticket.strip_prefix("mwt1_").is_some_and(|hex| hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())));
+            assert_eq!(store.consume(ticket, Some(GOD), maw_auth::WsTicketPath::try_from(path).unwrap(), Instant::now), maw_auth::WsTicketConsume::Accepted);
+        }
+    }
+
+    #[tokio::test]
+    async fn serve_ws_ticket_mint_denies_auth_bypasses_and_bad_input() {
+        const GOD: &str = "https://god.buildwithoracle.com";
+        let auth = ServeApiTokenAuth { token: Some("secret-token".into()), loopback_exempt: true, forced_open: false };
+        let app = serve_test_app_with_api_auth(auth.clone());
+        for (origin, credential, expected) in [
+            (Some(GOD), None, StatusCode::UNAUTHORIZED),
+            (Some(GOD), Some(("authorization", "Bearer wrong")), StatusCode::UNAUTHORIZED),
+            (None, Some(("x-maw-token", "secret-token")), StatusCode::UNAUTHORIZED),
+            (Some("https://evil.example"), Some(("x-maw-token", "secret-token")), StatusCode::FORBIDDEN),
+        ] {
+            assert_eq!(app.clone().oneshot(ws_ticket_request("/api/auth/ws-ticket", r#"{"path":"/ws"}"#, origin, credential)).await.unwrap().status(), expected);
+        }
+        let mut loopback = ws_ticket_request("/api/auth/ws-ticket", r#"{"path":"/ws"}"#, Some(GOD), None);
+        loopback.extensions_mut().insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 49_152))));
+        assert_eq!(app.clone().oneshot(loopback).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+        let mut signed = signed_json_request("POST", "/api/auth/ws-ticket", r#"{"path":"/ws"}"#, KEY, FROM, 1_782_277_200);
+        signed.headers_mut().insert("origin", HeaderValue::from_static(GOD));
+        assert_eq!(app.clone().oneshot(signed).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+        for bad in [
+            ws_ticket_request("/api/auth/ws-ticket?x=1", r#"{"path":"/ws"}"#, Some(GOD), Some(("x-maw-token", "secret-token"))),
+            ws_ticket_request("/api/auth/ws-ticket", r#"{"path":"/ws","extra":1}"#, Some(GOD), Some(("x-maw-token", "secret-token"))),
+            ws_ticket_request("/api/auth/ws-ticket", r#"{"path":"/WS"}"#, Some(GOD), Some(("x-maw-token", "secret-token"))),
+            ws_ticket_request("/api/auth/ws-ticket", "{}", Some(GOD), Some(("x-maw-token", "secret-token"))),
+            ws_ticket_request("/api/auth/ws-ticket", "{", Some(GOD), Some(("x-maw-token", "secret-token"))),
+            Request::builder().method(Method::POST).uri("/api/auth/ws-ticket").header("origin", GOD).header("x-maw-token", "secret-token").body(Body::from(r#"{"path":"/ws"}"#)).unwrap(),
+            Request::builder().method(Method::POST).uri("/api/auth/ws-ticket").header("origin", GOD).header("x-maw-token", "secret-token").header(CONTENT_TYPE, "text/plain").body(Body::from(r#"{"path":"/ws"}"#)).unwrap(),
+            Request::builder().method(Method::POST).uri("/api/auth/ws-ticket").header("origin", GOD).header("x-maw-token", "secret-token").header(CONTENT_TYPE, "application/json").body(Body::from(vec![b'x'; 129])).unwrap(),
+        ] {
+            assert_eq!(app.clone().oneshot(bad).await.unwrap().status(), StatusCode::BAD_REQUEST);
+        }
+        for denied_auth in [ServeApiTokenAuth::open(), ServeApiTokenAuth { forced_open: true, ..auth.clone() }] {
+            let denied = serve_test_app_with_api_auth(denied_auth).oneshot(ws_ticket_request("/api/auth/ws-ticket", r#"{"path":"/ws"}"#, Some(GOD), Some(("x-maw-token", "secret-token")))).await.unwrap();
+            assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+        }
+        let mut duplicate_origin = ws_ticket_request("/api/auth/ws-ticket", r#"{"path":"/ws"}"#, Some(GOD), Some(("x-maw-token", "secret-token")));
+        duplicate_origin.headers_mut().append("origin", HeaderValue::from_static(GOD));
+        assert_eq!(app.clone().oneshot(duplicate_origin).await.unwrap().status(), StatusCode::FORBIDDEN);
+        let full = Arc::new(maw_auth::WsTicketStore::default());
+        let mut rng = rand::rngs::StdRng::seed_from_u64(937);
+        for _ in 0..256 { full.issue(GOD, maw_auth::WsTicketPath::Ws, &mut rng, Instant::now).unwrap(); }
+        let unavailable = serve_test_app_with_api_auth_and_ws_tickets(auth, full).oneshot(ws_ticket_request("/api/auth/ws-ticket", r#"{"path":"/ws"}"#, Some(GOD), Some(("x-maw-token", "secret-token")))).await.unwrap();
+        assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(axum::body::to_bytes(unavailable.into_body(), 1).await.unwrap().is_empty());
     }
 
     #[tokio::test]

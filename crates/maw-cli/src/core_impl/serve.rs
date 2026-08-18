@@ -1,14 +1,14 @@
 use axum::{
     body::{Body, Bytes},
     extract::{ws::WebSocketUpgrade, ConnectInfo, Path as AxumPath, Query, State},
-    http::{HeaderMap, HeaderValue, Method, Request, StatusCode, Uri},
+    http::{header::{CACHE_CONTROL, CONTENT_TYPE}, HeaderMap, HeaderValue, Method, Request, StatusCode, Uri},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{any, get, post},
-    Json, Router,
+    Extension, Json, Router,
 };
 use futures_util::{SinkExt, StreamExt};
-use rand::RngCore;
+use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -17,12 +17,14 @@ use std::{
     path::PathBuf,
     process::{Child, Command, Stdio},
     sync::{Arc, Mutex},
+    time::Instant,
 };
 #[cfg(test)]
 use std::net::Ipv4Addr;
 
 const DEFAULT_SERVE_PORT: u16 = 3456;
 const DEFAULT_SERVE_BIND: &str = "0.0.0.0";
+pub(crate) const SERVE_WS_PROTOCOL: &str = "maw.ws.v1";
 const SERVE_FEED_MAX: usize = 200;
 const SERVE_LOG_TEXT_MAX: usize = 2_000;
 const SERVE_LOG_ERROR_MAX: usize = 1_000;
@@ -70,6 +72,12 @@ struct ServeApiTokenAuth {
 
 #[derive(Clone, Copy)]
 struct ServeOperatorAuth;
+
+#[derive(Clone)]
+struct ServeApiGateState {
+    auth: ServeApiTokenAuth,
+    _ws_tickets: Arc<maw_auth::WsTicketStore>,
+}
 
 tokio::task_local! { static SERVE_OPERATOR_CONTEXT: (); }
 
@@ -524,14 +532,29 @@ fn serve_core_state(state: &ServeState) -> crate::serve_core::ServecoreSharedSta
 }
 
 fn serve_router(state: ServeState) -> Router {
+    serve_router_with_ws_tickets(state, Arc::new(maw_auth::WsTicketStore::default()))
+}
+
+fn serve_router_with_ws_tickets(
+    state: ServeState,
+    ws_tickets: Arc<maw_auth::WsTicketStore>,
+) -> Router {
     let serve_core_state = serve_core_state(&state);
     let plugin_serve_routes = state.plugin_serve_routes.clone();
+    let api_gate = ServeApiGateState {
+        auth: state.api_token_auth.clone(),
+        _ws_tickets: ws_tickets.clone(),
+    };
     let state = Arc::new(state);
     let router = Router::new();
     let router = crate::serve_core::servecore_mount_core_routes(router);
     let router = crate::serve_core::modules::servecore_mount_modules(router, &[]);
     let router = serve_mount_plugin_routes(router, &plugin_serve_routes);
     let router = router
+        .route(
+            "/api/auth/ws-ticket",
+            post(api_ws_ticket).layer(Extension(ws_tickets)),
+        )
         .route("/api/send", post(api_send))
         .route("/api/feed", get(api_feed_get).post(api_feed_post))
         .route("/api/sessions", get(api_sessions))
@@ -560,7 +583,7 @@ fn serve_router(state: ServeState) -> Router {
     let router = router.fallback(api_not_found);
     let router = crate::serve_core::servecore_apply_pipeline(router);
     let router = router.layer(middleware::from_fn_with_state(
-        state.api_token_auth.clone(),
+        api_gate,
         serve_api_token_gate,
     ));
     let router = router.layer(middleware::from_fn(
@@ -578,7 +601,7 @@ fn serve_path_is_websocket(path: &str) -> bool {
 }
 
 async fn serve_api_token_gate(
-    State(auth): State<ServeApiTokenAuth>,
+    State(gate): State<ServeApiGateState>,
     mut req: Request<Body>,
     next: Next,
 ) -> Response {
@@ -590,6 +613,18 @@ async fn serve_api_token_gate(
             .into_response();
     }
     let path = req.uri().path();
+    let auth = &gate.auth;
+    if path == "/api/auth/ws-ticket" {
+        if req.headers().contains_key("origin")
+            && !auth.forced_open
+            && auth.token.is_some()
+            && auth.token_matches(req.headers())
+        {
+            serve_mark_operator_authenticated(&mut req);
+            return SERVE_OPERATOR_CONTEXT.scope((), next.run(req)).await;
+        }
+        return serve_token_unauthorized();
+    }
     let websocket = serve_path_is_websocket(path);
     if !websocket
         && (!path.starts_with("/api/")
@@ -615,7 +650,67 @@ async fn serve_api_token_gate(
         }
         return next.run(req).await;
     }
+    serve_token_unauthorized()
+}
+
+fn serve_token_unauthorized() -> Response {
     (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized", "auth": "maw-serve-token"}))).into_response()
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WsTicketRequest {
+    path: String,
+}
+
+#[derive(Serialize)]
+struct WsTicketResponse {
+    ticket: String,
+    protocol: &'static str,
+}
+
+async fn api_ws_ticket(
+    operator: Option<Extension<ServeOperatorAuth>>,
+    Extension(store): Extension<Arc<maw_auth::WsTicketStore>>,
+    req: Request<Body>,
+) -> Response {
+    if operator.is_none() {
+        return serve_token_unauthorized();
+    }
+    let origin = req
+        .headers()
+        .get("origin")
+        .and_then(|value| value.to_str().ok())
+        .map(ToOwned::to_owned);
+    let query_present = req.uri().query().is_some();
+    let json_content_type = req.headers().get(CONTENT_TYPE).and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value == "application/json" || value.starts_with("application/json;"));
+    if query_present || !json_content_type {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let Ok(body) = axum::body::to_bytes(req.into_body(), 128).await else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let Ok(payload) = serde_json::from_slice::<WsTicketRequest>(&body) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let (Some(origin), Ok(path)) = (
+        origin.as_deref(),
+        maw_auth::WsTicketPath::try_from(payload.path.as_str()),
+    ) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let Ok(ticket) = store.issue(origin, path, &mut OsRng, Instant::now) else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    (
+        [(CACHE_CONTROL, HeaderValue::from_static("no-store"))],
+        Json(WsTicketResponse {
+            ticket: ticket.expose_secret().to_owned(),
+            protocol: SERVE_WS_PROTOCOL,
+        }),
+    )
+        .into_response()
 }
 
 
