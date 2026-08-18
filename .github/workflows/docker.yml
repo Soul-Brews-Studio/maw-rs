@@ -1,0 +1,66 @@
+name: Docker image
+
+on:
+  pull_request:
+    branches: [alpha]
+  push:
+    branches: [alpha]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.sha }}
+      - run: docker build --pull --build-arg MAW_BUILD_VERSION="sha-${GITHUB_SHA}" -t maw-rs:pr .
+
+  publish:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.sha }}
+      - name: Build and push
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/soul-brews-studio/maw-rs"
+          sha_tag="sha-${GITHUB_SHA}"
+          case "$GITHUB_REF" in
+            refs/heads/alpha) release_tag=alpha ;;
+            refs/tags/*)
+              release_tag="${GITHUB_REF#refs/tags/}"
+              [[ "$release_tag" =~ ^v[0-9]{2}\.[1-9][0-9]?\.[1-9][0-9]?(-(alpha|beta)\.[0-9]{1,4})?$ ]] || exit 2
+              ;;
+            *) release_tag= ;;
+          esac
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          sha_exists=false
+          if docker manifest inspect "$image:$sha_tag" >/dev/null 2>&1; then
+            sha_exists=true
+            docker pull "$image:$sha_tag"
+          else
+            docker build --pull --build-arg MAW_BUILD_VERSION="$sha_tag" -t "$image:$sha_tag" .
+          fi
+          if [ -n "$release_tag" ]; then
+            docker tag "$image:$sha_tag" "$image:$release_tag"
+            docker push "$image:$release_tag"
+          fi
+          $sha_exists || docker push "$image:$sha_tag"
+          docker inspect --format='published {{index .RepoDigests 0}}' "$image:$sha_tag"
