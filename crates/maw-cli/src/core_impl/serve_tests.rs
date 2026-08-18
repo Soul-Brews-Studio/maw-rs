@@ -697,12 +697,29 @@ mod serve_tests {
         let _maw_home = EnvVarRestore::capture("MAW_HOME");
         let _state = EnvVarRestore::capture("MAW_STATE_DIR");
         let _ghq = EnvVarRestore::capture("GHQ_ROOT");
+        let _path = EnvVarRestore::capture("PATH");
         let root = std::env::temp_dir().join(format!(
             "maw-rs-serve-wake-argv-{}-{}",
             std::process::id(),
             random_hex(4)
         ));
         std::fs::create_dir_all(root.join("config")).expect("fixture root");
+        let bin = root.join("bin");
+        std::fs::create_dir_all(&bin).expect("fixture bin");
+        let tmux = bin.join("tmux");
+        std::fs::write(
+            &tmux,
+            include_str!("../../tests/fixtures/hermetic-tmux/empty-server.sh"),
+        )
+        .expect("fake tmux");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&tmux, std::fs::Permissions::from_mode(0o755)).expect("chmod fake tmux");
+        }
+        let mut path = vec![bin];
+        path.extend(std::env::var_os("PATH").into_iter().flat_map(|value| std::env::split_paths(&value).collect::<Vec<_>>()));
+        std::env::set_var("PATH", std::env::join_paths(path).expect("fixture PATH"));
         std::env::set_var("HOME", root.join("home"));
         std::env::set_var("XDG_CONFIG_HOME", root.join("xdg-config"));
         std::env::set_var("MAW_CONFIG_DIR", root.join("config"));

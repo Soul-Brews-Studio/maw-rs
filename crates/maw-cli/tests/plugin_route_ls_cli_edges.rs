@@ -6,6 +6,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use maw_cli::{run_cli, CliOutput};
 
+const EMPTY_LS_PANE: &str = "%0|zsh|plain-discord:1.0|shell|100|/repo|900";
+
 fn maw_rs_bin() -> PathBuf {
     let cargo_bin = PathBuf::from(env!("CARGO_BIN_EXE_maw-rs"));
     if cargo_bin.exists() {
@@ -199,7 +201,7 @@ fn ls_parser_optional_duration_and_recent_positionals_are_stable() {
         "\"activeThresholdSec\":1800",
     );
 
-    let active_without_following_value = run(&["ls", "--active"]);
+    let active_without_following_value = run(&["ls", "--active", "--pane", EMPTY_LS_PANE]);
     assert_eq!(active_without_following_value.code, 0);
     assert!(active_without_following_value.stderr.is_empty());
 
@@ -216,13 +218,13 @@ fn ls_parser_optional_duration_and_recent_positionals_are_stable() {
         "\"sessions\":[",
     );
 
-    let recent_without_following_value = run(&["ls", "--recent"]);
+    let recent_without_following_value = run(&["ls", "--recent", "--pane", EMPTY_LS_PANE]);
     assert_eq!(recent_without_following_value.code, 0);
     assert!(recent_without_following_value.stderr.is_empty());
 }
 
 #[test]
-fn ls_empty_local_text_and_live_tmux_fallback_are_stable() {
+fn ls_empty_local_text_with_injected_panes_is_stable() {
     assert_ok_contains(
         &[
             "ls",
@@ -232,14 +234,14 @@ fn ls_empty_local_text_and_live_tmux_fallback_are_stable() {
         "No active sessions.\n  → maw bud <name>     create new oracle\n  → maw wake <name>    attach existing\n",
     );
 
-    let live = run(&["ls", "--json"]);
-    assert_eq!(live.code, 0, "{}", live.stderr);
+    let injected = run(&["ls", "--json", "--pane", EMPTY_LS_PANE]);
+    assert_eq!(injected.code, 0, "{}", injected.stderr);
     assert!(
-        live.stdout.starts_with("{\"command\":\"ls\""),
+        injected.stdout.starts_with("{\"command\":\"ls\""),
         "{}",
-        live.stdout
+        injected.stdout
     );
-    assert!(live.stderr.is_empty());
+    assert!(injected.stderr.is_empty());
 }
 
 #[test]
