@@ -44,6 +44,7 @@ const SERVECORE_PIPELINE_ORDER: &[&str] = &[
 ];
 static SERVECORE_WS_CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
 const SERVECORE_ORCHESTRATION_BODY_LIMIT: usize = 64 * 1024;
+const SERVECORE_MAX_ALLOWED_ORIGINS: usize = 16;
 
 pub trait ServecoreEngine: Send + Sync {
     fn servecore_engine_name(&self) -> &'static str;
@@ -1531,6 +1532,9 @@ fn servecore_validate_path(path: &str) -> Result<(), String> {
 
 async fn servecore_cors_preflight(req: Request<Body>, next: Next) -> Response {
     let origin = req.headers().get("origin").cloned();
+    if !servecore_request_origin_allowed(req.headers()) {
+        return servecore_forbidden("origin-not-allowed");
+    }
     let allow_headers = req
         .headers()
         .get("access-control-request-headers")
@@ -1546,6 +1550,78 @@ async fn servecore_cors_preflight(req: Request<Body>, next: Next) -> Response {
     let mut response = next.run(req).await;
     servecore_add_cors_headers(response.headers_mut(), origin.as_ref(), &allow_headers);
     response
+}
+
+pub(crate) fn servecore_request_origin_allowed(headers: &HeaderMap) -> bool {
+    let mut origins = headers.get_all("origin").iter();
+    let Some(origin) = origins.next() else {
+        return true;
+    };
+    origins.next().is_none() && servecore_origin_allowed(origin)
+}
+
+fn servecore_origin_allowed(origin: &HeaderValue) -> bool {
+    let Ok(origin) = origin.to_str() else {
+        return false;
+    };
+    let configured = std::env::var("MAW_SERVE_ALLOWED_ORIGINS").ok();
+    servecore_origin_allowed_with(origin, configured.as_deref())
+}
+
+fn servecore_origin_allowed_with(origin: &str, configured: Option<&str>) -> bool {
+    if !servecore_valid_web_origin(origin) {
+        return false;
+    }
+    if origin == "https://god.buildwithoracle.com" || servecore_loopback_origin(origin) {
+        return true;
+    }
+    configured.is_some_and(|origins| {
+        if origins.len() > 4_096 {
+            return false;
+        }
+        let entries = origins
+            .split(',')
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+            .collect::<Vec<_>>();
+        !entries.is_empty()
+            && entries.len() <= SERVECORE_MAX_ALLOWED_ORIGINS
+            && entries
+                .iter()
+                .all(|entry| servecore_valid_web_origin(entry))
+            && entries.contains(&origin)
+    })
+}
+
+fn servecore_valid_web_origin(origin: &str) -> bool {
+    if origin.is_empty() || origin.len() > 2_048 || origin.contains('*') {
+        return false;
+    }
+    let Ok(uri) = origin.parse::<Uri>() else {
+        return false;
+    };
+    let Some(scheme) = uri.scheme_str() else {
+        return false;
+    };
+    let Some(authority) = uri.authority() else {
+        return false;
+    };
+    let suffix = authority.as_str().strip_prefix(authority.host());
+    let port_valid = matches!(suffix, Some(""))
+        || suffix.is_some_and(|part| part.starts_with(':') && authority.port_u16().is_some());
+    matches!(scheme, "http" | "https")
+        && !authority.host().is_empty()
+        && port_valid
+        && !origin.contains('@')
+        && origin == format!("{scheme}://{authority}")
+}
+
+fn servecore_loopback_origin(origin: &str) -> bool {
+    origin
+        .parse::<Uri>()
+        .ok()
+        .and_then(|uri| uri.host().map(ToOwned::to_owned))
+        .is_some_and(|host| matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1" | "[::1]"))
 }
 
 fn servecore_add_cors_headers(
@@ -1587,6 +1663,9 @@ fn servecore_add_vary_origin(headers: &mut HeaderMap) {
 }
 
 async fn servecore_ws_upgrade_gate(req: Request<Body>, next: Next) -> Response {
+    if !servecore_request_origin_allowed(req.headers()) {
+        return servecore_forbidden("origin-not-allowed");
+    }
     next.run(req).await
 }
 
@@ -2838,6 +2917,95 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("Content-Type, Authorization")
         );
+    }
+
+    #[tokio::test]
+    async fn servecore_cors_rejects_untrusted_browser_origin() {
+        let app = servecore_apply_pipeline(servecore_mount_core_routes(Router::new()));
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::OPTIONS)
+                    .uri("/api/serve-core/pipeline")
+                    .header("origin", "https://evil.example")
+                    .header("access-control-request-private-network", "true")
+                    .body(Body::empty())
+                    .expect("untrusted-origin request"),
+            )
+            .await
+            .expect("untrusted-origin response");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(response
+            .headers()
+            .get("access-control-allow-origin")
+            .is_none());
+        assert!(response
+            .headers()
+            .get("access-control-allow-private-network")
+            .is_none());
+        let duplicate = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/api/serve-core/pipeline")
+                    .header("origin", "https://god.buildwithoracle.com")
+                    .header("origin", "https://evil.example")
+                    .body(Body::empty())
+                    .expect("duplicate origin"),
+            )
+            .await
+            .expect("duplicate-origin response");
+        assert_eq!(duplicate.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn servecore_origin_policy_is_exact_and_keeps_local_ui_origins() {
+        for origin in [
+            "https://god.buildwithoracle.com",
+            "http://localhost:3456",
+            "https://localhost",
+            "http://127.0.0.1:3456",
+            "http://[::1]:3456",
+        ] {
+            assert!(servecore_origin_allowed_with(origin, None), "{origin}");
+        }
+        for origin in [
+            "null",
+            "*",
+            "https://evil.example",
+            "https://god.buildwithoracle.com.evil.example",
+            "https://god.buildwithoracle.com/",
+            "file://localhost",
+            "http://localhost:",
+            "http://localhost:abc",
+            "http://localhost:99999",
+        ] {
+            assert!(!servecore_origin_allowed_with(origin, None), "{origin}");
+        }
+        let configured = Some("https://ignored.example, https://office.example");
+        assert!(servecore_origin_allowed_with(
+            "https://office.example",
+            configured
+        ));
+        assert!(!servecore_origin_allowed_with(
+            "https://office.example.evil",
+            Some("https://office.example")
+        ));
+        for configured in ["*", "https://*.example,https://office.example"] {
+            assert!(!servecore_origin_allowed_with(
+                "https://office.example",
+                Some(configured)
+            ));
+        }
+        let too_many = (0..=SERVECORE_MAX_ALLOWED_ORIGINS)
+            .map(|index| format!("https://office-{index}.example"))
+            .collect::<Vec<_>>()
+            .join(",");
+        assert!(!servecore_origin_allowed_with(
+            "https://office-0.example",
+            Some(&too_many)
+        ));
     }
 
     #[tokio::test]

@@ -1,6 +1,14 @@
 # serve-* Surface for native serve-daemon design (maw-rs #86-94)
 > Gathered from maw-js source (read-only) 2026-06-25 for Bigboy's serve-daemon architecture draft → TK.
 
+## Current maw-rs browser-origin boundary
+
+`maw serve` accepts exact `https://god.buildwithoracle.com` or exact `localhost`,
+`127.0.0.1`, and `[::1]` browser origins. Add a comma-separated
+`MAW_SERVE_ALLOWED_ORIGINS` list (16 entries/4 KiB maximum); wildcard, suffix, malformed, and `null` values fail closed. Allowlisting only reaches
+command-capable WebSocket authentication; it never bypasses it. Missing-Origin native
+clients continue through the existing auth policy.
+
 ## TOP REFRAME
 serve-* are **NOT standalone CLI commands**. They are **serve-lifecycle plugins** that all mount onto the *single* `maw serve` Bun HTTP+WS server. No `maw serve-ws` entrypoint. maw-rs #86-94 → 8 native **modules registering into one shared gateway**, not 8 processes.
 - One server: `startBunGatewayServer` `src/core/server.ts:271-540` → one `Bun.serve({fetch,websocket})` (`:488`).

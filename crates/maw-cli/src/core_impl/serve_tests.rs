@@ -356,6 +356,14 @@ mod serve_tests {
         trust_store_path: std::path::PathBuf,
         wake: Arc<dyn ServeWakeExecutor>,
     ) -> Router {
+        serve_test_app_with_wake_and_auth(trust_store_path, wake, ServeApiTokenAuth::open())
+    }
+
+    fn serve_test_app_with_wake_and_auth(
+        trust_store_path: std::path::PathBuf,
+        wake: Arc<dyn ServeWakeExecutor>,
+        api_token_auth: ServeApiTokenAuth,
+    ) -> Router {
         serve_router(ServeState {
             cached_pubkey: Some(KEY.to_owned()),
             peer_pubkeys: HotReload::frozen(Vec::new()),
@@ -372,7 +380,7 @@ mod serve_tests {
             serve_core_state_override: None,
             trust_store_path,
             plugin_serve_routes: Vec::new(),
-            api_token_auth: ServeApiTokenAuth::open(),
+            api_token_auth,
             bound_port: DEFAULT_SERVE_PORT,
         })
     }
@@ -657,6 +665,41 @@ mod serve_tests {
             wake.wakes(),
             vec![("capture-agent".to_owned(), Some("fix issue".to_owned()))]
         );
+    }
+
+    #[tokio::test]
+    async fn serve_origin_gate_precedes_loopback_exemption_and_wake() {
+        let wake = Arc::new(FakeServeWake::default());
+        let app = serve_test_app_with_wake_and_auth(
+            serve_test_trust_store_path("wake-origin"),
+            wake.clone(),
+            ServeApiTokenAuth {
+                token: Some("secret-token".to_owned()),
+                loopback_exempt: true,
+                forced_open: false,
+            },
+        );
+        let request = |peer| {
+            let body = r#"{"target":"capture-agent"}"#;
+            let mut request =
+                signed_json_request("POST", "/api/wake", body, KEY, FROM, 1_782_277_200);
+            request.headers_mut().insert(
+                "origin",
+                HeaderValue::from_static("https://evil.example"),
+            );
+            request.extensions_mut().insert(ConnectInfo(peer));
+            request
+        };
+        let denied = app
+            .clone()
+            .oneshot(request(NON_LOOPBACK_TEST_PEER))
+            .await
+            .expect("origin before token");
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+        let peer = SocketAddr::from(([127, 0, 0, 1], 49_152));
+        let response = app.oneshot(request(peer)).await.expect("origin rejection");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(wake.wakes().is_empty());
     }
 
     #[tokio::test]
@@ -3236,8 +3279,17 @@ mod serve_tests {
 
     #[tokio::test]
     async fn serve_real_wire_websocket_subscribe_returns_native_ack_not_echo() {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
         let addr = spawn_test_server().await;
         let url = format!("ws://{addr}/ws");
+        let request = |origin: &str| {
+            let mut request = url.clone().into_client_request().expect("websocket request");
+            request
+                .headers_mut()
+                .insert("origin", origin.parse().expect("origin header"));
+            request
+        };
         let (mut ws, _response) = tokio_tungstenite::connect_async(&url)
             .await
             .expect("connect websocket");
@@ -3266,6 +3318,19 @@ mod serve_tests {
         })
         .await;
         assert!(ack.is_ok(), "websocket should ack subscribe after stream frames");
+        ws.close(None).await.expect("close native websocket");
+
+        let (mut god, _) = tokio_tungstenite::connect_async(request(
+            "https://god.buildwithoracle.com",
+        ))
+        .await
+        .expect("God UI websocket");
+        god.close(None).await.expect("close God UI websocket");
+
+        let err = tokio_tungstenite::connect_async(request("https://evil.example"))
+            .await
+            .expect_err("untrusted origin must fail before upgrade");
+        assert!(err.to_string().contains("403"), "{err}");
     }
 
     #[tokio::test]
