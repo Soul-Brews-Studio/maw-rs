@@ -1532,8 +1532,10 @@ version = "0.1.0-alpha.1"
 dependencies = [
  "ed25519-dalek",
  "hmac",
+ "rand_core 0.6.4",
  "serde_json",
  "sha2",
+ "subtle",
 ]
 
 [[package]]
