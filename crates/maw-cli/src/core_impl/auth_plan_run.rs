@@ -119,10 +119,11 @@ fn auth_ed25519_cli_pins(
     cached_pubkey: Option<&str>,
 ) -> std::sync::Arc<std::sync::Mutex<Ed25519TofuStore>> {
     let mut store = Ed25519TofuStore::default();
-    if headers.get("x-maw-ed25519-signature").is_some() {
-        if let (Some(from), Some(pubkey)) = (headers.get("x-maw-from"), cached_pubkey) {
-            let _ = store.pin_first_contact(from, pubkey);
-        }
+    if let (Some(from), Some(pubkey)) = (
+        headers.get("x-maw-from").map(str::trim).filter(|from| !from.is_empty()),
+        cached_pubkey,
+    ) {
+        let _ = store.pin_first_contact(from, pubkey);
     }
     std::sync::Arc::new(std::sync::Mutex::new(store))
 }

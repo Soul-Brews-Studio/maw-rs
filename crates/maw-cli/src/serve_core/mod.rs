@@ -2961,12 +2961,9 @@ mod tests {
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
-    #[tokio::test]
-    async fn servecore_ed25519_from_sign_allows_nonloopback_and_pins_first_contact() {
-        let peer = SocketAddr::from(([198, 51, 100, 10], 49_152));
+    fn servecore_ed25519_request(pubkey: &str) -> Request<Body> {
         let body = br#"{"event":"agent-idle"}"#;
-        let state = ServecoreSharedState::default().servecore_with_auth_now(1_700_000_000);
-        let request = Request::builder()
+        Request::builder()
             .method(Method::POST)
             .uri("/api/triggers/fire")
             .header("x-maw-from", "mawjs:m5")
@@ -2977,23 +2974,55 @@ mod tests {
                     "f15a856c7d8f4eddf64730cc61d4ccc0c28ca91b9a9df1a5016c628d737b3a0f"
                 ),
             )
-            .header(
-                "x-maw-ed25519-pubkey",
-                "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
-            )
+            .header("x-maw-ed25519-pubkey", pubkey)
             .header("x-maw-timestamp", "1700000000")
             .header("x-maw-auth-version", "ed25519")
             .body(Body::from(body.as_slice().to_vec()))
-            .expect("request");
+            .expect("request")
+    }
+
+    #[tokio::test]
+    async fn servecore_ed25519_from_sign_rejects_unpinned_nonloopback_identity() {
+        let peer = SocketAddr::from(([198, 51, 100, 10], 49_152));
+        let state = ServecoreSharedState::default().servecore_with_auth_now(1_700_000_000);
+        let request = servecore_ed25519_request(
+            "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
+        );
         let response = servecore_auth_request(state.clone(), request, peer).await;
-        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
         let pins = state
             .auth_ed25519_pins
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(pins.pinned("mawjs:m5"), None);
+    }
+
+    #[tokio::test]
+    async fn servecore_ed25519_accepts_only_the_matching_preloaded_pin() {
+        const PUBKEY: &str = "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664";
+        let peer = SocketAddr::from(([198, 51, 100, 10], 49_152));
+        let mut store = maw_auth::Ed25519TofuStore::default();
+        assert!(store.pin_first_contact("mawjs:m5", PUBKEY));
+        let pins = Arc::new(Mutex::new(store));
+        let state = ServecoreSharedState::default()
+            .servecore_with_auth_pins(pins.clone())
+            .servecore_with_auth_now(1_700_000_000);
+
+        let accepted =
+            servecore_auth_request(state.clone(), servecore_ed25519_request(PUBKEY), peer).await;
+        assert_eq!(accepted.status(), StatusCode::OK);
+        let rejected = servecore_auth_request(
+            state,
+            servecore_ed25519_request(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ),
+            peer,
+        )
+        .await;
+        assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
         assert_eq!(
-            pins.pinned("mawjs:m5"),
-            Some("79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664")
+            pins.lock().expect("test pin lock").pinned("mawjs:m5"),
+            Some(PUBKEY)
         );
     }
 

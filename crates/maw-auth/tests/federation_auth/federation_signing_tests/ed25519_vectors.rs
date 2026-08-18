@@ -5,6 +5,15 @@ const ED25519_SIG_HEX: &str = concat!(
     "f15a856c7d8f4eddf64730cc61d4ccc0c28ca91b9a9df1a5016c628d737b3a0f"
 );
 
+fn ed25519_hex_lower(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        use std::fmt::Write as _;
+        write!(&mut out, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    out
+}
+
 fn ed25519_tofu_test_path(label: &str) -> std::path::PathBuf {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -52,7 +61,7 @@ fn ed25519_request_parts(
 }
 
 #[test]
-fn verify_request_ed25519_from_sign_accepts_byte_exact_804_vector_and_pins_tofu() {
+fn verify_request_ed25519_from_sign_rejects_unpinned_request_key_without_persisting() {
     use maw_auth::{build_from_sign_payload, hash_body, Ed25519TofuStore};
     use std::sync::{Arc, Mutex};
 
@@ -67,14 +76,9 @@ fn verify_request_ed25519_from_sign_accepts_byte_exact_804_vector_and_pins_tofu(
         Some(ED25519_PUBKEY_HEX),
         pins.clone(),
     ));
-    assert_eq!(
-        decision,
-        maw_auth::RequestAuthDecision::Accept {
-            who: format!("ed25519:{FROM}")
-        }
-    );
+    assert_eq!(decision.reason(), Some("ed25519-pin-missing"));
     let guard = pins.lock().expect("test pin lock");
-    assert_eq!(guard.pinned(FROM), Some(ED25519_PUBKEY_HEX));
+    assert_eq!(guard.pinned(FROM), None);
 }
 
 #[test]
@@ -86,19 +90,10 @@ fn verify_request_ed25519_accepts_api_path_when_receiver_path_is_stripped() {
         sync::{Arc, Mutex},
     };
 
-    fn hex_lower(bytes: &[u8]) -> String {
-        let mut out = String::with_capacity(bytes.len() * 2);
-        for byte in bytes {
-            use std::fmt::Write as _;
-            write!(&mut out, "{byte:02x}").expect("writing to String cannot fail");
-        }
-        out
-    }
-
     let body = b"{\"event\":\"ed25519-api-path\"}";
     let signing_key = SigningKey::from_bytes(&[7_u8; 32]);
     let verifying_key = signing_key.verifying_key();
-    let pubkey_hex = hex_lower(verifying_key.as_bytes());
+    let pubkey_hex = ed25519_hex_lower(verifying_key.as_bytes());
     let payload = build_from_sign_payload(
         FROM,
         NOW,
@@ -107,8 +102,10 @@ fn verify_request_ed25519_accepts_api_path_when_receiver_path_is_stripped() {
         &hash_body(Some(body)),
     );
     let signature = signing_key.sign(payload.as_bytes());
-    let signature_hex = hex_lower(&signature.to_bytes());
-    let pins = Arc::new(Mutex::new(Ed25519TofuStore::default()));
+    let signature_hex = ed25519_hex_lower(&signature.to_bytes());
+    let mut store = Ed25519TofuStore::default();
+    assert!(store.pin_first_contact(FROM, &pubkey_hex));
+    let pins = Arc::new(Mutex::new(store));
 
     let decision = maw_auth::verify_request(&RequestAuthParts {
         method: "POST".to_owned(),
@@ -137,8 +134,10 @@ fn verify_request_ed25519_accepts_api_path_when_receiver_path_is_stripped() {
 
 
 #[test]
-fn sign_ed25519_headers_round_trip_verify_request() {
+fn sign_ed25519_headers_require_preestablished_key_and_round_trip() {
+    use ed25519_dalek::SigningKey;
     use maw_auth::{hash_body, sign_ed25519_headers_at, Headers, RequestAuthParts};
+    use sha2::{Digest, Sha256};
     use std::net::{IpAddr, Ipv4Addr};
 
     let body = br#"{"target":"agent","text":"hello"}"#;
@@ -146,6 +145,21 @@ fn sign_ed25519_headers_round_trip_verify_request() {
         .expect("sign ed25519");
     assert!(!headers.get("x-maw-ed25519-signature").unwrap_or_default().is_empty());
     assert!(!headers.get("x-maw-ed25519-pubkey").unwrap_or_default().is_empty());
+    let seed: [u8; 32] = Sha256::digest(PEER_KEY.as_bytes()).into();
+    let cached_pubkey = ed25519_hex_lower(SigningKey::from_bytes(&seed).verifying_key().as_bytes());
+
+    let unpinned = maw_auth::verify_request(&RequestAuthParts {
+        method: "POST".to_owned(),
+        path: "/api/send".to_owned(),
+        headers: Headers::new(headers.to_btree_map()),
+        body: Some(body.to_vec()),
+        peer_ip: Some(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 10))),
+        workspace_key: None,
+        cached_pubkey: None,
+        ed25519_pins: None,
+        now: NOW,
+    });
+    assert_eq!(unpinned.reason(), Some("ed25519-pin-missing"));
 
     let decision = maw_auth::verify_request(&RequestAuthParts {
         method: "POST".to_owned(),
@@ -154,7 +168,7 @@ fn sign_ed25519_headers_round_trip_verify_request() {
         body: Some(body.to_vec()),
         peer_ip: Some(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 10))),
         workspace_key: None,
-        cached_pubkey: headers.get("x-maw-ed25519-pubkey").map(str::to_owned),
+        cached_pubkey: Some(cached_pubkey),
         ed25519_pins: None,
         now: NOW,
     });

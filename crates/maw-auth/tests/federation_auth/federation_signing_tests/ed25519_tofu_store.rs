@@ -113,6 +113,27 @@ fn ed25519_tofu_missing_file_still_allows_first_use_pin() {
 }
 
 #[test]
+fn ed25519_request_does_not_create_a_missing_file_backed_pin_store() {
+    use maw_auth::Ed25519TofuStore;
+    use std::sync::{Arc, Mutex};
+
+    let path = ed25519_tofu_test_path("request-must-not-pin");
+    assert!(!path.exists());
+    let pins = Arc::new(Mutex::new(Ed25519TofuStore::file_backed(&path)));
+    let decision = maw_auth::verify_request(&ed25519_request_parts(
+        ED25519_SIG_HEX,
+        Some(ED25519_PUBKEY_HEX),
+        pins,
+    ));
+    assert_eq!(decision.reason(), Some("ed25519-pin-missing"));
+    assert!(!path.exists());
+    assert_eq!(
+        Ed25519TofuStore::file_backed(path).pinned(FROM),
+        None
+    );
+}
+
+#[test]
 fn ed25519_tofu_atomic_concurrent_pins_survive_reload() {
     use maw_auth::Ed25519TofuStore;
     use std::sync::{Arc, Mutex};
@@ -159,14 +180,19 @@ fn verify_request_ed25519_rejects_bad_sig_and_malformed_inputs_fail_closed() {
     use maw_auth::Ed25519TofuStore;
     use std::sync::{Arc, Mutex};
 
-    let pins = Arc::new(Mutex::new(Ed25519TofuStore::default()));
+    let mut store = Ed25519TofuStore::default();
+    assert!(store.pin_first_contact(FROM, ED25519_PUBKEY_HEX));
+    let pins = Arc::new(Mutex::new(store));
     let bad = maw_auth::verify_request(&ed25519_request_parts(
         &"0".repeat(128),
         Some(ED25519_PUBKEY_HEX),
         pins.clone(),
     ));
     assert_eq!(bad.reason(), Some("ed25519-signature-invalid"));
-    assert!(pins.lock().expect("test pin lock").is_empty());
+    assert_eq!(
+        pins.lock().expect("test pin lock").pinned(FROM),
+        Some(ED25519_PUBKEY_HEX)
+    );
 
     let malformed = maw_auth::verify_request(&ed25519_request_parts(
         "base64-ed25519-placeholder",
@@ -175,4 +201,3 @@ fn verify_request_ed25519_rejects_bad_sig_and_malformed_inputs_fail_closed() {
     ));
     assert_eq!(malformed.reason(), Some("ed25519-signature-invalid"));
 }
-
