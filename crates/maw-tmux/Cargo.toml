@@ -8,7 +8,6 @@ publish = false
 
 [dependencies]
 maw-matcher = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "e46932081dfd1a20bb962506086f1befe5525fa4" }
-maw-peer = { path = "../maw-peer" }
 
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }

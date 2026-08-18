@@ -1,5 +1,7 @@
-use maw_peer::{PeerSourceKind, PeerTarget};
-use maw_tmux::{mark_peer_targets_live, parse_tmux_pane_target, resolve_tmux_live_state, TmuxPane};
+use maw_tmux::{
+    mark_peer_targets_live, parse_tmux_pane_target, resolve_tmux_live_state, LivePeerTarget,
+    TmuxPane,
+};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -26,15 +28,6 @@ enum SourceFixture {
     Scout,
 }
 
-impl From<SourceFixture> for PeerSourceKind {
-    fn from(value: SourceFixture) -> Self {
-        match value {
-            SourceFixture::Config => Self::Config,
-            SourceFixture::Scout => Self::Scout,
-        }
-    }
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PaneFixture {
@@ -58,12 +51,16 @@ struct ExpectedFixture {
     awake_peers: Vec<String>,
 }
 
-impl From<PeerFixture> for PeerTarget {
+impl From<PeerFixture> for LivePeerTarget {
     fn from(value: PeerFixture) -> Self {
         Self {
             name: value.name,
             url: value.url,
-            source: value.source.into(),
+            source: match value.source {
+                SourceFixture::Config => "config",
+                SourceFixture::Scout => "scout",
+            }
+            .to_owned(),
             node: value.node,
             oracle: value.oracle,
         }
@@ -92,7 +89,7 @@ fn discover_tmux_live_state_fixtures_match_maw_js_portable_spec() {
     .expect("valid discover tmux live state fixture json");
 
     for fixture in fixtures {
-        let peers: Vec<PeerTarget> = fixture.peers.into_iter().map(Into::into).collect();
+        let peers: Vec<LivePeerTarget> = fixture.peers.into_iter().map(Into::into).collect();
         let panes: Vec<TmuxPane> = fixture.panes.into_iter().map(Into::into).collect();
         let result = resolve_tmux_live_state(&peers, &panes);
         let marked_peers = mark_peer_targets_live(&peers, &result.live);

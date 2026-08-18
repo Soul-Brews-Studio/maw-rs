@@ -68,11 +68,21 @@ fn parse_optional_u64(value: &str, message: &str) -> Result<Option<u64>, String>
         .map_err(|_| message.to_owned())
 }
 
-fn peer_with_no_live(peer: &maw_peer::PeerTarget) -> PeerTargetWithLive {
+fn project_live_peer_target(peer: &maw_peer::PeerTarget) -> LivePeerTarget {
+    LivePeerTarget {
+        name: peer.name.clone(),
+        url: peer.url.clone(),
+        source: peer.source.as_str().to_owned(),
+        node: peer.node.clone(),
+        oracle: peer.oracle.clone(),
+    }
+}
+
+fn peer_with_no_live(peer: &LivePeerTarget) -> PeerTargetWithLive {
     PeerTargetWithLive {
         name: peer.name.clone(),
         url: peer.url.clone(),
-        source: peer.source,
+        source: peer.source.clone(),
         node: peer.node.clone(),
         oracle: peer.oracle.clone(),
         awake: false,
@@ -415,4 +425,3 @@ fn render_oracle_records_json(records: &[RegisteredOracleRecord]) -> String {
             .join(",")
     )
 }
-

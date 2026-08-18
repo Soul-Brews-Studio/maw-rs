@@ -141,10 +141,15 @@ fn run_discover_plan(argv: &[String]) -> CliOutput {
         peers: discovery_rows,
     });
     let result = resolve_peer_sources(&config, mode, discoveries.as_ref());
+    let live_peers = result
+        .peers
+        .iter()
+        .map(project_live_peer_target)
+        .collect::<Vec<_>>();
     let include_live = json || tree || awake;
     let live_probe_calls = usize::from(include_live);
     let live_state = if include_live {
-        resolve_tmux_live_state(&result.peers, &panes)
+        resolve_tmux_live_state(&live_peers, &panes)
     } else {
         TmuxLiveStateResult {
             source: "tmux".to_owned(),
@@ -153,10 +158,9 @@ fn run_discover_plan(argv: &[String]) -> CliOutput {
         }
     };
     let peers_with_live = if include_live {
-        mark_peer_targets_live(&result.peers, &live_state.live)
+        mark_peer_targets_live(&live_peers, &live_state.live)
     } else {
-        result
-            .peers
+        live_peers
             .iter()
             .map(peer_with_no_live)
             .collect::<Vec<_>>()
@@ -407,4 +411,3 @@ fn parse_discover_fleet(value: &str) -> Result<FleetConfigRecord, String> {
         peer_matched: false,
     })
 }
-
