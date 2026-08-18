@@ -1553,8 +1553,8 @@ source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=e46932081dfd1a
 
 [[package]]
 name = "maw-calver"
-version = "0.1.0-alpha.1"
-source = "git+https://github.com/Soul-Brews-Studio/maw-calver?rev=c74522b2b7cb5b831c456b2a2fa333849aa85eef#c74522b2b7cb5b831c456b2a2fa333849aa85eef"
+version = "26.8.18-alpha.1329"
+source = "git+https://github.com/Soul-Brews-Studio/maw-calver?rev=8e97ae8814990bbd3b3766cb5e0bc4064c57e859#8e97ae8814990bbd3b3766cb5e0bc4064c57e859"
 
 [[package]]
 name = "maw-cli"
