@@ -332,11 +332,8 @@ pub(crate) fn agentstatus_oracle_from_feed_payload(payload: &[u8]) -> Option<Str
         .map(str::to_owned)
 }
 
-/// #813: the hardcoded arms (claude / codex / version shape / exact `node`)
-/// moved into the shared `maw_tmux::is_agent_pane_command` — this file was one
-/// of only two that already had the version arm, and its argv0-exact rule is
-/// the one the shared predicate adopted for every generic launcher name. The
-/// per-deployment `configured_bins` arm is genuinely local and stays here.
+/// #813: shared shape checks live in `maw_tmux::is_agent_pane_command`;
+/// this function keeps only local configured-bin overrides.
 pub(crate) fn agentstatus_is_agent_command(cmd: &str, configured_bins: &[String]) -> bool {
     let command = cmd.trim();
     if command.is_empty() {
@@ -758,18 +755,15 @@ mod tests {
 
     #[test]
     fn agentstatus_is_agent_command_matches_keywords_versions_and_exact_bins() {
-        let configured = vec!["omx --direct".to_owned()];
-        for command in ["claude", "codex", "1.2.3", "omx"] {
+        let configured = vec!["omx --direct".to_owned(), "opencode --workspace".to_owned()];
+        for command in ["claude", "codex", "1.2.3", "omx", "opencode"] {
             assert!(
                 agentstatus_is_agent_command(command, &configured),
                 "{command}"
             );
         }
-        // `node` sits beside `nodemon` deliberately (#813): it reached maw-rs
-        // through #770's port of maw-js, where it is a VENDORED substring regex
-        // (`/claude|codex|node/i`) that matches `nodemon` too. No launcher in
-        // either codebase reports `node` as pane_current_command.
-        for command in ["bash", "zsh", "node", "nodemon", ""] {
+        // Known false negatives stay warnings: node, bun, deno, and Python runtimes.
+        for command in ["bash", "zsh", "node", "nodemon", "", "bun", "python"] {
             assert!(
                 !agentstatus_is_agent_command(command, &configured),
                 "{command}"
@@ -779,10 +773,13 @@ mod tests {
 
     #[test]
     fn agentstatus_is_agent_command_uses_first_word_from_config_values() {
-        let configured = vec!["gemini --foo".to_owned(), "default --bar".to_owned()];
+        let configured = vec!["custom-agent --foo".to_owned(), "default --bar".to_owned()];
 
-        assert!(agentstatus_is_agent_command("gemini", &configured));
-        assert!(!agentstatus_is_agent_command("geminix", &configured));
+        assert!(agentstatus_is_agent_command("custom-agent", &configured));
+        assert!(!agentstatus_is_agent_command(
+            "custom-agent-helper",
+            &configured
+        ));
         assert!(!agentstatus_is_agent_command("default", &configured));
     }
 

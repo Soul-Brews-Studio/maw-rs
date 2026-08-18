@@ -117,13 +117,39 @@ mod agent_pane_parity_tests {
             why: "codex is distinctive enough to match anywhere in the command",
         },
         ParityCase {
+            command: "omx",
+            title: "shell",
+            expect_command: true,
+            expect_pane: true,
+            why: "omx is now exact-program in the explicit registry",
+        },
+        ParityCase {
+            command: "opencode",
+            title: "shell",
+            expect_command: true,
+            expect_pane: true,
+            why: "opencode is now exact-program in the explicit registry",
+        },
+        ParityCase {
+            command: "xomx",
+            title: "building the thing",
+            expect_command: false,
+            expect_pane: false,
+            why: "exact omx should not match substring",
+        },
+        ParityCase {
+            command: "opencode-helper",
+            title: "building the thing",
+            expect_command: false,
+            expect_pane: false,
+            why: "exact opencode should not match substring",
+        },
+        ParityCase {
             command: "node",
             title: "building the thing",
             expect_command: false,
             expect_pane: false,
-            why: "inherited dead weight: reached maw-rs via #770's maw-js port, where it is a \
-                  VENDORED substring regex matching `nodemon` too. maw-js runs under bun and \
-                  send-keys `claude`; no launcher reports `node`. 31 panes measured, zero",
+            why: "known false negative: `omx --direct` reports `node` in argv0, so this stays a warning",
         },
         ParityCase {
             command: "nodejs",
@@ -132,6 +158,41 @@ mod agent_pane_parity_tests {
             expect_pane: false,
             why: "Debian's package name for the same interpreter; out for the same reason as \
                   `node` itself",
+        },
+        ParityCase {
+            command: "bun",
+            title: "building the thing",
+            expect_command: false,
+            expect_pane: false,
+            why: "known false negative: maw-js-daemon under bun reports `bun` in argv0",
+        },
+        ParityCase {
+            command: "bun run dev",
+            title: "building the thing",
+            expect_command: false,
+            expect_pane: false,
+            why: "generic runtime command-line from argv0 should stay out",
+        },
+        ParityCase {
+            command: "python3.12",
+            title: "building the thing",
+            expect_command: false,
+            expect_pane: false,
+            why: "generic runtime variant should stay denied",
+        },
+        ParityCase {
+            command: "npx",
+            title: "building the thing",
+            expect_command: false,
+            expect_pane: false,
+            why: "generic runtime command-line from argv0 should stay out",
+        },
+        ParityCase {
+            command: "uv",
+            title: "building the thing",
+            expect_command: false,
+            expect_pane: false,
+            why: "generic runtime command-line from argv0 should stay out",
         },
         ParityCase {
             command: "node",
