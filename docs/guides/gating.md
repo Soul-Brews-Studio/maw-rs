@@ -170,8 +170,8 @@ Rules the cache lives by:
 - **Disk story**: golden dirs are GB-scale, so they live under one dedicated
   root (`~/.maw/gate-cache/`), the refresh keeps only the **2 newest** shas,
   and retired cache dirs are `mv`'d to `${TMPDIR:-/tmp}/gate-cache-trash-*` (no
-  `rm`; the July disk crisis was untracked target-dir sprawl). Reap your own
-  merged worktrees' active gate dirs stay on NVMe and retire under
+  `rm`; the July disk crisis was untracked target-dir sprawl). Merge-train
+  active gate dirs stay on NVMe and retire under
   `/mnt/nvme1/cargo/retired-gates/` when that volume is available.
 - Refresh cadence: on demand, or schedule it (no in-repo `.maw/schedule.toml`
   exists yet), e.g.
