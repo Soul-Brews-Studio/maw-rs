@@ -20,7 +20,7 @@ maw-auto-wake = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev =
 maw-auth = { path = "../maw-auth" }
 maw-bring = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "e46932081dfd1a20bb962506086f1befe5525fa4" }
 maw-bind = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "e46932081dfd1a20bb962506086f1befe5525fa4" }
-maw-calver = { git = "https://github.com/Soul-Brews-Studio/maw-calver", rev = "c74522b2b7cb5b831c456b2a2fa333849aa85eef" }
+maw-calver = { git = "https://github.com/Soul-Brews-Studio/maw-calver", rev = "8e97ae8814990bbd3b3766cb5e0bc4064c57e859" }
 maw-feed = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "e46932081dfd1a20bb962506086f1befe5525fa4" }
 maw-fuzzy = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "e46932081dfd1a20bb962506086f1befe5525fa4" }
 maw-identity = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "e46932081dfd1a20bb962506086f1befe5525fa4" }
