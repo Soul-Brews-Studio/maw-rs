@@ -136,7 +136,13 @@ where
         self.send_text_with_sleeper(target, text, std::thread::sleep)
     }
 
-    fn send_text_with_sleeper<F>(
+    /// Run [`Self::send_text`] with an injected sleep function for deterministic
+    /// callers. Production callbacks must honor every requested delay.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same fail-closed errors as [`Self::send_text`].
+    pub fn send_text_with_sleeper<F>(
         &mut self,
         target: &str,
         text: &str,

@@ -75,10 +75,11 @@
             server_observed: false,
             initial_cold_start_allowed: true,
         };
+        let borrowed = &mut runner;
         #[cfg(target_os = "linux")]
-        assert!(runner.is_initial_cold_start(&enoent));
+        assert!(TmuxRunner::is_initial_cold_start(&borrowed, &enoent));
         #[cfg(not(target_os = "linux"))]
-        assert!(!runner.is_initial_cold_start(&enoent));
+        assert!(!TmuxRunner::is_initial_cold_start(&borrowed, &enoent));
         let stale = TmuxError::new("tmux exited with status 1: no server running on /dev/null");
         assert!(!runner.is_initial_cold_start(&stale));
         #[cfg(target_os = "linux")]

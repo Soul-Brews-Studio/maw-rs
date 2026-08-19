@@ -52,153 +52,13 @@ fn sendtext_send_text<R, F>(
     runner: &mut R,
     target: &str,
     text: &str,
-    mut sleep: F,
+    sleep: F,
 ) -> Result<maw_tmux::SendTextReport, maw_tmux::TmuxError>
 where
     R: maw_tmux::TmuxRunner,
     F: FnMut(std::time::Duration),
 {
-    sendtext_exit_mode_if_needed(runner, target)?;
-    let used_buffer = text.contains('\n') || text.len() > 500;
-    if used_buffer {
-        runner.run_with_stdin("load-buffer", &["-".to_owned()], text.as_bytes())?;
-        runner.run("paste-buffer", &["-t".to_owned(), target.to_owned()])?;
-    } else {
-        runner.run("send-keys", &maw_tmux::tmux_send_keys_literal_args(target, text))?;
-    }
-    sleep(std::time::Duration::from_millis(maw_tmux::SEND_SETTLE_MS));
-    // Snapshot an opaque TUI rendering before Enter; capture failure leaves
-    // no baseline, preserving the fail-stop behavior for different input.
-    let buffered_pending = if used_buffer {
-        sendtext_pending_input(runner, target)
-    } else {
-        None
-    };
-    let (enter_attempts, warned_pending) = sendtext_submit_with_confirm(
-        runner,
-        target,
-        text,
-        buffered_pending.as_deref(),
-        &mut sleep,
-    )?;
-    Ok(maw_tmux::SendTextReport {
-        used_buffer,
-        enter_attempts,
-        warned_pending,
-    })
-}
-
-fn sendtext_exit_mode_if_needed<R: maw_tmux::TmuxRunner>(
-    runner: &mut R,
-    target: &str,
-) -> Result<(), maw_tmux::TmuxError> {
-    let probe = runner.run(
-        "display-message",
-        &[
-            "-t".to_owned(),
-            target.to_owned(),
-            "-p".to_owned(),
-            "#{pane_in_mode}".to_owned(),
-        ],
-    );
-    if probe.is_ok_and(|raw| raw.trim() == "1") {
-        match runner.run(
-            "send-keys",
-            &[
-                "-t".to_owned(),
-                target.to_owned(),
-                "-X".to_owned(),
-                "cancel".to_owned(),
-            ],
-        ) {
-            Ok(_) => Ok(()),
-            Err(error) if error.message.contains("not in a mode") => Ok(()),
-            Err(error) => Err(error),
-        }
-    } else {
-        Ok(())
-    }
-}
-
-fn sendtext_submit_with_confirm<R, F>(
-    runner: &mut R,
-    target: &str,
-    text: &str,
-    buffered_pending: Option<&str>,
-    sleep: &mut F,
-) -> Result<(u32, bool), maw_tmux::TmuxError>
-where
-    R: maw_tmux::TmuxRunner,
-    F: FnMut(std::time::Duration),
-{
-    for attempt in 1..=maw_tmux::MAX_SUBMIT_ATTEMPTS {
-        runner.run("send-keys", &maw_tmux::tmux_send_enter_args(target))?;
-        sleep(std::time::Duration::from_millis(maw_tmux::SUBMIT_CONFIRM_MS));
-        match sendtext_pending_state_after_grace(
-            runner,
-            target,
-            text,
-            buffered_pending,
-            sleep,
-        ) {
-            maw_tmux::PendingInputState::Cleared => return Ok((attempt, false)),
-            maw_tmux::PendingInputState::DifferentInput => return Ok((attempt, true)),
-            maw_tmux::PendingInputState::MatchesSent => {}
-        }
-    }
-    Ok((maw_tmux::MAX_SUBMIT_ATTEMPTS, true))
-}
-
-fn sendtext_pending_state_after_grace<R, F>(
-    runner: &mut R,
-    target: &str,
-    text: &str,
-    buffered_pending: Option<&str>,
-    sleep: &mut F,
-) -> maw_tmux::PendingInputState
-where
-    R: maw_tmux::TmuxRunner,
-    F: FnMut(std::time::Duration),
-{
-    let _confirm_state = sendtext_pending_input_state(runner, target, text, buffered_pending);
-    sleep(std::time::Duration::from_millis(maw_tmux::SUBMIT_GRACE_MS));
-    sendtext_pending_input_state(runner, target, text, buffered_pending)
-}
-
-fn sendtext_pending_input_state<R: maw_tmux::TmuxRunner>(
-    runner: &mut R,
-    target: &str,
-    text: &str,
-    buffered_pending: Option<&str>,
-) -> maw_tmux::PendingInputState {
-    let Some(pending) = sendtext_pending_input(runner, target) else {
-        return maw_tmux::PendingInputState::Cleared;
-    };
-    if maw_tmux::pending_input_matches_sent(&pending, text)
-        || buffered_pending
-            .is_some_and(|baseline| maw_tmux::pending_input_matches_sent(&pending, baseline))
-    {
-        maw_tmux::PendingInputState::MatchesSent
-    } else {
-        maw_tmux::PendingInputState::DifferentInput
-    }
-}
-
-fn sendtext_pending_input<R: maw_tmux::TmuxRunner>(runner: &mut R, target: &str) -> Option<String> {
-    runner
-        .run(
-            "capture-pane",
-            &[
-                "-t".to_owned(),
-                target.to_owned(),
-                "-e".to_owned(),
-                "-p".to_owned(),
-                "-S".to_owned(),
-                "-5".to_owned(),
-            ],
-        )
-        .ok()
-        .and_then(|content| maw_tmux::pane_pending_input_from_capture(&content))
+    maw_tmux::TmuxClient::new(runner).send_text_with_sleeper(target, text, sleep)
 }
 
 fn sendtext_parse_args(argv: &[String]) -> Result<SendtextOptions, String> {
@@ -255,13 +115,9 @@ fn sendtext_validate_tmux_target(value: &str) -> Result<(), String> {
 
 fn sendtext_success_output(target: &str, report: &maw_tmux::SendTextReport) -> CliOutput {
     let method = if report.used_buffer { "buffer" } else { "literal" };
-    let mut stdout = format!("  \x1b[32m✓\x1b[0m sent text to {target} ({method})\n");
-    if report.warned_pending {
-        stdout.push_str("  \x1b[33m⚠\x1b[0m pane still had pending input after Enter retries\n");
-    }
     CliOutput {
         code: 0,
-        stdout,
+        stdout: format!("  \x1b[32m✓\x1b[0m sent text to {target} ({method})\n"),
         stderr: String::new(),
     }
 }
@@ -275,6 +131,9 @@ mod sendtext_tests {
         calls: Vec<(String, Vec<String>)>,
         stdin_calls: Vec<(String, Vec<String>, String)>,
         responses: std::collections::VecDeque<Result<String, maw_tmux::TmuxError>>,
+        preflight: Option<Result<String, maw_tmux::TmuxError>>,
+        preflight_args: Option<Vec<String>>,
+        joined_capture_seen: bool,
     }
 
     impl SendtextMockTmux {
@@ -292,6 +151,13 @@ mod sendtext_tests {
 
     impl maw_tmux::TmuxRunner for SendtextMockTmux {
         fn run(&mut self, subcommand: &str, args: &[String]) -> Result<String, maw_tmux::TmuxError> {
+            if subcommand == "capture-pane"
+                && args.iter().any(|arg| arg == "-J")
+                && !std::mem::replace(&mut self.joined_capture_seen, true)
+            {
+                self.preflight_args = Some(args.to_vec());
+                return self.preflight.take().unwrap_or_else(|| Ok(String::new()));
+            }
             self.calls.push((subcommand.to_owned(), args.to_vec()));
             self.responses
                 .pop_front()
@@ -366,7 +232,7 @@ mod sendtext_tests {
 
     fn sendtext_buffered_case(
         mut after_paste: Vec<Result<&str, &str>>,
-    ) -> (CliOutput, SendtextMockTmux, usize) {
+    ) -> (Result<CliOutput, String>, SendtextMockTmux, usize) {
         let _lock = super::env_test_lock();
         let _env = SendtextEnvGuard::sendtext_new();
         let mut responses = vec![Ok("0"), Ok(""), Ok("")];
@@ -375,8 +241,7 @@ mod sendtext_tests {
         let output = sendtext_with_no_sleep(
             &[String::from("%9"), SENDTEXT_BUFFERED_TEXT.to_owned()],
             &mut tmux,
-        )
-        .expect("send text ok");
+        );
         let enter_count = tmux
             .calls
             .iter()
@@ -384,7 +249,6 @@ mod sendtext_tests {
                 command == "send-keys" && args.last().is_some_and(|arg| arg == "Enter")
             })
             .count();
-        assert!(output.stdout.contains("(buffer)"));
         (output, tmux, enter_count)
     }
 
@@ -441,6 +305,7 @@ mod sendtext_tests {
             Ok("❯ "),
             Ok("❯ "),
         ]);
+        let output = output.expect("send text ok");
 
         assert!(!output.stdout.contains("pending input after Enter retries"));
         assert_eq!(enter_count, 2);
@@ -460,6 +325,7 @@ mod sendtext_tests {
             Ok("❯ "),
             Ok("❯ "),
         ]);
+        let output = output.expect("send text ok");
 
         assert!(!output.stdout.contains("pending input after Enter retries"));
         assert_eq!(enter_count, 2);
@@ -474,7 +340,7 @@ mod sendtext_tests {
             Ok("❯ different queued input"),
         ]);
 
-        assert!(output.stdout.contains("pending input after Enter retries"));
+        assert!(output.expect_err("different input must fail").contains("not be confirmed"));
         assert_eq!(enter_count, 1);
     }
 
@@ -487,7 +353,7 @@ mod sendtext_tests {
             Ok(SENDTEXT_BUFFERED_PLACEHOLDER),
         ]);
 
-        assert!(output.stdout.contains("pending input after Enter retries"));
+        assert!(output.expect_err("unknown baseline must fail").contains("not be confirmed"));
         assert_eq!(enter_count, 1);
     }
 
@@ -512,7 +378,7 @@ mod sendtext_tests {
     }
 
     #[test]
-    fn sendtext_warns_when_pending_input_remains() {
+    fn sendtext_fails_when_pending_input_remains() {
         let _lock = super::env_test_lock();
         let _env = SendtextEnvGuard::sendtext_new();
         let mut tmux = SendtextMockTmux::sendtext_with_responses(vec![
@@ -532,10 +398,10 @@ mod sendtext_tests {
             Ok("$ deploy"),
         ]);
 
-        let output =
-            sendtext_with_no_sleep(&sendtext_strings(&["%9", "deploy"]), &mut tmux).expect("send");
+        let error = sendtext_with_no_sleep(&sendtext_strings(&["%9", "deploy"]), &mut tmux)
+            .expect_err("pending input must fail");
 
-        assert!(output.stdout.contains("pending input after Enter retries"));
+        assert!(error.contains("delivery could not be confirmed"));
         assert_eq!(
             tmux.calls
                 .iter()
@@ -543,6 +409,18 @@ mod sendtext_tests {
                 .count(),
             4
         );
+    }
+
+    #[test]
+    fn sendtext_refuses_to_append_to_existing_pending_input() {
+        let mut tmux = SendtextMockTmux::sendtext_with_responses(vec![Ok("0")]);
+        tmux.preflight = Some(Ok("$ existing input".to_owned()));
+        let error = sendtext_with_no_sleep(&sendtext_strings(&["%9", "deploy"]), &mut tmux)
+            .expect_err("existing input must be refused before mutation");
+        assert!(error.contains("already has pending input"));
+        assert_eq!(tmux.preflight_args, Some(sendtext_strings(&["-t", "%9", "-e", "-p", "-J", "-S", "-80"])));
+        assert!(tmux.calls.iter().all(|(command, _)| command != "send-keys"));
+        assert!(tmux.stdin_calls.is_empty());
     }
 
     #[test]
@@ -557,11 +435,11 @@ mod sendtext_tests {
             Ok("$ different queued input"),
         ]);
 
-        let output =
+        let error =
             sendtext_with_no_sleep(&sendtext_strings(&["%9", "deploy"]), &mut tmux)
-                .expect("send");
+                .expect_err("different input must fail");
 
-        assert!(output.stdout.contains("pending input after Enter retries"));
+        assert!(error.contains("inspect the pane before retrying"));
         assert_eq!(
             tmux.calls
                 .iter()

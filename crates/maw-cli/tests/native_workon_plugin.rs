@@ -43,6 +43,7 @@ case "$1" in
   display-message) printf '50-mawjs\n' ;;
   list-windows) printf '%s' "$MAW_FAKE_TMUX_WINDOWS" ;;
   has-session) exit 1 ;;
+  capture-pane) printf '$ \n' ;;
   new-session|new-window|send-keys|select-window) exit 0 ;;
   *) printf 'unexpected tmux %s\n' "$1" >&2; exit 9 ;;
 esac
@@ -232,7 +233,7 @@ fn native_workon_outside_tmux_creates_session_and_prints_attach_plan() {
         "{tmux_log}"
     );
     assert!(
-        tmux_log.contains("capture-pane -t demo:demo -e -p -S -5"),
+        tmux_log.contains("capture-pane -t demo:demo -e -p -J -S -80"),
         "{tmux_log}"
     );
 }
