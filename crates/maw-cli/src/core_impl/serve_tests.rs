@@ -2481,6 +2481,128 @@ mod serve_tests {
             .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
     }
 
+    fn browser_ws_request(url: &str, origin: Option<&str>, carrier: &str) -> axum::http::Request<()> {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let mut request = url.into_client_request().unwrap();
+        if let Some(origin) = origin { request.headers_mut().insert("origin", origin.parse().unwrap()); }
+        request.headers_mut().insert("sec-websocket-protocol", carrier.parse().unwrap());
+        request
+    }
+
+    async fn browser_ws_status(request: axum::http::Request<()>) -> StatusCode {
+        match tokio_tungstenite::connect_async(request).await {
+            Ok(_) => StatusCode::SWITCHING_PROTOCOLS,
+            Err(tokio_tungstenite::tungstenite::Error::Http(response)) => response.status(),
+            Err(error) => panic!("unexpected WebSocket result: {error}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn serve_browser_ws_ticket_consume() {
+        const GOD: &str = "https://god.buildwithoracle.com";
+        let store = Arc::new(maw_auth::WsTicketStore::default());
+        let mut rng = rand::rngs::StdRng::seed_from_u64(937);
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = serve_test_app_with_api_auth_and_ws_tickets(
+            ServeApiTokenAuth {
+                token: Some("secret-token".into()),
+                loopback_exempt: true,
+                forced_open: false,
+            },
+            store.clone(),
+        );
+        let wire_app = app.clone();
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                wire_app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+
+        for path in ["/ws", "/ws/pty", "/ws/tmux"] {
+            let kind = maw_auth::WsTicketPath::try_from(path).unwrap();
+            let ticket = store.issue(GOD, kind, &mut rng, Instant::now).unwrap();
+            let carrier = format!("{SERVE_WS_PROTOCOL}, {}", ticket.expose_secret());
+            let url = format!("ws://{addr}{path}");
+            let (socket, response) = tokio_tungstenite::connect_async(browser_ws_request(&url, Some(GOD), &carrier)).await.unwrap();
+            assert_eq!(response.headers()["sec-websocket-protocol"], SERVE_WS_PROTOCOL);
+            assert!(!response.headers().values().any(|value| value.as_bytes().windows(ticket.expose_secret().len()).any(|part| part == ticket.expose_secret().as_bytes())));
+            drop(socket);
+            assert_eq!(browser_ws_status(browser_ws_request(&url, Some(GOD), &carrier)).await, StatusCode::UNAUTHORIZED);
+        }
+        let bound = store.issue(GOD, maw_auth::WsTicketPath::Ws, &mut rng, Instant::now).unwrap();
+        let carrier = format!("{SERVE_WS_PROTOCOL}, {}", bound.expose_secret());
+        for (origin, path) in [("http://localhost", "/ws"), (GOD, "/ws/pty")] {
+            assert_eq!(browser_ws_status(browser_ws_request(&format!("ws://{addr}{path}"), Some(origin), &carrier)).await, StatusCode::UNAUTHORIZED);
+        }
+        assert_eq!(browser_ws_status(browser_ws_request(&format!("ws://{addr}/ws"), Some(GOD), &carrier)).await, StatusCode::SWITCHING_PROTOCOLS);
+        let once = store.issue(GOD, maw_auth::WsTicketPath::Ws, &mut rng, Instant::now).unwrap();
+        let carrier = format!("{SERVE_WS_PROTOCOL}, {}", once.expose_secret());
+        let url = format!("ws://{addr}/ws");
+        let (a, b) = tokio::join!(browser_ws_status(browser_ws_request(&url, Some(GOD), &carrier)), browser_ws_status(browser_ws_request(&url, Some(GOD), &carrier)));
+        assert_eq!([a, b].into_iter().filter(|status| *status == StatusCode::SWITCHING_PROTOCOLS).count(), 1);
+        assert_eq!([a, b].into_iter().filter(|status| *status == StatusCode::UNAUTHORIZED).count(), 1);
+        let parser = store.issue(GOD, maw_auth::WsTicketPath::Ws, &mut rng, Instant::now).unwrap();
+        let raw = parser.expose_secret();
+        for bad in [SERVE_WS_PROTOCOL.to_owned(), raw.to_owned(), format!("{raw}, {SERVE_WS_PROTOCOL}"), format!("{SERVE_WS_PROTOCOL}, {}", raw.to_ascii_uppercase()), format!("{SERVE_WS_PROTOCOL}, {raw}, extra"), format!("MAW.WS.V1, {raw}"), format!(" {SERVE_WS_PROTOCOL}, {raw}"), format!("{SERVE_WS_PROTOCOL}, {raw} "), format!("{SERVE_WS_PROTOCOL}, "), "x".repeat(129)] {
+            let request = serve_ws_upgrade_request("/ws").header("origin", GOD).header("sec-websocket-protocol", bad).header("x-maw-token", "secret-token").body(Body::empty()).unwrap();
+            assert_eq!(app.clone().oneshot(request).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+        }
+        let mut duplicate = serve_ws_upgrade_request("/ws").header("origin", GOD).header("sec-websocket-protocol", format!("{SERVE_WS_PROTOCOL}, {raw}")).body(Body::empty()).unwrap();
+        duplicate.headers_mut().append("sec-websocket-protocol", HeaderValue::from_static(SERVE_WS_PROTOCOL));
+        assert_eq!(app.clone().oneshot(duplicate).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(store.consume(raw, Some(GOD), maw_auth::WsTicketPath::Ws, Instant::now), maw_auth::WsTicketConsume::Accepted);
+        let malformed = store.issue(GOD, maw_auth::WsTicketPath::Ws, &mut rng, Instant::now).unwrap();
+        let carrier = format!("{SERVE_WS_PROTOCOL}, {}", malformed.expose_secret());
+        let request = Request::get("/ws").header("origin", GOD).header("sec-websocket-protocol", carrier).body(Body::empty()).unwrap();
+        assert_eq!(app.clone().oneshot(request).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(store.consume(malformed.expose_secret(), Some(GOD), maw_auth::WsTicketPath::Ws, Instant::now), maw_auth::WsTicketConsume::Accepted);
+        let burn = store.issue(GOD, maw_auth::WsTicketPath::Ws, &mut rng, Instant::now).unwrap();
+        let request = serve_ws_upgrade_request("/ws").header("origin", GOD).header("sec-websocket-protocol", format!("{SERVE_WS_PROTOCOL}, {}", burn.expose_secret())).body(Body::empty()).unwrap();
+        assert_ne!(app.clone().oneshot(request).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(store.consume(burn.expose_secret(), Some(GOD), maw_auth::WsTicketPath::Ws, Instant::now), maw_auth::WsTicketConsume::Rejected);
+        let native = store.issue(GOD, maw_auth::WsTicketPath::Ws, &mut rng, Instant::now).unwrap();
+        let request = serve_ws_upgrade_request("/ws").header("x-maw-token", "secret-token").header("sec-websocket-protocol", format!("{SERVE_WS_PROTOCOL}, {}", native.expose_secret())).body(Body::empty()).unwrap();
+        assert_ne!(app.clone().oneshot(request).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(store.consume(native.expose_secret(), Some(GOD), maw_auth::WsTicketPath::Ws, Instant::now), maw_auth::WsTicketConsume::Accepted);
+
+        let ticket_only = store.issue(GOD, maw_auth::WsTicketPath::Ws, &mut rng, Instant::now).unwrap();
+        let request = serve_ws_upgrade_request("/ws").header("sec-websocket-protocol", ticket_only.expose_secret()).body(Body::empty()).unwrap();
+        assert_eq!(app.clone().oneshot(request).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(store.consume(ticket_only.expose_secret(), Some(GOD), maw_auth::WsTicketPath::Ws, Instant::now), maw_auth::WsTicketConsume::Accepted);
+
+        let exact = store.issue(GOD, maw_auth::WsTicketPath::Ws, &mut rng, Instant::now).unwrap();
+        let carrier = format!("{SERVE_WS_PROTOCOL}, {}", exact.expose_secret());
+        for path in ["/ws/", "/ws/foo"] {
+            let request = serve_ws_upgrade_request(path).header("origin", GOD).header("x-maw-token", "secret-token").header("sec-websocket-protocol", &carrier).body(Body::empty()).unwrap();
+            assert_eq!(app.clone().oneshot(request).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+        }
+        let request = serve_ws_upgrade_request("/ws").header("origin", GOD).header("sec-websocket-protocol", &carrier).body(Body::empty()).unwrap();
+        assert_ne!(app.clone().oneshot(request).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+
+        let seeded = Arc::new(maw_auth::WsTicketStore::default());
+        let ticket = seeded.issue(GOD, maw_auth::WsTicketPath::Ws, &mut rng, Instant::now).unwrap();
+        let carrier = format!("{SERVE_WS_PROTOCOL}, {}", ticket.expose_secret());
+        for denied in [ServeApiTokenAuth::open(), ServeApiTokenAuth { token: Some("secret-token".into()), loopback_exempt: true, forced_open: true }] {
+            let request = serve_ws_upgrade_request("/ws").header("origin", GOD).header("sec-websocket-protocol", &carrier).body(Body::empty()).unwrap();
+            assert_eq!(serve_test_app_with_api_auth_and_ws_tickets(denied, seeded.clone()).oneshot(request).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+        }
+        let request = serve_ws_upgrade_request("/ws").header("origin", GOD).header("sec-websocket-protocol", &carrier).body(Body::empty()).unwrap();
+        let configured = ServeApiTokenAuth { token: Some("secret-token".into()), loopback_exempt: true, forced_open: false };
+        assert_ne!(serve_test_app_with_api_auth_and_ws_tickets(configured, seeded.clone()).oneshot(request).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(seeded.consume(ticket.expose_secret(), Some(GOD), maw_auth::WsTicketPath::Ws, Instant::now), maw_auth::WsTicketConsume::Rejected);
+
+        let poison = store.clone();
+        let _ = std::thread::spawn(move || poison.consume(&format!("mwt1_{}", "0".repeat(64)), Some(GOD), maw_auth::WsTicketPath::Ws, || panic!("poison"))).join();
+        let request = serve_ws_upgrade_request("/ws").header("origin", GOD).header("sec-websocket-protocol", format!("{SERVE_WS_PROTOCOL}, mwt1_{}", "0".repeat(64))).body(Body::empty()).unwrap();
+        assert_eq!(app.oneshot(request).await.unwrap().status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
     // #828: /ws reaches `tmux send-keys`, but the gate only looked at `/api/`,
     // so an unauthenticated upgrade got past it (verified live: 101 from the LAN
     // while /api/feed answered 401 on the same daemon).
@@ -3559,12 +3681,12 @@ mod serve_tests {
         assert!(ack.is_ok(), "websocket should ack subscribe after stream frames");
         ws.close(None).await.expect("close native websocket");
 
-        let (mut god, _) = tokio_tungstenite::connect_async(request(
+        let err = tokio_tungstenite::connect_async(request(
             "https://god.buildwithoracle.com",
         ))
         .await
-        .expect("God UI websocket");
-        god.close(None).await.expect("close God UI websocket");
+        .expect_err("God UI requires a ticket");
+        assert!(err.to_string().contains("401"), "{err}");
 
         let err = tokio_tungstenite::connect_async(request("https://evil.example"))
             .await

@@ -7,8 +7,8 @@ use crate::serve_core::{
     process_engine::{serveengine_tmux_capture, serveengine_tmux_capture_lines},
     servecore_ws_connection_guard, servecore_ws_connection_limit_reached,
     servecore_ws_handle_frame, servecore_ws_send, servecore_ws_send_text_frames,
-    servecore_ws_target, ServecoreAgentPane, ServecoreLifecycleModule, ServecoreSharedState,
-    ServecoreWsKind,
+    servecore_ws_target, ServeBrowserWsAuth, ServecoreAgentPane, ServecoreLifecycleModule,
+    ServecoreSharedState, ServecoreWsKind,
 };
 use axum::{
     body::{to_bytes, Body},
@@ -136,6 +136,7 @@ async fn godui_pin_info_get() -> impl IntoResponse {
 
 async fn godui_ws_upgrade(
     ws: WebSocketUpgrade,
+    ticket: Option<Extension<ServeBrowserWsAuth>>,
     uri: Uri,
     Extension(state): Extension<Arc<ServecoreSharedState>>,
     Extension(config): Extension<super::websocket_routes::WsConfig>,
@@ -165,6 +166,11 @@ async fn godui_ws_upgrade(
         )
             .into_response();
     }
+    let ws = if ticket.is_some() {
+        ws.protocols([crate::core_impl::SERVE_WS_PROTOCOL])
+    } else {
+        ws
+    };
     ws.on_upgrade(move |socket| godui_ws_stream(socket, state, target, config))
         .into_response()
 }

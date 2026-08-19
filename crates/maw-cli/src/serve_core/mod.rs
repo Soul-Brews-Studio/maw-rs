@@ -42,6 +42,13 @@ const SERVECORE_PIPELINE_ORDER: &[&str] = &[
     "registry",
     "fallback-views",
 ];
+
+#[derive(Clone, Copy)]
+struct ServeBrowserWsAuth;
+
+pub(crate) fn servecore_mark_ws_ticket_accepted(req: &mut Request<Body>) {
+    req.extensions_mut().insert(ServeBrowserWsAuth);
+}
 static SERVECORE_WS_CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
 const SERVECORE_ORCHESTRATION_BODY_LIMIT: usize = 64 * 1024;
 const SERVECORE_MAX_ALLOWED_ORIGINS: usize = 16;
@@ -1949,6 +1956,7 @@ async fn servecore_registry_stub() -> impl IntoResponse {
 
 async fn servecore_ws_upgrade(
     ws: WebSocketUpgrade,
+    ticket: Option<Extension<ServeBrowserWsAuth>>,
     uri: Uri,
     Extension(kind): Extension<ServecoreWsKind>,
     Extension(state): Extension<Arc<ServecoreSharedState>>,
@@ -1979,6 +1987,11 @@ async fn servecore_ws_upgrade(
         )
             .into_response();
     }
+    let ws = if ticket.is_some() {
+        ws.protocols([crate::core_impl::SERVE_WS_PROTOCOL])
+    } else {
+        ws
+    };
     ws.on_upgrade(move |socket| servecore_ws_stream(socket, state, kind, target, config))
         .into_response()
 }
