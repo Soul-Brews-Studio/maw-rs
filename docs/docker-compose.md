@@ -23,8 +23,11 @@ curl -H "Authorization: Bearer $MAW_SERVE_TOKEN" \
 ```
 
 Treat the token like a password: keep it out of source control and shell
-history. Protected `/api/*` routes reject requests without the Bearer token;
-health remains unauthenticated for container monitoring.
+history. Bearer-gated `/api/*` routes reject requests without the token;
+health remains unauthenticated for container monitoring. Non-loopback native
+clients must use signed peer authentication for `/api/sessions` and
+`/api/capture`; a serve token without allowed-browser operator context receives
+403 on those routes.
 
 Named volumes persist XDG config/data/state/cache and `/repos`. Inspect them
 with `docker volume ls`; `docker compose down` preserves them, while
