@@ -52,6 +52,68 @@
         let error = TmuxError::new("tmux failed");
         assert_eq!(error.to_string(), "tmux failed");
 
+        let enoent = TmuxError::new(
+            "tmux exited with status 1: error connecting to /definitely/missing/maw-940.sock (No such file or directory)",
+        );
+        assert!(enoent.is_cold_start());
+        assert!(TmuxError::new("tmux exited with status 1: no server running on /tmp/tmux-1/default").is_cold_start());
+        for fatal in [
+            "no server running on /tmp/tmux-1/default",
+            "tmux exited with status 1: no server running on /tmp/evil\nsocket",
+            "tmux exited with status 2: no server running on /tmp/tmux-1/default",
+            "tmux exited with status 1: error connecting to /tmp/tmux-1/default (Connection refused)",
+            "tmux exited with status 1: error connecting to /tmp/tmux-1/default (Permission denied)",
+            "tmux exited with status 1: server exited unexpectedly",
+            "failed to execute tmux: No such file or directory",
+        ] {
+            assert!(!TmuxError::new(fatal).is_cold_start(), "{fatal}");
+        }
+
+        let mut runner = CommandTmuxRunner {
+            program: OsString::from("tmux"),
+            socket: None,
+            server_observed: false,
+            initial_cold_start_allowed: true,
+        };
+        #[cfg(target_os = "linux")]
+        assert!(runner.is_initial_cold_start(&enoent));
+        #[cfg(not(target_os = "linux"))]
+        assert!(!runner.is_initial_cold_start(&enoent));
+        let stale = TmuxError::new("tmux exited with status 1: no server running on /dev/null");
+        assert!(!runner.is_initial_cold_start(&stale));
+        #[cfg(target_os = "linux")]
+        {
+            let socket = std::env::temp_dir().join(format!(
+                "maw-940-unlinked-live-{}.sock",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_file(&socket);
+            drop(std::os::unix::net::UnixListener::bind(&socket).expect("bind stale socket"));
+            let stale = TmuxError::new(format!("tmux exited with status 1: no server running on {}", socket.display()));
+            let can_bootstrap = runner.is_initial_cold_start(&stale);
+            std::fs::remove_file(&socket).expect("remove stale socket");
+            assert!(can_bootstrap, "unbound socket can bootstrap");
+            let listener = std::os::unix::net::UnixListener::bind(&socket).expect("bind socket");
+            std::fs::remove_file(&socket).expect("unlink live socket");
+            let unlinked = TmuxError::new(format!(
+                "tmux exited with status 1: error connecting to {} (No such file or directory)",
+                socket.display()
+            ));
+            assert!(!runner.is_initial_cold_start(&unlinked), "#860 live socket");
+            drop(listener);
+        }
+        runner.server_observed = true;
+        assert!(
+            !runner.is_initial_cold_start(&enoent),
+            "ENOENT after a reachable server is fatal"
+        );
+        runner.server_observed = false;
+        runner.initial_cold_start_allowed = false;
+        assert!(
+            !runner.is_initial_cold_start(&enoent),
+            "ENOENT in an attached TMUX client is fatal (#860)"
+        );
+
         let mut tracker = TmuxSendTracker::default();
         assert_eq!(tracker.check("%1", 1_000, false), SendThrottle::Allowed);
         assert!(tracker.get("%1").is_some());

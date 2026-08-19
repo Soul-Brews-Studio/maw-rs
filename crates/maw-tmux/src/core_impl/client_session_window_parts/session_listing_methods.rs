@@ -43,6 +43,22 @@ where
             .map(|raw| parse_list_all_windows(&raw))
     }
 
+    /// List topology for a creation-capable command's first probe.
+    ///
+    /// Unlike observer listings, this maps only a runner-proven cold start to
+    /// empty. Call it once, before mutation; subsequent reads must use
+    /// [`Self::list_all`] so server loss stays fatal (#860, #940).
+    ///
+    /// # Errors
+    ///
+    /// Returns every error that is not proven to be an initial cold start.
+    pub fn list_all_for_initial_creation(&mut self) -> Result<Vec<TmuxSession>, TmuxError> {
+        match self.list_all() {
+            Err(error) if self.runner.is_initial_cold_start(&error) => Ok(Vec::new()),
+            result => result,
+        }
+    }
+
     /// List one session's windows.
     ///
     /// # Errors

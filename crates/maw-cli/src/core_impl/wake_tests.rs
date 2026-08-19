@@ -273,6 +273,43 @@ mod wake_tests {
         fn wake_confirm_poll_sleep(&mut self, _delay: std::time::Duration) {}
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn wake940_cold_inventory_can_create_but_later_server_loss_is_fatal() {
+        wake_with_fixture(|root| {
+            let socket = root.join("missing.sock");
+            drop(std::os::unix::net::UnixListener::bind(&socket).expect("stale socket"));
+            let program = root.join("tmux-fake");
+            std::fs::write(
+                &program,
+                format!(
+                    "#!/bin/sh\ncase \"$1\" in\nlist-windows) echo 'no server running on {}' >&2; exit 1;;\nnew-session|set-option) exit 0;;\n*) exit 31;;\nesac\n",
+                    socket.display()
+                ),
+            )
+            .expect("fake tmux");
+            update_mark_executable(&program).expect("executable fake tmux");
+            let mut tmux = WakeNativeTmux {
+                client: TmuxClient::new(maw_tmux::CommandTmuxRunner::with_program(program)),
+            };
+            for observer in ["--list", "--all"] {
+                let error = wake_run(&wake_strings(&["fresh", observer]), &mut tmux)
+                    .expect_err("observer inventory stays fatal");
+                assert!(error.contains("tmux unreachable"), "{observer}: {error}");
+            }
+            let root_arg = root.display().to_string();
+            let (code, _) = wake_run(&wake_strings(&["fresh", "--repo-path", &root_arg, "--dry-run", "--no-attach"]), &mut tmux)
+                .expect("cold target dry-run proceeds");
+            assert_eq!(code, 0);
+            tmux.wake_new_session("fresh", "oracle", std::path::Path::new("/tmp"))
+                .expect("cold-start path reaches new-session");
+            assert!(tmux
+                .wake_list_for_initial_creation()
+                .expect_err("server loss after creation stays fatal")
+                .contains("tmux unreachable"));
+        });
+    }
+
     fn wake_strings(values: &[&str]) -> Vec<String> { values.iter().map(|value| (*value).to_owned()).collect() }
 
     fn wake_git(repo: &std::path::Path, args: &[&str]) -> String {

@@ -67,6 +67,9 @@ struct WakeResolvedNative {
 
 trait WakeTmuxNative {
     fn wake_list(&mut self) -> Result<Vec<TmuxSession>, String>;
+    fn wake_list_for_initial_creation(&mut self) -> Result<Vec<TmuxSession>, String> {
+        self.wake_list()
+    }
     fn wake_has_session(&mut self, name: &str) -> bool;
     fn wake_new_session(&mut self, name: &str, window: &str, cwd: &std::path::Path) -> Result<(), String>;
     fn wake_new_window(&mut self, session: &str, window: &str, cwd: &std::path::Path) -> Result<(), String>;
@@ -82,22 +85,37 @@ trait WakeTmuxNative {
     fn wake_confirm_poll_sleep(&mut self, delay: std::time::Duration) { std::thread::sleep(delay); }
 }
 
-struct WakeNativeTmux;
+struct WakeNativeTmux<R = maw_tmux::CommandTmuxRunner> {
+    client: TmuxClient<R>,
+}
 
-impl WakeTmuxNative for WakeNativeTmux {
+impl Default for WakeNativeTmux<maw_tmux::CommandTmuxRunner> {
+    fn default() -> Self {
+        Self {
+            client: TmuxClient::local(),
+        }
+    }
+}
+
+impl<R: maw_tmux::TmuxRunner> WakeTmuxNative for WakeNativeTmux<R> {
     fn wake_list(&mut self) -> Result<Vec<TmuxSession>, String> {
-        TmuxClient::local()
+        self.client
             .list_all()
             .map_err(|error| format!("tmux unreachable: {error}"))
     }
 
-    fn wake_has_session(&mut self, name: &str) -> bool { TmuxClient::local().has_session(name) }
+    fn wake_list_for_initial_creation(&mut self) -> Result<Vec<TmuxSession>, String> {
+        self.client
+            .list_all_for_initial_creation()
+            .map_err(|error| format!("tmux unreachable: {error}"))
+    }
+
+    fn wake_has_session(&mut self, name: &str) -> bool { self.client.has_session(name) }
 
     fn wake_new_session(&mut self, name: &str, window: &str, cwd: &std::path::Path) -> Result<(), String> {
         wake_validate_tmux_name(name, "session")?;
         wake_validate_tmux_name(window, "window")?;
         wake_validate_cwd(cwd)?;
-        let mut tmux = TmuxClient::local();
         let opts = maw_tmux::NewSessionOptions {
             window: Some(window.to_owned()),
             cwd: Some(cwd.display().to_string()),
@@ -105,19 +123,19 @@ impl WakeTmuxNative for WakeNativeTmux {
             command: None,
             print_format: None,
         };
-        tmux.new_session(name, &opts).map(|_| ()).map_err(|error| error.to_string())
+        self.client.new_session(name, &opts).map(|_| ()).map_err(|error| error.to_string())
     }
 
     fn wake_new_window(&mut self, session: &str, window: &str, cwd: &std::path::Path) -> Result<(), String> {
         wake_validate_tmux_name(session, "session")?;
         wake_validate_tmux_name(window, "window")?;
         wake_validate_cwd(cwd)?;
-        TmuxClient::local().new_window(session, window, Some(&cwd.display().to_string())).map_err(|error| error.to_string())
+        self.client.new_window(session, window, Some(&cwd.display().to_string())).map_err(|error| error.to_string())
     }
 
     fn wake_send_text(&mut self, target: &str, text: &str) -> Result<(), String> {
         wake_validate_tmux_target(target)?;
-        TmuxClient::local().send_text(target, text).map(|_| ()).map_err(|error| error.to_string())
+        self.client.send_text(target, text).map(|_| ()).map_err(|error| error.to_string())
     }
 
     fn wake_send_text_detached(&mut self, target: String, text: String) -> Result<Option<std::thread::JoinHandle<()>>, String> {
@@ -125,7 +143,7 @@ impl WakeTmuxNative for WakeNativeTmux {
         std::thread::Builder::new()
             .name("maw-wake-send-text".to_owned())
             .spawn(move || {
-                let mut tmux = WakeNativeTmux;
+                let mut tmux = WakeNativeTmux::<maw_tmux::CommandTmuxRunner>::default();
                 let _ = tmux.wake_send_text(&target, &text);
             })
             .map(Some)
@@ -134,12 +152,12 @@ impl WakeTmuxNative for WakeNativeTmux {
 
     fn wake_pane_current_command(&mut self, target: &str) -> Result<String, String> {
         wake_validate_tmux_target(target)?;
-        TmuxClient::local().display_pane_current_command(target).map_err(|error| error.to_string())
+        self.client.display_pane_current_command(target).map_err(|error| error.to_string())
     }
 
     fn wake_target_pane_id(&mut self, target: &str) -> Result<String, String> {
         wake_validate_tmux_target(target)?;
-        TmuxClient::local()
+        self.client
             .first_pane_id(target)
             .ok_or_else(|| format!("wake: target pane not found: {target}"))
     }
@@ -162,13 +180,12 @@ impl WakeTmuxNative for WakeNativeTmux {
     fn wake_select_window(&mut self, target: &str) -> Result<(), String> {
         wake_validate_tmux_target(target)?;
         let session = target.split(':').next().unwrap_or(target);
-        let mut tmux = TmuxClient::local();
         if std::env::var_os("TMUX").is_some() {
-            tmux.switch_client(session);
-            tmux.select_window(target);
+            self.client.switch_client(session);
+            self.client.select_window(target);
             return Ok(());
         }
-        tmux.select_window(target);
+        self.client.select_window(target);
         let status = std::process::Command::new("tmux")
             .arg("attach-session")
             .arg("-t")
@@ -200,7 +217,7 @@ fn run_wake_command(argv: &[String]) -> CliOutput {
         return help_output(wake_usage());
     }
     let mut fleet_wake = |args: &[String]| run_fleet_command(args);
-    run_wake_command_with(argv, &mut WakeNativeTmux, &mut fleet_wake)
+    run_wake_command_with(argv, &mut WakeNativeTmux::default(), &mut fleet_wake)
 }
 
 fn run_wake_command_with(
@@ -212,7 +229,11 @@ fn run_wake_command_with(
         Ok(options) => options,
         Err(message) => return CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") },
     };
-    let sessions = match tmux.wake_list() {
+    let sessions = match if options.list || options.all {
+        tmux.wake_list()
+    } else {
+        tmux.wake_list_for_initial_creation()
+    } {
         Ok(sessions) => sessions,
         Err(message) => return CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") },
     };
@@ -225,7 +246,11 @@ fn run_wake_command_with(
 
 fn wake_run(argv: &[String], tmux: &mut impl WakeTmuxNative) -> Result<(i32, String), String> {
     let options = wake_parse_args(argv)?;
-    let sessions = tmux.wake_list()?;
+    let sessions = if options.list || options.all {
+        tmux.wake_list()?
+    } else {
+        tmux.wake_list_for_initial_creation()?
+    };
     wake_run_options(&options, &sessions, tmux)
 }
 
