@@ -56,9 +56,14 @@ fn write_fake_maw(root: &Path) -> PathBuf {
 }
 
 fn run(args: &[&str], root: &Path) -> std::process::Output {
+    run_with_fake(args, root, &[])
+}
+
+fn run_with_fake(args: &[&str], root: &Path, fake_env: &[(&str, &str)]) -> std::process::Output {
     let fake_bin = write_fake_maw(root);
     let fake_log = root.join("tmux.jsonl");
-    Command::new(bin())
+    let mut command = Command::new(bin());
+    command
         .args(args)
         .env("HOME", root.join("home"))
         .env("MAW_HOME", root.join("maw-home"))
@@ -66,9 +71,11 @@ fn run(args: &[&str], root: &Path) -> std::process::Output {
         .env("MAW_JS_REF_DIR", "/nonexistent")
         .env("MAW_RS_TEAM_ENTER_FAKE_TMUX_LOG", &fake_log)
         .env("MAW_RS_TEAM_TMUX_PANES", "alpha|builder|codex|/tmp|%11\nalpha|reviewer|claude|/tmp|%12\nalpha|lead|codex|/tmp|%13")
-        .env("PATH", format!("{}:{}", fake_bin.display(), std::env::var("PATH").unwrap_or_default()))
-        .output()
-        .expect("run maw-rs")
+        .env("PATH", format!("{}:{}", fake_bin.display(), std::env::var("PATH").unwrap_or_default()));
+    for (key, value) in fake_env {
+        command.env(key, value);
+    }
+    command.output().expect("run maw-rs")
 }
 
 fn assert_stdout_golden(name: &str, root: &Path, args: &[&str], expected: &str) -> String {
@@ -94,6 +101,18 @@ fn assert_stdout_golden(name: &str, root: &Path, args: &[&str], expected: &str) 
     fs::read_to_string(root.join("tmux.jsonl")).expect("tmux log")
 }
 
+fn assert_stderr_golden(root: &Path, fake_key: &str, expected: &str) -> String {
+    let output = run_with_fake(
+        &["team", "send-enter", "all", "hello", "team"],
+        root,
+        &[(fake_key, "%12")],
+    );
+    assert!(!output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), expected);
+    fs::read_to_string(root.join("tmux.jsonl")).expect("tmux log")
+}
+
 #[test]
 fn team_enter_and_send_enter_are_native_and_argv_tmux() {
     let root = temp_dir("golden");
@@ -106,8 +125,7 @@ fn team_enter_and_send_enter_are_native_and_argv_tmux() {
         include_str!("fixtures/native-team-enter/team-enter-builder.stdout"),
     );
     assert!(
-        enter_log
-            .contains(r#"{"args":["-t","%11","Enter"],"command":"send-keys","program":"tmux"}"#),
+        enter_log.matches(r#"["-t","%11","Enter"]"#).count() == 1,
         "{enter_log}"
     );
 
@@ -134,6 +152,51 @@ fn team_enter_and_send_enter_are_native_and_argv_tmux() {
         !send_log.contains("%13"),
         "team lead must not receive enter: {send_log}"
     );
+}
+
+#[test]
+fn team_send_enter_buffers_501_bytes_via_stdin() {
+    let root = temp_dir("buffer");
+    seed_team(&root);
+    let payload = "x".repeat(501);
+    let output = run(&["team", "send-enter", "builder", payload.as_str()], &root);
+    assert!(output.status.success());
+    let log = fs::read_to_string(root.join("tmux.jsonl")).expect("tmux log");
+    assert!(log.contains(r#""command":"load-buffer""#));
+    assert!(log.contains(r#""stdinBytes":501"#));
+    assert!(log.contains(r#""command":"paste-buffer""#));
+    assert!(!log.contains(r#""-l""#));
+}
+
+#[test]
+fn team_send_enter_preflights_all_before_payload_mutation() {
+    let root = temp_dir("pending");
+    seed_team(&root);
+    let pending_log = assert_stderr_golden(
+        &root,
+        "MAW_RS_TEAM_ENTER_FAKE_PENDING_PANE",
+        include_str!("fixtures/native-team-enter/team-send-enter-pending.stderr"),
+    );
+    assert!(!pending_log.contains(r#""command":"send-keys""#));
+    assert!(!pending_log.contains("load-buffer"));
+    assert!(!pending_log.contains("paste-buffer"));
+    for pane in ["%11", "%12"] {
+        assert!(pending_log.contains(&format!(r#"["-t","{pane}","-e","-p","-J","-S","-80"]"#)));
+    }
+}
+
+#[test]
+fn team_send_enter_reports_prior_confirmation_when_next_is_unconfirmed() {
+    let root = temp_dir("partial");
+    seed_team(&root);
+    let partial_log = assert_stderr_golden(
+        &root,
+        "MAW_RS_TEAM_ENTER_FAKE_DIFFERENT_PANE",
+        include_str!("fixtures/native-team-enter/team-send-enter-partial.stderr"),
+    );
+    assert!(partial_log.contains(r#"["-t","%11","-l","hello team"]"#));
+    assert!(partial_log.contains(r#"["-t","%12","-l","hello team"]"#));
+    assert_eq!(partial_log.matches(r#"["-t","%12","Enter"]"#).count(), 1);
 }
 
 #[test]

@@ -151,8 +151,7 @@ where
     where
         F: FnMut(std::time::Duration),
     {
-        self.exit_mode_if_needed(target)?;
-        self.ensure_composer_empty(target)?;
+        self.preflight_send_text(target)?;
         let used_buffer = text.contains('\n') || text.len() > 500;
         if used_buffer {
             self.load_buffer(text)?;
@@ -179,6 +178,19 @@ where
             enter_attempts,
             warned_pending: false,
         })
+    }
+
+    /// Exit pane mode and refuse a text send when capture fails or a recognized composer is nonempty.
+    ///
+    /// This preflight is advisory for batch callers; [`Self::send_text`] repeats it immediately
+    /// before placing text so intervening input still fails closed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a runner error or refuses an existing pending composer.
+    pub fn preflight_send_text(&mut self, target: &str) -> Result<(), TmuxError> {
+        self.exit_mode_if_needed(target)?;
+        self.ensure_composer_empty(target)
     }
 
     fn ensure_composer_empty(&mut self, target: &str) -> Result<(), TmuxError> {
