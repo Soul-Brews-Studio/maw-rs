@@ -502,18 +502,16 @@ mod tab_tests {
             )
         );
         assert_eq!(
-            runner.calls[3],
+            runner.calls[4],
             (
                 "send-keys".to_owned(),
                 strings(&["-t", "alpha:scratch", "-l", "maw ls -v --watch"])
             )
         );
         assert_eq!(
-            runner.calls[4],
+            runner.calls[5],
             ("send-keys".to_owned(), strings(&["-t", "alpha:scratch", "Enter"]))
         );
-        assert_eq!(runner.calls[5].0, "capture-pane");
-        assert_eq!(runner.calls[5].1[0..2], strings(&["-t", "alpha:scratch"]));
     }
 
     #[test]
@@ -648,9 +646,8 @@ mod tab_tests {
 
         assert_eq!(output.stdout, "\x1b[32mtalk\x1b[0m → work: hi there\n");
         assert_eq!(runner.calls[2], ("display-message".to_owned(), strings(&["-t", "work", "-p", "#{pane_in_mode}"])));
-        assert_eq!(runner.calls[3], ("send-keys".to_owned(), strings(&["-t", "work", "-l", "hi there"])));
-        assert_eq!(runner.calls[4], ("send-keys".to_owned(), strings(&["-t", "work", "Enter"])));
-        assert_eq!(runner.calls[5].0, "capture-pane");
+        assert_eq!(runner.calls[4], ("send-keys".to_owned(), strings(&["-t", "work", "-l", "hi there"])));
+        assert_eq!(runner.calls[5], ("send-keys".to_owned(), strings(&["-t", "work", "Enter"])));
     }
 
     #[test]

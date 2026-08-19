@@ -245,3 +245,22 @@ pub trait TmuxRunner {
         self.run(subcommand, args)
     }
 }
+
+impl<R: TmuxRunner + ?Sized> TmuxRunner for &mut R {
+    fn run(&mut self, subcommand: &str, args: &[String]) -> Result<String, TmuxError> {
+        (**self).run(subcommand, args)
+    }
+
+    fn is_initial_cold_start(&self, error: &TmuxError) -> bool {
+        (**self).is_initial_cold_start(error)
+    }
+
+    fn run_with_stdin(
+        &mut self,
+        subcommand: &str,
+        args: &[String],
+        stdin: &[u8],
+    ) -> Result<String, TmuxError> {
+        (**self).run_with_stdin(subcommand, args, stdin)
+    }
+}

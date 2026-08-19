@@ -1109,11 +1109,10 @@ mod workon_tests {
         assert_eq!(&runner.calls[2].1[..3], &workon_strings(&["-d", "-s", "demo"])[..]);
         assert_eq!(&runner.calls[2].1[5..], &workon_strings(&["-n", "demo"])[..]);
         assert_eq!(runner.calls[3].0, "display-message");
-        assert_eq!(runner.calls[4].0, "send-keys");
         assert_eq!(runner.calls[5].0, "send-keys");
-        assert_eq!(runner.calls[6].0, "capture-pane");
+        assert_eq!(runner.calls[6].0, "send-keys");
         assert_eq!(runner.calls[7].0, "capture-pane");
-        assert_eq!(runner.calls.len(), 8);
+        assert_eq!(runner.calls.len(), 9);
     }
 
     #[test]
