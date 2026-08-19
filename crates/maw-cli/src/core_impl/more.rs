@@ -341,7 +341,7 @@ fn more_boot_spawned_codex(
         "--repo-path".to_owned(),
         result.worktree_path.display().to_string(),
     ];
-    let (code, stdout) = wake_run(&args, &mut WakeNativeTmux)?;
+    let (code, stdout) = wake_run(&args, &mut WakeNativeTmux::default())?;
     if code == 0 {
         Ok(())
     } else {

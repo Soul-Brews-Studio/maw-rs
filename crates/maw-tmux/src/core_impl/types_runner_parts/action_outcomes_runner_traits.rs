@@ -180,6 +180,30 @@ impl TmuxError {
             message: message.into(),
         }
     }
+
+    /// Whether tmux reports that its server/socket has not been created yet.
+    ///
+    /// This classifies stderr only. Callers must additionally prove this is an
+    /// initial, outside-tmux probe: an unlinked live socket has the same ENOENT
+    /// text and must remain fatal (#860).
+    #[must_use]
+    pub fn is_cold_start(&self) -> bool {
+        self.cold_start_socket().is_some()
+    }
+
+    #[must_use]
+    pub(crate) fn cold_start_socket(&self) -> Option<&str> {
+        let message = self.message.as_str();
+        let detail = message.strip_prefix("tmux exited with status 1: ")?;
+        detail
+            .strip_prefix("no server running on ")
+            .or_else(|| {
+                detail
+                    .strip_prefix("error connecting to ")?
+                    .strip_suffix(" (No such file or directory)")
+            })
+            .filter(|socket| !socket.trim().is_empty() && !socket.chars().any(char::is_control))
+    }
 }
 
 impl fmt::Display for TmuxError {
@@ -198,6 +222,14 @@ pub trait TmuxRunner {
     ///
     /// Returns [`TmuxError`] when tmux exits non-zero or the host command cannot be executed.
     fn run(&mut self, subcommand: &str, args: &[String]) -> Result<String, TmuxError>;
+
+    /// Whether `error` proves an initial cold server for this runner.
+    ///
+    /// The default is fail-closed because injected runners have no reliable
+    /// caller/server history. The process runner overrides this with both.
+    fn is_initial_cold_start(&self, _error: &TmuxError) -> bool {
+        false
+    }
 
     /// Run `tmux <subcommand> <args...>` with stdin.
     ///
