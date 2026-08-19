@@ -29,80 +29,30 @@ impl Default for TeamEnterTmux240 {
 }
 
 impl TeamEnterTmux240 {
-    fn team_send_literal(&mut self, pane_id: &str, text: &str) -> Result<(), String> {
+    fn team_preflight_text(&mut self, pane_id: &str) -> Result<(), String> {
         team_validate_pane_id240(pane_id)?;
-        team_validate_text240(text)?;
-        self.team_tmux_run240("send-keys", &maw_tmux::tmux_send_keys_literal_args(pane_id, text)).map(|_| ())
+        maw_tmux::TmuxClient::new(&mut *self)
+            .preflight_send_text(pane_id)
+            .map_err(|error| error.message)
     }
 
     fn team_send_text(&mut self, pane_id: &str, text: &str) -> Result<(), String> {
-        self.team_send_literal(pane_id, text)?;
-        self.team_sleep240(maw_tmux::SEND_SETTLE_MS);
-        for _ in 1..=maw_tmux::MAX_SUBMIT_ATTEMPTS {
-            self.team_send_enter(pane_id)?;
-            self.team_sleep240(maw_tmux::SUBMIT_CONFIRM_MS);
-            match self.team_pending_state_after_grace(pane_id, text) {
-                maw_tmux::PendingInputState::Cleared
-                | maw_tmux::PendingInputState::DifferentInput => return Ok(()),
-                maw_tmux::PendingInputState::MatchesSent => {}
-            }
-        }
-        Ok(())
+        team_validate_pane_id240(pane_id)?;
+        team_validate_text240(text)?;
+        let fake = self.fake_log.is_some();
+        maw_tmux::TmuxClient::new(&mut *self)
+            .send_text_with_sleeper(pane_id, text, move |duration| {
+                if !fake {
+                    std::thread::sleep(duration);
+                }
+            })
+            .map(|_| ())
+            .map_err(|error| error.message)
     }
 
     fn team_send_enter(&mut self, pane_id: &str) -> Result<(), String> {
         team_validate_pane_id240(pane_id)?;
         self.team_tmux_run240("send-keys", &maw_tmux::tmux_send_enter_args(pane_id)).map(|_| ())
-    }
-
-    fn team_pending_state_after_grace(
-        &mut self,
-        pane_id: &str,
-        text: &str,
-    ) -> maw_tmux::PendingInputState {
-        let _confirm_state = self.team_pending_input_state(pane_id, text);
-        self.team_sleep240(maw_tmux::SUBMIT_GRACE_MS);
-        self.team_pending_input_state(pane_id, text)
-    }
-
-    fn team_pending_input_state(
-        &mut self,
-        pane_id: &str,
-        text: &str,
-    ) -> maw_tmux::PendingInputState {
-        let Some(pending) = self.team_pending_input(pane_id) else {
-            return maw_tmux::PendingInputState::Cleared;
-        };
-        if maw_tmux::pending_input_matches_sent(&pending, text) {
-            maw_tmux::PendingInputState::MatchesSent
-        } else {
-            maw_tmux::PendingInputState::DifferentInput
-        }
-    }
-
-    fn team_pending_input(&mut self, pane_id: &str) -> Option<String> {
-        if team_validate_pane_id240(pane_id).is_err() {
-            return None;
-        }
-        self.team_tmux_run240(
-            "capture-pane",
-            &[
-                "-t".to_owned(),
-                pane_id.to_owned(),
-                "-e".to_owned(),
-                "-p".to_owned(),
-                "-S".to_owned(),
-                "-5".to_owned(),
-            ],
-        )
-        .ok()
-        .and_then(|content| maw_tmux::pane_pending_input_from_capture(&content))
-    }
-
-    fn team_sleep240(&self, millis: u64) {
-        if self.fake_log.is_none() {
-            std::thread::sleep(std::time::Duration::from_millis(millis));
-        }
     }
 
     fn team_probe_pane(&mut self, pane_id: &str) -> Result<(String, String), String> {
@@ -126,11 +76,55 @@ impl TeamEnterTmux240 {
     fn team_tmux_run240(&mut self, command: &str, args: &[String]) -> Result<String, String> {
         if let Some(path) = &self.fake_log {
             let mut body = std::fs::read_to_string(path).unwrap_or_default();
+            let target = args.get(1).map(String::as_str);
+            let pending = command == "capture-pane"
+                && std::env::var("MAW_RS_TEAM_ENTER_FAKE_PENDING_PANE").ok().as_deref() == target;
+            let different = command == "capture-pane"
+                && std::env::var("MAW_RS_TEAM_ENTER_FAKE_DIFFERENT_PANE").ok().as_deref() == target
+                && target.is_some_and(|pane| body.contains(&format!("\"args\":[\"-t\",\"{pane}\",\"-l\",")));
             body.push_str(&(serde_json::json!({"program":"tmux","command":command,"args":args}).to_string() + "\n"));
             team_atomic_write_0600(path, &body)?;
+            if pending { return Ok("$ existing input".to_owned()); }
+            if different { return Ok("$ different queued input".to_owned()); }
             return Ok(String::new());
         }
         maw_tmux::TmuxRunner::run(&mut self.runner, command, args).map_err(|error| error.message)
+    }
+
+    fn team_tmux_run_with_stdin240(
+        &mut self,
+        command: &str,
+        args: &[String],
+        stdin: &[u8],
+    ) -> Result<String, String> {
+        if let Some(path) = &self.fake_log {
+            let mut body = std::fs::read_to_string(path).unwrap_or_default();
+            body.push_str(&(serde_json::json!({"program":"tmux","command":command,"args":args,"stdinBytes":stdin.len()}).to_string() + "\n"));
+            team_atomic_write_0600(path, &body)?;
+            return Ok(String::new());
+        }
+        maw_tmux::TmuxRunner::run_with_stdin(&mut self.runner, command, args, stdin)
+            .map_err(|error| error.message)
+    }
+}
+
+impl maw_tmux::TmuxRunner for TeamEnterTmux240 {
+    fn run(&mut self, command: &str, args: &[String]) -> Result<String, maw_tmux::TmuxError> {
+        self.team_tmux_run240(command, args).map_err(maw_tmux::TmuxError::new)
+    }
+
+    fn is_initial_cold_start(&self, error: &maw_tmux::TmuxError) -> bool {
+        maw_tmux::TmuxRunner::is_initial_cold_start(&self.runner, error)
+    }
+
+    fn run_with_stdin(
+        &mut self,
+        command: &str,
+        args: &[String],
+        stdin: &[u8],
+    ) -> Result<String, maw_tmux::TmuxError> {
+        self.team_tmux_run_with_stdin240(command, args, stdin)
+            .map_err(maw_tmux::TmuxError::new)
     }
 }
 
@@ -198,11 +192,27 @@ fn team_member_matches240(member: &TeamMember122, selector: &str, team: &str) ->
 
 fn team_enter_run240(opts: &TeamEnterOptions240, members: &[TeamEnterMember240], tmux: &mut TeamEnterTmux240) -> Result<String, String> {
     use std::fmt::Write as _;
+    for member in members { team_validate_member_pane_belongs240(&opts.team, member, tmux)?; }
+    if opts.text.is_some() {
+        for member in members {
+            tmux.team_preflight_text(&member.pane_id).map_err(|error| format!("team send-enter preflight failed for {} before any payload or Enter was sent: {error}", member.display))?;
+        }
+    }
     let mut out = String::new();
+    let mut completed = Vec::new();
     for member in members {
-        team_validate_member_pane_belongs240(&opts.team, member, tmux)?;
-        if let Some(text) = &opts.text { tmux.team_send_text(&member.pane_id, text)?; } else { tmux.team_send_enter(&member.pane_id)?; }
-        let _ = writeln!(out, "\x1b[36m↵\x1b[0m enter sent to {}", member.display);
+        let result = if let Some(text) = &opts.text { tmux.team_send_text(&member.pane_id, text) } else { tmux.team_send_enter(&member.pane_id) };
+        if let Err(error) = result {
+            let names = if completed.is_empty() { "none".to_owned() } else { completed.join(", ") };
+            let (failure, progress) = if opts.text.is_some() { ("submission not confirmed for", "prior submissions confirmed") } else { ("Enter key not accepted by tmux for", "prior Enter keys accepted by tmux") };
+            return Err(format!("team {} {failure} {}; {} of {} {progress} ({names}): {error}", opts.subcommand, member.display, completed.len(), members.len()));
+        }
+        completed.push(member.display.clone());
+        if opts.text.is_some() {
+            let _ = writeln!(out, "\x1b[36m↵\x1b[0m submission confirmed for {}", member.display);
+        } else {
+            let _ = writeln!(out, "\x1b[36m↵\x1b[0m tmux accepted Enter key for {} (pane state unconfirmed)", member.display);
+        }
     }
     Ok(out)
 }
