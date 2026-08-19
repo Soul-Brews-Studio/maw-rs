@@ -159,7 +159,7 @@ fn talkto_native_local_thread_notification_sends_to_guarded_pane() {
     assert!(log.contains("load-buffer -"), "{log}");
     assert!(log.contains("paste-buffer -t %42"), "{log}");
     assert!(log.contains("send-keys -t %42 Enter"), "{log}");
-    assert!(log.contains("capture-pane -t %42 -e -p -S -5"), "{log}");
+    assert!(log.contains("capture-pane -t %42 -e -p -J -S -80"), "{log}");
     let state_log =
         std::fs::read_to_string(root.join("home/.maw/maw-log.jsonl")).expect("state log");
     assert!(state_log.contains(r#""ch":"thread:1""#), "{state_log}");
