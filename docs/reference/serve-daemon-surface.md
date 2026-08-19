@@ -14,9 +14,10 @@ For an allowed browser origin, an exact configured `MAW_SERVE_TOKEN` in Bearer o
 30-second one-use credential with `POST /api/auth/ws-ticket` and JSON `{"path":"/ws"}`
 (also `/ws/pty` or `/ws/tmux`). Success is exactly `{"ticket":...,"protocol":"maw.ws.v1"}`
 with `Cache-Control: no-store`; keep the ticket in memory. Minting never falls open to
-open mode, loopback exemption, query credentials, or preflight. Phase B will require
-`[protocol, ticket]` for Origin-present WebSockets and echo only the stable protocol;
-until then this endpoint adds no browser-WebSocket authentication.
+open mode, loopback exemption, query credentials, or preflight. Origin-present WebSockets must
+offer `["maw.ws.v1", ticket]`; consumption precedes handler work and echoes only `maw.ws.v1`.
+An accepted attempt can burn on later extractor/engine failure; mint a fresh ticket before retrying.
+Native no-Origin token and loopback behavior is unchanged.
 
 The God UI connector's `GET /api/config` response is a daemon-start snapshot
 containing exactly `node`, `agents`, and named-peer `{name,url}` rows. It is a
