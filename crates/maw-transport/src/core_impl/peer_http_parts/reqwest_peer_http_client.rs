@@ -154,6 +154,16 @@ fn request_error_message(action: &str, url: &str, error: &reqwest::Error) -> Str
     )
 }
 
+fn peer_send_transport_code(message: &str) -> Option<&'static str> {
+    let message = message.strip_prefix("connect failed posting ")?.rsplit_once(": ")?.1.to_ascii_lowercase();
+    Some(if message.contains("timeout") || message.contains("timed out") {
+        "TIMEOUT"
+    } else if message.contains("refused") {
+        "REFUSED"
+    } else {
+        "UNKNOWN"
+    })
+}
 /// Flatten an error's `source()` chain into one line, dropping links that only
 /// repeat the URL the caller already prints.
 fn error_cause_chain(error: &(dyn std::error::Error + 'static), url: &str) -> String {
@@ -207,6 +217,7 @@ impl ReqwestHttpTransportIo {
     pub fn new(timeout_ms: u64) -> Result<Self, String> {
         let timeout = Duration::from_millis(timeout_ms);
         let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
             .timeout(timeout)
             .build()
             .map_err(|error| format!("http client build failed: {error}"))?;
@@ -250,7 +261,7 @@ impl ReqwestHttpTransportIo {
             decision: wire.decision,
             warning: wire.warning,
         };
-        if status >= 400 {
+        if status >= 300 {
             return Err(peer_send_error_message(status, &parsed));
         }
         if !parsed.delivered_or_queued() {
@@ -264,6 +275,33 @@ impl ReqwestHttpTransportIo {
             ));
         }
         Ok(parsed)
+    }
+
+    /// Try addresses in order, advancing only for connect-phase failures.
+    /// # Errors
+    /// Stops on post-connect/HTTP/build/sign/parse/read errors.
+    pub async fn send_peer_addresses(
+        &self,
+        request: &PeerSendRequest,
+        addresses: &[String],
+    ) -> Result<PeerSendResponse, String> {
+        let mut failures = Vec::new();
+        for address in addresses {
+            let mut attempt = request.clone();
+            attempt.peer_url.clone_from(address);
+            match self.send_peer(&attempt).await {
+                Ok(response) => return Ok(response),
+                Err(message) => match peer_send_transport_code(&message) {
+                    Some(code) => failures.push(format!("{address}: {code} ({message})")),
+                    None => return Err(message),
+                },
+            }
+        }
+        if failures.is_empty() {
+            Err("no peer addresses configured".to_owned())
+        } else {
+            Err(format!("all peer addresses failed: {}", failures.join("; ")))
+        }
     }
 
     /// POST a signed maw v3 `/api/wake` request.
@@ -294,7 +332,7 @@ impl ReqwestHttpTransportIo {
             target: wire.target,
             error: wire.error,
         };
-        if status >= 400 {
+        if status >= 300 {
             return Err(format!(
                 "remote /api/wake returned HTTP {status}: {}",
                 parsed.error.as_deref().unwrap_or("request failed")

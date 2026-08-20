@@ -741,7 +741,8 @@ async fn send_peer_message(
         peer_key,
         timestamp: i64::try_from(current_epoch_seconds()).unwrap_or(i64::MAX),
     };
-    match client.send_peer(&request).await {
+    let addresses = peer_send_addresses(node, peer_url);
+    match client.send_peer_addresses(&request, &addresses).await {
         Ok(response) => {
             let outbound = format_local_hey_message(&args.text, config, sender_oracle, args.from.as_deref());
             send_record_success(command, audit_args, config, sender_oracle, args.from.as_deref(), &args.target, &outbound, &format!("peer:{node}"), signature.as_ref());
@@ -772,6 +773,24 @@ async fn send_peer_message(
     }
 }
 
+fn peer_send_addresses(node: &str, peer_url: &str) -> Vec<String> {
+    peer_send_addresses_from_store(node, peer_url, &peers_load_store())
+}
+fn peer_send_addresses_from_store(node: &str, peer_url: &str, store: &PeersStoreNative) -> Vec<String> {
+    let by_node = store.peers.iter().find(|(alias, _)| !node.is_empty() && alias.eq_ignore_ascii_case(node)).map(|(_, peer)| peer).or_else(|| store.peers.values().find(|peer| !node.is_empty() && peer.node.as_deref().is_some_and(|value| value.eq_ignore_ascii_case(node))));
+    let peer = by_node.or_else(|| store.peers.values().find(|peer| peer.url == peer_url)).or_else(|| store.peers.values().find(|peer| peer.addresses.iter().any(|address| address == peer_url)));
+    let Some(peer) = peer else {
+        return vec![peer_url.to_owned()];
+    };
+    if peer.addresses.is_empty() { return vec![peer_url.to_owned()]; }
+    let error = peer.last_error.clone().and_then(|value| serde_json::from_value(value).ok());
+    let health_matches_primary = peer.addresses.first() == Some(&peer.url);
+    maw_peer::ordered_peer_addresses(
+        &peer.addresses,
+        health_matches_primary.then_some(peer.last_seen.as_deref()).flatten(),
+        health_matches_primary.then_some(error.as_ref()).flatten(),
+    )
+}
 
 #[allow(clippy::too_many_arguments)]
 fn send_record_success(
@@ -803,12 +822,6 @@ fn send_record_success(
         sink.record(&record);
     }
 }
-
-
-
-
-
-
 
 
 

@@ -14,6 +14,7 @@ use maw_peer::{
 fn peer(added_at: &str, last_seen: Option<&str>) -> PeerRecord {
     PeerRecord {
         url: "u".to_owned(),
+        addresses: Vec::new(),
         node: None,
         added_at: added_at.to_owned(),
         last_seen: last_seen.map(str::to_owned),
@@ -138,6 +139,7 @@ fn peer_store_path_empty_stale_tmp_save_and_load_round_trip_match_maw_js() {
         "alpha".to_owned(),
         PeerRecord {
             url: "http://alpha.local:3210".to_owned(),
+            addresses: Vec::new(),
             node: Some("alpha-node".to_owned()),
             added_at: "2026-05-18T00:00:00.000Z".to_owned(),
             last_seen: None,

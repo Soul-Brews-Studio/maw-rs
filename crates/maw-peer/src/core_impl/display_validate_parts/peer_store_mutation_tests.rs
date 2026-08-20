@@ -12,6 +12,7 @@
     fn peer_record(url: &str) -> PeerRecord {
         PeerRecord {
             url: url.to_owned(),
+            addresses: Vec::new(),
             node: None,
             added_at: "2026-05-21T00:00:00Z".to_owned(),
             last_seen: None,
@@ -185,4 +186,27 @@
         assert_eq!(stale_age_ms(&peer, 5000), Some(4000));
         peer.last_seen = Some("2026-06-02T13:54:44.148Z".to_owned());
         assert!(stale_age_ms(&peer, u64::MAX).is_some());
+    }
+
+    #[test]
+    fn multi_address_health_and_store_shapes_are_backward_compatible() {
+        let mut peer = peer_record("primary");
+        peer.addresses = vec!["primary".to_owned(), "lan".to_owned(), "lan".to_owned()];
+        let error = ProbeLastError { code: ProbeErrorCode::Refused, message: "down".to_owned(), at: "2026-08-20T10:01:00Z".to_owned() };
+        assert_eq!(ordered_peer_addresses(&peer.addresses, Some("2026-08-20T10:00:00Z"), Some(&error)), vec!["lan", "primary"]);
+        assert_eq!(ordered_peer_addresses(&peer.addresses, Some("1787220120000"), Some(&error)), vec!["primary", "lan"]);
+
+        let raw = r#"{"version":1,"peers":{"studio":{"url":"a","addedAt":"now"}}}"#;
+        let legacy: PeerStoreFile = serde_json::from_str(raw).expect("legacy string URL");
+        let peer = &legacy.peers["studio"];
+        assert_eq!(ordered_peer_addresses(std::slice::from_ref(&peer.url), None, None), vec!["a"]);
+        let encoded = serde_json::to_string(&legacy).expect("serialize");
+        assert!(encoded.contains(r#""url":"a""#) && !encoded.contains("addresses"), "{encoded}");
+        assert_eq!(serde_json::from_str::<PeerStoreFile>(&encoded).expect("round trip"), legacy);
+
+        let raw = r#"{"version":1,"peers":{"studio":{"url":"a","addresses":["a","b"],"addedAt":"now"}}}"#;
+        let modern: PeerStoreFile = serde_json::from_str(raw).expect("address list");
+        let addresses = &modern.peers["studio"].addresses;
+        assert_eq!(addresses.as_slice(), ["a", "b"]);
+        assert_eq!(ordered_peer_addresses(addresses, None, None), *addresses);
     }

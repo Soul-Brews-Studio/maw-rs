@@ -169,6 +169,7 @@ mod servepeerstartupwarnings_tests {
     fn peer(alias_url: &str, oracle: &str, node: &str) -> maw_peer::PeerRecord {
         maw_peer::PeerRecord {
             url: alias_url.to_owned(),
+            addresses: Vec::new(),
             node: None,
             added_at: "2026-06-24T09:00:00.000Z".to_owned(),
             last_seen: None,

@@ -160,6 +160,7 @@ pub fn cmd_peer_add_from_plan(plan: &PeerAddPlan) -> Result<PeerAddResult, Strin
 fn peer_add_new_record(plan: &PeerAddPlan) -> PeerRecord {
     PeerRecord {
         url: plan.url.clone(),
+        addresses: plan.peers.get(&plan.alias).filter(|peer| peer.url == plan.url).map(|peer| peer.addresses.clone()).unwrap_or_default(),
         node: plan.node.clone().or_else(|| plan.probe.node.clone()),
         added_at: plan.now.clone(),
         last_seen: plan.probe.error.is_none().then(|| plan.now.clone()),
@@ -208,4 +209,3 @@ fn peer_add_apply_existing(
         peer.one_way = existing.one_way;
     }
 }
-

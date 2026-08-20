@@ -27,6 +27,7 @@ fn state_path_is_primary_while_legacy_home_peers_are_migrated_on_mutation() {
             "state".to_owned(),
             PeerRecord {
                 url: "http://state.local:3456".to_owned(),
+                addresses: Vec::new(),
                 node: Some("state-node".to_owned()),
                 added_at: "2026-05-20T01:00:00.000Z".to_owned(),
                 last_seen: None,
@@ -94,6 +95,7 @@ fn mutate_peer_store_reads_inside_lock_and_tolerates_malformed_existing_contents
             "after".to_owned(),
             PeerRecord {
                 url: "http://after".to_owned(),
+                addresses: Vec::new(),
                 node: Some("after-node".to_owned()),
                 added_at: "2026-05-18T00:00:00.000Z".to_owned(),
                 last_seen: Some("2026-05-18T01:00:00.000Z".to_owned()),
@@ -124,6 +126,7 @@ fn mutate_peer_store_reads_inside_lock_and_tolerates_malformed_existing_contents
             "recovered".to_owned(),
             PeerRecord {
                 url: "http://recovered".to_owned(),
+                addresses: Vec::new(),
                 node: None,
                 added_at: "x".to_owned(),
                 last_seen: None,
@@ -168,6 +171,7 @@ fn read_errors_and_unlocked_parse_errors_recover_as_empty_stores() {
             "recovered".to_owned(),
             PeerRecord {
                 url: "http://recovered".to_owned(),
+                addresses: Vec::new(),
                 node: None,
                 added_at: "bad".to_owned(),
                 last_seen: None,
