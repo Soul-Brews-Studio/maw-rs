@@ -2631,6 +2631,70 @@ mod serve_tests {
         assert_eq!(browser_ws_status(evil).await, StatusCode::FORBIDDEN);
     }
 
+    // Regression: f1660ab4 reverted #934/#937's ticket requirement and removed
+    // the subprotocol echo with it. RFC 6455 4.1 makes a client fail an upgrade
+    // whose 101 echoes none of its offered protocols, so every credentialed
+    // browser (maw-ui `openWs` sends ["maw.ws.v1", "<ticket>"]) rejected an
+    // upgrade the server had accepted. Status-line-only probes all read 101 and
+    // called it healthy, which is exactly why this shipped.
+    fn ws_offer_request(url: &str, origin: &str, carrier: &str) -> axum::http::Request<()> {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let mut request = url.into_client_request().unwrap();
+        request.headers_mut().insert("origin", origin.parse().unwrap());
+        request
+            .headers_mut()
+            .insert("sec-websocket-protocol", carrier.parse().unwrap());
+        request
+    }
+
+    #[tokio::test]
+    async fn serve_ws_upgrade_echoes_the_stable_subprotocol() {
+        // A real listener, not `oneshot`: axum only negotiates a subprotocol on
+        // a genuine upgrade, and tokio-tungstenite enforces RFC 6455 4.1 on the
+        // client side — it errors when the 101 echoes none of the offered
+        // protocols, which is precisely what a browser does and precisely what
+        // every status-line-only probe missed when #962 shipped.
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind ws echo");
+        let addr = listener.local_addr().unwrap();
+        let app = serve_test_app_with_api_auth(ServeApiTokenAuth {
+            token: Some("secret-token".to_owned()),
+            loopback_exempt: true,
+            forced_open: false,
+        });
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+
+        let url = format!("ws://{addr}/ws/pty?target=nova:1.0");
+        // The exact shape maw-ui `openWs` sends when it holds a credential.
+        let carrier = format!("{SERVE_WS_PROTOCOL}, mwt1_deadbeef");
+        let (socket, response) =
+            tokio_tungstenite::connect_async(ws_offer_request(&url, "http://localhost", &carrier))
+                .await
+                .expect("credentialed upgrade must be accepted and echoed");
+        assert_eq!(response.headers()["sec-websocket-protocol"], SERVE_WS_PROTOCOL);
+        // The ticket must never be reflected into a response header.
+        assert!(!response
+            .headers()
+            .values()
+            .any(|value| value.as_bytes().windows(13).any(|w| w == b"mwt1_deadbeef")));
+        drop(socket);
+
+        // A bare offer negotiates the same stable protocol.
+        let (socket, response) = tokio_tungstenite::connect_async(ws_offer_request(&url, "http://localhost", SERVE_WS_PROTOCOL))
+        .await
+        .expect("bare stable offer must be accepted");
+        assert_eq!(response.headers()["sec-websocket-protocol"], SERVE_WS_PROTOCOL);
+        drop(socket);
+    }
+
     // #828: /ws reaches `tmux send-keys`, but the gate only looked at `/api/`,
     // so an unauthenticated upgrade got past it (verified live: 101 from the LAN
     // while /api/feed answered 401 on the same daemon).

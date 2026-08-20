@@ -1980,7 +1980,15 @@ async fn servecore_ws_upgrade(
         )
             .into_response();
     }
-    ws.on_upgrade(move |socket| servecore_ws_stream(socket, state, kind, target, config))
+    // RFC 6455 4.1: a client offering subprotocols fails the connection when the
+    // 101 echoes none of them. maw-ui's `openWs` still opens credentialed
+    // sockets as ["maw.ws.v1", "<ticket>"], so #962 dropping this negotiation
+    // alongside the ticket requirement made every credentialed browser reject an
+    // upgrade the server had accepted. axum echoes only from the list below, so
+    // a ticket value can never reach a response header, and a client that offers
+    // nothing still negotiates nothing.
+    ws.protocols([crate::core_impl::SERVE_WS_PROTOCOL])
+        .on_upgrade(move |socket| servecore_ws_stream(socket, state, kind, target, config))
         .into_response()
 }
 

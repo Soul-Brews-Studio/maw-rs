@@ -165,7 +165,11 @@ async fn godui_ws_upgrade(
         )
             .into_response();
     }
-    ws.on_upgrade(move |socket| godui_ws_stream(socket, state, target, config))
+    // Mirrors `servecore_ws_upgrade`: negotiate the stable subprotocol so a
+    // credentialed browser's offer is echoed and the 101 is not rejected (#962
+    // regression). axum echoes only from this list, never the ticket value.
+    ws.protocols([crate::core_impl::SERVE_WS_PROTOCOL])
+        .on_upgrade(move |socket| godui_ws_stream(socket, state, target, config))
         .into_response()
 }
 
