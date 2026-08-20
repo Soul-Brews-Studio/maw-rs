@@ -396,6 +396,19 @@ Four root decisions settled by the fleet owner. These are no longer assumptions.
   what turns maw's TOFU into the SSH-equivalent kind. Until then, pinning and disclosure are the
   same event.
 
+- **C-010 — The hub plugin ships bundled inside the maw-rs release.** Every node that has the
+  binary already has the plugin, so there is no bootstrap problem and no manual copy to N machines —
+  which is the very cost this specification exists to remove. `maw plugin install` accepts only a
+  local directory, with no URL or registry path, so any unbundled option would reintroduce per-node
+  manual work.
+
+  **Consequence, stated plainly**: combined with C-008 (an `engine.serve` process, not a sandbox),
+  being a plugin now buys code organisation, process isolation, and per-node enable/disable. It does
+  **not** buy independent release cadence, and it does **not** buy a security boundary. Those were
+  the two original arguments for the plugin form and both are now spent. The remaining benefits are
+  real but modest, and if they ever stop justifying the proxy-and-process machinery, folding this
+  into core is a legitimate simplification rather than a regression.
+
 ## Owner Decisions Required
 
 These are the fleet owner's to make; the specification is deliberately incomplete without them.
