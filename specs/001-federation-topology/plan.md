@@ -93,6 +93,62 @@ Recommendation: **`maw-peer` while the design is still moving**, and extract to 
 stops changing. Iterating across two repos on an unsettled type will cost more than the later move.
 This is a reversible choice and is flagged rather than assumed.
 
+
+## Delivery Vehicle: Plugin or Core?
+
+Asked during planning: could this be an external plugin rather than core features? Investigated
+rather than assumed, because two fields examined earlier today turned out to be declared and inert.
+
+**The plugin system is real and mature.** `maw plugin list` reports 98 installed (24 core, 47
+standard, 27 extra), 26 with an API surface, health ok. And the two hooks that matter are wired,
+not decorative:
+
+| hook | evidence |
+|---|---|
+| `PluginTransport { peer: bool }` | consumed at `wasm_mvp_runtime.rs:57-59, 84-86` |
+| `PluginEngineServe { command, prefix, health, events }` | mounted by `serve_plugin_proxy.rs` — a plugin may run its own process behind a proxied prefix, so it is not limited to WASM |
+| `PluginApi { path, methods }` | plugins register HTTP routes |
+| `net:fetch:<name>` | validator rejects the capability unless a matching named endpoint is declared |
+| `secret:use:<name>` | host-injected auth; the guest never receives token bytes (issue #244) |
+| `consent:read` / `consent:trust` / `consent:pending` | plugins can participate in the consent surface |
+
+### Decision
+
+**The hub is a plugin. Trust stays in core.**
+
+| concern | vehicle | reason |
+|---|---|---|
+| roster serving, join endpoint, revocation, membership | **plugin** | optional per fleet; ships without a core release; declares its own `api` and named endpoints |
+| relay (phase 5, if adopted) | **plugin**, `transport.peer = true` | the field exists for exactly this; remains fallback-only |
+| signature verification, pin store, key material | **core, never a plugin** | if a plugin decides who is authentic, installing a plugin grants authority over identity |
+| multi-address selection (phase 1) | **core**, `maw-peer` | pure, sits on the send path, and is unblocked by every open decision |
+| join-code primitive | **core**, `maw-auth::PairCodeStore` | already exists |
+
+### Why the plugin route is safer here, not merely cheaper
+
+The usual instinct — keep security in core, not in loadable artifacts — is inverted by this
+capability model. A plugin can only obtain `secret:use:<name>`, which is host-mediated and passes
+no key bytes into the guest, and it cannot reach an origin it did not declare. A hub plugin
+therefore **cannot reproduce the #877 defect by construction**: it never holds the secret it signs
+with. Core today does the opposite — it publishes that secret to any unauthenticated caller.
+
+The sandbox currently has a better secret story than the core it would plug into. That is an
+argument for the plugin, and simultaneously an argument that core's story must be fixed regardless.
+
+### The constraint this creates
+
+Bootstrapping. A new node needs the plugin before it can join anything. Core therefore retains
+`maw peers add` as the bootstrap path — which the specification already requires under Assumptions
+("enrollment is additive; manual pairing stays as bootstrap and escape hatch"). That assumption now
+carries two loads, and must not be dropped.
+
+### What this changes about the phases
+
+Phases 1 and 3 stay in core unchanged — reachability and identity are core concerns. Phases 2, 4 and
+5 become plugin work in the `maw-plugins` repository, where they get independent CI, independent
+versioning, and the existing sha256 pin-hash gate. The two-repo cost noted for `maw-hub` applies
+there too, but buys a release cadence decoupled from maw-rs.
+
 ## Phases
 
 Ordered by dependency, matching the specification's Implementation Order.
