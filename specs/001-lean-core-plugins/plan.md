@@ -225,7 +225,8 @@ leaf only when both repos genuinely consume it. No third runtime repository is i
    candidate as a canary and exercise wake/attach/hey/peek/serve (including the God origin) plus
    installed/missing/refused extracted-plugin smokes before cutting the CalVer alpha tag. The God
    canary is browser-equivalent: assert the installed binary commit, negotiated `maw.ws.v1`, and
-   `Sec-WebSocket-Accept`, not merely a successful HTTP/WebSocket status line.
+   `Sec-WebSocket-Accept`, not merely a successful HTTP/WebSocket status line, and record each
+   observed value in immutable canary evidence.
 
 ## Complexity Tracking
 

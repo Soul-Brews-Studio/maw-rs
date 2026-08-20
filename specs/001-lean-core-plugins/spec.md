@@ -320,7 +320,7 @@ plugin installed, missing, hash-invalid, SDK-incompatible, and under-capable.
   MUST pass. The God WebSocket canary MUST use a browser-equivalent client that asserts the exact
   installed `maw --version` commit, negotiated `maw.ws.v1` subprotocol, and
   `Sec-WebSocket-Accept` rather than a status-line-only probe; evidence MUST identify the candidate
-  and artifact pins.
+  and artifact pins and record the observed version, negotiated subprotocol, and accept value.
 - **FR-029**: The final native source MUST contain only generic provider/host contracts for the scoped
   products, with no reachable Codex/team/bring/split product implementation.
 - **FR-030**: Issue #963 MUST maintain a reviewed child ledger mapping each requirement to bounded,

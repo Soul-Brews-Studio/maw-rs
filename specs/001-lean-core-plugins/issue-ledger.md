@@ -114,5 +114,5 @@ tree hash; maw-plugins main SHA; registry SHA and every scoped package/artifact 
 toolchain/build/CI/direct-invocation log hashes; T168 full-gate log hash; T169 smoke result hashes;
 T170 reviewer identity/verdict and frozen diff hashes; and T171 canary candidate/version/pin/smoke
 evidence (including browser-equivalent God WebSocket `maw.ws.v1` and `Sec-WebSocket-Accept`
-assertions), release/tag/closure comment URLs.
+assertions with observed version/echo/accept values), release/tag/closure comment URLs.
 Any later ledger update is a separate docs-only audit PR and cannot claim to prove that candidate.
