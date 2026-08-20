@@ -8,7 +8,7 @@
 
 **Input**: User description: "Move maw bring, maw split, every team workflow, and
 Codex-specific account/workflow/provider behavior out of native core into plugins while
-leaving maw wake and maw attach native, untouched, and working. Use Spec Kit and GitHub
+leaving maw wake, maw attach, maw hey, maw peek, and maw serve native, untouched, and working. Use Spec Kit and GitHub
 issues to drive the work."
 
 ## User Scenarios & Testing *(mandatory)*
@@ -197,8 +197,8 @@ plugin installed, missing, hash-invalid, SDK-incompatible, and under-capable.
 
 ### Functional Requirements
 
-- **FR-001**: The system MUST keep `wake`, `attach`, and `a` registered and implemented natively.
-- **FR-002**: Extraction slices MUST preserve the frozen wake/attach observable contract for all
+- **FR-001**: The system MUST keep `wake`, `attach`, `a`, `hey`, `peek`, and `serve` registered and implemented natively.
+- **FR-002**: Extraction slices MUST preserve the frozen wake/attach/hey/peek/serve observable contract for all
   non-Codex paths and for Codex when the accepted provider is installed; missing/refused Codex
   selection MUST use only the approved pre-mutation repair error and MUST NOT fall back.
 - **FR-003**: The system MUST route `bring` and `b` exclusively to one installed external artifact

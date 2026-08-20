@@ -21,9 +21,9 @@ Sync Impact Report
 ### I. Stable Native Kernel
 
 The native binary MUST retain orchestration that establishes the trusted host boundary:
-`maw wake`, `maw attach`/`maw a`, plugin discovery and verification, capability
+`maw wake`, `maw attach`/`maw a`, `maw hey`, `maw peek`, `maw serve`, plugin discovery and verification, capability
 enforcement, signed/authenticated transport, and raw tmux/process/filesystem adapters.
-Extraction MUST NOT move or shadow the native `wake`, `attach`, or `a` entrypoints or their
+Extraction MUST NOT move or shadow the native `wake`, `attach`, `a`, `hey`, `peek`, or `serve` entrypoints or their
 orchestration state machines. Their binary fast paths, tmux effects, and every non-Codex observable
 contract MUST remain frozen, and unrelated optional plugins MUST remain unable to intercept them.
 With an accepted Codex provider installed, frozen Codex launch/resume behavior MUST remain at parity.

@@ -89,14 +89,15 @@ The first search must show no reachable native owner for an extracted verb. The 
 ownership search must show canonical package and alias coverage. Run help, completion, plugin list,
 doctor, missing artifact, bad hash, old SDK, and denied capability scenarios.
 
-## 5. Prove wake and attach stability
+## 5. Prove native wake, attach, hey, peek, and serve stability
 
 Use the child issue's exact focused tests twice with an isolated target. Run unrelated workflow
-plugins present/absent with identical wake/attach results. Run Codex with the accepted provider for
+plugins present/absent with identical wake/attach/hey/peek/serve results. Run Codex with the accepted provider for
 parity, explicit missing/refused Codex for the approved pre-mutation failure, and non-Codex
-wake/attach without the Codex artifact for byte-identical behavior. At minimum cover native wake
-parser/launch/cold-start and attach picker, sleeping-target wake, and binary fast path fixtures. Do
-not modify wake/attach expectations merely to accommodate extraction.
+wake/attach/hey/peek/serve without the Codex artifact for byte-identical behavior. At minimum cover native wake
+parser/launch/cold-start and attach picker, sleeping-target wake, binary fast path, and the accepted
+`https://god.buildwithoracle.com` serve-origin fixtures. Do
+not modify wake/attach/hey/peek/serve expectations merely to accommodate extraction.
 
 Example target convention:
 
@@ -105,6 +106,12 @@ CARGO_TARGET_DIR=/mnt/nvme1/cargo/target-omx-963-<slice> \
   cargo test -p maw-cli wake --locked --no-fail-fast
 CARGO_TARGET_DIR=/mnt/nvme1/cargo/target-omx-963-<slice> \
   cargo test -p maw-cli attach --locked --no-fail-fast
+CARGO_TARGET_DIR=/mnt/nvme1/cargo/target-omx-963-<slice> \
+  cargo test -p maw-cli hey --locked --no-fail-fast
+CARGO_TARGET_DIR=/mnt/nvme1/cargo/target-omx-963-<slice> \
+  cargo test -p maw-cli peek --locked --no-fail-fast
+CARGO_TARGET_DIR=/mnt/nvme1/cargo/target-omx-963-<slice> \
+  cargo test -p maw-cli serve --locked --no-fail-fast
 ```
 
 Child issues name narrower exact filters where available.

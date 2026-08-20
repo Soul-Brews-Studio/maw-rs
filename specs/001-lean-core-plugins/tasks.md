@@ -127,14 +127,14 @@ ABI fixture, external Rust SDK binding, and CI conformance row are merged.
 
 ---
 
-## Phase 3: User Story 1 - Native Wake and Attach Stay Stable (Priority: P1)
+## Phase 3: User Story 1 - Native Kernel Stays Stable (Priority: P1)
 
 **Goal**: Establish a non-negotiable regression baseline used by every cutover.
 
-- [ ] T073 [P] [maw-rs] [US1] Freeze wake regression rows and source boundaries in `crates/maw-cli/src/core_impl/wake_tests.rs` and `crates/maw-cli/tests/native_send_wake_http.rs` without changing production.
+- [ ] T073 [P] [maw-rs] [US1] Freeze wake plus `hey`/`peek`/`serve` native-kernel regression rows and source boundaries in `crates/maw-cli/src/core_impl/wake_tests.rs`, `crates/maw-cli/src/core_impl/send_federation.rs`, `crates/maw-cli/src/core_impl/tmux_peek.rs`, `crates/maw-cli/src/core_impl/serve_tests.rs`, and `crates/maw-cli/tests/native_send_wake_http.rs` without changing production; retain the exact accepted `https://god.buildwithoracle.com` serve-origin rows.
 - [ ] T074 [P] [maw-rs] [US1] Freeze attach dispatcher, sleeping-target wake, and binary fast-path rows in `crates/maw-cli/src/core_impl/attach_private_tests.rs`, `crates/maw-cli/tests/attach_alias_cli.rs`, and `crates/maw-cli/tests/native_attach_view_stream_split.rs`.
-- [ ] T075 [maw-rs] [US1] Add `crates/maw-cli/tests/lean_core_native_boundary.rs` asserting wake/attach/a remain native and scoped optional verbs do not.
-- [ ] T076 [maw-rs] [US1] Define exact focused wake/attach twice-green commands and evidence fields in `specs/001-lean-core-plugins/quickstart.md` and `specs/001-lean-core-plugins/issue-ledger.md`; until #964 lands, every slice touching `crates/maw-cli/src/core_impl/*.rs` also runs and records explicit standalone rustfmt checks over the touched fragments.
+- [ ] T075 [maw-rs] [US1] Add `crates/maw-cli/tests/lean_core_native_boundary.rs` asserting wake/attach/a/hey/peek/serve remain native and scoped optional verbs do not.
+- [ ] T076 [maw-rs] [US1] Define exact focused wake/attach/hey/peek/serve twice-green commands and evidence fields in `specs/001-lean-core-plugins/quickstart.md` and `specs/001-lean-core-plugins/issue-ledger.md`; until #964 lands, every slice touching `crates/maw-cli/src/core_impl/*.rs` also runs and records explicit standalone rustfmt checks over the touched fragments.
 
 ---
 

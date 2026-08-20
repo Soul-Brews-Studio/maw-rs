@@ -10,8 +10,8 @@
 Move optional workflow and vendor-specific behavior from `maw-rs` into reproducible,
 capability-gated artifacts in `Soul-Brews-Studio/maw-plugins`. Land narrow host/runtime
 dispatch/result and the capability-free guest SDK prerequisites first, implement and differentially verify each external artifact while native
-dispatch still owns production, then cut over one canonical verb at a time. `wake`, `attach`,
-the plugin host, and raw tmux/process/filesystem authority remain native. Bring is the first MVP;
+dispatch still owns production, then cut over one canonical verb at a time. `wake`, `attach`, `hey`,
+`peek`, `serve`, the plugin host, and raw tmux/process/filesystem authority remain native. Bring is the first MVP;
 split follows only after flag and typed-mutation prerequisites; team and Codex move in bounded
 user-story trains. Scoped guests use injected typed lifecycle, pane inventory/observation, layout,
 batch-launch, named-root/input, opaque execution/workspace authority, worktree/repository, provider,
@@ -100,7 +100,10 @@ crates/maw-cli/src/core_impl/
 ├── codex_accounts.rs          # removed at Codex workflow cutover
 ├── more*.rs / wave.rs         # moved together to packages/codex after accepted artifact
 ├── wake*.rs                   # preserved native
-└── attach*.rs                 # preserved native
+├── attach*.rs                 # preserved native
+├── send_federation.rs         # `hey` preserved native
+├── tmux_peek.rs               # `peek` preserved native
+└── serve_daemon.rs            # `serve` preserved native
 
 crates/maw-plugin-manifest/src/core_impl/
 └── wasm_host/                 # narrow typed host/runtime prerequisites only

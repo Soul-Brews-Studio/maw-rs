@@ -16,7 +16,7 @@ This creates duplicate ownership, release coupling, and a temptation to widen ra
 
 ### Native trusted kernel
 
-`wake`, `attach`/`a`, their state machines and fast paths, plugin discovery/verification, native
+`wake`, `attach`/`a`, `hey`, `peek`, `serve`, their state machines and fast paths, plugin discovery/verification, native
 Extism hosting, authentication/consent enforcement, signed transport, and raw tmux/process/filesystem
 adapters remain native. The plugin host and `maw-tmux` stay in their current Rust ownership domains
 under #911 and #910.

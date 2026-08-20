@@ -12,7 +12,7 @@ is exhaustive and unique; child issues may contain several predeclared PR slices
 | Order | Child | Task range | Direct dependencies | External artifact gate | State |
 |---:|---|---|---|---|---|
 | 1 | pending: Spec Kit/ADR/inventories/ledger | T001-T006 | #963 | n/a | pending |
-| 2 | pending: native wake/attach regression boundary | T073-T076 | 1 | n/a | pending |
+| 2 | pending: native wake/attach/hey/peek/serve regression boundary | T073-T076 | 1 | n/a | pending |
 | 3 | pending: route/flag/multi-command/result contracts | T007-T017 | 1 | n/a | pending |
 | 4 | pending: base guest ABI/SDK/registry/policy/artifact harness | T018-T024 | 3 | base SDK accepted | pending |
 | 5 | pending: injected lifecycle and pane-submit host | T025-T032 | 3 | n/a | pending |
@@ -40,7 +40,7 @@ is exhaustive and unique; child issues may contain several predeclared PR slices
 ### Dependency invariants
 
 - Child 12 is the earliest product MVP. Its artifact needs only the base route/ABI chain; its
-  downstream cutover also consumes the native wake/attach baseline. It never waits for typed host
+  downstream cutover also consumes the native wake/attach/hey/peek/serve baseline. It never waits for typed host
   children 5-11.
 - Every artifact is merged, hash-pinned, directly invoked, CI-validated, and recorded accepted before
   its fresh downstream branch exists.
