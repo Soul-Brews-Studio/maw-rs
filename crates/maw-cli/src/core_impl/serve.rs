@@ -76,7 +76,6 @@ struct ServeOperatorAuth;
 #[derive(Clone)]
 struct ServeApiGateState {
     auth: ServeApiTokenAuth,
-    ws_tickets: Arc<maw_auth::WsTicketStore>,
 }
 
 tokio::task_local! { static SERVE_OPERATOR_CONTEXT: (); }
@@ -92,17 +91,17 @@ impl ServeApiTokenAuth {
     fn open() -> Self { Self { token: None, loopback_exempt: true, forced_open: true } }
 
     /// The banner names what is ENFORCED, not just how the token resolved:
-    /// without a configured token there is nothing to mint or validate a
-    /// one-use ws-ticket against, so every Origin-bearing browser client is
-    /// refused in BOTH open modes. Reporting that as a bare `open` cost a
+    /// the websocket surface never falls open the way `/api/` does, so an
+    /// Origin-bearing browser client still needs the bearer token (or
+    /// loopback trust) in every mode. Reporting that as a bare `open` cost a
     /// full debugging session (#955).
     fn mode_label(&self) -> &'static str {
         if self.forced_open {
-            "open (configured) (browser clients refused; the ws-ticket flow needs MAW_SERVE_TOKEN, which overrides this open mode)"
+            "open (configured) (browser clients refused unless loopback; forced_open does not open browser websockets)"
         } else if self.token.is_some() {
-            "token (browser clients mint a one-use ws-ticket per path)"
+            "token (browser clients authenticate with the same bearer token as /api)"
         } else {
-            "open (no token \u{2014} browser clients refused; set MAW_SERVE_TOKEN to enable the ws-ticket flow)"
+            "open (no token \u{2014} browser clients refused; set MAW_SERVE_TOKEN to authenticate them)"
         }
     }
 
@@ -554,7 +553,6 @@ fn serve_router_with_ws_tickets(
     let plugin_serve_routes = state.plugin_serve_routes.clone();
     let api_gate = ServeApiGateState {
         auth: state.api_token_auth.clone(),
-        ws_tickets: ws_tickets.clone(),
     };
     let state = Arc::new(state);
     let router = Router::new();
@@ -636,37 +634,8 @@ async fn serve_api_token_gate(
         }
         return serve_token_unauthorized();
     }
-    if req.headers().contains_key("origin") && serve_path_is_websocket(path) {
-        if auth.forced_open || auth.token.is_none() {
-            return serve_token_unauthorized();
-        }
-        let Ok(ticket_path) = maw_auth::WsTicketPath::try_from(path) else {
-            return serve_token_unauthorized();
-        };
-        if !serve_apparent_ws_upgrade(&req) {
-            return serve_token_unauthorized();
-        }
-        let Some((origin, ticket)) = serve_browser_ws_ticket(&req) else {
-            return serve_token_unauthorized();
-        };
-        match gate
-            .ws_tickets
-            .consume(&ticket, Some(&origin), ticket_path, Instant::now)
-        {
-            maw_auth::WsTicketConsume::Accepted => {
-                req.headers_mut().insert(
-                    "sec-websocket-protocol",
-                    HeaderValue::from_static(SERVE_WS_PROTOCOL),
-                );
-                crate::serve_core::servecore_mark_ws_ticket_accepted(&mut req);
-                return next.run(req).await;
-            }
-            maw_auth::WsTicketConsume::Rejected => return serve_token_unauthorized(),
-            maw_auth::WsTicketConsume::Unavailable => {
-                return StatusCode::SERVICE_UNAVAILABLE.into_response()
-            }
-        }
-    }
+    // #934/#937's ws-ticket requirement is reverted: an Origin-allowlisted
+    // upgrade (checked above, #928-931 untouched) now needs only the below.
     let websocket = serve_path_is_websocket(path);
     if !websocket
         && (!path.starts_with("/api/")
@@ -693,58 +662,6 @@ async fn serve_api_token_gate(
         return next.run(req).await;
     }
     serve_token_unauthorized()
-}
-
-fn serve_apparent_ws_upgrade(req: &Request<Body>) -> bool {
-    fn one(headers: &HeaderMap, name: &str, expected: &str, max: usize) -> bool {
-        let mut values = headers.get_all(name).iter();
-        let Some(value) = values.next() else { return false; };
-        values.next().is_none()
-            && value.as_bytes().len() <= max
-            && value
-                .to_str()
-                .is_ok_and(|value| value.eq_ignore_ascii_case(expected))
-    }
-    fn connection(headers: &HeaderMap) -> bool {
-        let mut values = headers.get_all("connection").iter();
-        let Some(value) = values.next() else { return false; };
-        values.next().is_none()
-            && value.as_bytes().len() <= 128
-            && value.to_str().is_ok_and(|value| {
-                value
-                    .split(',')
-                    .any(|token| token.trim().eq_ignore_ascii_case("upgrade"))
-            })
-    }
-    req.method() == Method::GET
-        && connection(req.headers())
-        && one(req.headers(), "upgrade", "websocket", 32)
-        && one(req.headers(), "sec-websocket-version", "13", 8)
-        && {
-            let mut keys = req.headers().get_all("sec-websocket-key").iter();
-            keys.next()
-                .is_some_and(|key| !key.is_empty() && key.as_bytes().len() <= 128)
-                && keys.next().is_none()
-        }
-}
-
-fn serve_browser_ws_ticket(req: &Request<Body>) -> Option<(String, String)> {
-    let origin = req.headers().get("origin")?.to_str().ok()?.to_owned();
-    let mut values = req.headers().get_all("sec-websocket-protocol").iter();
-    let raw = values.next()?;
-    if values.next().is_some() || raw.as_bytes().len() > 128 {
-        return None;
-    }
-    let raw = raw.to_str().ok()?;
-    let (stable, ticket) = raw.split_once(',')?;
-    if ticket.contains(',')
-        || stable.trim_end_matches([' ', '\t']) != SERVE_WS_PROTOCOL
-        || stable.starts_with([' ', '\t'])
-        || ticket.trim_end_matches([' ', '\t']) != ticket
-    {
-        return None;
-    }
-    Some((origin, ticket.trim_start_matches([' ', '\t']).to_owned()))
 }
 
 fn serve_token_unauthorized() -> Response {
