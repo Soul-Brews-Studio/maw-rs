@@ -4,7 +4,7 @@
 
 **Created**: 2026-08-20
 
-**Status**: Draft — awaiting empirical relay result (E3) and three owner decisions
+**Status**: Draft — empirical results landed 2026-08-20; three owner decisions outstanding
 
 **Input**: User description: "i think we have wrong design so we join federation to federation if i
 have 10 machine it should be paired 10x10 times? 1 to 1 it hard? se we should join a server like we
@@ -224,10 +224,18 @@ one addresses a member of the other, and that the number of enrollment operation
   yet propagated", and MUST NOT report the second as the first.
 - **FR-023**: Loss of the enrollment authority MUST NOT prevent already-enrolled members from
   communicating. Degradation MUST be to present behaviour, never to silence.
-- **FR-024**: [NEEDS CLARIFICATION: is message relay through a third node in scope at all? Source
-  reading says the v3 signature omits the destination entirely, so relay is signature-transparent
-  and needs no protocol change; empirical experiment E3 is pending. Note maw-js shipped hub delivery
-  as `HubTransport` and deliberately removed it in v26.6.13 — the reason is not yet recovered.]
+- **FR-024** *(resolved 2026-08-20 by experiment)*: Message relay through a third node requires no
+  protocol change. Confirmed empirically against three isolated daemons: a signed request is not
+  bound to its destination and verifies at any node that trusts the sender (**E3, CONFIRMED**).
+  Relay therefore MAY be adopted, and MUST remain fallback-only after direct paths fail.
+- **FR-025**: Adopting relay MUST NOT ship before replay protection. The same property that makes
+  relay free makes replay free: there is no nonce or seen-set, and the acceptance window is ±300s
+  (**E4**). A captured request is therefore replayable to any node in the fleet for up to ten
+  minutes. Formalizing the relay path formalizes an accidental property, and MUST close it in the
+  same change.
+- **FR-026**: Signature verification MUST authenticate the claimed agent identity, not only the
+  node. Forgery of the oracle identity currently succeeds because only the node key is
+  authenticated (**E2**) — the same defect scope as issue #798.
 
 ### Functional Requirements — Identity (US4)
 
