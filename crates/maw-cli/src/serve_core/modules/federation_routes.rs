@@ -391,10 +391,7 @@ async fn federation_fleet_sessions(
             return guard.1.clone();
         }
     }
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_millis(2500))
-        .build()
-    {
+    let client = match fleet_sweep_client(Duration::from_millis(2500)) {
         Ok(client) => client,
         Err(error) => {
             let error = format!("http client build failed: {error}");
@@ -429,6 +426,18 @@ async fn federation_fleet_sessions(
         }
     }
     map
+}
+
+/// The sweep's HTTP client. Like the peer client (#954) it must never follow a
+/// redirect: the sweep signs `GET /api/sessions` and the v3 payload names no
+/// destination, so a peer answering `302` would be handed this node's
+/// `X-Maw-*` headers to replay elsewhere — and following would also step
+/// straight past the IP `pin` resolved for that peer.
+fn fleet_sweep_client(timeout: Duration) -> reqwest::Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
 }
 
 /// The headers that authenticate this node's fleet sweep to a peer, or an empty
@@ -1142,6 +1151,57 @@ mod tests {
         // reads the peer store live. Baking a status here (the old #524-class
         // stub) would make the map lie — this guard flips if that regresses.
         assert!(federation_default_state().status_override.is_none());
+    }
+
+    async fn federation_spawn_router(router: Router) -> std::net::SocketAddr {
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move { axum::serve(listener, router).await.expect("server") });
+        addr
+    }
+
+    /// #954, sweep half: a peer answering the signed `GET /api/sessions` with a
+    /// `302` must not get the signed headers relayed onward. The proof is the
+    /// redirect target's own hit counter, not merely the sweep's error string.
+    #[tokio::test]
+    async fn fleet_sweep_refuses_a_redirect_and_the_target_observes_nothing() {
+        let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = std::sync::Arc::clone(&hits);
+        let target = federation_spawn_router(Router::new().fallback(move || {
+            let counter = std::sync::Arc::clone(&counter);
+            async move {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                "[]"
+            }
+        }))
+        .await;
+        let location = format!("http://{target}/api/sessions");
+        let peer = federation_spawn_router(Router::new().fallback(move || {
+            let location = location.clone();
+            async move {
+                (
+                    StatusCode::FOUND,
+                    [(axum::http::header::LOCATION, location)],
+                )
+            }
+        }))
+        .await;
+
+        let client = fleet_sweep_client(Duration::from_secs(5)).expect("client");
+        let outcome =
+            federation_fetch_peer_sessions(&client, &format!("http://{peer}"), None, &[]).await;
+        let error = outcome.error.unwrap_or_default();
+        assert!(
+            error.contains("302"),
+            "the 302 must surface, not be followed: {error}"
+        );
+        assert_eq!(
+            hits.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "the redirect target must observe zero sweep requests"
+        );
     }
 
     #[tokio::test]
