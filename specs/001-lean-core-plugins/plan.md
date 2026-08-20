@@ -221,7 +221,9 @@ leaf only when both repos genuinely consume it. No third runtime repository is i
 
 1. Align help, completions, plugin listing, doctor, registry, aliases, and missing/refusal guidance.
 2. Prove zero reachable duplicate native owners and zero unadjudicated Codex/team product logic.
-3. Run combined exact-tree full gate, external artifact CI/pin checks, and release verification.
+3. Run combined exact-tree full gate and external artifact CI/pin checks; install that unchanged
+   candidate as a canary and exercise wake/attach/hey/peek/serve (including the God origin) plus
+   installed/missing/refused extracted-plugin smokes before cutting the CalVer alpha tag.
 
 ## Complexity Tracking
 
