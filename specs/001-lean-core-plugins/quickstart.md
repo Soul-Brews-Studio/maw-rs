@@ -145,4 +145,6 @@ SHA-256, authored line count, source/artifact SHA, and independent review in the
 - No raw process environment, secret, unrestricted fs/process/tmux, or trust mutation grant exists.
 - Combined exact tree passes full gate and external CI before release verification; its unchanged
   pinned candidate completes the native-kernel and installed/missing/refused plugin canary before
-  the CalVer alpha tag is cut.
+  the CalVer alpha tag is cut. For the God WebSocket row, use a browser-equivalent client and assert
+  the exact installed `maw --version` commit, `maw.ws.v1` negotiation, and
+  `Sec-WebSocket-Accept`; a `101` status line alone is insufficient.
