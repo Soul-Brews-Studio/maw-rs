@@ -183,6 +183,18 @@ fn error_cause_chain(error: &(dyn std::error::Error + 'static), url: &str) -> St
     }
 }
 
+/// #954: name a refused redirect for what it is, and print where the peer was
+/// pointing. A legitimate federation peer never redirects a signed request, so
+/// the `Location` is the single most useful fact for whoever reads this --
+/// either a reverse proxy in front of the peer, or someone fishing for our
+/// signature headers.
+fn redirect_refused_message(url: &str, status: u16, location: Option<&str>) -> String {
+    format!(
+        "refused redirect posting {url}: peer answered HTTP {status} pointing at {} — a signed maw request is never re-sent to an address the peer names (#954)",
+        location.unwrap_or("an unnamed location")
+    )
+}
+
 struct PeerAuth<'a> {
     from: &'a str,
     federation_token: &'a str,
@@ -219,6 +231,16 @@ impl ReqwestHttpTransportIo {
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(timeout)
+            // #954: never follow a redirect on a signed federation request. The
+            // v3 payload is `METHOD:path:timestamp:body_hash:from` -- the
+            // destination appears nowhere in it -- so a peer that answers a
+            // signed POST with `302 Location: <anywhere>` would be handed our
+            // signature headers verbatim (reqwest strips only `Authorization`
+            // and `Cookie` across origins, not `X-Maw-*`), and could replay
+            // them at any node pinning us for the whole +/-300s window. The
+            // plugin path already sets this (`host_http.rs`); the peer path did
+            // not.
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|error| format!("http client build failed: {error}"))?;
         Ok(Self { client, timeout_ms })
@@ -421,6 +443,21 @@ impl ReqwestHttpTransportIo {
             .await
             .map_err(|error| request_error_message("posting", &url, &error))?;
         let status = response.status().as_u16();
+        // #954: with `Policy::none()` a redirect arrives as an ordinary 3xx
+        // response rather than an error, so refuse it here by name. Left
+        // unhandled it would surface as "failed to parse /api/send response"
+        // on an empty body, which reads like a broken peer instead of one
+        // trying to aim our signed request somewhere else.
+        if (300..400).contains(&status) {
+            return Err(redirect_refused_message(
+                &url,
+                status,
+                response
+                    .headers()
+                    .get(reqwest::header::LOCATION)
+                    .and_then(|value| value.to_str().ok()),
+            ));
+        }
         let text = response
             .text()
             .await
@@ -600,5 +637,105 @@ mod decision_tests {
         assert!(decision_hint("something-new").is_none());
         let msg = peer_send_error_message(401, &resp(None, Some("something-new")));
         assert!(msg.contains("[decision=something-new]"));
+    }
+}
+
+#[cfg(test)]
+mod redirect_policy_tests {
+    use std::sync::{Arc, Mutex};
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    use super::{PeerAuth, ReqwestHttpTransportIo};
+
+    type Seen = Arc<Mutex<Vec<String>>>;
+
+    const OK_BODY: &str = "{\"ok\":true,\"state\":\"delivered\"}";
+
+    /// Minimal HTTP/1.1 responder on an ephemeral loopback port. It records
+    /// every request it is handed, so a test can assert on what a server
+    /// *observed* rather than only on what the client returned.
+    async fn spawn_server(response: String) -> (String, Seen) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind loopback");
+        let port = listener.local_addr().expect("local addr").port();
+        let seen: Seen = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&seen);
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let response = response.clone();
+                let recorder = Arc::clone(&recorder);
+                tokio::spawn(async move {
+                    let mut buf = [0_u8; 4096];
+                    let read = stream.read(&mut buf).await.unwrap_or(0);
+                    if let Ok(mut guard) = recorder.lock() {
+                        guard.push(String::from_utf8_lossy(&buf[..read]).into_owned());
+                    }
+                    let _ = stream.write_all(response.as_bytes()).await;
+                    let _ = stream.shutdown().await;
+                });
+            }
+        });
+        (format!("http://127.0.0.1:{port}"), seen)
+    }
+
+    fn ok_response() -> String {
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{OK_BODY}",
+            OK_BODY.len()
+        )
+    }
+
+    fn redirect_response(location: &str) -> String {
+        format!("HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+    }
+
+    fn hits(seen: &Seen) -> usize {
+        seen.lock().expect("seen lock").len()
+    }
+
+    /// #954: a peer answering a signed `POST /api/send` with a `302` must not
+    /// get that signed request re-sent to the address it named. Asserting only
+    /// that the client returned an error would not prove this — the
+    /// `X-Maw-Signature` headers could still have left the machine, and the v3
+    /// payload (`METHOD:path:timestamp:body_hash:from`) names no destination,
+    /// so whoever catches them can replay them at any node that trusts the
+    /// sender for the whole ±300s window. So this asserts on the redirect
+    /// target's own request log: it must be empty.
+    #[tokio::test]
+    async fn peer_redirect_is_refused_and_the_target_observes_nothing() {
+        let (attacker_url, attacker_seen) = spawn_server(ok_response()).await;
+        let (peer_url, peer_seen) =
+            spawn_server(redirect_response(&format!("{attacker_url}/api/send"))).await;
+
+        let io = ReqwestHttpTransportIo::new(4000).expect("client");
+        let error = io
+            .post_signed_json(
+                &peer_url,
+                "/api/send",
+                "{\"target\":\"black\",\"text\":\"hi\"}",
+                PeerAuth {
+                    from: "maw-rs:black",
+                    federation_token: "token",
+                    peer_key: "peer-key",
+                    timestamp: 1_782_345_900,
+                },
+            )
+            .await
+            .expect_err("a redirected signed request must fail, not be followed");
+
+        assert!(
+            error.starts_with("refused redirect posting"),
+            "the refusal must be named, not opaque: {error}"
+        );
+        assert!(error.contains("302"), "{error}");
+        assert!(error.contains(&attacker_url), "{error}");
+        assert_eq!(hits(&peer_seen), 1, "the configured peer is still contacted");
+        assert_eq!(
+            hits(&attacker_seen),
+            0,
+            "the redirect target must observe zero requests, saw: {:?}",
+            attacker_seen.lock().expect("seen lock")
+        );
     }
 }

@@ -32,7 +32,11 @@ impl ReqwestHttpTransportIo {
         let method = reqwest::Method::from_bytes(request.method.as_bytes())
             .map_err(|error| format!("invalid HTTP method: {error}"))?;
         let timeout = request.timeout_ms.unwrap_or(self.timeout_ms());
-        let client = if request.pinned_addr.is_some() || !request.follow_redirects {
+        // The shared `self.client` now refuses redirects outright (#954), so
+        // the opt-in `follow_redirects` plugin path is the one that has to
+        // build its own client -- previously it was the only one that could
+        // reuse the shared client, and the condition was the other way round.
+        let client = if request.pinned_addr.is_some() || request.follow_redirects {
             let mut builder = reqwest::Client::builder().timeout(std::time::Duration::from_millis(timeout));
             if !request.follow_redirects {
                 builder = builder.redirect(reqwest::redirect::Policy::none());
