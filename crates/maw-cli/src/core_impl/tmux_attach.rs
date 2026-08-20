@@ -344,12 +344,26 @@ fn run_send_key_command(argv: &[String]) -> CliOutput {
         Ok(target) => target,
         Err(message) => return command_target_error("send-key", &message),
     };
-    if let Err(error) = client.send_keys(&resolved, &[options.key.to_owned()]) {
+    send_key_resolved(&resolved, options.key, |target, key| {
+        client
+            .send_keys(target, &[key.to_owned()])
+            .map_err(|error| error.to_string())
+    })
+}
+
+fn send_key_resolved(
+    resolved: &str,
+    key: &str,
+    mut send_keys: impl FnMut(&str, &str) -> Result<(), String>,
+) -> CliOutput {
+    if let Err(error) = send_keys(resolved, key) {
         return command_target_error("send-key", &format!("tmux send-keys failed: {error}"));
     }
     CliOutput {
         code: 0,
-        stdout: format!("\x1b[32mdelivered\x1b[0m → {resolved}: {}\n", options.key),
+        stdout: format!(
+            "\x1b[32mtmux accepted\x1b[0m → {resolved}: {key} (pane state unconfirmed)\n"
+        ),
         stderr: String::new(),
     }
 }
@@ -555,6 +569,34 @@ mod tmux_attach_send_key_tests {
         assert_eq!(
             output.stderr,
             "send-enter: tmux send-keys returned an error on request 2 of 3 after tmux accepted 1 of 3 requested Enter keypresses; failed request outcome and pane state are unconfirmed, inspect pane before retrying: injected failure\n"
+        );
+    }
+
+    #[test]
+    fn send_key_reports_raw_success_without_claiming_delivery() {
+        let mut calls = Vec::new();
+        let output = send_key_resolved("%42", "C-c", |target, key| {
+            calls.push((target.to_owned(), key.to_owned()));
+            Ok(())
+        });
+        assert_eq!(calls, [("%42".to_owned(), "C-c".to_owned())]);
+        assert_eq!(
+            output.stdout,
+            "\x1b[32mtmux accepted\x1b[0m → %42: C-c (pane state unconfirmed)\n"
+        );
+        assert_eq!(output.code, 0);
+        assert!(output.stderr.is_empty());
+        assert!(!output.stdout.contains("delivered"));
+    }
+
+    #[test]
+    fn send_key_reports_failure_with_unconfirmed_state() {
+        let output = send_key_resolved("%42", "C-c", |_, _| Err("injected failure".to_owned()));
+        assert_eq!(output.code, 1);
+        assert!(output.stdout.is_empty());
+        assert_eq!(
+            output.stderr,
+            "send-key: tmux send-keys failed: injected failure\n"
         );
     }
 
