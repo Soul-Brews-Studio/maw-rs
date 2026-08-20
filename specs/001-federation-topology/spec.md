@@ -421,6 +421,27 @@ Four root decisions settled by the fleet owner. These are no longer assumptions.
   test: a suite that depends on another machine staying misconfigured is neither reproducible nor
   self-cleaning.
 
+- **C-012 — Local only: no WireGuard, and `black` is no longer part of the fleet.** Addresses in
+  scope are loopback, LAN IP, and hostname on this machine's network. Network-path failover across a
+  VPN is out of scope, and no evidence, example, or test may rest on WireGuard or on `black`.
+
+  **This changes what justifies multi-address support.** The original headline motivation — every
+  peer URL pointing at a down WireGuard address while the LAN path worked — is withdrawn. What
+  remains is narrower and entirely local:
+
+  - **port drift on the same host**: `blackbox` was pinned at `:3467` while the same host served
+    `:3456`. Nothing about that involved a VPN.
+  - **stale entries that never resolved**: `w` pointed at `w.local`, which has no DNS record at all.
+  - **multiple aliases for one machine**: `betafed` and `m5` are the same host on different ports.
+
+  The feature is therefore about *an address being wrong*, not about *a network path being down*.
+  Requirements FR-010 through FR-016 stand as written, but their justification is this list, and any
+  future reviewer weighing whether the complexity is warranted should weigh it against these cases
+  rather than against a VPN outage.
+
+  Note for implementation: a powered-off host on the LAN still fails during the connect phase, so
+  connect-phase failover remains necessary. Only the VPN framing is withdrawn, not the mechanism.
+
 ## Owner Decisions Required
 
 These are the fleet owner's to make; the specification is deliberately incomplete without them.
