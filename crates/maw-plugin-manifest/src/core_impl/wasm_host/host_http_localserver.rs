@@ -1,65 +1,91 @@
+/// Redirect hops `http_request` follows on `followRedirects`; each hop
+/// re-runs every gate, so this only bounds a well-behaved chain.
+const MAX_HTTP_REDIRECT_HOPS: u8 = 10;
+
 impl MawWasmHost {
+    /// Every gate a URL must pass (Discord hard-deny, scheme, DNS pin,
+    /// private-IP, `net:` capability). Transport never re-applies these on a
+    /// redirect (#959), so `http_request` re-runs this per hop, not just once.
+    fn validate_http_target(&self, url: &Url) -> Result<(String, SocketAddr, String), HostResult<Value>> {
+        if is_discord_gateway(url) {
+            return Err(HostResult::err(
+                HostErrorCode::CapabilityDenied,
+                "Discord gateway is hard-denied from WASM host functions",
+            ));
+        }
+        let scheme = url.scheme();
+        if !matches!(scheme, "http" | "https") {
+            return Err(HostResult::err(
+                HostErrorCode::CapabilityDenied,
+                "only http/https URLs are supported",
+            ));
+        }
+        let Some(host) = url.host_str().map(str::to_owned) else {
+            return Err(HostResult::err(HostErrorCode::InvalidArgs, "url host is required"));
+        };
+        let pinned_addr = self.resolve_http_pinned_addr(url, &host)?;
+        if private_ip(pinned_addr.ip()) && !self.caps.contains("net", "private", Some(&host)) {
+            return Err(HostResult::err(
+                HostErrorCode::CapabilityDenied,
+                "private network access denied",
+            ));
+        }
+        let cap = self.caps.require("net", scheme, Some(&host))?;
+        Ok((host, pinned_addr, cap))
+    }
+
     fn http_request(&self, input: &str) -> HostResult<Value> {
         let start = Instant::now();
         let args = match parse_args::<HttpArgs>(input) {
             Ok(args) => args,
             Err(err) => return err,
         };
-        let url = match Url::parse(&args.url) {
-            Ok(url) => url,
-            Err(error) => {
-                return HostResult::err(HostErrorCode::InvalidArgs, format!("invalid url: {error}"))
-            }
-        };
-        if is_discord_gateway(&url) {
-            return HostResult::err(
-                HostErrorCode::CapabilityDenied,
-                "Discord gateway is hard-denied from WASM host functions",
-            );
-        }
-        let scheme = url.scheme();
-        if !matches!(scheme, "http" | "https") {
-            return HostResult::err(
-                HostErrorCode::CapabilityDenied,
-                "only http/https URLs are supported",
-            );
-        }
-        let host = match url.host_str() {
-            Some(host) => host.to_owned(),
-            None => return HostResult::err(HostErrorCode::InvalidArgs, "url host is required"),
-        };
-        let pinned_addr = match self.resolve_http_pinned_addr(&url, &host) {
-            Ok(addr) => addr,
-            Err(err) => return err,
-        };
-        if private_ip(pinned_addr.ip()) && !self.caps.contains("net", "private", Some(&host)) {
-            return HostResult::err(
-                HostErrorCode::CapabilityDenied,
-                "private network access denied",
-            );
-        }
-        let cap = match self.caps.require("net", scheme, Some(&host)) {
-            Ok(cap) => cap,
-            Err(err) => return err,
-        };
+        let follow = args.follow_redirects.unwrap_or(false);
         let headers = redact_headers(args.headers.unwrap_or_default());
-        let request = TransportHttpRequest {
-            method: args.method,
-            url: args.url,
-            headers,
-            body: args.body,
-            timeout_ms: Some(
-                args.timeout_ms
-                    .unwrap_or(self.http_timeout_ms)
-                    .min(MAX_HTTP_TIMEOUT_MS),
-            ),
-            follow_redirects: args.follow_redirects.unwrap_or(false),
-            pinned_addr: Some(pinned_addr),
-            max_response_bytes: None,
-        };
-        let result = self.run_http_transport(&request);
-        self.audit("maw.http.request", &cap, &host, status_of(&result), start);
-        result
+        let timeout_ms = Some(
+            args.timeout_ms
+                .unwrap_or(self.http_timeout_ms)
+                .min(MAX_HTTP_TIMEOUT_MS),
+        );
+        let mut url_str = args.url;
+        let mut hops = 0_u8;
+        loop {
+            let url = match Url::parse(&url_str) {
+                Ok(url) => url,
+                Err(error) => {
+                    return HostResult::err(
+                        HostErrorCode::InvalidArgs,
+                        format!("invalid url: {error}"),
+                    )
+                }
+            };
+            let (host, pinned_addr, cap) = match self.validate_http_target(&url) {
+                Ok(target) => target,
+                Err(err) => return err,
+            };
+            let request = TransportHttpRequest {
+                method: args.method.clone(),
+                url: url_str.clone(),
+                headers: headers.clone(),
+                body: args.body.clone(),
+                timeout_ms,
+                follow_redirects: false,
+                pinned_addr: Some(pinned_addr),
+                max_response_bytes: None,
+            };
+            let result = self.run_http_transport(&request);
+            if follow && hops < MAX_HTTP_REDIRECT_HOPS {
+                if let Some(location) = redirect_location(&result) {
+                    if let Ok(next) = url.join(&location) {
+                        hops += 1;
+                        url_str = next.to_string();
+                        continue;
+                    }
+                }
+            }
+            self.audit("maw.http.request", &cap, &host, status_of(&result), start);
+            return result;
+        }
     }
 
     fn net_fetch(&self, input: &str) -> HostResult<Value> {
@@ -401,6 +427,23 @@ impl MawWasmHost {
         );
         result
     }
+}
+
+/// The `location` target of a 3xx `result`, re-validated per hop by
+/// `validate_http_target` before `http_request` follows it (#959).
+fn redirect_location(result: &HostResult<Value>) -> Option<String> {
+    let HostResult::Ok { value, .. } = result else {
+        return None;
+    };
+    let status = value.get("status")?.as_u64()?;
+    if !(300..400).contains(&status) {
+        return None;
+    }
+    value
+        .get("headers")?
+        .get("location")?
+        .as_str()
+        .map(str::to_owned)
 }
 
 fn resolve_pass_secret(path: &str) -> Option<String> {
