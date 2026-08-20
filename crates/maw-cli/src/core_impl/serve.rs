@@ -91,8 +91,19 @@ impl ServeApiTokenAuth {
     #[cfg(test)]
     fn open() -> Self { Self { token: None, loopback_exempt: true, forced_open: true } }
 
+    /// The banner names what is ENFORCED, not just how the token resolved:
+    /// without a configured token there is nothing to mint or validate a
+    /// one-use ws-ticket against, so every Origin-bearing browser client is
+    /// refused in BOTH open modes. Reporting that as a bare `open` cost a
+    /// full debugging session (#955).
     fn mode_label(&self) -> &'static str {
-        if self.forced_open { "open (configured)" } else if self.token.is_some() { "token" } else { "open" }
+        if self.forced_open {
+            "open (configured) (browser clients refused; the ws-ticket flow needs MAW_SERVE_TOKEN, which overrides this open mode)"
+        } else if self.token.is_some() {
+            "token (browser clients mint a one-use ws-ticket per path)"
+        } else {
+            "open (no token \u{2014} browser clients refused; set MAW_SERVE_TOKEN to enable the ws-ticket flow)"
+        }
     }
 
     fn token_matches(&self, headers: &HeaderMap) -> bool {
@@ -740,6 +751,14 @@ fn serve_token_unauthorized() -> Response {
     (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized", "auth": "maw-serve-token"}))).into_response()
 }
 
+/// Same `{"error", …}` envelope the origin gate already answers with, so a
+/// ws-ticket 400 says WHICH of the five client-side contract violations it
+/// was instead of an empty body (#955). `reason` is a fixed slug from the
+/// list below — never request-derived text, so nothing can leak.
+fn serve_ws_ticket_bad_request(reason: &'static str) -> Response {
+    (StatusCode::BAD_REQUEST, Json(json!({"error": "bad-request", "reason": reason}))).into_response()
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WsTicketRequest {
@@ -768,20 +787,27 @@ async fn api_ws_ticket(
     let query_present = req.uri().query().is_some();
     let json_content_type = req.headers().get(CONTENT_TYPE).and_then(|value| value.to_str().ok())
         .is_some_and(|value| value == "application/json" || value.starts_with("application/json;"));
-    if query_present || !json_content_type {
-        return StatusCode::BAD_REQUEST.into_response();
+    // Order is reporting-only: each guard rejects exactly the requests it
+    // rejected before, and a request that trips several still gets one 400.
+    if !json_content_type {
+        return serve_ws_ticket_bad_request("content-type-not-json");
+    }
+    if query_present {
+        return serve_ws_ticket_bad_request("query-string-not-allowed");
     }
     let Ok(body) = axum::body::to_bytes(req.into_body(), 128).await else {
-        return StatusCode::BAD_REQUEST.into_response();
+        return serve_ws_ticket_bad_request("body-too-large");
     };
     let Ok(payload) = serde_json::from_slice::<WsTicketRequest>(&body) else {
-        return StatusCode::BAD_REQUEST.into_response();
+        return serve_ws_ticket_bad_request("body-not-a-ws-ticket-request");
     };
-    let (Some(origin), Ok(path)) = (
-        origin.as_deref(),
-        maw_auth::WsTicketPath::try_from(payload.path.as_str()),
-    ) else {
-        return StatusCode::BAD_REQUEST.into_response();
+    let Ok(path) = maw_auth::WsTicketPath::try_from(payload.path.as_str()) else {
+        return serve_ws_ticket_bad_request("path-not-allowed");
+    };
+    // Unreachable through the gate, which only forwards Origin-bearing
+    // requests; kept so a non-UTF-8 Origin header still answers a reason.
+    let Some(origin) = origin.as_deref() else {
+        return serve_ws_ticket_bad_request("origin-missing");
     };
     let Ok(ticket) = store.issue(origin, path, &mut OsRng, Instant::now) else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();

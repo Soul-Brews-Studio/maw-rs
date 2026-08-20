@@ -19,6 +19,16 @@ offer `["maw.ws.v1", ticket]`; consumption precedes handler work and echoes only
 An accepted attempt can burn on later extractor/engine failure; mint a fresh ticket before retrying.
 Native no-Origin token and loopback behavior is unchanged.
 
+The ticket is **one-use and per-path**: `/ws` and `/ws/pty` each need their own, and
+every reconnect needs a fresh one. Minting once during authentication and caching the
+value works exactly once. A rejected mint answers `400` with
+`{"error":"bad-request","reason":...}` naming which contract it broke —
+`content-type-not-json`, `query-string-not-allowed`, `body-too-large` (128-byte cap),
+`body-not-a-ws-ticket-request` (`{"path":...}` only, unknown fields denied), or
+`path-not-allowed`. The startup banner reports the enforced state, not just the
+resolved token: both open modes print that browser clients are refused, because with
+no token there is nothing to mint or validate a ticket against (#955).
+
 The God UI connector's `GET /api/config` response is a daemon-start snapshot
 containing exactly `node`, `agents`, and named-peer `{name,url}` rows. It is a
 typed, secret-free projection rather than a config export: query strings are
