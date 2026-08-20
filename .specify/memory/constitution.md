@@ -76,6 +76,38 @@ follow-up commits instead.
 - **Fixtures are evidence.** Update or add them when behavior changes; never delete a fixture to
   make a test pass.
 
+### Client-First Ordering For Cross-Surface Breaks
+
+When a change tightens what one surface accepts from another — server tightening on a client,
+host on a plugin, daemon on a CLI — **ship the permissive half first.**
+
+The order is:
+
+1. Land the client change that sends the new thing. An older server ignores an unknown field,
+   header, or subprotocol, so this is a no-op against every deployed version.
+2. Verify the new client still works against the old server. Measure it; do not assume it.
+3. Only then tighten the server to require it.
+
+Reversing this breaks every client between the two releases, and the breakage is invisible in CI
+because CI tests one version of both halves together.
+
+**Evidence this rule was paid for.** #932/#937 hardened browser WebSocket upgrades to require a
+one-use ticket in the subprotocol, and shipped ahead of the only client that could send one. Every
+browser client broke, and the failure surfaced as an operator debugging session against a banner
+that read `auth: open`. Measured afterwards on the actual binaries:
+
+```
+old server (9c1bfb9e) + old client (no subprotocol)        -> 101
+old server (9c1bfb9e) + new client (sends maw.ws.v1,...)   -> 101   <- compatible, free
+new server (96fd621d) + old client                         -> 401   <- the break
+```
+
+The compatible ordering was available at zero cost and was simply not considered.
+
+**Corollary**: a deprecation window is not always the answer, but the *ordering* always is. Where a
+window is also needed — offline peers that cannot upgrade in lockstep — name the removal release in
+the same PR that opens the window.
+
 ### Dispatch Contract
 
 Work handed to another agent MUST carry:
@@ -107,4 +139,4 @@ Where this document and `CLAUDE.md` disagree, `CLAUDE.md` wins for repo mechanic
 wins for specification discipline. Neither overrides an explicit instruction from the repository
 owner.
 
-**Version**: 1.0.0 | **Ratified**: 2026-08-20 | **Last Amended**: 2026-08-20
+**Version**: 1.1.0 | **Ratified**: 2026-08-20 | **Last Amended**: 2026-08-20
