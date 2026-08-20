@@ -337,6 +337,42 @@ Four root decisions settled by the fleet owner. These are no longer assumptions.
   change that authenticates the currently unauthenticated oracle half (E2). Cross-fleet federation
   itself remains P4 and unbuilt.
 
+### Session 2026-08-20, round 2
+
+- **C-005 — Two signatures per roster entry.** The fleet key signs *membership* ("this node belongs
+  to this fleet"); each node signs *its own addresses*. Consequence: revocation is controlled solely
+  by the fleet key, and a node that changes network re-signs its own addresses without the machine
+  holding the fleet key being present. Rejected: a single fleet key over the whole document (every
+  address change would require the fleet key), and pure self-signed entries (authentic but
+  unauthorized — nothing would assert membership, so kick would remain impossible).
+
+- **C-006 — Dual-accept migration, with the removal release named in the same PR that adds it.**
+  Nodes accept both the existing HMAC path and the new signature during a stated window; each node
+  upgrades on its own schedule. A flag day was rejected as physically impossible on this fleet —
+  `mba` is unreachable and `black` was unreachable-by-pin for 43 hours. Naming the removal release
+  up front is a required part of this decision, not a nicety: it is what prevents a temporary
+  window from silently becoming permanent, which would leave a downgrade path open forever.
+
+- **C-007 — Roster freshness: fresh 15 minutes, usable 30 days, refuse beyond.** A revoked node
+  loses access within 15 minutes. The fleet keeps operating for 30 days with the roster source
+  unreachable, logging loudly while stale. 30 days rather than 7 because this fleet demonstrably
+  tolerated a machine being dark for 43 hours without anyone noticing, so a quiet week is plausible,
+  and a fleet that hard-stops because a sync did not run is a worse failure than the one being
+  prevented. If instant revocation is ever required, it needs a separate mechanism and must be named
+  as such rather than implied by a TTL.
+
+- **C-008 — The hub plugin runs as an `engine.serve` process, not in the wasm-host sandbox.**
+  Chosen deliberately with the trade understood. An `engine.serve` plugin is an ordinary OS process
+  with full filesystem and network access and no capability enforcement, so it can read `peer-key`
+  directly and sign as its node.
+
+  **Therefore C-003 is a boundary against mistakes, not against malice.** Core still performs
+  verification and the plugin still only proposes, which prevents an entire class of bug — but it is
+  a convention that a compromised plugin could bypass, not an enforced sandbox. This is consistent
+  with C-002, whose threat model covers a lost or stolen machine and a LAN attacker, and explicitly
+  does **not** cover a hostile plugin: plugins here are written by the fleet owner, not installed
+  from third parties. If that ever changes, this decision must be revisited before it does.
+
 ## Owner Decisions Required
 
 These are the fleet owner's to make; the specification is deliberately incomplete without them.
