@@ -299,7 +299,10 @@ plugin installed, missing, hash-invalid, SDK-incompatible, and under-capable.
   Unmatched/ambiguous intent receives zero typed host grants; artifact-wide grants alone never
   authorize an operation. An immutable pre-#963 `cli.command` artifact MAY retain its static legacy
   semantics only while a host-recorded package path/source/hash row matches and it receives no new
-  typed capability; eligibility cannot be copied or drifted.
+  typed capability; eligibility cannot be copied or drifted. For every cross-surface ABI, SDK, or
+  intent-capability change, delivery MUST be client-first: land an additive client/guest-compatible
+  contract and prove it against the current host before enabling or tightening the host side; no
+  host release may require a client artifact that has not already been accepted and pinned.
 - **FR-024**: Help, completions, plugin listing, and doctor output MUST agree on native versus plugin
   ownership.
 - **FR-025**: A native dispatcher and an external plugin MUST NOT both be reachable owners of the

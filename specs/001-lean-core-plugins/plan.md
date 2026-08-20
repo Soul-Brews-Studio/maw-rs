@@ -145,7 +145,10 @@ leaf only when both repos genuinely consume it. No third runtime repository is i
 3. Freeze the existing invoke/context/result route ABI, bootstrap the capability-free Rust guest SDK
    and native/wasm CI, pin the build environment and byte-reproducibility check, make external
    registry generation route-aware, and restore committed-artifact host invocation. This is
-   sufficient for Bring and does not imply any typed host function.
+   sufficient for Bring and does not imply any typed host function. For every later cross-surface
+   ABI or capability evolution, use client-first ordering: ship additive guest/SDK compatibility,
+   run it against the current host, then enable the host addition or tightening only after the
+   compatible client artifact is accepted and pinned.
 4. Add generic injected lifecycle/pane-submit operations: DTO/traits in maw-plugin-manifest and the
    production adapter in maw-cli, never a reverse crate dependency or self-spawn escape hatch.
    Lifecycle consumes host-issued workspace, engine, and member refs rather than guest strings.
@@ -162,8 +165,9 @@ leaf only when both repos genuinely consume it. No third runtime repository is i
    maintenance/health, and opaque occupancy before team
    preflight or Codex source depends on them.
 9. Only after every typed host surface lands, publish the complete maw-rs ABI fixture and extend the
-   already-landed Rust SDK/CI in bounded per-surface slices; typed guests cannot consume a surface
-   before this conformance row.
+   already-landed Rust SDK/CI in bounded per-surface slices; first prove each additive binding against
+   the preceding host fixture, then enable its host-side requirement. Typed guests cannot consume a
+   surface before this conformance row.
 10. Retain the forbidden-capability scan and committed-artifact invocation parity coverage that
     replace repo-split test debt (#546).
 
