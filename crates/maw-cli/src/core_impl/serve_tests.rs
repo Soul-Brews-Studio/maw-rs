@@ -916,6 +916,109 @@ mod serve_tests {
         assert!(axum::body::to_bytes(unavailable.into_body(), 1).await.unwrap().is_empty());
     }
 
+    fn ws_ticket_post(body: Body, content_type: Option<&'static str>) -> Request<Body> {
+        let mut builder = Request::builder()
+            .method(Method::POST)
+            .uri("/api/auth/ws-ticket")
+            .header("origin", "https://god.buildwithoracle.com")
+            .header("x-maw-token", "secret-token");
+        if let Some(content_type) = content_type {
+            builder = builder.header(CONTENT_TYPE, content_type);
+        }
+        let mut request = builder.body(body).expect("request");
+        request.extensions_mut().insert(ConnectInfo(NON_LOOPBACK_TEST_PEER));
+        request
+    }
+
+    fn ws_ticket_test_auth() -> ServeApiTokenAuth {
+        ServeApiTokenAuth { token: Some("secret-token".to_owned()), loopback_exempt: true, forced_open: false }
+    }
+
+    #[test]
+    fn serve_auth_banner_states_the_enforced_browser_outcome_in_every_mode() {
+        let no_token = ServeApiTokenAuth { token: None, loopback_exempt: true, forced_open: false };
+        let forced_open = ServeApiTokenAuth::open();
+        let token = ws_ticket_test_auth();
+        assert_eq!(
+            no_token.mode_label(),
+            "open (no token \u{2014} browser clients refused; set MAW_SERVE_TOKEN to enable the ws-ticket flow)"
+        );
+        assert_eq!(
+            forced_open.mode_label(),
+            "open (configured) (browser clients refused; the ws-ticket flow needs MAW_SERVE_TOKEN, which overrides this open mode)"
+        );
+        assert_eq!(token.mode_label(), "token (browser clients mint a one-use ws-ticket per path)");
+        assert!(forced_open.mode_label().starts_with("open (configured)"), "the (configured) suffix must survive");
+        for label in [no_token.mode_label(), forced_open.mode_label(), token.mode_label()] {
+            assert!(label.contains("browser clients"), "banner must name the enforced browser outcome: {label}");
+            assert!(!label.contains("secret-token"), "banner must not echo the token: {label}");
+        }
+    }
+
+    #[tokio::test]
+    async fn serve_ws_ticket_bad_requests_name_a_distinct_machine_readable_reason() {
+        const GOD: &str = "https://god.buildwithoracle.com";
+        let credential = Some(("x-maw-token", "secret-token"));
+        let app = serve_test_app_with_api_auth(ws_ticket_test_auth());
+        let cases: Vec<(&str, Request<Body>)> = vec![
+            ("content-type-not-json", ws_ticket_post(Body::from(r#"{"path":"/ws"}"#), None)),
+            ("content-type-not-json", ws_ticket_post(Body::from(r#"{"path":"/ws"}"#), Some("text/plain"))),
+            ("query-string-not-allowed", ws_ticket_request("/api/auth/ws-ticket?x=1", r#"{"path":"/ws"}"#, Some(GOD), credential)),
+            ("body-too-large", ws_ticket_post(Body::from(vec![b'x'; 129]), Some("application/json"))),
+            ("body-not-a-ws-ticket-request", ws_ticket_request("/api/auth/ws-ticket", r#"{"path":"/ws","extra":1}"#, Some(GOD), credential)),
+            ("body-not-a-ws-ticket-request", ws_ticket_request("/api/auth/ws-ticket", "{}", Some(GOD), credential)),
+            ("body-not-a-ws-ticket-request", ws_ticket_request("/api/auth/ws-ticket", "{", Some(GOD), credential)),
+            ("path-not-allowed", ws_ticket_request("/api/auth/ws-ticket", r#"{"path":"/WS"}"#, Some(GOD), credential)),
+            ("path-not-allowed", ws_ticket_request("/api/auth/ws-ticket", r#"{"path":"/ws/nope"}"#, Some(GOD), credential)),
+        ];
+        let mut reasons = Vec::new();
+        for (reason, request) in cases {
+            let response = app.clone().oneshot(request).await.expect("response");
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{reason}");
+            let payload = response_json(response).await;
+            assert_eq!(payload, json!({"error": "bad-request", "reason": reason}));
+            reasons.push(reason);
+        }
+        reasons.sort_unstable();
+        reasons.dedup();
+        assert_eq!(reasons.len(), 5, "each documented mistake needs its own reason: {reasons:?}");
+    }
+
+    #[tokio::test]
+    async fn serve_ws_ticket_reason_bodies_keep_the_accept_reject_set_unchanged() {
+        const GOD: &str = "https://god.buildwithoracle.com";
+        const URI: &str = "/api/auth/ws-ticket";
+        let credential = Some(("x-maw-token", "secret-token"));
+        let app = serve_test_app_with_api_auth(ws_ticket_test_auth());
+        let cases: Vec<(&str, StatusCode, Request<Body>)> = vec![
+            ("mint /ws", StatusCode::OK, ws_ticket_request(URI, r#"{"path":"/ws"}"#, Some(GOD), credential)),
+            ("mint /ws/pty", StatusCode::OK, ws_ticket_request(URI, r#"{"path":"/ws/pty"}"#, Some(GOD), credential)),
+            ("mint /ws/tmux", StatusCode::OK, ws_ticket_request(URI, r#"{"path":"/ws/tmux"}"#, Some(GOD), credential)),
+            ("mint with charset", StatusCode::OK, ws_ticket_post(Body::from(r#"{"path":"/ws"}"#), Some("application/json; charset=utf-8"))),
+            ("no credential", StatusCode::UNAUTHORIZED, ws_ticket_request(URI, r#"{"path":"/ws"}"#, Some(GOD), None)),
+            ("wrong credential", StatusCode::UNAUTHORIZED, ws_ticket_request(URI, r#"{"path":"/ws"}"#, Some(GOD), Some(("authorization", "Bearer wrong")))),
+            ("no origin", StatusCode::UNAUTHORIZED, ws_ticket_request(URI, r#"{"path":"/ws"}"#, None, credential)),
+            ("disallowed origin", StatusCode::FORBIDDEN, ws_ticket_request(URI, r#"{"path":"/ws"}"#, Some("https://evil.example"), credential)),
+            ("query string", StatusCode::BAD_REQUEST, ws_ticket_request("/api/auth/ws-ticket?x=1", r#"{"path":"/ws"}"#, Some(GOD), credential)),
+            ("unknown field", StatusCode::BAD_REQUEST, ws_ticket_request(URI, r#"{"path":"/ws","extra":1}"#, Some(GOD), credential)),
+            ("missing field", StatusCode::BAD_REQUEST, ws_ticket_request(URI, "{}", Some(GOD), credential)),
+            ("malformed json", StatusCode::BAD_REQUEST, ws_ticket_request(URI, "{", Some(GOD), credential)),
+            ("uppercased path", StatusCode::BAD_REQUEST, ws_ticket_request(URI, r#"{"path":"/WS"}"#, Some(GOD), credential)),
+            ("unlisted path", StatusCode::BAD_REQUEST, ws_ticket_request(URI, r#"{"path":"/ws/nope"}"#, Some(GOD), credential)),
+            ("no content type", StatusCode::BAD_REQUEST, ws_ticket_post(Body::from(r#"{"path":"/ws"}"#), None)),
+            ("wrong content type", StatusCode::BAD_REQUEST, ws_ticket_post(Body::from(r#"{"path":"/ws"}"#), Some("text/plain"))),
+            ("oversized body", StatusCode::BAD_REQUEST, ws_ticket_post(Body::from(vec![b'x'; 129]), Some("application/json"))),
+        ];
+        for (name, expected, request) in cases {
+            let response = app.clone().oneshot(request).await.expect("response");
+            let status = response.status();
+            let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024).await.expect("body");
+            let text = String::from_utf8_lossy(&bytes).into_owned();
+            assert_eq!(status, expected, "{name}: {text}");
+            assert!(!text.contains("secret-token"), "{name} leaked the token: {text}");
+        }
+    }
+
     #[tokio::test]
     async fn serve_wake_surfaces_receiver_failure_not_false_success() {
         let wake = Arc::new(FakeServeWake::default());
