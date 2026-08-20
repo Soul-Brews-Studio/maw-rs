@@ -277,22 +277,37 @@ fn run_send_enter_command(argv: &[String]) -> CliOutput {
         Ok(target) => target,
         Err(message) => return command_target_error("send-enter", &message),
     };
-    for _ in 0..count {
-        if let Err(error) = client.send_enter(&resolved) {
+    send_enter_resolved(&resolved, count, |target| {
+        client.send_enter(target).map_err(|error| error.to_string())
+    })
+}
+
+fn send_enter_resolved(
+    resolved: &str,
+    count: usize,
+    mut send_enter: impl FnMut(&str) -> Result<(), String>,
+) -> CliOutput {
+    for accepted in 0..count {
+        if let Err(error) = send_enter(resolved) {
+            let request = accepted + 1;
             return command_target_error(
                 "send-enter",
-                &format!("tmux send-keys failed: {error}"),
+                &format!(
+                    "tmux send-keys returned an error on request {request} of {count} after tmux accepted {accepted} of {count} requested Enter keypresses; failed request outcome and pane state are unconfirmed, inspect pane before retrying: {error}"
+                ),
             );
         }
     }
-    let plural = if count == 1 {
-        "Enter".to_owned()
+    let keys = if count == 1 {
+        "1 Enter key".to_owned()
     } else {
-        format!("{count} Enters")
+        format!("{count} Enter keys")
     };
     CliOutput {
         code: 0,
-        stdout: format!("\x1b[32mdelivered\x1b[0m → {resolved}: {plural}\n"),
+        stdout: format!(
+            "\x1b[32mtmux accepted\x1b[0m → {resolved}: {keys} (pane state unconfirmed)\n"
+        ),
         stderr: String::new(),
     }
 }
@@ -498,6 +513,49 @@ mod tmux_attach_send_key_tests {
 
     fn strings(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    #[test]
+    fn send_enter_reports_raw_success_without_claiming_delivery() {
+        let mut calls = Vec::new();
+        let output = send_enter_resolved("%42", 3, |target| {
+            calls.push(target.to_owned());
+            Ok(())
+        });
+        assert_eq!(calls, ["%42", "%42", "%42"]);
+        assert_eq!(
+            output.stdout,
+            "\x1b[32mtmux accepted\x1b[0m → %42: 3 Enter keys (pane state unconfirmed)\n"
+        );
+        assert_eq!(output.code, 0);
+        assert!(output.stderr.is_empty());
+        assert!(!output.stdout.contains("delivered"));
+
+        let single = send_enter_resolved("%7", 1, |_| Ok(()));
+        assert_eq!(
+            single.stdout,
+            "\x1b[32mtmux accepted\x1b[0m → %7: 1 Enter key (pane state unconfirmed)\n"
+        );
+    }
+
+    #[test]
+    fn send_enter_stops_and_reports_prior_acceptance_on_second_failure() {
+        let mut calls = Vec::new();
+        let output = send_enter_resolved("%42", 3, |target| {
+            calls.push(target.to_owned());
+            if calls.len() == 2 {
+                Err("injected failure".to_owned())
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!(calls, ["%42", "%42"]);
+        assert_eq!(output.code, 1);
+        assert!(output.stdout.is_empty());
+        assert_eq!(
+            output.stderr,
+            "send-enter: tmux send-keys returned an error on request 2 of 3 after tmux accepted 1 of 3 requested Enter keypresses; failed request outcome and pane state are unconfirmed, inspect pane before retrying: injected failure\n"
+        );
     }
 
     #[test]
