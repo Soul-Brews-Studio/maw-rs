@@ -201,10 +201,15 @@ ordered attempt list, unit-tested with no I/O. The send path tries in order; tra
 to the next address, an authentication refusal does not (FR-016). Exhaustion reports every address
 and its distinct reason, reusing the REFUSED/TIMEOUT distinction `maw peers probe` already draws.
 
-**Live acceptance case, captured 2026-08-20**: peer `blackbox` is pinned at `192.168.1.185:3467`,
-which refuses. The same host answers on `192.168.1.185:3456` with
-`{"ok":true,"port":3456,"server":"local","source":"maw-rs"}` and identifies as node `black`. A
-running peer reads as dead because one string is stale. This is the regression test.
+**Motivating observation, captured 2026-08-20** (evidence, *not* a test — see C-011): peer
+`blackbox` is pinned at `192.168.1.185:3467`, which refuses, while the same host answers on
+`192.168.1.185:3456` with `{"ok":true,"port":3456,"server":"local","source":"maw-rs"}` and
+identifies as node `black`. A running peer read as dead for 43 hours because one string was stale
+and there was no second address to try.
+
+The regression test reproduces that *shape* locally: two or more addresses for one peer, the first
+refusing, on isolated daemons bound to ephemeral loopback ports on this machine. No test depends on
+another node.
 
 ### Phase 2 — Enrollment (US1) · blocked on owner decision 1
 

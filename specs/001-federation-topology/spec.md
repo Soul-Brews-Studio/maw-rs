@@ -409,6 +409,18 @@ Four root decisions settled by the fleet owner. These are no longer assumptions.
   real but modest, and if they ever stop justifying the proxy-and-process machinery, folding this
   into core is a legitimate simplification rather than a regression.
 
+- **C-011 — All work happens on the `white` machine; no test may depend on another node.** No
+  acceptance criterion in this specification may require a second machine to be reachable, or to be
+  in a particular broken state, in order to pass. Multi-node behaviour is exercised with isolated
+  daemons on ephemeral loopback ports on one host — the technique the 2026-08-20 empirical run
+  already used successfully for three nodes on ports 39001-3.
+
+  This supersedes the earlier live acceptance case in the plan, which proposed reproducing the
+  `blackbox` pin mismatch (pinned `:3467`, actually serving `:3456`). That observation remains valid
+  evidence for *why* the feature is needed and stays recorded as motivation, but it must not be a
+  test: a suite that depends on another machine staying misconfigured is neither reproducible nor
+  self-cleaning.
+
 ## Owner Decisions Required
 
 These are the fleet owner's to make; the specification is deliberately incomplete without them.
