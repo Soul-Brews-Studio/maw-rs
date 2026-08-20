@@ -305,6 +305,38 @@ one addresses a member of the other, and that the number of enrollment operation
 - Existing message and peek semantics are unchanged; this specification adds enrollment,
   reachability, membership, and identity, and changes no user-facing verb behaviour.
 
+## Clarifications
+
+### Session 2026-08-20
+
+Four root decisions settled by the fleet owner. These are no longer assumptions.
+
+- **C-001 — The roster is the primitive; transport is pluggable.** The signed artifact
+  (`fleet -> node -> pubkey -> addresses`, with a validity window) is the unit of trust. How it
+  reaches a node — git, rsync, vault sync, or HTTP from a node in hub mode — is a separate and
+  swappable concern. Consequence: the hub is optional rather than load-bearing, "hub down does not
+  mean fleet silent" holds by construction, and phase 2 can ship with no running service. The
+  `maw fleet join <code>` experience is preserved regardless of transport.
+
+- **C-002 — Threat model: design for a lost or stolen machine and for an attacker on the LAN;
+  accept local-process trust explicitly.** A member is trusted to be honest but may be lost, stolen,
+  or decommissioned. An attacker on the LAN is in scope: today `curl /api/identity` on any node
+  returns that node's signing secret, demonstrated across machines on 2026-08-20. Loopback skipping
+  signature verification is **accepted as a written decision**, not an oversight: the security
+  boundary is "who can run processes on this host". Host-networked containers fall inside that
+  boundary and this must be documented where operators will see it.
+
+- **C-003 — Core verifies; a plugin may only propose.** Signature verification, the pin store, and
+  key material stay in core. A plugin can propose roster entries; core validates before pinning.
+  Installing a plugin therefore never grants authority over identity. This is what makes the
+  sandbox argument honest — the plugin is safer because it holds no authority, not merely because
+  it holds no key bytes.
+
+- **C-004 — Reserve fleet namespacing now; implement fleet-to-fleet later.** Addresses carry
+  `agent@node@fleet` from the first change that touches the identity field, landing in the same
+  change that authenticates the currently unauthenticated oracle half (E2). Cross-fleet federation
+  itself remains P4 and unbuilt.
+
 ## Owner Decisions Required
 
 These are the fleet owner's to make; the specification is deliberately incomplete without them.
