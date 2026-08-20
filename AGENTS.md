@@ -180,3 +180,8 @@ maw hey 33-maw-rs:1 "done #N PR <url> gates green: <exact commands>; root cause:
 
 Use the current session lead if it differs. Include the PR link, exact gate evidence, and
 root cause for bug fixes.
+
+<!-- SPECKIT START -->
+For additional context about technologies to be used, project structure,
+shell commands, and other important information, read the current plan
+<!-- SPECKIT END -->
