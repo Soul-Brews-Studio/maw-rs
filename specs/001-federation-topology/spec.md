@@ -373,6 +373,29 @@ Four root decisions settled by the fleet owner. These are no longer assumptions.
   does **not** cover a hostile plugin: plugins here are written by the fleet owner, not installed
   from third parties. If that ever changes, this decision must be revisited before it does.
 
+### Session 2026-08-20, round 3
+
+- **C-009 — Trust anchor is TOFU for now: working fleet first, stronger anchor later.** A joining
+  node accepts the fleet public key it is served on first contact and pins it; every later fetch
+  must match the pin. This reuses the mechanism `maw peers add` already implements and requires no
+  change to the existing 6-hex-character pair code.
+
+  **Known and accepted gap**: TOFU cannot detect an attacker who intercepts the *first* contact —
+  the node would pin the attacker's key and trust it confidently thereafter. C-002 places a LAN
+  attacker in scope, so this is a deliberate deferral by the fleet owner, recorded as a choice
+  rather than an oversight.
+
+  **Upgrade path is additive and must be preserved.** A later change can add a fleet-key fingerprint
+  prefix to the join code, so that presenting the code both authorizes entry and proves which key is
+  correct. That requires widening the code beyond its current 24 bits of entropy, but it does not
+  invalidate keys already pinned under TOFU. No decision taken now may foreclose it: in particular
+  the join-code format must remain versioned or length-flexible.
+
+  Note for whoever implements this: maw's TOFU is currently weaker than SSH's, because SSH pins a
+  *public* key — harmless if disclosed — while maw pins the peer's *secret*. C-006's migration is
+  what turns maw's TOFU into the SSH-equivalent kind. Until then, pinning and disclosure are the
+  same event.
+
 ## Owner Decisions Required
 
 These are the fleet owner's to make; the specification is deliberately incomplete without them.
