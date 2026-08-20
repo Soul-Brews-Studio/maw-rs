@@ -124,6 +124,46 @@ not decorative:
 | multi-address selection (phase 1) | **core**, `maw-peer` | pure, sits on the send path, and is unblocked by every open decision |
 | join-code primitive | **core**, `maw-auth::PairCodeStore` | already exists |
 
+### Verified plugin runtime facts (2026-08-20, after two wrong readings)
+
+Two runtimes exist and they are not comparable:
+
+| | default MVP runtime | `--features wasm-host` |
+|---|---|---|
+| file | `wasm_mvp_runtime.rs` | `wasm_host/` (21 files, extism) |
+| host imports | **rejected outright** — `if module.has_imports { error("unresolved imports") }` | full host-function surface |
+| usable for a hub | no — cannot open a socket or persist | yes |
+
+The `wasm-host` surface includes `host_peer.rs` (**federation peer calls**), `host_http_localserver.rs`,
+`host_fs_read_write.rs`, `host_fs_mkdir_remove_list.rs`, `host_tmux.rs`, `host_config_consent.rs`,
+`host_exec_paths_config.rs`, `host_ssh_paths.rs`, `host_roots_state.rs`, `list_redact_network.rs`.
+
+**Secrets are host-resolved, confirmed in code** (`host_peer.rs:7-11,75-79`):
+
+```rust
+let key = self.secret_ref(args.peer_key_ref.as_deref());
+let federation_token = self.secret_ref(args.federation_token_ref.as_deref());
+if !self.caps.contains("net", url.scheme(), Some(host)) { /* refused */ }
+let client = ReqwestHttpTransportIo::new(self.http_timeout_ms);
+```
+
+The guest passes a **reference**; the host resolves the secret, enforces the net capability, and makes
+the call itself. The guest never receives key bytes. A federation-aware host function therefore
+already exists.
+
+`maw-cli` declares `default = []` with `wasm-host = ["maw-plugin-manifest/wasm-host"]`, so the feature
+is opt-in at build time — but the installed binary carries **4015 extism symbols**, meaning release
+builds enable it. The capability is live on this machine today, not aspirational.
+
+Correction of record: an earlier revision of this plan asserted host-injected secrets from issue #244
+without verification. A second reading of the parser and the MVP runtime wrongly concluded the
+mechanism was inert. Only the third reading, above, was measured. The original conclusion survives;
+the reasoning that reached it did not.
+
+Distribution is the open constraint: `maw plugin install <dir> --root R` installs from a **local
+directory**. There is no URL or registry install, so a node needs the plugin placed on it before it
+can join anything — which is why core must retain `maw peers add` as bootstrap.
+
 ### Why the plugin route is safer here, not merely cheaper
 
 The usual instinct — keep security in core, not in loadable artifacts — is inverted by this
