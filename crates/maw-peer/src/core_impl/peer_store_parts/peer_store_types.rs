@@ -57,6 +57,8 @@ fn probe_failure(error: ProbeLastError) -> ProbePeerResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PeerRecord {
     pub url: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub addresses: Vec<String>,
     #[serde(default)]
     pub node: Option<String>,
     #[serde(rename = "addedAt")]
@@ -81,6 +83,34 @@ pub struct PeerRecord {
     /// peer (`POST /api/probe`). `None` = not checked / unreachable.
     #[serde(default, rename = "authOk")]
     pub auth_ok: Option<bool>,
+}
+
+/// Order configured peer addresses without I/O. Probe health describes the
+/// first address: a newer failure demotes it behind the stable alternatives.
+#[must_use]
+pub fn ordered_peer_addresses(
+    addresses: &[String],
+    last_seen: Option<&str>,
+    last_error: Option<&ProbeLastError>,
+) -> Vec<String> {
+    let mut ordered = Vec::new();
+    for address in addresses.iter().filter(|address| !address.trim().is_empty()) {
+        if !ordered.contains(address) {
+            ordered.push(address.clone());
+        }
+    }
+    let primary_failed = last_error.is_some_and(|error| {
+        last_seen.is_none_or(|seen| {
+            match (parse_timestamp_ms(&error.at), parse_timestamp_ms(seen)) {
+                (Some(failed), Some(seen)) => failed >= seen,
+                _ => true,
+            }
+        })
+    });
+    if primary_failed && ordered.len() > 1 {
+        ordered.rotate_left(1);
+    }
+    ordered
 }
 
 /// Peer store file shape, ported from maw-js peers `store.ts` schema v1.
@@ -261,4 +291,3 @@ mod parse_remote_identity_tests {
         assert_eq!(parsed.identity.expect("identity").oracle, "");
     }
 }
-

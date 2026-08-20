@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 fn peer(url: &str) -> PeerRecord {
     PeerRecord {
         url: url.to_owned(),
+        addresses: Vec::new(),
         node: None,
         added_at: now(),
         last_seen: None,

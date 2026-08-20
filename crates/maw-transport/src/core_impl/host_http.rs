@@ -45,7 +45,7 @@ impl ReqwestHttpTransportIo {
                 .build()
                 .map_err(|error| format!("http client build failed: {error}"))?
         } else {
-            self.client.clone()
+            reqwest::Client::builder().build().map_err(|error| format!("http client build failed: {error}"))?
         };
         let mut builder = client
             .request(method, &request.url)

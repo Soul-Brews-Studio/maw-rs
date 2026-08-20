@@ -31,6 +31,7 @@ fn store_from<const N: usize>(peers: [(&str, &str, String, Option<String>); N]) 
                 alias.to_owned(),
                 PeerRecord {
                     url: url.to_owned(),
+                    addresses: Vec::new(),
                     node: None,
                     added_at,
                     last_seen,

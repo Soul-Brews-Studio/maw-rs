@@ -528,6 +528,7 @@ fn pair_write_peer_to_env(env: &maw_peer::PeerStoreEnv, node: &str, url: &str, c
     maw_peer::mutate_peer_store(env, |store| {
         store.peers.insert(node.to_owned(), maw_peer::PeerRecord {
             url: url.to_owned(),
+            addresses: store.peers.get(node).filter(|peer| peer.url == url).map(|peer| peer.addresses.clone()).unwrap_or_default(),
             node: Some(node.to_owned()),
             added_at: now.clone(),
             last_seen: Some(now.clone()),
@@ -879,11 +880,14 @@ mod pair_tests {
             root.clone(),
             [("PEERS_FILE", peers.to_string_lossy().to_string())],
         );
+        std::fs::create_dir_all(peers.parent().expect("state parent")).expect("state dir");
+        std::fs::write(&peers, r#"{"version":1,"peers":{"peer-node":{"url":"https://peer.example","addresses":["https://peer-lan.example"],"addedAt":"0"}}}"#).expect("seed peers");
         pair_write_peer_to_env(&env, "peer-node", "https://peer.example", Some("config-oracle")).expect("write peer");
-        let raw = std::fs::read_to_string(&peers).expect("read peers");
-        let value: serde_json::Value = serde_json::from_str(&raw).expect("json");
-        assert_eq!(value["peers"]["peer-node"]["url"], "https://peer.example");
+        assert_eq!(maw_peer::load_peer_store(&env).peers["peer-node"].addresses.as_slice(), ["https://peer-lan.example"]);
         assert!(!peers.with_extension("json.tmp").exists());
+        pair_write_peer_to_env(&env, "peer-node", "https://changed.example", Some("config-oracle")).expect("re-pair peer");
+        let changed = maw_peer::load_peer_store(&env);
+        assert!(changed.peers["peer-node"].url == "https://changed.example" && changed.peers["peer-node"].addresses.is_empty());
         let _ = std::fs::remove_dir_all(root);
     }
 

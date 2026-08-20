@@ -20,6 +20,8 @@ struct PeersStoreNative {
 #[serde(rename_all = "camelCase")]
 struct PeersPeerNative {
     url: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    addresses: Vec<String>,
     node: Option<String>,
     added_at: String,
     last_seen: Option<String>,
@@ -123,6 +125,7 @@ fn peers_cmd_add(argv: &[String], positional: &[&str]) -> Result<CliOutput, Stri
     let now = peers_now_iso();
     let mut peer = PeersPeerNative {
         url: url.to_owned(),
+        addresses: existing.as_ref().filter(|entry| entry.url == url).map(|entry| entry.addresses.clone()).unwrap_or_default(),
         node,
         added_at: now.clone(),
         last_seen: None,
@@ -801,6 +804,15 @@ mod peers_tests {
     use super::*;
 
     fn peers_args(values: &[&str]) -> Vec<String> { values.iter().map(|value| (*value).to_owned()).collect() }
+
+    #[test]
+    fn send_lookup_uses_runtime_store_address_list() {
+        let raw = r#"{"peers":{"aaa":{"url":"http://stale-config","addresses":["http://stale-config","http://old"],"node":"studio","addedAt":"0"},"legacy":{"url":"http://legacy","addedAt":"0"},"studio":{"url":"http://old","addresses":["http://old","http://lan"],"addedAt":"0","lastSeen":null,"lastError":{"code":"REFUSED","message":"down","at":"9999999999999"}}}}"#;
+        let store: PeersStoreNative = serde_json::from_str(raw).expect("runtime store");
+        assert_eq!(peer_send_addresses_from_store("studio", "http://old", &store), vec!["http://lan", "http://old"]);
+        assert_eq!(peer_send_addresses_from_store("legacy", "http://route-b", &store), vec!["http://route-b"]);
+        assert_eq!(peer_send_addresses_from_store("", "http://old", &store), vec!["http://lan", "http://old"]);
+    }
 
     #[test]
     fn peers_map_rows_flag_loopback_self_duplicate_nodes_and_reachability() {

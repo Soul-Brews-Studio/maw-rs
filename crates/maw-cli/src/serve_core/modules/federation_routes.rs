@@ -885,6 +885,7 @@ mod tests {
     ) -> maw_peer::PeerRecord {
         maw_peer::PeerRecord {
             url: url.to_owned(),
+            addresses: Vec::new(),
             node: Some(node.to_owned()),
             added_at: "2026-07-25T00:00:00Z".to_owned(),
             last_seen: Some("2026-07-25T00:00:00Z".to_owned()),

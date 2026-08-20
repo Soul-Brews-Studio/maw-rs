@@ -21,6 +21,7 @@ fn peer(
 ) -> PeerRecord {
     PeerRecord {
         url: url.to_owned(),
+        addresses: Vec::new(),
         node: node.map(str::to_owned),
         added_at: "2026-05-17T00:00:00.000Z".to_owned(),
         last_seen: last_seen.map(str::to_owned),

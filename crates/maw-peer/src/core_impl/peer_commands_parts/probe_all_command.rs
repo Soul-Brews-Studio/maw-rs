@@ -100,6 +100,7 @@ mod part03_coverage_tests {
     fn peer_record(url: &str) -> PeerRecord {
         PeerRecord {
             url: url.to_owned(),
+            addresses: Vec::new(),
             node: None,
             added_at: "2026-05-21T00:00:00Z".to_owned(),
             last_seen: None,
