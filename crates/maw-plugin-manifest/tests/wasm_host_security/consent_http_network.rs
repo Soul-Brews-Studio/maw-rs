@@ -161,3 +161,87 @@ fn ipv4_mapped_ipv6_private_hosts_are_denied() {
     }
 }
 
+// #959: a plugin allowed one origin must not ride its redirect to an address
+// the pin, private-IP gate, or `net:` allowlist would refuse as the first
+// hop. Each case isolates one gate and proves the target is never connected.
+fn redirect_escape(
+    label: &str,
+    status: &str,
+    extra_caps: &[&str],
+    resolver: Option<(&str, IpAddr)>,
+    location: &str,
+) -> Value {
+    let dir = temp(label);
+    let (origin_url, _rx) = serve_net_once(
+        raw_response(status, &format!("location: {location}\r\n"), ""),
+        0,
+    );
+    let port = origin_url.rsplit(':').next().expect("origin port");
+    let mut caps = vec!["net:http:origin.test", "net:private:origin.test"];
+    caps.extend_from_slice(extra_caps);
+    let mut guest =
+        host(&dir, &caps).with_http_resolver_override("origin.test", [IpAddr::V4(Ipv4Addr::LOCALHOST)]);
+    if let Some((name, ip)) = resolver {
+        guest = guest.with_http_resolver_override(name, [ip]);
+    }
+    call(
+        &guest,
+        "maw.http.request",
+        &json!({"method": "GET", "url": format!("http://origin.test:{port}/go"), "followRedirects": true}),
+    )
+}
+
+fn assert_never_hit(rx: &mpsc::Receiver<String>) {
+    assert!(
+        rx.recv_timeout(std::time::Duration::from_millis(300)).is_err(),
+        "redirect target observed a connection it must never see"
+    );
+}
+
+#[test]
+fn http_request_follow_redirects_refuses_escape_to_non_allowlisted_host() {
+    for status in ["302 Found", "307 Temporary Redirect", "308 Permanent Redirect"] {
+        let (target_url, target_rx) = serve_net_once(raw_response("200 OK", "", "stolen"), 0);
+        let target_port = target_url.rsplit(':').next().expect("target port");
+        let result = redirect_escape(
+            &format!("redirect-host-{}", &status[..3]),
+            status,
+            &["net:private:evil.test"], // isolates the `net:` allowlist gate
+            Some(("evil.test", IpAddr::V4(Ipv4Addr::LOCALHOST))),
+            &format!("http://evil.test:{target_port}/steal"),
+        );
+        assert_eq!(result["ok"], false, "{status}: {result}");
+        assert_eq!(result["code"], "capability_denied", "{status}: {result}");
+        assert_never_hit(&target_rx);
+    }
+}
+
+#[test]
+fn http_request_follow_redirects_refuses_escape_to_loopback() {
+    let (target_url, target_rx) = serve_net_once(raw_response("200 OK", "", "stolen"), 0);
+    let target_port = target_url.rsplit(':').next().expect("target port");
+    let result = redirect_escape(
+        "redirect-loopback",
+        "302 Found",
+        &["net:http:127.0.0.1"], // isolates the private-IP gate
+        None,
+        &format!("http://127.0.0.1:{target_port}/steal"),
+    );
+    assert_eq!(result["ok"], false, "{result}");
+    assert_eq!(result["code"], "capability_denied", "{result}");
+    assert_never_hit(&target_rx);
+}
+
+#[test]
+fn http_request_follow_redirects_refuses_escape_to_link_local() {
+    // No real listener: link-local addresses aren't portably bindable here.
+    let result = redirect_escape(
+        "redirect-linklocal",
+        "302 Found",
+        &["net:http:linklocal.test"],
+        Some(("linklocal.test", IpAddr::V4(Ipv4Addr::new(169, 254, 1, 1)))),
+        "http://linklocal.test/steal",
+    );
+    assert_eq!(result["ok"], false, "{result}");
+    assert_eq!(result["code"], "capability_denied", "{result}");
+}
