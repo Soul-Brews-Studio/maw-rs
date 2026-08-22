@@ -112,7 +112,7 @@ maw() {
 claude() {
   local channels="${MAW_CLAUDE_CHANNELS-plugin:discord@claude-plugins-official}"
   local opts=(--dangerously-skip-permissions)
-  [[ -n "$channels" ]] && opts+=(--channels "$channels")
+  [[ -n "$channels" ]] && opts+=(--channels="$channels")
   if [[ "$*" == *"--continue"* ]]; then
     command claude "${opts[@]}" "$@" || command claude "${opts[@]}" "${@/--continue/}"
   else
