@@ -8,6 +8,7 @@
 #[derive(Default)]
 struct PluginLsOptions {
     verbose: bool,
+    json: bool,
     tiers: Vec<PluginTier>,
     api_only: bool,
 }
@@ -22,6 +23,7 @@ fn parse_plugin_ls_args(argv: &[String]) -> Result<PluginAction, PluginParseErro
     while index < argv.len() {
         match argv[index].as_str() {
             "-v" | "--verbose" => ls_options.verbose = true,
+            "--json" => ls_options.json = true,
             "--core" => ls_options.tiers.push(PluginTier::Core),
             "--standard" => ls_options.tiers.push(PluginTier::Standard),
             "--extra" => ls_options.tiers.push(PluginTier::Extra),
@@ -65,7 +67,7 @@ fn parse_plugin_ls_args(argv: &[String]) -> Result<PluginAction, PluginParseErro
 fn plugin_ls_help() -> CliOutput {
     CliOutput {
         code: 0,
-        stdout: "usage: maw plugin <init|build|install|create|ls|info|remove|enable <name...>|disable> [args]\n  ls: compact by default; use -v for full table; filters: --core --standard --extra --api\n".to_owned(),
+        stdout: "usage: maw plugin <init|build|install|create|ls|info|remove|enable <name...>|disable> [args]\n  ls: compact by default; use -v for full table, --json for machine output; filters: --core --standard --extra --api\n".to_owned(),
         stderr: String::new(),
     }
 }
@@ -78,6 +80,13 @@ fn render_plugin_ls(plugins: &[LoadedPlugin], options: &PluginLsOptions) -> Stri
         .filter(|row| !options.api_only || row.api_path.is_some())
         .collect::<Vec<_>>();
     rows.sort_by_key(|row| (plugin_tier_order(row.tier), row.name.to_owned()));
+
+    // JSON is decided BEFORE the empty-set early return below. "no plugins
+    // installed" is a fine sentence and invalid JSON, and a consumer that asked
+    // for --json must get parseable output on every path, including the empty one.
+    if options.json {
+        return render_plugin_ls_json(&rows, options);
+    }
 
     if rows.is_empty() {
         return if plugins.is_empty() {
@@ -92,6 +101,51 @@ fn render_plugin_ls(plugins: &[LoadedPlugin], options: &PluginLsOptions) -> Stri
     }
 
     render_plugin_ls_table(&rows)
+}
+
+fn render_plugin_ls_json(rows: &[PluginLsRow<'_>], options: &PluginLsOptions) -> String {
+    let active = rows.iter().filter(|row| !row.disabled).count();
+    let missing = rows.iter().filter(|row| row.missing_executable).count();
+    let plugins = rows
+        .iter()
+        .map(|row| {
+            serde_json::json!({
+                "name": row.name,
+                "version": row.version,
+                "tier": row.tier.as_str(),
+                "disabled": row.disabled,
+                "cli": row.cli_command,
+                "api": row.api_path,
+                // The absolute path, not the ~-shortened one the tables print: a
+                // consumer of --json needs a path it can stat, not one a human reads.
+                "dir": row.dir_full,
+                "missingExecutable": row.missing_executable,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let mut document = serde_json::json!({
+        "total": rows.len(),
+        "active": active,
+        "disabled": rows.len() - active,
+        "missingExecutables": missing,
+        "plugins": plugins,
+    });
+    // Report the filter that produced this set. Without it, a filtered result is
+    // indistinguishable from the whole installed set, and a caller diffing two runs
+    // would read a filter as an uninstall.
+    let filters = options
+        .tiers
+        .iter()
+        .map(|tier| tier.as_str())
+        .chain(options.api_only.then_some("api"))
+        .collect::<Vec<_>>();
+    document["filters"] = serde_json::json!(filters);
+
+    format!(
+        "{}\n",
+        serde_json::to_string_pretty(&document).unwrap_or_else(|_| "{}".to_owned())
+    )
 }
 
 fn render_plugin_ls_compact(rows: &[PluginLsRow<'_>], options: &PluginLsOptions) -> String {
@@ -121,8 +175,26 @@ fn render_plugin_ls_compact(rows: &[PluginLsRow<'_>], options: &PluginLsOptions)
         )
     };
 
+    // An `ls` that never names anything is not a listing. The counts above answer
+    // "how many"; a reader running `ls` is asking "which". Names carry their own
+    // state inline, because a disabled or broken plugin still counts in the totals
+    // and would otherwise be indistinguishable from a healthy one without `-v`.
+    let names = rows
+        .iter()
+        .map(|row| {
+            if row.disabled {
+                format!("{} (disabled)", row.name)
+            } else if row.missing_executable {
+                format!("{} (no executable)", row.name)
+            } else {
+                row.name.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" · ");
+
     format!(
-        "{} plugin{} ({} active, {} disabled){}\n  core: {core} · standard: {standard} · extra: {extra}\n  cli: {cli} · api: {api} · health: {health}\n",
+        "{} plugin{} ({} active, {} disabled){}\n  core: {core} · standard: {standard} · extra: {extra}\n  cli: {cli} · api: {api} · health: {health}\n  {names}\n",
         rows.len(),
         if rows.len() == 1 { "" } else { "s" },
         active,
@@ -200,6 +272,8 @@ struct PluginLsRow<'a> {
     tier: PluginTier,
     surfaces: String,
     dir: String,
+    dir_full: String,
+    cli_command: Option<String>,
     disabled: bool,
     has_cli: bool,
     missing_executable: bool,
@@ -221,8 +295,10 @@ impl<'a> PluginLsRow<'a> {
             tier: maw_plugin_manifest::effective_tier(manifest),
             surfaces: plugin_ls_surfaces(cli_command.as_deref(), api_path),
             dir: shorten_home(&plugin.dir),
-            disabled: plugin.disabled,
+            dir_full: plugin.dir.display().to_string(),
             has_cli: cli_command.is_some(),
+            cli_command,
+            disabled: plugin.disabled,
             missing_executable: executable_path.is_some_and(|path| !path.exists()),
             api_path,
         }

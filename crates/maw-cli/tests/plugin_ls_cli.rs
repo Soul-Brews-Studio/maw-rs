@@ -80,7 +80,7 @@ fn plugin_ls_defaults_to_compact_summary_with_tier_and_surface_counts() {
     assert_eq!(output.code, 0, "{}", output.stderr);
     assert_eq!(
         output.stdout,
-        "3 plugins (3 active, 0 disabled)\n  core: 1 · standard: 1 · extra: 1\n  cli: 3 · api: 2 · health: ok\n"
+        "3 plugins (3 active, 0 disabled)\n  core: 1 · standard: 1 · extra: 1\n  cli: 3 · api: 2 · health: ok\n  bravo · alpha · charlie\n"
     );
 }
 
@@ -144,10 +144,12 @@ fn plugin_ls_verbose_renders_maw_js_grouped_table_and_filters_refused_plugins() 
 
 #[test]
 fn plugin_ls_rejects_unknown_args() {
-    let output = run(&["plugin".to_owned(), "ls".to_owned(), "--json".to_owned()]);
+    // Was `--json` until that became a real flag. The assertion is about rejecting
+    // unknown arguments, so it needs an example that stays unknown.
+    let output = run(&["plugin".to_owned(), "ls".to_owned(), "--not-a-flag".to_owned()]);
 
     assert_eq!(output.code, 2);
-    assert!(output.stderr.contains("plugin ls: unknown argument --json"));
+    assert!(output.stderr.contains("plugin ls: unknown argument --not-a-flag"));
     assert!(output.stderr.contains("usage: maw-rs plugin ls"));
 }
 
@@ -297,4 +299,59 @@ fn plugin_info_and_ls_verbose_agree_on_tier_when_the_manifest_omits_it() {
             json.stdout
         );
     }
+}
+
+#[test]
+fn plugin_ls_json_is_parseable_on_every_path_including_the_empty_one() {
+    let root = temp_plugin_root("json");
+    write_plugin(
+        &root,
+        "delta",
+        r#"{
+          "name": "delta",
+          "version": "1.2.3",
+          "sdk": "*",
+          "tier": "core",
+          "entry": "index.ts",
+          "cli": { "command": "delta" }
+        }"#,
+    );
+
+    let scan = |extra: &[&str]| {
+        let mut args = vec![
+            "plugin".to_owned(),
+            "ls".to_owned(),
+            "--json".to_owned(),
+            "--scan-dir".to_owned(),
+            root.display().to_string(),
+        ];
+        args.extend(extra.iter().map(|arg| (*arg).to_owned()));
+        run(&args)
+    };
+
+    let output = scan(&[]);
+    assert_eq!(output.code, 0, "{}", output.stderr);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&output.stdout).expect("--json must emit parseable JSON");
+    assert_eq!(parsed["total"], 1);
+    assert_eq!(parsed["active"], 1);
+    assert_eq!(parsed["plugins"][0]["name"], "delta");
+    assert_eq!(parsed["plugins"][0]["version"], "1.2.3");
+    assert_eq!(parsed["plugins"][0]["tier"], "core");
+    assert_eq!(parsed["plugins"][0]["cli"], "delta");
+    assert_eq!(parsed["plugins"][0]["api"], serde_json::Value::Null);
+    assert_eq!(parsed["filters"], serde_json::json!([]));
+    // The absolute path, not the ~-shortened form the human tables print.
+    assert_eq!(parsed["plugins"][0]["dir"], root.join("delta").display().to_string());
+
+    // A filter that matches nothing is the path where the text renderer emits an
+    // English sentence. JSON must stay JSON there, or every consumer breaks on a
+    // condition that is not an error.
+    let empty = scan(&["--extra"]);
+    assert_eq!(empty.code, 0, "{}", empty.stderr);
+    let parsed_empty: serde_json::Value =
+        serde_json::from_str(&empty.stdout).expect("empty --json must still parse");
+    assert_eq!(parsed_empty["total"], 0);
+    assert_eq!(parsed_empty["plugins"], serde_json::json!([]));
+    assert_eq!(parsed_empty["filters"], serde_json::json!(["extra"]));
 }
