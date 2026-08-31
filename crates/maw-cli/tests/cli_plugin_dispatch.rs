@@ -422,7 +422,7 @@ fn plugin_ls_scans_home_maw_plugins_by_default() {
     assert!(output.stderr.is_empty(), "{}", output.stderr);
     assert_eq!(
         output.stdout,
-        "1 plugin (1 active, 0 disabled)\n  core: 0 · standard: 0 · extra: 1\n  cli: 1 · api: 0 · health: ok\n"
+        "1 plugin (1 active, 0 disabled)\n  core: 0 · standard: 0 · extra: 1\n  cli: 1 · api: 0 · health: ok\n  home-weather\n"
     );
 
     remove_dir_all(root).expect("cleanup");
