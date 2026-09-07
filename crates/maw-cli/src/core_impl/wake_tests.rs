@@ -881,6 +881,65 @@ mod wake_tests {
     }
 
     #[test]
+    fn wake_channels_terminates_the_option_list_before_the_prompt() {
+        wake_with_fixture(|root| {
+            let repo = root.join("ghq/github.com/acme/neo-oracle");
+            std::fs::create_dir_all(repo.join(".maw")).expect("repo .maw");
+
+            // #973: `--channels` is variadic in the claude CLI, so a bare
+            // prompt after it is parsed as another channel entry and the
+            // engine dies before it starts. `--` terminates the list.
+            std::fs::write(
+                repo.join(".maw/maw.config.40.json"),
+                r#"{"wake":{"engine":"claude","channels":true,"prompt":"read AGENTS.md first"}}"#,
+            )
+            .expect("repo config claude channels prompt");
+            let mut tmux = WakeMockTmux::default();
+            let (code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("channels prompt");
+            assert_eq!(code, 0);
+            let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
+            assert!(
+                send.ends_with(
+                    "MAW_SESSION_WINDOW=neo claude --channels plugin:discord@claude-plugins-official -- 'read AGENTS.md first'"
+                ),
+                "{send}"
+            );
+
+            // Without the channels flag the prompt still follows the engine
+            // directly — no stray separator.
+            std::fs::write(
+                repo.join(".maw/maw.config.40.json"),
+                r#"{"wake":{"engine":"claude","prompt":"read AGENTS.md first"}}"#,
+            )
+            .expect("repo config claude prompt only");
+            let mut tmux = WakeMockTmux::default();
+            let (code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("prompt only");
+            assert_eq!(code, 0);
+            let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
+            assert!(send.ends_with("MAW_SESSION_WINDOW=neo claude 'read AGENTS.md first'"), "{send}");
+
+            // A commands.<engine>-channels replacement line that already ends
+            // in `--` keeps exactly one separator — a second would land inside
+            // the prompt text.
+            std::fs::write(
+                repo.join(".maw/maw.config.40.json"),
+                r#"{"commands":{"claude-channels":"claude --channels plugin:discord@claude-plugins-official --"},"wake":{"engine":"claude","channels":true,"prompt":"read AGENTS.md first"}}"#,
+            )
+            .expect("repo config channels entry");
+            let mut tmux = WakeMockTmux::default();
+            let (code, _stdout) = wake_run(&wake_strings(&["neo", "--no-attach"]), &mut tmux).expect("channels entry");
+            assert_eq!(code, 0);
+            let send = tmux.actions.iter().find(|action| action.starts_with("send ")).expect("send action");
+            assert!(
+                send.ends_with(
+                    "MAW_SESSION_WINDOW=neo claude --channels plugin:discord@claude-plugins-official -- 'read AGENTS.md first'"
+                ),
+                "{send}"
+            );
+        });
+    }
+
+    #[test]
     fn wake_defaults_block_resume_resumes_the_configured_engine_and_fresh_opts_out() {
         wake_with_fixture(|root| {
             let repo = root.join("ghq/github.com/acme/neo-oracle");

@@ -205,7 +205,10 @@ fn wake_command(window: &str, cwd: &std::path::Path, options: &WakeOptionsNative
     let mut engine_command =
         wake_engine_launch_command(&engine, resolution.command, &config, resume, options.engine_command.as_deref(), &mut warnings);
     if channels { wake_apply_channels(&mut engine_command, &engine, &config, resume, &mut warnings); }
-    if let Some(prompt) = options.prompt.as_deref().or(defaults.prompt.as_deref()) { let _ = write!(engine_command, " {}", wake_shell_quote(prompt)); }
+    if let Some(prompt) = options.prompt.as_deref().or(defaults.prompt.as_deref()) {
+        let separator = wake_prompt_separator(&engine_command);
+        let _ = write!(engine_command, "{separator} {}", wake_shell_quote(prompt));
+    }
     (format!("MAW_SESSION_WINDOW={} {engine_command}", wake_shell_quote(window)), warnings)
 }
 
@@ -287,6 +290,27 @@ fn wake_apply_channels(
             "wake: channels requested but engine '{engine}' is not claude-family — skipping the claude-only --channels flag; define commands.{engine}-channels for an engine-specific line"
         ));
     }
+}
+
+/// `--` to terminate the option list before the positional prompt, or empty
+/// when none is needed (#973).
+///
+/// The claude CLI's `--channels` is variadic, so it keeps eating following
+/// arguments: a bare prompt appended after it is read as one more channel
+/// entry and the launch dies with `--channels entries must be tagged: <the
+/// prompt>` before the engine ever starts, leaving wake's window at a shell.
+///
+/// Only claude-family lines carrying the flag need the separator — no other
+/// engine is handed `--channels` (#615) — and a `commands.<engine>-channels`
+/// replacement line that already ends in `--` must not collect a second one,
+/// which would push the separator itself into the prompt text.
+fn wake_prompt_separator(engine_command: &str) -> &'static str {
+    if wake_engine_binary(engine_command) != Some("claude") {
+        return "";
+    }
+    let words: Vec<&str> = engine_command.split_whitespace().collect();
+    let channels = words.iter().any(|word| *word == "--channels" || word.starts_with("--channels="));
+    if channels && words.last() != Some(&"--") { " --" } else { "" }
 }
 
 /// A non-empty `commands.<name>` entry from merged config, if present.
