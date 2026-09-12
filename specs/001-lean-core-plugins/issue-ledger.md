@@ -112,5 +112,7 @@ trees and append evidence to issue #963 (or an immutable externally-addressable 
 there), never back into the reviewed/released tree. The record must identify: maw-rs alpha SHA and
 tree hash; maw-plugins main SHA; registry SHA and every scoped package/artifact SHA-256; T167
 toolchain/build/CI/direct-invocation log hashes; T168 full-gate log hash; T169 smoke result hashes;
-T170 reviewer identity/verdict and frozen diff hashes; and T171 release/tag/closure comment URLs.
+T170 reviewer identity/verdict and frozen diff hashes; and T171 canary candidate/version/pin/smoke
+evidence (including browser-equivalent God WebSocket `maw.ws.v1` and `Sec-WebSocket-Accept`
+assertions with observed version/echo/accept values), release/tag/closure comment URLs.
 Any later ledger update is a separate docs-only audit PR and cannot claim to prove that candidate.

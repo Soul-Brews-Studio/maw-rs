@@ -314,7 +314,13 @@ plugin installed, missing, hash-invalid, SDK-incompatible, and under-capable.
 - **FR-027**: Every extraction MUST retain or add parity fixtures covering stdout, stderr, exit code,
   JSON, host-call ordering, and no-mutation failure paths.
 - **FR-028**: Every downstream ownership change MUST rerun focused wake/attach regressions and the
-  repository gate required by the constitution.
+  repository gate required by the constitution. Before cutting the final CalVer alpha tag, the exact
+  unchanged candidate MUST be installed and exercised as a canary: native wake/attach/hey/peek/serve
+  (including the accepted God origin) and every installed/missing/refused extracted-plugin smoke
+  MUST pass. The God WebSocket canary MUST use a browser-equivalent client that asserts the exact
+  installed `maw --version` commit, negotiated `maw.ws.v1` subprotocol, and
+  `Sec-WebSocket-Accept` rather than a status-line-only probe; evidence MUST identify the candidate
+  and artifact pins and record the observed version, negotiated subprotocol, and accept value.
 - **FR-029**: The final native source MUST contain only generic provider/host contracts for the scoped
   products, with no reachable Codex/team/bring/split product implementation.
 - **FR-030**: Issue #963 MUST maintain a reviewed child ledger mapping each requirement to bounded,
