@@ -814,7 +814,7 @@ mod serve_tests {
             serve_test_trust_store_path("browser-preflight"),
             wake.clone(),
             ServeApiTokenAuth {
-                token: Some("secret-token".to_owned()),
+                token: Some("TEST_ONLY_OPERATOR_TOKEN".to_owned()),
                 loopback_exempt: false,
                 forced_open: false,
             },
@@ -896,8 +896,8 @@ mod serve_tests {
         assert!(wake.wakes().is_empty());
 
         for (header, value) in [
-            ("authorization", "Bearer secret-token"),
-            ("x-maw-token", "secret-token"),
+            ("authorization", "Bearer TEST_ONLY_OPERATOR_TOKEN"),
+            ("x-maw-token", "TEST_ONLY_OPERATOR_TOKEN"),
         ] {
             let response = app
                 .clone()
@@ -912,9 +912,10 @@ mod serve_tests {
         sessions
             .headers_mut()
             .insert("origin", HeaderValue::from_static(GOD));
-        sessions
-            .headers_mut()
-            .insert("x-maw-token", HeaderValue::from_static("secret-token"));
+        sessions.headers_mut().insert(
+            "x-maw-token",
+            HeaderValue::from_static("TEST_ONLY_OPERATOR_TOKEN"),
+        );
         assert_auth_allowed(
             app.clone()
                 .oneshot(sessions)
@@ -928,7 +929,7 @@ mod serve_tests {
             unsigned_json_request("POST", "/api/wake", r#"{"target":"capture-agent"}"#);
         no_origin.headers_mut().insert(
             "authorization",
-            HeaderValue::from_static("Bearer secret-token"),
+            HeaderValue::from_static("Bearer TEST_ONLY_OPERATOR_TOKEN"),
         );
         assert_eq!(
             app.clone()
@@ -963,7 +964,7 @@ mod serve_tests {
         let store = Arc::new(maw_auth::WsTicketStore::default());
         let app = serve_test_app_with_api_auth_and_ws_tickets(
             ServeApiTokenAuth {
-                token: Some("secret-token".to_owned()),
+                token: Some("TEST_ONLY_OPERATOR_TOKEN".to_owned()),
                 loopback_exempt: true,
                 forced_open: false,
             },
@@ -1004,7 +1005,7 @@ mod serve_tests {
             .method(Method::GET)
             .uri("/api/auth/ws-ticket")
             .header("origin", GOD)
-            .header("x-maw-token", "secret-token")
+            .header("x-maw-token", "TEST_ONLY_OPERATOR_TOKEN")
             .body(Body::empty())
             .unwrap();
         let method = app.clone().oneshot(method).await.unwrap();
@@ -1014,9 +1015,12 @@ mod serve_tests {
             .unwrap()
             .is_empty());
         for (path, credential) in [
-            ("/ws", ("authorization", "Bearer secret-token")),
-            ("/ws/pty", ("x-maw-token", "secret-token")),
-            ("/ws/tmux", ("authorization", "Bearer secret-token")),
+            ("/ws", ("authorization", "Bearer TEST_ONLY_OPERATOR_TOKEN")),
+            ("/ws/pty", ("x-maw-token", "TEST_ONLY_OPERATOR_TOKEN")),
+            (
+                "/ws/tmux",
+                ("authorization", "Bearer TEST_ONLY_OPERATOR_TOKEN"),
+            ),
         ] {
             let body = match path {
                 "/ws" => r#"{"path":"/ws"}"#,
@@ -3192,7 +3196,7 @@ mod serve_tests {
     #[tokio::test]
     async fn serve_api_token_auth_gates_api_but_leaves_health_open() {
         let app = serve_test_app_with_api_auth(ServeApiTokenAuth {
-            token: Some("secret-token".to_owned()),
+            token: Some("TEST_ONLY_OPERATOR_TOKEN".to_owned()),
             loopback_exempt: false,
             forced_open: false,
         });
@@ -3222,7 +3226,7 @@ mod serve_tests {
             .clone()
             .oneshot(
                 axum::http::Request::get("/api/feed")
-                    .header("authorization", "Bearer secret-token")
+                    .header("authorization", "Bearer TEST_ONLY_OPERATOR_TOKEN")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -3233,7 +3237,7 @@ mod serve_tests {
         let plugin = app
             .oneshot(
                 axum::http::Request::get("/api/testext/health")
-                    .header("x-maw-token", "secret-token")
+                    .header("x-maw-token", "TEST_ONLY_OPERATOR_TOKEN")
                     .body(Body::empty())
                     .unwrap(),
             )
