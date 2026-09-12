@@ -1,7 +1,16 @@
 const DISPATCH_316: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "consent-constants", handler: Handler::Sync(run_consent_constants_plan) },
-    DispatcherEntry { command: "consent-request", handler: Handler::Sync(run_consent_request_plan) },
-    DispatcherEntry { command: "consent-approval", handler: Handler::Sync(run_consent_approval_plan) },
+    DispatcherEntry {
+        command: "consent-constants",
+        handler: Handler::Sync(run_consent_constants_plan),
+    },
+    DispatcherEntry {
+        command: "consent-request",
+        handler: Handler::Sync(run_consent_request_plan),
+    },
+    DispatcherEntry {
+        command: "consent-approval",
+        handler: Handler::Sync(run_consent_approval_plan),
+    },
 ];
 
 fn render_consent_pin_plan_json(
@@ -531,4 +540,3 @@ fn run_consent_approval_plan(argv: &[String]) -> CliOutput {
         stderr: String::new(),
     }
 }
-

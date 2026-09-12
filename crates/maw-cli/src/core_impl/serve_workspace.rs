@@ -17,7 +17,9 @@ async fn api_workspace_create(
         "joinCodeExpiresAt": workspace.join_code_expires_at,
     });
     with_workspace_store(&state, |store| {
-        store.join_codes.insert(workspace.join_code.clone(), workspace.id.clone());
+        store
+            .join_codes
+            .insert(workspace.join_code.clone(), workspace.id.clone());
         store.workspaces.insert(workspace.id.clone(), workspace);
     });
     Json(response).into_response()

@@ -16,8 +16,17 @@ mod work_bundle_tests {
 
     impl WorkBundleEnvGuard {
         fn work_new() -> Self {
-            let keys = ["HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"];
-            let saved = keys.into_iter().map(|key| (key, std::env::var_os(key))).collect::<Vec<_>>();
+            let keys = [
+                "HOME",
+                "XDG_CONFIG_HOME",
+                "XDG_STATE_HOME",
+                "XDG_DATA_HOME",
+                "XDG_CACHE_HOME",
+            ];
+            let saved = keys
+                .into_iter()
+                .map(|key| (key, std::env::var_os(key)))
+                .collect::<Vec<_>>();
             let root = std::env::temp_dir().join(format!("maw-work-bundle-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&root);
             std::fs::create_dir_all(root.join("home")).expect("home");
@@ -34,7 +43,11 @@ mod work_bundle_tests {
     impl Drop for WorkBundleEnvGuard {
         fn drop(&mut self) {
             for (key, value) in self.saved.drain(..) {
-                if let Some(value) = value { std::env::set_var(key, value); } else { std::env::remove_var(key); }
+                if let Some(value) = value {
+                    std::env::set_var(key, value);
+                } else {
+                    std::env::remove_var(key);
+                }
             }
             let _ = std::fs::remove_dir_all(&self.root);
         }
@@ -59,14 +72,34 @@ mod work_bundle_tests {
 
     impl NewFakeTmux {
         fn with_skip_attach() -> Self {
-            Self { env_no_prompt: true, current_session: "parent".to_owned(), current_window: "main".to_owned(), ..Self::default() }
+            Self {
+                env_no_prompt: true,
+                current_session: "parent".to_owned(),
+                current_window: "main".to_owned(),
+                ..Self::default()
+            }
         }
 
-        fn seed_launch(&mut self, session: &str, cwd: &std::path::Path, command: &str, window: &str) {
+        fn seed_launch(
+            &mut self,
+            session: &str,
+            cwd: &std::path::Path,
+            command: &str,
+            window: &str,
+        ) {
             self.existing.insert(session.to_owned());
-            self.options.insert((session.to_owned(), NEW_WORKSPACE_CWD_OPTION.to_owned()), cwd.display().to_string());
-            self.options.insert((session.to_owned(), NEW_WORKSPACE_COMMAND_OPTION.to_owned()), command.to_owned());
-            self.options.insert((session.to_owned(), NEW_WORKSPACE_WINDOW_OPTION.to_owned()), window.to_owned());
+            self.options.insert(
+                (session.to_owned(), NEW_WORKSPACE_CWD_OPTION.to_owned()),
+                cwd.display().to_string(),
+            );
+            self.options.insert(
+                (session.to_owned(), NEW_WORKSPACE_COMMAND_OPTION.to_owned()),
+                command.to_owned(),
+            );
+            self.options.insert(
+                (session.to_owned(), NEW_WORKSPACE_WINDOW_OPTION.to_owned()),
+                window.to_owned(),
+            );
         }
     }
 
@@ -76,7 +109,10 @@ mod work_bundle_tests {
             self.existing.contains(name)
         }
 
-        fn new_session_create(&mut self, request: &NewSessionCreateNative) -> Result<String, String> {
+        fn new_session_create(
+            &mut self,
+            request: &NewSessionCreateNative,
+        ) -> Result<String, String> {
             self.calls.push(format!(
                 "new-session {} {} {} {:?} {:?}",
                 request.name, request.window, request.cwd, request.command, request.print_format
@@ -108,14 +144,28 @@ mod work_bundle_tests {
             Ok(())
         }
 
-        fn new_read_session_option(&mut self, session: &str, option: &str) -> Result<Option<String>, String> {
+        fn new_read_session_option(
+            &mut self,
+            session: &str,
+            option: &str,
+        ) -> Result<Option<String>, String> {
             self.calls.push(format!("read-option {session} {option}"));
-            Ok(self.options.get(&(session.to_owned(), option.to_owned())).cloned())
+            Ok(self
+                .options
+                .get(&(session.to_owned(), option.to_owned()))
+                .cloned())
         }
 
-        fn new_set_session_option(&mut self, session: &str, option: &str, value: &str) -> Result<(), String> {
-            self.calls.push(format!("set-option {session} {option} {value}"));
-            self.options.insert((session.to_owned(), option.to_owned()), value.to_owned());
+        fn new_set_session_option(
+            &mut self,
+            session: &str,
+            option: &str,
+            value: &str,
+        ) -> Result<(), String> {
+            self.calls
+                .push(format!("set-option {session} {option} {value}"));
+            self.options
+                .insert((session.to_owned(), option.to_owned()), value.to_owned());
             Ok(())
         }
 
@@ -124,9 +174,15 @@ mod work_bundle_tests {
             Ok(())
         }
 
-        fn new_stdin_is_terminal(&self) -> bool { self.stdin_tty }
-        fn new_stdout_is_terminal(&self) -> bool { self.stdout_tty }
-        fn new_env_no_prompt(&self) -> bool { self.env_no_prompt }
+        fn new_stdin_is_terminal(&self) -> bool {
+            self.stdin_tty
+        }
+        fn new_stdout_is_terminal(&self) -> bool {
+            self.stdout_tty
+        }
+        fn new_env_no_prompt(&self) -> bool {
+            self.env_no_prompt
+        }
     }
 
     #[derive(Default)]
@@ -150,9 +206,15 @@ mod work_bundle_tests {
                 sessions: vec![
                     TmuxSession {
                         name: "77-mawjs".to_owned(),
-                        windows: vec![promote_test_window("mawjs-oracle"), promote_test_window("test-cli")],
+                        windows: vec![
+                            promote_test_window("mawjs-oracle"),
+                            promote_test_window("test-cli"),
+                        ],
                     },
-                    TmuxSession { name: "scratch".to_owned(), windows: vec![promote_test_window("scratch")] },
+                    TmuxSession {
+                        name: "scratch".to_owned(),
+                        windows: vec![promote_test_window("scratch")],
+                    },
                 ],
                 caller_in_tmux: true,
                 ..Self::default()
@@ -170,12 +232,19 @@ mod work_bundle_tests {
             Ok(self.sessions.clone())
         }
 
-        fn promote_list_windows(&mut self, session: &str) -> Result<Vec<maw_tmux::TmuxWindow>, String> {
+        fn promote_list_windows(
+            &mut self,
+            session: &str,
+        ) -> Result<Vec<maw_tmux::TmuxWindow>, String> {
             self.calls.push(format!("list-windows {session}"));
             if self.list_windows_fail_for.contains(session) {
                 return Err("tmux list failed".to_owned());
             }
-            self.sessions.iter().find(|item| item.name == session).map(|item| item.windows.clone()).ok_or_else(|| "no such session".to_owned())
+            self.sessions
+                .iter()
+                .find(|item| item.name == session)
+                .map(|item| item.windows.clone())
+                .ok_or_else(|| "no such session".to_owned())
         }
 
         fn promote_has_session(&mut self, name: &str) -> bool {
@@ -183,18 +252,26 @@ mod work_bundle_tests {
             self.existing.contains(name) || self.sessions.iter().any(|item| item.name == name)
         }
 
-        fn promote_caller_in_tmux(&self) -> bool { self.caller_in_tmux }
+        fn promote_caller_in_tmux(&self) -> bool {
+            self.caller_in_tmux
+        }
 
         fn promote_new_session(&mut self, name: &str, window: &str) -> Result<(), String> {
-            self.mutation_calls.push(format!("new-session -d -s {name} -n {window}"));
+            self.mutation_calls
+                .push(format!("new-session -d -s {name} -n {window}"));
             self.existing.insert(name.to_owned());
-            self.sessions.push(TmuxSession { name: name.to_owned(), windows: vec![promote_test_window(window)] });
+            self.sessions.push(TmuxSession {
+                name: name.to_owned(),
+                windows: vec![promote_test_window(window)],
+            });
             Ok(())
         }
 
         fn promote_move_window(&mut self, src: &str, dst: &str) -> Result<(), String> {
-            self.mutation_calls.push(format!("move-window -s {src} -t {dst}"));
-            let (src_session, src_window) = src.split_once(':').ok_or_else(|| "bad source".to_owned())?;
+            self.mutation_calls
+                .push(format!("move-window -s {src} -t {dst}"));
+            let (src_session, src_window) =
+                src.split_once(':').ok_or_else(|| "bad source".to_owned())?;
             let dst_session = dst.trim_end_matches(':');
             if self.move_should_fail {
                 if self.foreign_before_rollback {
@@ -205,11 +282,15 @@ mod work_bundle_tests {
                 return Err("move failed".to_owned());
             }
             if let Some(src_session_item) = self.promote_session_mut(src_session) {
-                src_session_item.windows.retain(|window| window.name != src_window);
+                src_session_item
+                    .windows
+                    .retain(|window| window.name != src_window);
             }
             if !self.verify_missing {
                 if let Some(dst_session_item) = self.promote_session_mut(dst_session) {
-                    dst_session_item.windows.push(promote_test_window(src_window));
+                    dst_session_item
+                        .windows
+                        .push(promote_test_window(src_window));
                 }
             }
             Ok(())
@@ -227,7 +308,9 @@ mod work_bundle_tests {
 
         fn promote_kill_window(&mut self, target: &str) -> Result<(), String> {
             self.mutation_calls.push(format!("kill-window -t {target}"));
-            let Some((session, window)) = target.split_once(':') else { return Err("bad target".to_owned()); };
+            let Some((session, window)) = target.split_once(':') else {
+                return Err("bad target".to_owned());
+            };
             if let Some(session_item) = self.promote_session_mut(session) {
                 session_item.windows.retain(|item| item.name != window);
             }
@@ -235,20 +318,40 @@ mod work_bundle_tests {
         }
 
         fn promote_switch_client(&mut self, session: &str) -> Result<(), String> {
-            self.mutation_calls.push(format!("switch-client -t {session}"));
+            self.mutation_calls
+                .push(format!("switch-client -t {session}"));
             Ok(())
         }
     }
 
     fn promote_test_window(name: &str) -> maw_tmux::TmuxWindow {
-        maw_tmux::TmuxWindow { index: 0, name: name.to_owned(), active: false, cwd: None }
+        maw_tmux::TmuxWindow {
+            index: 0,
+            name: name.to_owned(),
+            active: false,
+            cwd: None,
+        }
     }
 
     #[test]
     fn work_dispatch_registers_seven_commands() {
         assert_eq!(DISPATCH_93.len(), 7);
-        let commands = DISPATCH_93.iter().map(|entry| entry.command).collect::<Vec<_>>();
-        assert_eq!(commands, ["work", "awake", "scaffold", "new", "promote", "preflight", "snapshots"]);
+        let commands = DISPATCH_93
+            .iter()
+            .map(|entry| entry.command)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            commands,
+            [
+                "work",
+                "awake",
+                "scaffold",
+                "new",
+                "promote",
+                "preflight",
+                "snapshots"
+            ]
+        );
     }
 
     #[test]
@@ -285,8 +388,15 @@ mod work_bundle_tests {
         assert_eq!(value["cwd"], workspace.display().to_string());
         assert_eq!(value["command"], "echo hi");
         assert_eq!(value["reused"], false);
-        assert!(tmux.calls.iter().any(|call| call.starts_with("new-session team-room lead")));
-        assert!(tmux.calls.iter().any(|call| call == &format!("set-option team-room {NEW_WORKSPACE_CWD_OPTION} {}", workspace.display())));
+        assert!(tmux
+            .calls
+            .iter()
+            .any(|call| call.starts_with("new-session team-room lead")));
+        assert!(tmux.calls.iter().any(|call| call
+            == &format!(
+                "set-option team-room {NEW_WORKSPACE_CWD_OPTION} {}",
+                workspace.display()
+            )));
         assert!(!workspace.join("plugin.json").exists());
     }
 
@@ -295,7 +405,11 @@ mod work_bundle_tests {
         let mut tmux = NewFakeTmux::with_skip_attach();
         let out = new_run_command_with(&work_args(&["hello-rust", "--rust"]), &mut tmux);
         assert_eq!(out.code, 1);
-        assert!(out.stderr.contains("plugin-scaffold option"), "{}", out.stderr);
+        assert!(
+            out.stderr.contains("plugin-scaffold option"),
+            "{}",
+            out.stderr
+        );
         assert!(out.stderr.contains("maw plugin create"), "{}", out.stderr);
         assert!(tmux.calls.is_empty());
     }
@@ -308,13 +422,26 @@ mod work_bundle_tests {
         std::fs::create_dir_all(&workspace).expect("workspace");
         let mut tmux = NewFakeTmux::with_skip_attach();
         let out = new_run_command_with(
-            &work_args(&["dry-room", "--path", workspace.to_str().expect("utf8"), "--dry-run"]),
+            &work_args(&[
+                "dry-room",
+                "--path",
+                workspace.to_str().expect("utf8"),
+                "--dry-run",
+            ]),
             &mut tmux,
         );
         assert_eq!(out.code, 0, "{}", out.stderr);
-        assert!(out.stdout.contains("[dry-run] would create workspace session 'dry-room'"), "{}", out.stdout);
+        assert!(
+            out.stdout
+                .contains("[dry-run] would create workspace session 'dry-room'"),
+            "{}",
+            out.stdout
+        );
         assert!(!out.stdout.contains("plugin"), "{}", out.stdout);
-        assert!(!tmux.calls.iter().any(|call| call.starts_with("new-session")));
+        assert!(!tmux
+            .calls
+            .iter()
+            .any(|call| call.starts_with("new-session")));
     }
 
     #[test]
@@ -326,22 +453,46 @@ mod work_bundle_tests {
         let mut tmux = NewFakeTmux::with_skip_attach();
         tmux.seed_launch("auto-room-echo-hi", &workspace, "different", "lead");
         let out = new_run_command_with(
-            &work_args(&["--path", workspace.to_str().expect("utf8"), "--cmd", "echo hi", "--dry-run"]),
+            &work_args(&[
+                "--path",
+                workspace.to_str().expect("utf8"),
+                "--cmd",
+                "echo hi",
+                "--dry-run",
+            ]),
             &mut tmux,
         );
         assert_eq!(out.code, 0, "{}", out.stderr);
-        assert!(out.stdout.contains("using 'auto-room-echo-hi-2'"), "{}", out.stdout);
+        assert!(
+            out.stdout.contains("using 'auto-room-echo-hi-2'"),
+            "{}",
+            out.stdout
+        );
     }
 
     #[test]
     fn work_guards_reject_separator_and_leading_dash_values() {
-        assert!(work_run_command(&work_args(&["--"])).stderr.contains("separator"));
-        assert!(awake_run_command(&work_args(&["--"])).stderr.contains("separator"));
-        assert!(scaffold_run_command(&work_args(&["-bad"])).stderr.contains("looks like a flag"));
-        assert!(new_run_command(&work_args(&["-bad"])).stderr.contains("invalid session name"));
-        assert!(promote_run_command(&work_args(&["-bad"])).stderr.contains("looks like a flag"));
-        assert!(preflight_run_command(&work_args(&["-bad"])).stderr.contains("looks like a flag"));
-        assert!(snapshots_run_command(&work_args(&["-bad"])).stderr.contains("looks like a flag"));
+        assert!(work_run_command(&work_args(&["--"]))
+            .stderr
+            .contains("separator"));
+        assert!(awake_run_command(&work_args(&["--"]))
+            .stderr
+            .contains("separator"));
+        assert!(scaffold_run_command(&work_args(&["-bad"]))
+            .stderr
+            .contains("looks like a flag"));
+        assert!(new_run_command(&work_args(&["-bad"]))
+            .stderr
+            .contains("invalid session name"));
+        assert!(promote_run_command(&work_args(&["-bad"]))
+            .stderr
+            .contains("looks like a flag"));
+        assert!(preflight_run_command(&work_args(&["-bad"]))
+            .stderr
+            .contains("looks like a flag"));
+        assert!(snapshots_run_command(&work_args(&["-bad"]))
+            .stderr
+            .contains("looks like a flag"));
     }
 
     #[test]
@@ -350,12 +501,25 @@ mod work_bundle_tests {
         let _restore = EnvVarRestore::capture("MAW_JS_REF_DIR");
         std::env::set_var("MAW_JS_REF_DIR", "/nonexistent");
         let mut tmux = PromoteFakeTmux::promote_fixture();
-        let out = promote_run_command_with(&work_args(&["77-mawjs:test-cli", "--as", "isolated", "--attach"]), &mut tmux);
+        let out = promote_run_command_with(
+            &work_args(&["77-mawjs:test-cli", "--as", "isolated", "--attach"]),
+            &mut tmux,
+        );
         assert_eq!(out.code, 0, "{}", out.stderr);
-        assert_eq!(out.stdout, include_str!("../../tests/fixtures/native-promote/promote-success.stdout"));
+        assert_eq!(
+            out.stdout,
+            include_str!("../../tests/fixtures/native-promote/promote-success.stdout")
+        );
         assert_eq!(
             tmux.calls,
-            ["list-all", "list-windows 77-mawjs", "list-all", "list-windows 77-mawjs", "has-session isolated", "list-windows isolated"]
+            [
+                "list-all",
+                "list-windows 77-mawjs",
+                "list-all",
+                "list-windows 77-mawjs",
+                "has-session isolated",
+                "list-windows isolated"
+            ]
         );
         assert_eq!(
             tmux.mutation_calls,
@@ -373,37 +537,61 @@ mod work_bundle_tests {
         let _restore = EnvVarRestore::capture("MAW_JS_REF_DIR");
         std::env::set_var("MAW_JS_REF_DIR", "/nonexistent");
         let mut tmux = PromoteFakeTmux::promote_fixture();
-        tmux.sessions.push(TmuxSession { name: "other".to_owned(), windows: vec![promote_test_window("test-cli")] });
+        tmux.sessions.push(TmuxSession {
+            name: "other".to_owned(),
+            windows: vec![promote_test_window("test-cli")],
+        });
         let ambiguous = promote_run_command_with(&work_args(&["test-cli"]), &mut tmux);
         assert_eq!(ambiguous.code, 1);
-        assert_eq!(ambiguous.stderr, include_str!("../../tests/fixtures/native-promote/promote-ambiguous.stderr"));
+        assert_eq!(
+            ambiguous.stderr,
+            include_str!("../../tests/fixtures/native-promote/promote-ambiguous.stderr")
+        );
         assert!(tmux.mutation_calls.is_empty());
 
         let mut tmux = PromoteFakeTmux::promote_fixture();
         tmux.existing.insert("isolated".to_owned());
-        let exists = promote_run_command_with(&work_args(&["77-mawjs:test-cli", "--as", "isolated"]), &mut tmux);
+        let exists = promote_run_command_with(
+            &work_args(&["77-mawjs:test-cli", "--as", "isolated"]),
+            &mut tmux,
+        );
         assert_eq!(exists.code, 1);
-        assert_eq!(exists.stderr, include_str!("../../tests/fixtures/native-promote/promote-dst-exists.stderr"));
+        assert_eq!(
+            exists.stderr,
+            include_str!("../../tests/fixtures/native-promote/promote-dst-exists.stderr")
+        );
         assert!(tmux.mutation_calls.is_empty());
     }
 
     #[test]
     fn promote_refuses_only_window_and_bad_inputs_before_mutation() {
         let mut tmux = PromoteFakeTmux::promote_fixture();
-        let solo = promote_run_command_with(&work_args(&["scratch:scratch", "--as", "isolated"]), &mut tmux);
+        let solo = promote_run_command_with(
+            &work_args(&["scratch:scratch", "--as", "isolated"]),
+            &mut tmux,
+        );
         assert_eq!(solo.code, 1);
         assert!(solo.stderr.contains("only window in session 'scratch'"));
         assert!(tmux.mutation_calls.is_empty());
 
         let mut tmux = PromoteFakeTmux::promote_fixture();
-        let bad_as = promote_run_command_with(&work_args(&["77-mawjs:test-cli", "--as", "-bad"]), &mut tmux);
+        let bad_as = promote_run_command_with(
+            &work_args(&["77-mawjs:test-cli", "--as", "-bad"]),
+            &mut tmux,
+        );
         assert_eq!(bad_as.code, 1);
-        assert!(bad_as.stderr.contains("not start with '-'") || bad_as.stderr.contains("looks like a flag"));
+        assert!(
+            bad_as.stderr.contains("not start with '-'")
+                || bad_as.stderr.contains("looks like a flag")
+        );
         assert!(tmux.calls.is_empty());
         assert!(tmux.mutation_calls.is_empty());
 
         let mut tmux = PromoteFakeTmux::promote_fixture();
-        let old_shape = promote_run_command_with(&work_args(&["77-mawjs:test-cli", "--base", "alpha"]), &mut tmux);
+        let old_shape = promote_run_command_with(
+            &work_args(&["77-mawjs:test-cli", "--base", "alpha"]),
+            &mut tmux,
+        );
         assert_eq!(old_shape.code, 1);
         assert!(old_shape.stderr.contains("looks like a flag"));
         assert!(tmux.calls.is_empty());
@@ -416,27 +604,50 @@ mod work_bundle_tests {
         let _restore = EnvVarRestore::capture("MAW_JS_REF_DIR");
         std::env::set_var("MAW_JS_REF_DIR", "/nonexistent");
         let mut tmux = PromoteFakeTmux::promote_fixture();
-        tmux.sessions.push(TmuxSession { name: "isolated".to_owned(), windows: vec![promote_test_window("existing")] });
-        let out = promote_run_command_with(&work_args(&["77-mawjs:test-cli", "--as", "isolated", "--force"]), &mut tmux);
+        tmux.sessions.push(TmuxSession {
+            name: "isolated".to_owned(),
+            windows: vec![promote_test_window("existing")],
+        });
+        let out = promote_run_command_with(
+            &work_args(&["77-mawjs:test-cli", "--as", "isolated", "--force"]),
+            &mut tmux,
+        );
         assert_eq!(out.code, 0, "{}", out.stderr);
-        assert_eq!(out.stdout, include_str!("../../tests/fixtures/native-promote/promote-existing-force.stdout"));
-        assert_eq!(tmux.mutation_calls, ["move-window -s 77-mawjs:test-cli -t isolated:"]);
-        assert!(tmux.mutation_calls.iter().all(|call| !call.starts_with("kill-")));
+        assert_eq!(
+            out.stdout,
+            include_str!("../../tests/fixtures/native-promote/promote-existing-force.stdout")
+        );
+        assert_eq!(
+            tmux.mutation_calls,
+            ["move-window -s 77-mawjs:test-cli -t isolated:"]
+        );
+        assert!(tmux
+            .mutation_calls
+            .iter()
+            .all(|call| !call.starts_with("kill-")));
     }
 
     #[test]
     fn promote_rolls_back_created_placeholder_but_not_foreign_windows() {
         let mut tmux = PromoteFakeTmux::promote_fixture();
         tmux.verify_missing = true;
-        let verify = promote_run_command_with(&work_args(&["77-mawjs:test-cli", "--as", "isolated"]), &mut tmux);
+        let verify = promote_run_command_with(
+            &work_args(&["77-mawjs:test-cli", "--as", "isolated"]),
+            &mut tmux,
+        );
         assert_eq!(verify.code, 1);
         assert!(verify.stderr.contains("rolled back placeholder session"));
-        assert!(tmux.mutation_calls.contains(&"kill-session -t isolated".to_owned()));
+        assert!(tmux
+            .mutation_calls
+            .contains(&"kill-session -t isolated".to_owned()));
 
         let mut tmux = PromoteFakeTmux::promote_fixture();
         tmux.verify_missing = true;
         tmux.move_should_fail = false;
-        let out = promote_run_command_with(&work_args(&["77-mawjs:test-cli", "--as", "isolated"]), &mut tmux);
+        let out = promote_run_command_with(
+            &work_args(&["77-mawjs:test-cli", "--as", "isolated"]),
+            &mut tmux,
+        );
         assert_eq!(out.code, 1);
         assert!(out.stderr.contains("rolled back placeholder session"));
     }
@@ -446,19 +657,35 @@ mod work_bundle_tests {
         let mut tmux = PromoteFakeTmux::promote_fixture();
         tmux.move_should_fail = true;
         tmux.foreign_before_rollback = true;
-        let move_fail = promote_run_command_with(&work_args(&["77-mawjs:test-cli", "--as", "isolated"]), &mut tmux);
+        let move_fail = promote_run_command_with(
+            &work_args(&["77-mawjs:test-cli", "--as", "isolated"]),
+            &mut tmux,
+        );
         assert_eq!(move_fail.code, 1);
         assert!(move_fail.stderr.contains("move failed"));
-        assert!(!tmux.mutation_calls.contains(&"kill-session -t isolated".to_owned()));
-        assert!(tmux.mutation_calls.contains(&"kill-window -t isolated:__promote_placeholder__".to_owned()));
+        assert!(!tmux
+            .mutation_calls
+            .contains(&"kill-session -t isolated".to_owned()));
+        assert!(tmux
+            .mutation_calls
+            .contains(&"kill-window -t isolated:__promote_placeholder__".to_owned()));
 
         let mut tmux = PromoteFakeTmux::promote_fixture();
         tmux.list_windows_fail_for.insert("isolated".to_owned());
-        let list_fail = promote_run_command_with(&work_args(&["77-mawjs:test-cli", "--as", "isolated"]), &mut tmux);
+        let list_fail = promote_run_command_with(
+            &work_args(&["77-mawjs:test-cli", "--as", "isolated"]),
+            &mut tmux,
+        );
         assert_eq!(list_fail.code, 1);
-        assert!(list_fail.stderr.contains("no session rollback performed because ownership cannot be verified"));
-        assert!(!tmux.mutation_calls.contains(&"kill-session -t isolated".to_owned()));
-        assert!(tmux.mutation_calls.contains(&"kill-window -t isolated:__promote_placeholder__".to_owned()));
+        assert!(list_fail
+            .stderr
+            .contains("no session rollback performed because ownership cannot be verified"));
+        assert!(!tmux
+            .mutation_calls
+            .contains(&"kill-session -t isolated".to_owned()));
+        assert!(tmux
+            .mutation_calls
+            .contains(&"kill-window -t isolated:__promote_placeholder__".to_owned()));
     }
 
     #[test]
@@ -477,7 +704,11 @@ mod work_bundle_tests {
     fn preflight_json_reports_temp_git_repo_clean() {
         let _lock = super::env_test_lock();
         let env = WorkBundleEnvGuard::work_new();
-        std::process::Command::new("git").arg("init").arg(&env.root).output().expect("git init");
+        std::process::Command::new("git")
+            .arg("init")
+            .arg(&env.root)
+            .output()
+            .expect("git init");
         let out = preflight_run_command(&work_args(&[env.root.to_str().expect("utf8"), "--json"]));
         assert_eq!(out.code, 0, "{}", out.stderr);
         assert!(out.stdout.contains("\"git\":true"));

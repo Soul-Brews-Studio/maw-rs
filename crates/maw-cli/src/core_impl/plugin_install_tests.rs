@@ -24,7 +24,8 @@ mod plugin_install_tests {
     #[test]
     fn classifier_accepts_explicit_git_url_forms() {
         assert_eq!(
-            classify_plugin_install_source("https://github.com/owner/repo", None, None).expect("https"),
+            classify_plugin_install_source("https://github.com/owner/repo", None, None)
+                .expect("https"),
             InstallSource::Git {
                 url: "https://github.com/owner/repo".to_owned(),
                 reference: None,
@@ -73,8 +74,12 @@ mod plugin_install_tests {
     #[test]
     fn classifier_maps_owner_repo_shorthand_to_github_when_not_local() {
         assert_eq!(
-            classify_plugin_install_source("Soul-Brews-Studio/maw-js", Some("alpha".to_owned()), None)
-                .expect("shorthand"),
+            classify_plugin_install_source(
+                "Soul-Brews-Studio/maw-js",
+                Some("alpha".to_owned()),
+                None
+            )
+            .expect("shorthand"),
             InstallSource::Git {
                 url: "https://github.com/Soul-Brews-Studio/maw-js".to_owned(),
                 reference: Some("alpha".to_owned()),
@@ -95,8 +100,12 @@ mod plugin_install_tests {
             }
         );
         assert_eq!(
-            classify_plugin_install_source("Soul-Brews-Studio/maw-plugins/packages/costs", None, None)
-                .expect("monorepo shorthand"),
+            classify_plugin_install_source(
+                "Soul-Brews-Studio/maw-plugins/packages/costs",
+                None,
+                None
+            )
+            .expect("monorepo shorthand"),
             InstallSource::Git {
                 url: "https://github.com/Soul-Brews-Studio/maw-plugins".to_owned(),
                 reference: None,
@@ -111,19 +120,29 @@ mod plugin_install_tests {
     fn classifier_keeps_local_paths_local() {
         assert_eq!(
             classify_plugin_install_source("local-plugin", None, None).expect("plain local"),
-            InstallSource::Local { dir: std::path::PathBuf::from("local-plugin"), sha256: None }
+            InstallSource::Local {
+                dir: std::path::PathBuf::from("local-plugin"),
+                sha256: None
+            }
         );
 
         let dir = temp_existing_dir("existing");
         assert_eq!(
-            classify_plugin_install_source(&dir.display().to_string(), None, None).expect("existing"),
-            InstallSource::Local { dir: dir.clone(), sha256: None }
+            classify_plugin_install_source(&dir.display().to_string(), None, None)
+                .expect("existing"),
+            InstallSource::Local {
+                dir: dir.clone(),
+                sha256: None
+            }
         );
 
         let pathish = "./missing-plugin";
         assert_eq!(
             classify_plugin_install_source(pathish, None, None).expect("pathish"),
-            InstallSource::Local { dir: std::path::PathBuf::from(pathish), sha256: None }
+            InstallSource::Local {
+                dir: std::path::PathBuf::from(pathish),
+                sha256: None
+            }
         );
 
         let pin = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -151,28 +170,56 @@ mod plugin_install_tests {
         let path = temp_existing_dir("lock").join("plugins.lock");
         let _guard = crate::test_env::EnvVarGuard::set("MAW_PLUGINS_LOCK", &path);
         let sha = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        let matched = verify_plugin_install_pin("demo", "0.1.0", Some(sha), Some(sha), true, false).expect("match");
+        let matched = verify_plugin_install_pin("demo", "0.1.0", Some(sha), Some(sha), true, false)
+            .expect("match");
         assert_eq!(matched.warning, None);
         assert_eq!(matched.resolved_sha256.as_deref(), Some(sha));
-        let err = verify_plugin_install_pin("demo", "0.1.0", Some(sha), Some("sha256:1111111111111111111111111111111111111111111111111111111111111111"), false, false).expect_err("mismatch");
+        let err = verify_plugin_install_pin(
+            "demo",
+            "0.1.0",
+            Some(sha),
+            Some("sha256:1111111111111111111111111111111111111111111111111111111111111111"),
+            false,
+            false,
+        )
+        .expect_err("mismatch");
         assert!(err.contains("sha256 mismatch"), "{err}");
-        assert!(verify_plugin_install_pin("demo", "0.1.0", Some(sha), None, true, false).expect("warn").warning.expect("warning").contains("unpinned"));
+        assert!(
+            verify_plugin_install_pin("demo", "0.1.0", Some(sha), None, true, false)
+                .expect("warn")
+                .warning
+                .expect("warning")
+                .contains("unpinned")
+        );
         let locked = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         std::fs::write(&path, format!(r#"{{"schema":1,"plugins":{{"demo":{{"version":"0.1.0","sha256":"{locked}","source":"github:o/r@v1"}}}}}}"#)).expect("lock");
-        assert_eq!(verify_plugin_install_pin("demo", "0.1.0", Some(locked), None, true, false).expect("lock match").warning, None);
-        let err = verify_plugin_install_pin("demo", "0.1.0", Some(sha), None, false, false).expect_err("lock mismatch");
+        assert_eq!(
+            verify_plugin_install_pin("demo", "0.1.0", Some(locked), None, true, false)
+                .expect("lock match")
+                .warning,
+            None
+        );
+        let err = verify_plugin_install_pin("demo", "0.1.0", Some(sha), None, false, false)
+            .expect_err("lock mismatch");
         assert!(err.contains("plugins.lock"), "{err}");
         // --force replaces a mismatching lock pin instead of refusing.
-        let forced = verify_plugin_install_pin("demo", "0.2.0", Some(sha), None, false, true).expect("forced");
-        assert!(forced.warning.expect("force warning").contains("pin replaced"));
+        let forced = verify_plugin_install_pin("demo", "0.2.0", Some(sha), None, false, true)
+            .expect("forced");
+        assert!(forced
+            .warning
+            .expect("force warning")
+            .contains("pin replaced"));
         // explicit --sha256 contradiction stays fatal even with --force.
-        let err = verify_plugin_install_pin("demo", "0.1.0", Some(locked), Some(sha), false, true).expect_err("explicit pin mismatch");
+        let err = verify_plugin_install_pin("demo", "0.1.0", Some(locked), Some(sha), false, true)
+            .expect_err("explicit pin mismatch");
         assert!(err.contains("sha256 mismatch"), "{err}");
     }
 
     #[test]
     fn lock_writer_creates_file_preserves_entries_and_lists_names() {
-        let path = temp_existing_dir("lock-write").join("nested").join("plugins.lock");
+        let path = temp_existing_dir("lock-write")
+            .join("nested")
+            .join("plugins.lock");
         let _guard = crate::test_env::EnvVarGuard::set("MAW_PLUGINS_LOCK", &path);
         let summary = maw_plugin_manifest::PluginInstallSummary {
             name: "demo".to_owned(),
@@ -187,8 +234,11 @@ mod plugin_install_tests {
         super::record_plugin_install_pin(&summary, None, "path:/tmp/demo-src").expect("noop");
         assert!(!path.exists());
 
-        super::record_plugin_install_pin(&summary, Some(sha), "path:/tmp/demo-src").expect("create");
-        let entry = super::read_plugin_lock_entry_full("demo").expect("read").expect("entry");
+        super::record_plugin_install_pin(&summary, Some(sha), "path:/tmp/demo-src")
+            .expect("create");
+        let entry = super::read_plugin_lock_entry_full("demo")
+            .expect("read")
+            .expect("entry");
         assert_eq!(entry.version, "0.1.0");
         assert_eq!(entry.sha256, sha);
         assert_eq!(entry.source.as_deref(), Some("path:/tmp/demo-src"));
@@ -205,7 +255,9 @@ mod plugin_install_tests {
         let mut names = super::plugin_lock_pinned_names();
         names.sort();
         assert_eq!(names, vec!["demo".to_owned(), "other".to_owned()]);
-        assert!(super::read_plugin_lock_entry_full("demo").expect("read").is_some());
+        assert!(super::read_plugin_lock_entry_full("demo")
+            .expect("read")
+            .is_some());
     }
 
     fn write_wasm_package_manifest(
@@ -225,8 +277,11 @@ mod plugin_install_tests {
 
     fn write_wasm_package_fixture(dir: &std::path::Path, name: &str) -> String {
         std::fs::create_dir_all(dir).expect("package dir");
-        std::fs::write(dir.join("plugin.wasm"), b"\0asm\x01\x00\x00\x00verify-fixture")
-            .expect("wasm artifact");
+        std::fs::write(
+            dir.join("plugin.wasm"),
+            b"\0asm\x01\x00\x00\x00verify-fixture",
+        )
+        .expect("wasm artifact");
         let sha256 = maw_plugin_manifest::hash_file(&dir.join("plugin.wasm")).expect("hash wasm");
         write_wasm_package_manifest(dir, name, "plugin.wasm", &sha256);
         sha256
@@ -245,7 +300,10 @@ mod plugin_install_tests {
         else {
             panic!("expected wasm verification");
         };
-        assert_eq!(verification.resolved_sha256.as_deref(), Some(sha256.as_str()));
+        assert_eq!(
+            verification.resolved_sha256.as_deref(),
+            Some(sha256.as_str())
+        );
         assert_eq!(verification.warning, None);
 
         // Explicit --sha256 equal to the manifest pin still verifies.
@@ -254,7 +312,10 @@ mod plugin_install_tests {
         else {
             panic!("expected wasm verification");
         };
-        assert_eq!(verification.resolved_sha256.as_deref(), Some(sha256.as_str()));
+        assert_eq!(
+            verification.resolved_sha256.as_deref(),
+            Some(sha256.as_str())
+        );
 
         let _ = std::fs::remove_dir_all(root);
     }
@@ -264,10 +325,16 @@ mod plugin_install_tests {
         let root = temp_existing_dir("verify-tamper");
         let package = root.join("pkg");
         write_wasm_package_fixture(&package, "verify-tamper-demo");
-        std::fs::write(package.join("plugin.wasm"), b"\0asm\x01\x00\x00\x00TAMPERED")
-            .expect("tamper");
+        std::fs::write(
+            package.join("plugin.wasm"),
+            b"\0asm\x01\x00\x00\x00TAMPERED",
+        )
+        .expect("tamper");
         let error = verify_package_dir(&package, None, false, false).expect_err("refused");
-        assert!(error.contains("artifact sha256 mismatch — refusing to install"), "{error}");
+        assert!(
+            error.contains("artifact sha256 mismatch — refusing to install"),
+            "{error}"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -276,8 +343,11 @@ mod plugin_install_tests {
         let root = temp_existing_dir("verify-missing-pin");
         let package = root.join("pkg");
         std::fs::create_dir_all(&package).expect("package dir");
-        std::fs::write(package.join("plugin.wasm"), b"\0asm\x01\x00\x00\x00unpinned")
-            .expect("wasm artifact");
+        std::fs::write(
+            package.join("plugin.wasm"),
+            b"\0asm\x01\x00\x00\x00unpinned",
+        )
+        .expect("wasm artifact");
         std::fs::write(
             package.join("plugin.json"),
             r#"{"name":"verify-unpinned-demo","version":"1.0.0","target":"wasm","sdk":"*","artifact":{"path":"plugin.wasm"},"cli":{"command":"verify-unpinned-demo"}}"#,
@@ -296,7 +366,12 @@ mod plugin_install_tests {
         std::fs::write(root.join("outside.wasm"), b"\0asm\x01\x00\x00\x00outside")
             .expect("outside wasm");
         let sha256 = maw_plugin_manifest::hash_file(&root.join("outside.wasm")).expect("hash");
-        write_wasm_package_manifest(&package, "verify-traversal-demo", "../outside.wasm", &sha256);
+        write_wasm_package_manifest(
+            &package,
+            "verify-traversal-demo",
+            "../outside.wasm",
+            &sha256,
+        );
         let error = verify_package_dir(&package, None, false, false).expect_err("refused");
         assert!(error.contains("must stay inside the package"), "{error}");
 
@@ -317,7 +392,10 @@ mod plugin_install_tests {
         write_wasm_package_fixture(&package, "verify-force-proof-demo");
         let wrong = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
         let error = verify_package_dir(&package, Some(wrong), false, true).expect_err("refused");
-        assert!(error.contains("sha256 mismatch — refusing to install"), "{error}");
+        assert!(
+            error.contains("sha256 mismatch — refusing to install"),
+            "{error}"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

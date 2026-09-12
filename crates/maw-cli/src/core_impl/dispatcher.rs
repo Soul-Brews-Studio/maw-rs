@@ -15,16 +15,15 @@ use maw_auth::{
     pair_api_accept_plan, pair_api_auto_plan, pair_api_generate_plan, pair_api_probe_plan,
     pair_api_status_plan, pretty_pair_code, redact_pair_code, reject_consent_plan,
     request_consent_plan, resolve_from_address, resolve_sender_oracle, sign, sign_auto_pair_proof,
-    sign_headers_at,
-    sign_headers_v3_at, sign_hmac_sig, sign_request_v3, trust_key, verify, verify_auto_pair_proof,
-    verify_consent_pin, verify_hmac_sig, verify_request, ApprovedBy, AutoPairAddOutcome,
-    AutoPairIdentity, AutoPairInput, ConsentAction, ConsentApprovalResult, ConsentRequestArgs,
-    ConsentRequestResult, ConsentStatus, ConsentStore, Ed25519TofuStore, FromAddressConfig, FromVerifyDecision,
-    Headers, LookupResult, PairAcceptInput, PairApiAcceptResult, PairApiAutoResult, PairApiConfig,
-    PairApiGenerateResult, PairApiProbeResult, PairApiStatusResult, PairCodeStore, PairEntry,
-    PeerPendingRequest, PeerPostResult, PendingRequest, RecentHelloStore, RequestAuthDecision,
-    RequestAuthParts, TrustEntry, VerifyRequestArgs, DEFAULT_ORACLE, PAIR_CODE_ALPHABET,
-    WINDOW_SEC,
+    sign_headers_at, sign_headers_v3_at, sign_hmac_sig, sign_request_v3, trust_key, verify,
+    verify_auto_pair_proof, verify_consent_pin, verify_hmac_sig, verify_request, ApprovedBy,
+    AutoPairAddOutcome, AutoPairIdentity, AutoPairInput, ConsentAction, ConsentApprovalResult,
+    ConsentRequestArgs, ConsentRequestResult, ConsentStatus, ConsentStore, Ed25519TofuStore,
+    FromAddressConfig, FromVerifyDecision, Headers, LookupResult, PairAcceptInput,
+    PairApiAcceptResult, PairApiAutoResult, PairApiConfig, PairApiGenerateResult,
+    PairApiProbeResult, PairApiStatusResult, PairCodeStore, PairEntry, PeerPendingRequest,
+    PeerPostResult, PendingRequest, RecentHelloStore, RequestAuthDecision, RequestAuthParts,
+    TrustEntry, VerifyRequestArgs, DEFAULT_ORACLE, PAIR_CODE_ALPHABET, WINDOW_SEC,
 };
 use maw_auto_wake::{should_auto_wake, AutoWakeManifest, AutoWakeOptions, AutoWakeSite};
 use maw_bind::{resolve_bind_host, BindConfig, BindHostResult};
@@ -48,11 +47,11 @@ use maw_plugin_manifest::ExtismWasmInvokeRuntime;
 #[cfg(not(feature = "wasm-host"))]
 use maw_plugin_manifest::WasmHostUnavailableRuntime;
 use maw_plugin_manifest::{
-    build_js_plugin_dir, discover_packages, hash_file, import_plugin_symbol, infer_plugin_capabilities,
-    init_js_plugin_dir, install_built_plugin_dir, invoke_plugin, load_manifest_from_dir,
-    parse_manifest, DiscoverPackagesOptions, DiscoverPackagesReport, HOST_FN_NAMES, InvokeContext,
-    InvokeResult, InvokeSource, LoadedPlugin, LoadedPluginKind,
-    PluginManifest, PluginTier,
+    build_js_plugin_dir, discover_packages, hash_file, import_plugin_symbol,
+    infer_plugin_capabilities, init_js_plugin_dir, install_built_plugin_dir, invoke_plugin,
+    load_manifest_from_dir, parse_manifest, DiscoverPackagesOptions, DiscoverPackagesReport,
+    InvokeContext, InvokeResult, InvokeSource, LoadedPlugin, LoadedPluginKind, PluginManifest,
+    PluginTier, HOST_FN_NAMES,
 };
 use maw_plugin_scaffold::{
     build_manifest_json, cmd_plugin_create, validate_plugin_name, PluginCreateRequest,
@@ -69,17 +68,17 @@ use maw_routing::{
 };
 use maw_split::{decide_split_policy, SplitPolicyDecision, SplitPolicyInput};
 use maw_tmux::{
-    decide_tmux_attach_action, mark_peer_targets_live, resolve_tmux_live_state,
-    resolve_tmux_attach_session, tmux_attach_spawn_command, DiscoverLivePane, LivePeerTarget,
-    PeerTargetWithLive, CommandTmuxRunner, TmuxAttachAction, TmuxAttachSessionResolution,
-    TmuxClient, TmuxLiveStateResult, TmuxPane, TmuxSession,
+    decide_tmux_attach_action, mark_peer_targets_live, resolve_tmux_attach_session,
+    resolve_tmux_live_state, tmux_attach_spawn_command, CommandTmuxRunner, DiscoverLivePane,
+    LivePeerTarget, PeerTargetWithLive, TmuxAttachAction, TmuxAttachSessionResolution, TmuxClient,
+    TmuxLiveStateResult, TmuxPane, TmuxSession,
 };
 use maw_transport::{
     classify_error, classify_symmetric_federation_status, FederationPeerStatus, FederationPeerView,
-    FederationStatus, PairStatus, PeerFederationStatus, PeerFederationStatusResult,
-    SymmetricFederationStatus, Transport, TransportFailureReason, TransportResult, TransportRouter,
-    HttpRequest as TransportHttpRequest, PeerProbeAuthResult, PeerSendRequest, PeerWakeRequest,
-    ReqwestHttpTransportIo, TransportTarget,
+    FederationStatus, HttpRequest as TransportHttpRequest, PairStatus, PeerFederationStatus,
+    PeerFederationStatusResult, PeerProbeAuthResult, PeerSendRequest, PeerWakeRequest,
+    ReqwestHttpTransportIo, SymmetricFederationStatus, Transport, TransportFailureReason,
+    TransportResult, TransportRouter, TransportTarget,
 };
 use maw_worktree::{
     resolve_worktree_window, Session as WorktreeSession, Window as WorktreeWindow,
@@ -246,16 +245,43 @@ enum DispatchTarget {
 }
 
 const DISPATCH_01: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "--help", handler: Handler::Sync(usage_handler) },
-    DispatcherEntry { command: "-h", handler: Handler::Sync(usage_handler) },
-    DispatcherEntry { command: "help", handler: Handler::Sync(usage_handler) },
-    DispatcherEntry { command: "commands", handler: Handler::Sync(commands_handler) },
-    DispatcherEntry { command: "--version", handler: Handler::Sync(version_handler) },
-    DispatcherEntry { command: "-v", handler: Handler::Sync(version_handler) },
-    DispatcherEntry { command: "version", handler: Handler::Sync(version_handler) },
-    DispatcherEntry { command: "auto-wake", handler: Handler::Sync(run_auto_wake_plan) },
+    DispatcherEntry {
+        command: "--help",
+        handler: Handler::Sync(usage_handler),
+    },
+    DispatcherEntry {
+        command: "-h",
+        handler: Handler::Sync(usage_handler),
+    },
+    DispatcherEntry {
+        command: "help",
+        handler: Handler::Sync(usage_handler),
+    },
+    DispatcherEntry {
+        command: "commands",
+        handler: Handler::Sync(commands_handler),
+    },
+    DispatcherEntry {
+        command: "--version",
+        handler: Handler::Sync(version_handler),
+    },
+    DispatcherEntry {
+        command: "-v",
+        handler: Handler::Sync(version_handler),
+    },
+    DispatcherEntry {
+        command: "version",
+        handler: Handler::Sync(version_handler),
+    },
+    DispatcherEntry {
+        command: "auto-wake",
+        handler: Handler::Sync(run_auto_wake_plan),
+    },
     #[cfg(test)]
-    DispatcherEntry { command: "__async-dispatch-test", handler: Handler::Async(run_async_dispatch_test) },
+    DispatcherEntry {
+        command: "__async-dispatch-test",
+        handler: Handler::Async(run_async_dispatch_test),
+    },
 ];
 
 #[must_use]
@@ -268,7 +294,7 @@ pub fn dispatcher_status(command: &str) -> DispatchKind {
 
 #[cfg(test)]
 mod async_dispatch_tests {
-    use super::{run_cli_async, CliOutput, DispatchKind, dispatcher_status};
+    use super::{dispatcher_status, run_cli_async, CliOutput, DispatchKind};
 
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_owned()).collect()
@@ -293,7 +319,6 @@ mod async_dispatch_tests {
     }
 }
 
-
 #[cfg(test)]
 mod dispatcher_fragment_tests {
     use super::{
@@ -307,8 +332,8 @@ mod dispatcher_fragment_tests {
     use std::fs;
 
     const CORE_COMMANDS: &[&str] = &[
-        "hey", "send", "serve", "health", "ls", "wake", "tmux", "init", "reply", "run",
-        "attach", "bud", "buddy",
+        "hey", "send", "serve", "health", "ls", "wake", "tmux", "init", "reply", "run", "attach",
+        "bud", "buddy",
     ];
 
     #[test]
@@ -328,13 +353,27 @@ mod dispatcher_fragment_tests {
 
         let mut seen = BTreeSet::new();
         for command in &commands {
-            assert!(seen.insert(*command), "duplicate dispatcher command: {command}");
-            assert_eq!(dispatcher_status(command), DispatchKind::Native, "{command}");
+            assert!(
+                seen.insert(*command),
+                "duplicate dispatcher command: {command}"
+            );
+            assert_eq!(
+                dispatcher_status(command),
+                DispatchKind::Native,
+                "{command}"
+            );
         }
-        assert_eq!(commands.len(), seen.len(), "dispatcher command count drifted from unique set");
+        assert_eq!(
+            commands.len(),
+            seen.len(),
+            "dispatcher command count drifted from unique set"
+        );
 
         for command in CORE_COMMANDS {
-            assert!(seen.contains(*command), "missing core dispatcher command: {command}");
+            assert!(
+                seen.contains(*command),
+                "missing core dispatcher command: {command}"
+            );
         }
     }
 
@@ -348,10 +387,18 @@ mod dispatcher_fragment_tests {
         let _guard = env_test_lock();
         let (_state_root, _restores) = cli_dispatch_test_env();
         for command in ["--version", "-v", "version"] {
-            assert_eq!(dispatcher_status(command), DispatchKind::Native, "{command}");
+            assert_eq!(
+                dispatcher_status(command),
+                DispatchKind::Native,
+                "{command}"
+            );
             let output = run_cli(&[command.to_owned()]);
             assert_eq!(output.code, 0, "{command}");
-            assert_eq!(output.stdout, format!("{MAW_RS_VERSION_STRING}\n"), "{command}");
+            assert_eq!(
+                output.stdout,
+                format!("{MAW_RS_VERSION_STRING}\n"),
+                "{command}"
+            );
             assert!(output.stderr.is_empty(), "{command}: {}", output.stderr);
         }
         assert!(MAW_RS_VERSION_STRING.starts_with("maw-rs v"));
@@ -374,18 +421,29 @@ mod dispatcher_fragment_tests {
             .collect();
         assert!(!rows.is_empty(), "{text}");
         let row: serde_json::Value = serde_json::from_str(rows.last().expect("row")).expect("json");
-        assert_eq!(row.get("cmd").and_then(serde_json::Value::as_str), Some("version"));
         assert_eq!(
-            row.get("args").and_then(serde_json::Value::as_array).map(Vec::len),
+            row.get("cmd").and_then(serde_json::Value::as_str),
+            Some("version")
+        );
+        assert_eq!(
+            row.get("args")
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len),
             Some(0)
         );
-        assert_eq!(row.get("binary").and_then(serde_json::Value::as_str), Some("maw-rs"));
+        assert_eq!(
+            row.get("binary").and_then(serde_json::Value::as_str),
+            Some("maw-rs")
+        );
         assert_eq!(
             row.get("version").and_then(serde_json::Value::as_str),
             Some(super::MAW_RS_BUILD_VERSION)
         );
         let config_path = super::maw_config_path(&current_xdg_env(), &["audit.jsonl"]);
-        assert!(!config_path.exists(), "audit must use state, not config: {config_path:?}");
+        assert!(
+            !config_path.exists(),
+            "audit must use state, not config: {config_path:?}"
+        );
     }
 
     #[test]
@@ -445,7 +503,6 @@ mod dispatcher_fragment_tests {
         assert_eq!(cli_dispatch_now_iso(), "1970-01-01T00:00:00.000Z");
         std::env::remove_var("MAW_AUDIT_TEST_NOW_MS");
     }
-
 }
 
 #[must_use]
@@ -460,9 +517,11 @@ fn dispatcher_entries() -> impl Iterator<Item = &'static DispatcherEntry> {
 fn dispatcher_target(command: &str) -> DispatchTarget {
     dispatcher_entries()
         .find(|entry| entry.command == command)
-        .map_or(DispatchTarget::UnknownCommand, |entry| match entry.handler {
-            Handler::Sync(handler) => DispatchTarget::Native(handler),
-            Handler::Async(handler) => DispatchTarget::AsyncNative(handler),
+        .map_or(DispatchTarget::UnknownCommand, |entry| {
+            match entry.handler {
+                Handler::Sync(handler) => DispatchTarget::Native(handler),
+                Handler::Async(handler) => DispatchTarget::AsyncNative(handler),
+            }
         })
 }
 
@@ -497,9 +556,9 @@ pub fn run_cli(argv: &[String]) -> CliOutput {
             cli_dispatch_log_command(command, &argv[1..]);
             native_or_plugin_fallback(argv, || handler(&argv[1..]))
         }
-        DispatchTarget::AsyncNative(handler) => native_or_plugin_fallback(argv, || {
-            run_async_handler_blocking(handler, &argv[1..])
-        }),
+        DispatchTarget::AsyncNative(handler) => {
+            native_or_plugin_fallback(argv, || run_async_handler_blocking(handler, &argv[1..]))
+        }
         DispatchTarget::UnknownCommand => dispatch_cli_plugin_or_unknown(argv, command),
     }
 }
@@ -609,15 +668,15 @@ fn cli_dispatch_now_iso() -> String {
     let minute = (day_seconds % 3600) / 60;
     let second = day_seconds % 60;
     let (year, month, day) = cli_dispatch_civil_from_days(days);
-    format!(
-        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z"
-    )
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z")
 }
 
 fn cli_dispatch_now_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
+        .map_or(0, |duration| {
+            u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+        })
 }
 
 fn cli_dispatch_civil_from_days(days: i64) -> (i32, u32, u32) {
@@ -642,7 +701,8 @@ fn run_async_handler_blocking(handler: AsyncHandler, args: &[String]) -> CliOutp
         return CliOutput {
             code: 1,
             stdout: String::new(),
-            stderr: "cannot block_on inside runtime; call run_cli_async for async commands\n".to_owned(),
+            stderr: "cannot block_on inside runtime; call run_cli_async for async commands\n"
+                .to_owned(),
         };
     }
 
@@ -672,7 +732,6 @@ fn run_async_dispatch_test(args: Vec<String>) -> Pin<Box<dyn Future<Output = Cli
         }
     })
 }
-
 
 fn dispatch_cli_plugin_or_unknown(argv: &[String], command: &str) -> CliOutput {
     // SDK-floor gate: default options carry the ABI-derived runtime version
@@ -841,7 +900,6 @@ fn plugin_manifest_opts_into_bun_dev(plugin: &LoadedPlugin) -> bool {
         .is_some_and(|runtime| runtime == "bun-dev")
 }
 
-
 #[cfg(test)]
 mod ts_plugin_dispatch_decision_tests {
     use super::*;
@@ -863,8 +921,11 @@ mod ts_plugin_dispatch_decision_tests {
 
     fn load_ts_plugin(label: &str, runtime: Option<&str>) -> (std::path::PathBuf, LoadedPlugin) {
         let dir = temp_plugin_dir(label);
-        std::fs::write(dir.join("index.ts"), "export default async function main() {}\n")
-            .expect("entry");
+        std::fs::write(
+            dir.join("index.ts"),
+            "export default async function main() {}\n",
+        )
+        .expect("entry");
         let mut manifest = json!({
             "name": label,
             "version": "1.0.0",
@@ -934,7 +995,9 @@ mod ts_plugin_dispatch_decision_tests {
         let shim_dir = temp_plugin_dir("fake-bun-bin");
         let fake_bun = shim_dir.join("bun");
         std::fs::write(&fake_bun, "#!/bin/sh\npwd -P\n").expect("fake bun");
-        let mut permissions = std::fs::metadata(&fake_bun).expect("metadata").permissions();
+        let mut permissions = std::fs::metadata(&fake_bun)
+            .expect("metadata")
+            .permissions();
         permissions.set_mode(0o755);
         std::fs::set_permissions(&fake_bun, permissions).expect("chmod");
         let mut path_entries = vec![shim_dir.clone()];
@@ -956,7 +1019,10 @@ mod ts_plugin_dispatch_decision_tests {
             format!("{}\n", caller_dir.canonicalize().expect("caller").display())
         );
 
-        let fallback_ctx = InvokeContext { cwd: None, ..caller_ctx };
+        let fallback_ctx = InvokeContext {
+            cwd: None,
+            ..caller_ctx
+        };
         let fallback_output = dispatch_bun_dev_plugin(&plugin, &fallback_ctx);
         assert_eq!(fallback_output.code, 0);
         assert_eq!(
@@ -1011,7 +1077,9 @@ mod ts_plugin_dispatch_decision_tests {
             "#!/bin/sh\necho streamed-stdout\necho streamed-stderr 1>&2\nexit 7\n",
         )
         .expect("fake bun");
-        let mut permissions = std::fs::metadata(&fake_bun).expect("metadata").permissions();
+        let mut permissions = std::fs::metadata(&fake_bun)
+            .expect("metadata")
+            .permissions();
         permissions.set_mode(0o755);
         std::fs::set_permissions(&fake_bun, permissions).expect("chmod");
         let mut path_entries = vec![shim_dir.clone()];
@@ -1061,7 +1129,9 @@ mod ts_plugin_dispatch_decision_tests {
         let shim_dir = temp_plugin_dir("fake-bun-bin-piped-explicit");
         let fake_bun = shim_dir.join("bun");
         std::fs::write(&fake_bun, "#!/bin/sh\necho piped-stdout\nexit 0\n").expect("fake bun");
-        let mut permissions = std::fs::metadata(&fake_bun).expect("metadata").permissions();
+        let mut permissions = std::fs::metadata(&fake_bun)
+            .expect("metadata")
+            .permissions();
         permissions.set_mode(0o755);
         std::fs::set_permissions(&fake_bun, permissions).expect("chmod");
         let mut path_entries = vec![shim_dir.clone()];
@@ -1105,7 +1175,9 @@ mod ts_plugin_dispatch_decision_tests {
             "#!/bin/sh\necho \"error: Cannot find module 'foo' from '/some/path'\" 1>&2\nexit 1\n",
         )
         .expect("fake bun");
-        let mut permissions = std::fs::metadata(&fake_bun).expect("metadata").permissions();
+        let mut permissions = std::fs::metadata(&fake_bun)
+            .expect("metadata")
+            .permissions();
         permissions.set_mode(0o755);
         std::fs::set_permissions(&fake_bun, permissions).expect("chmod");
         let mut path_entries = vec![shim_dir.clone()];
@@ -1138,7 +1210,9 @@ mod ts_plugin_dispatch_decision_tests {
             output.stderr
         );
         assert!(
-            output.stderr.contains("Cannot find module 'foo' from '/some/path'"),
+            output
+                .stderr
+                .contains("Cannot find module 'foo' from '/some/path'"),
             "wrapped stderr should keep the raw bun error visible below the wrapper: {}",
             output.stderr
         );
@@ -1190,7 +1264,10 @@ fn dispatch_bun_dev_plugin_with_tty(
         return CliOutput {
             code: 2,
             stdout: String::new(),
-            stderr: format!("{banner}dev-tier plugin {} has no TS/JS entry\n", plugin.manifest.name),
+            stderr: format!(
+                "{banner}dev-tier plugin {} has no TS/JS entry\n",
+                plugin.manifest.name
+            ),
         };
     };
 
@@ -1402,7 +1479,9 @@ fn render_cli_plugin_result(result: InvokeResult) -> CliOutput {
     if result.ok {
         return CliOutput {
             code: 0,
-            stdout: result.output.map_or_else(String::new, with_trailing_newline),
+            stdout: result
+                .output
+                .map_or_else(String::new, with_trailing_newline),
             stderr: String::new(),
         };
     }
@@ -1424,7 +1503,6 @@ fn with_trailing_newline(mut value: String) -> String {
     }
     value
 }
-
 
 #[allow(clippy::too_many_lines)]
 fn run_auto_wake_plan(argv: &[String]) -> CliOutput {

@@ -1,6 +1,7 @@
-const DISPATCH_107: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "activity", handler: Handler::Sync(activity_run_command) },
-];
+const DISPATCH_107: &[DispatcherEntry] = &[DispatcherEntry {
+    command: "activity",
+    handler: Handler::Sync(activity_run_command),
+}];
 
 #[derive(Debug, Default)]
 struct ActivityEnvTmux {
@@ -16,7 +17,9 @@ impl ActivityTmux for ActivityEnvTmux {
         }
     }
 
-    fn list_all(&mut self) -> Result<Vec<TmuxSession>, String> { Ok(Vec::new()) }
+    fn list_all(&mut self) -> Result<Vec<TmuxSession>, String> {
+        Ok(Vec::new())
+    }
 }
 
 #[derive(Debug)]
@@ -32,7 +35,9 @@ impl ActivityClock for ActivityEnvClock {
         now
     }
 
-    fn sleep_ms(&mut self, ms: u64) { self.now = self.now.saturating_add(ms); }
+    fn sleep_ms(&mut self, ms: u64) {
+        self.now = self.now.saturating_add(ms);
+    }
 }
 
 fn activity_run_command(argv: &[String]) -> CliOutput {
@@ -47,17 +52,34 @@ fn activity_run_fake_command(argv: &[String]) -> CliOutput {
         Ok(parsed) => parsed,
         Err(message) => return activity_parse_error(&message),
     };
-    let mut tmux = ActivityEnvTmux { captures: activity_fake_captures() };
-    let mut clock = ActivityEnvClock { now: 0, step: 1_000 };
+    let mut tmux = ActivityEnvTmux {
+        captures: activity_fake_captures(),
+    };
+    let mut clock = ActivityEnvClock {
+        now: 0,
+        step: 1_000,
+    };
     match cmd_activity(parsed.0.as_deref(), &parsed.1, &mut tmux, &mut clock) {
-        Ok(output) => CliOutput { code: 0, stdout: output.stdout, stderr: output.stderr },
-        Err(message) => CliOutput { code: 1, stdout: String::new(), stderr: format!("activity: {message}\n") },
+        Ok(output) => CliOutput {
+            code: 0,
+            stdout: output.stdout,
+            stderr: output.stderr,
+        },
+        Err(message) => CliOutput {
+            code: 1,
+            stdout: String::new(),
+            stderr: format!("activity: {message}\n"),
+        },
     }
 }
 
 fn activity_parse_error(message: &str) -> CliOutput {
     let code = if message == ACTIVITY_USAGE { 2 } else { 1 };
-    CliOutput { code, stdout: String::new(), stderr: format!("{message}\n") }
+    CliOutput {
+        code,
+        stdout: String::new(),
+        stderr: format!("{message}\n"),
+    }
 }
 
 fn activity_fake_captures() -> Vec<String> {

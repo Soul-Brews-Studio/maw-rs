@@ -120,7 +120,10 @@ fn auth_ed25519_cli_pins(
 ) -> std::sync::Arc<std::sync::Mutex<Ed25519TofuStore>> {
     let mut store = Ed25519TofuStore::default();
     if let (Some(from), Some(pubkey)) = (
-        headers.get("x-maw-from").map(str::trim).filter(|from| !from.is_empty()),
+        headers
+            .get("x-maw-from")
+            .map(str::trim)
+            .filter(|from| !from.is_empty()),
         cached_pubkey,
     ) {
         let _ = store.pin_first_contact(from, pubkey);
@@ -226,31 +229,21 @@ fn run_auth_from_sign_payload(
             return CliOutput {
                 code: 2,
                 stdout: String::new(),
-                stderr: "auth from-sign-payload: --signed-at is required with --legacy\n".to_owned(),
+                stderr: "auth from-sign-payload: --signed-at is required with --legacy\n"
+                    .to_owned(),
             };
         };
-        build_legacy_from_sign_payload(
-            from,
-            signed_at,
-            &method,
-            path,
-            body_hash,
-        )
+        build_legacy_from_sign_payload(from, signed_at, &method, path, body_hash)
     } else {
         let Some(timestamp) = timestamp else {
             return CliOutput {
                 code: 2,
                 stdout: String::new(),
-                stderr: "auth from-sign-payload: --timestamp is required without --legacy\n".to_owned(),
+                stderr: "auth from-sign-payload: --timestamp is required without --legacy\n"
+                    .to_owned(),
             };
         };
-        build_from_sign_payload(
-            from,
-            timestamp,
-            &method,
-            path,
-            body_hash,
-        )
+        build_from_sign_payload(from, timestamp, &method, path, body_hash)
     };
     CliOutput {
         code: 0,
@@ -441,7 +434,8 @@ fn run_auth_sign_v3(
                 return CliOutput {
                     code: 2,
                     stdout: String::new(),
-                    stderr: "auth sign-v3: signing headers failed after signature succeeded\n".to_owned(),
+                    stderr: "auth sign-v3: signing headers failed after signature succeeded\n"
+                        .to_owned(),
                 };
             };
             CliOutput {

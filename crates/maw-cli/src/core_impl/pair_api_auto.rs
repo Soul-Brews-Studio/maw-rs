@@ -1,6 +1,7 @@
-const DISPATCH_321: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "pair-api-auto", handler: Handler::Sync(run_pair_api_auto_plan) },
-];
+const DISPATCH_321: &[DispatcherEntry] = &[DispatcherEntry {
+    command: "pair-api-auto",
+    handler: Handler::Sync(run_pair_api_auto_plan),
+}];
 
 fn parse_seed_accepted(value: &str) -> Result<PairAcceptInput, String> {
     let Some((node, url)) = value.split_once('=') else {
@@ -404,4 +405,3 @@ fn pair_api_auto_usage() -> &'static str {
     "usage: maw-rs pair-api-auto --node <node> --oracle <oracle> --port <port> --base-url <url> --federation-token <token> --pubkey <pubkey> --now <ms> [--remote-node <node> --remote-url <url> --zid <zid>] [--remote-oracle <oracle>] [--remote-pubkey <pubkey>] [--hello <zid:seen_at_ms>]... [--add-ok|--add-one-way|--add-pubkey-mismatch <message>|--add-error <message>] [--plan-json]
        maw-rs pair-api-auto constants [--plan-json]"
 }
-

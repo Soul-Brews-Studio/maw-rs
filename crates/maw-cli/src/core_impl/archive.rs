@@ -1,6 +1,7 @@
-const DISPATCH_45: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "archive", handler: Handler::Sync(run_archive_command) },
-];
+const DISPATCH_45: &[DispatcherEntry] = &[DispatcherEntry {
+    command: "archive",
+    handler: Handler::Sync(run_archive_command),
+}];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ArchiveOptions {
@@ -18,8 +19,16 @@ struct ArchiveFleetEntry {
 
 fn run_archive_command(argv: &[String]) -> CliOutput {
     match archive_run_command_impl(argv) {
-        Ok(stdout) => CliOutput { code: 0, stdout, stderr: String::new() },
-        Err(message) => CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") },
+        Ok(stdout) => CliOutput {
+            code: 0,
+            stdout,
+            stderr: String::new(),
+        },
+        Err(message) => CliOutput {
+            code: 1,
+            stdout: String::new(),
+            stderr: format!("{message}\n"),
+        },
     }
 }
 
@@ -46,7 +55,9 @@ fn archive_parse_args(argv: &[String]) -> Result<Option<ArchiveOptions>, String>
             "--help" | "-h" => return Ok(None),
             "--dry-run" => dry_run = true,
             "--yes" | "-y" => yes = true,
-            value if value.starts_with('-') => return Err(format!("archive: unknown argument {value}")),
+            value if value.starts_with('-') => {
+                return Err(format!("archive: unknown argument {value}"))
+            }
             value => {
                 if oracle.is_some() {
                     return Err(archive_usage_text().to_owned());
@@ -60,19 +71,29 @@ fn archive_parse_args(argv: &[String]) -> Result<Option<ArchiveOptions>, String>
     let Some(oracle) = oracle else {
         return Err("usage: maw archive <oracle> [--dry-run]".to_owned());
     };
-    Ok(Some(ArchiveOptions { oracle, dry_run, yes }))
+    Ok(Some(ArchiveOptions {
+        oracle,
+        dry_run,
+        yes,
+    }))
 }
 
 fn archive_validate_oracle(value: &str) -> Result<(), String> {
     if value.is_empty() || value.trim() != value || value.starts_with('-') || value.contains('/') {
-        Err("archive: oracle must be non-empty, unpadded, not start with '-', and not contain '/'".to_owned())
+        Err(
+            "archive: oracle must be non-empty, unpadded, not start with '-', and not contain '/'"
+                .to_owned(),
+        )
     } else {
         Ok(())
     }
 }
 
 fn archive_find_entry(oracle: &str) -> Result<Option<ArchiveFleetEntry>, String> {
-    for entry in fleet_load_entries_result("archive")?.into_iter().filter(fleet_entry_is_session) {
+    for entry in fleet_load_entries_result("archive")?
+        .into_iter()
+        .filter(fleet_entry_is_session)
+    {
         if archive_session_oracle_name(&entry.session.name) == oracle {
             return Ok(Some(ArchiveFleetEntry {
                 file: entry.file,
@@ -87,11 +108,16 @@ fn archive_find_entry(oracle: &str) -> Result<Option<ArchiveFleetEntry>, String>
 fn archive_session_oracle_name(session_name: &str) -> &str {
     session_name
         .split_once('-')
-        .filter(|(prefix, suffix)| prefix.chars().all(|ch| ch.is_ascii_digit()) && !suffix.is_empty())
+        .filter(|(prefix, suffix)| {
+            prefix.chars().all(|ch| ch.is_ascii_digit()) && !suffix.is_empty()
+        })
         .map_or(session_name, |(_, suffix)| suffix)
 }
 
-fn archive_render_and_apply(entry: &ArchiveFleetEntry, options: &ArchiveOptions) -> Result<String, String> {
+fn archive_render_and_apply(
+    entry: &ArchiveFleetEntry,
+    options: &ArchiveOptions,
+) -> Result<String, String> {
     let repo_slug = entry
         .session
         .windows
@@ -102,7 +128,11 @@ fn archive_render_and_apply(entry: &ArchiveFleetEntry, options: &ArchiveOptions)
     }
 
     let mut out = String::new();
-    let _ = writeln!(out, "\n  \x1b[36m⚰️  Archiving\x1b[0m — {}\n", options.oracle);
+    let _ = writeln!(
+        out,
+        "\n  \x1b[36m⚰️  Archiving\x1b[0m — {}\n",
+        options.oracle
+    );
     archive_render_soul_sync(&mut out, entry, repo_slug, options)?;
     archive_render_disable(&mut out, entry, options)?;
     archive_render_repo_archive(&mut out, repo_slug, options)?;
@@ -119,7 +149,15 @@ fn archive_render_soul_sync(
     let mut host = SoulsyncSystemHost;
     let fleet = load_native_fleet();
     let github_root = ghq_root().join("github.com");
-    soul_sync_archive_render_soul_sync_with(out, entry, repo_slug, options, &mut host, &fleet, &github_root)
+    soul_sync_archive_render_soul_sync_with(
+        out,
+        entry,
+        repo_slug,
+        options,
+        &mut host,
+        &fleet,
+        &github_root,
+    )
 }
 
 fn soul_sync_archive_render_soul_sync_with(
@@ -132,7 +170,10 @@ fn soul_sync_archive_render_soul_sync_with(
     github_root: &std::path::Path,
 ) -> Result<(), String> {
     if entry.session.sync_peers.is_empty() {
-        let _ = writeln!(out, "  \x1b[90m○\x1b[0m no sync_peers configured — knowledge stays local");
+        let _ = writeln!(
+            out,
+            "  \x1b[90m○\x1b[0m no sync_peers configured — knowledge stays local"
+        );
         return Ok(());
     }
     if options.dry_run {
@@ -147,7 +188,10 @@ fn soul_sync_archive_render_soul_sync_with(
     archive_require_yes(options)?;
     let _ = writeln!(out, "  \x1b[36m⏳\x1b[0m final soul-sync to peers...");
     if repo_slug.is_empty() {
-        let _ = writeln!(out, "  \x1b[33m⚠\x1b[0m soul-sync failed: oracle repo not configured");
+        let _ = writeln!(
+            out,
+            "  \x1b[33m⚠\x1b[0m soul-sync failed: oracle repo not configured"
+        );
         return Ok(());
     }
     let oracle_path = soul_sync_archive_repo_path(github_root, repo_slug)?;
@@ -167,7 +211,8 @@ fn soul_sync_archive_render_soul_sync_with(
             let _ = writeln!(out, "  \x1b[33m⚠\x1b[0m {peer}: repo not found, skipping");
             continue;
         };
-        let result = soulsync_sync_oracle_vaults(&oracle_path, &peer_path, &options.oracle, &peer, host);
+        let result =
+            soulsync_sync_oracle_vaults(&oracle_path, &peer_path, &options.oracle, &peer, host);
         total += result.total;
         soulsync_render_oracle_result(out, &result);
     }
@@ -176,7 +221,10 @@ fn soul_sync_archive_render_soul_sync_with(
     Ok(())
 }
 
-fn soul_sync_archive_repo_path(github_root: &std::path::Path, repo_slug: &str) -> Result<std::path::PathBuf, String> {
+fn soul_sync_archive_repo_path(
+    github_root: &std::path::Path,
+    repo_slug: &str,
+) -> Result<std::path::PathBuf, String> {
     archive_validate_repo_slug(repo_slug)?;
     let mut path = github_root.to_path_buf();
     for part in repo_slug.split('/') {
@@ -185,7 +233,11 @@ fn soul_sync_archive_repo_path(github_root: &std::path::Path, repo_slug: &str) -
     Ok(path)
 }
 
-fn archive_render_disable(out: &mut String, entry: &ArchiveFleetEntry, options: &ArchiveOptions) -> Result<(), String> {
+fn archive_render_disable(
+    out: &mut String,
+    entry: &ArchiveFleetEntry,
+    options: &ArchiveOptions,
+) -> Result<(), String> {
     if options.dry_run {
         let _ = writeln!(
             out,
@@ -198,21 +250,35 @@ fn archive_render_disable(out: &mut String, entry: &ArchiveFleetEntry, options: 
     let disabled = fleet_disabled_path(&entry.path);
     match std::fs::rename(&entry.path, &disabled) {
         Ok(()) => {
-            let _ = writeln!(out, "  \x1b[32m✓\x1b[0m fleet config disabled: {}.disabled", entry.file);
+            let _ = writeln!(
+                out,
+                "  \x1b[32m✓\x1b[0m fleet config disabled: {}.disabled",
+                entry.file
+            );
         }
         Err(error) => {
-            let _ = writeln!(out, "  \x1b[33m⚠\x1b[0m could not disable fleet config: {error}");
+            let _ = writeln!(
+                out,
+                "  \x1b[33m⚠\x1b[0m could not disable fleet config: {error}"
+            );
         }
     }
     Ok(())
 }
 
-fn archive_render_repo_archive(out: &mut String, repo_slug: &str, options: &ArchiveOptions) -> Result<(), String> {
+fn archive_render_repo_archive(
+    out: &mut String,
+    repo_slug: &str,
+    options: &ArchiveOptions,
+) -> Result<(), String> {
     if repo_slug.is_empty() {
         return Ok(());
     }
     if options.dry_run {
-        let _ = writeln!(out, "  \x1b[36m⬡\x1b[0m [dry-run] would archive: gh repo archive {repo_slug}");
+        let _ = writeln!(
+            out,
+            "  \x1b[36m⬡\x1b[0m [dry-run] would archive: gh repo archive {repo_slug}"
+        );
         return Ok(());
     }
     archive_require_yes(options)?;
@@ -225,7 +291,11 @@ fn archive_render_repo_archive(out: &mut String, repo_slug: &str, options: &Arch
         }
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-            let message = if stderr.is_empty() { format!("gh exited {}", output.status) } else { stderr };
+            let message = if stderr.is_empty() {
+                format!("gh exited {}", output.status)
+            } else {
+                stderr
+            };
             let _ = writeln!(out, "  \x1b[33m⚠\x1b[0m archive failed: {message}");
         }
         Err(error) => {
@@ -235,9 +305,16 @@ fn archive_render_repo_archive(out: &mut String, repo_slug: &str, options: &Arch
     Ok(())
 }
 
-fn archive_render_death_certificate(out: &mut String, entry: &ArchiveFleetEntry, options: &ArchiveOptions) {
+fn archive_render_death_certificate(
+    out: &mut String,
+    entry: &ArchiveFleetEntry,
+    options: &ArchiveOptions,
+) {
     if options.dry_run {
-        let _ = writeln!(out, "  \x1b[36m⬡\x1b[0m [dry-run] would log death to family registry");
+        let _ = writeln!(
+            out,
+            "  \x1b[36m⬡\x1b[0m [dry-run] would log death to family registry"
+        );
         out.push('\n');
     } else {
         let _ = writeln!(
@@ -245,7 +322,10 @@ fn archive_render_death_certificate(out: &mut String, entry: &ArchiveFleetEntry,
             "  \x1b[32m✓\x1b[0m {} archived — ψ/ preserved locally, knowledge synced to peers\n",
             options.oracle
         );
-        let _ = writeln!(out, "  \x1b[90mNothing is deleted (Principle 1). ψ/ and git history remain.\x1b[0m");
+        let _ = writeln!(
+            out,
+            "  \x1b[90mNothing is deleted (Principle 1). ψ/ and git history remain.\x1b[0m"
+        );
         let _ = writeln!(
             out,
             "  \x1b[90mTo unarchive: rename {}.disabled → {} + gh repo unarchive\x1b[0m",
@@ -266,7 +346,10 @@ fn archive_require_yes(options: &ArchiveOptions) -> Result<(), String> {
 
 fn archive_validate_repo_slug(value: &str) -> Result<(), String> {
     let parts = value.split('/').collect::<Vec<_>>();
-    if parts.len() != 2 || parts.iter().any(|part| !archive_safe_repo_part(part)) || value.starts_with('-') {
+    if parts.len() != 2
+        || parts.iter().any(|part| !archive_safe_repo_part(part))
+        || value.starts_with('-')
+    {
         return Err(format!("archive: invalid repo slug '{value}'"));
     }
     Ok(())
@@ -294,13 +377,19 @@ mod archive_tests {
     }
 
     impl SoulsyncHost for ArchiveSoulsyncFakeHost {
-        fn soulsync_now(&mut self) -> String { self.now.clone() }
+        fn soulsync_now(&mut self) -> String {
+            self.now.clone()
+        }
     }
 
     fn archive_session(name: &str, repo: &str, peers: &[&str]) -> NativeFleetSession {
         NativeFleetSession {
             name: name.to_owned(),
-            windows: vec![NativeFleetWindow { name: name.to_owned(), repo: repo.to_owned(), kind: None }],
+            windows: vec![NativeFleetWindow {
+                name: name.to_owned(),
+                repo: repo.to_owned(),
+                kind: None,
+            }],
             sync_peers: peers.iter().map(|value| (*value).to_owned()).collect(),
             project_repos: Vec::new(),
             ..NativeFleetSession::default()
@@ -313,14 +402,17 @@ mod archive_tests {
     }
 
     fn archive_temp_root(name: &str) -> std::path::PathBuf {
-        let root = std::env::temp_dir().join(format!("maw-rs-archive-{name}-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("maw-rs-archive-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         root
     }
 
     #[test]
     fn archive_parse_help_and_flags() {
-        assert!(archive_parse_args(&archive_strings(&["--help"])).expect("parse").is_none());
+        assert!(archive_parse_args(&archive_strings(&["--help"]))
+            .expect("parse")
+            .is_none());
         let parsed = archive_parse_args(&archive_strings(&["neo", "--dry-run", "--yes"]))
             .expect("parse")
             .expect("options");
@@ -331,8 +423,11 @@ mod archive_tests {
 
     #[test]
     fn archive_oracle_guard_blocks_option_injection() {
-        let error = archive_parse_args(&archive_strings(&["-oProxyCommand=touch-pwned", "--dry-run"]))
-            .expect_err("guard");
+        let error = archive_parse_args(&archive_strings(&[
+            "-oProxyCommand=touch-pwned",
+            "--dry-run",
+        ]))
+        .expect_err("guard");
         assert!(error.contains("unknown argument"));
         assert!(archive_validate_repo_slug("-bad/repo").is_err());
         assert!(archive_validate_repo_slug("org/-repo").is_err());
@@ -354,22 +449,34 @@ mod archive_tests {
         let neo = github_root.join("org/neo-oracle");
         let trinity = github_root.join("org/trinity-oracle");
         archive_write(&neo.join("ψ/memory/learnings/new.md"), "new learning");
-        archive_write(&neo.join("ψ/memory/learnings/existing.md"), "source should not overwrite");
+        archive_write(
+            &neo.join("ψ/memory/learnings/existing.md"),
+            "source should not overwrite",
+        );
         archive_write(&neo.join("ψ/identity.json"), r#"{"secret":true}"#);
         archive_write(&neo.join("ψ/vault/secret.txt"), "vault secret");
-        archive_write(&trinity.join("ψ/memory/learnings/existing.md"), "keep destination");
+        archive_write(
+            &trinity.join("ψ/memory/learnings/existing.md"),
+            "keep destination",
+        );
 
         let entry = ArchiveFleetEntry {
             file: "01-neo.json".to_owned(),
             path: root.join("fleet/01-neo.json"),
             session: archive_session("01-neo", "org/neo-oracle", &["trinity"]),
         };
-        let options = ArchiveOptions { oracle: "neo".to_owned(), dry_run: false, yes: true };
+        let options = ArchiveOptions {
+            oracle: "neo".to_owned(),
+            dry_run: false,
+            yes: true,
+        };
         let fleet = vec![
             archive_session("01-neo", "org/neo-oracle", &["trinity"]),
             archive_session("02-trinity", "org/trinity-oracle", &[]),
         ];
-        let mut host = ArchiveSoulsyncFakeHost { now: "2026-06-26T00:00:00.000Z".to_owned() };
+        let mut host = ArchiveSoulsyncFakeHost {
+            now: "2026-06-26T00:00:00.000Z".to_owned(),
+        };
         let mut out = String::new();
 
         soul_sync_archive_render_soul_sync_with(
@@ -383,14 +490,27 @@ mod archive_tests {
         )
         .expect("sync");
 
-        assert_eq!(out, include_str!("../../tests/fixtures/native-archive/soul-sync.stdout"));
-        assert_eq!(std::fs::read_to_string(trinity.join("ψ/memory/learnings/new.md")).expect("copied"), "new learning");
         assert_eq!(
-            std::fs::read_to_string(trinity.join("ψ/memory/learnings/existing.md")).expect("preserved"),
+            out,
+            include_str!("../../tests/fixtures/native-archive/soul-sync.stdout")
+        );
+        assert_eq!(
+            std::fs::read_to_string(trinity.join("ψ/memory/learnings/new.md")).expect("copied"),
+            "new learning"
+        );
+        assert_eq!(
+            std::fs::read_to_string(trinity.join("ψ/memory/learnings/existing.md"))
+                .expect("preserved"),
             "keep destination"
         );
-        assert!(!trinity.join("ψ/identity.json").exists(), "identity files must not be copied");
-        assert!(!trinity.join("ψ/vault/secret.txt").exists(), "vault secrets must not be copied");
+        assert!(
+            !trinity.join("ψ/identity.json").exists(),
+            "identity files must not be copied"
+        );
+        assert!(
+            !trinity.join("ψ/vault/secret.txt").exists(),
+            "vault secrets must not be copied"
+        );
         let log = std::fs::read_to_string(trinity.join("ψ/.soul-sync/sync.log")).expect("sync log");
         assert!(log.contains("2026-06-26T00:00:00.000Z | neo → trinity | 1 files | 1 learnings"));
         assert!(!log.contains("secret"));
@@ -410,9 +530,15 @@ mod archive_tests {
             path: root.join("fleet/01-neo.json"),
             session: archive_session("01-neo", "org/neo-oracle", &["trinity"]),
         };
-        let options = ArchiveOptions { oracle: "neo".to_owned(), dry_run: false, yes: false };
+        let options = ArchiveOptions {
+            oracle: "neo".to_owned(),
+            dry_run: false,
+            yes: false,
+        };
         let fleet = vec![archive_session("02-trinity", "org/trinity-oracle", &[])];
-        let mut host = ArchiveSoulsyncFakeHost { now: "2026-06-26T00:00:00.000Z".to_owned() };
+        let mut host = ArchiveSoulsyncFakeHost {
+            now: "2026-06-26T00:00:00.000Z".to_owned(),
+        };
         let mut out = String::new();
 
         let error = soul_sync_archive_render_soul_sync_with(
@@ -431,5 +557,4 @@ mod archive_tests {
         assert!(!trinity.join("ψ/memory/learnings/new.md").exists());
         let _ = std::fs::remove_dir_all(root);
     }
-
 }

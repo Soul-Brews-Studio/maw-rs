@@ -1,6 +1,7 @@
-const DISPATCH_38: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "rename", handler: Handler::Sync(run_rename_command) },
-];
+const DISPATCH_38: &[DispatcherEntry] = &[DispatcherEntry {
+    command: "rename",
+    handler: Handler::Sync(run_rename_command),
+}];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RenameWindow {
@@ -112,7 +113,12 @@ fn parse_js_i32_prefix(value: &str) -> Option<i32> {
         .take_while(char::is_ascii_digit)
         .collect::<String>();
     (!digits.is_empty())
-        .then(|| digits.parse::<i32>().ok().and_then(|number| number.checked_mul(sign)))
+        .then(|| {
+            digits
+                .parse::<i32>()
+                .ok()
+                .and_then(|number| number.checked_mul(sign))
+        })
         .flatten()
 }
 
@@ -137,15 +143,19 @@ mod rename_tests {
     }
 
     impl maw_tmux::TmuxRunner for MockTmuxRunner {
-        fn run(&mut self, subcommand: &str, args: &[String]) -> Result<String, maw_tmux::TmuxError> {
+        fn run(
+            &mut self,
+            subcommand: &str,
+            args: &[String],
+        ) -> Result<String, maw_tmux::TmuxError> {
             self.calls.push((subcommand.to_owned(), args.to_vec()));
             match subcommand {
                 "display-message" => Ok(self.session.clone()),
                 "list-windows" => Ok(self.windows.clone()),
-                "rename-window" => self
-                    .fail_on_rename
-                    .clone()
-                    .map_or_else(|| Ok(String::new()), |message| Err(maw_tmux::TmuxError::new(message))),
+                "rename-window" => self.fail_on_rename.clone().map_or_else(
+                    || Ok(String::new()),
+                    |message| Err(maw_tmux::TmuxError::new(message)),
+                ),
                 other => Err(maw_tmux::TmuxError::new(format!("unexpected {other}"))),
             }
         }
@@ -165,10 +175,28 @@ mod rename_tests {
 
         let stdout = rename_with_runner(&strings(&["1abc", "work"]), &mut runner).expect("rename");
 
-        assert_eq!(stdout, "\x1b[32m✓\x1b[0m tab 1 \x1b[33mold\x1b[0m → \x1b[33mwork\x1b[0m\n");
-        assert_eq!(runner.calls[0], ("display-message".to_owned(), strings(&["-p", "#S"])));
-        assert_eq!(runner.calls[1], ("list-windows".to_owned(), strings(&["-t", "03-neo", "-F", "#I:#W"])));
-        assert_eq!(runner.calls[2], ("rename-window".to_owned(), strings(&["-t", "03-neo:1", "work"])));
+        assert_eq!(
+            stdout,
+            "\x1b[32m✓\x1b[0m tab 1 \x1b[33mold\x1b[0m → \x1b[33mwork\x1b[0m\n"
+        );
+        assert_eq!(
+            runner.calls[0],
+            ("display-message".to_owned(), strings(&["-p", "#S"]))
+        );
+        assert_eq!(
+            runner.calls[1],
+            (
+                "list-windows".to_owned(),
+                strings(&["-t", "03-neo", "-F", "#I:#W"])
+            )
+        );
+        assert_eq!(
+            runner.calls[2],
+            (
+                "rename-window".to_owned(),
+                strings(&["-t", "03-neo:1", "work"])
+            )
+        );
     }
 
     #[test]
@@ -179,10 +207,17 @@ mod rename_tests {
             ..MockTmuxRunner::default()
         };
 
-        let stdout = rename_with_runner(&strings(&["3", "arra-codex-frontend"]), &mut runner).expect("rename");
+        let stdout = rename_with_runner(&strings(&["3", "arra-codex-frontend"]), &mut runner)
+            .expect("rename");
 
         assert_eq!(stdout, "\x1b[32m✓\x1b[0m tab 3 \x1b[33marra-oracle-v3-arra-codex-frontend\x1b[0m → \x1b[33marra-codex-frontend\x1b[0m\n");
-        assert_eq!(runner.calls[2], ("rename-window".to_owned(), strings(&["-t", "41-arra-oracle-v3:3", "arra-codex-frontend"])));
+        assert_eq!(
+            runner.calls[2],
+            (
+                "rename-window".to_owned(),
+                strings(&["-t", "41-arra-oracle-v3:3", "arra-codex-frontend"])
+            )
+        );
     }
 
     #[test]
@@ -201,8 +236,15 @@ mod rename_tests {
 
     #[test]
     fn rename_missing_args_match_maw_js_usage() {
-        assert_eq!(rename_with_runner(&[], &mut MockTmuxRunner::default()).expect_err("usage"), rename_usage());
-        assert_eq!(rename_with_runner(&strings(&["1"]), &mut MockTmuxRunner::default()).expect_err("usage"), rename_usage());
+        assert_eq!(
+            rename_with_runner(&[], &mut MockTmuxRunner::default()).expect_err("usage"),
+            rename_usage()
+        );
+        assert_eq!(
+            rename_with_runner(&strings(&["1"]), &mut MockTmuxRunner::default())
+                .expect_err("usage"),
+            rename_usage()
+        );
     }
 
     #[test]
@@ -213,10 +255,15 @@ mod rename_tests {
             ..MockTmuxRunner::default()
         };
 
-        let error = rename_with_runner(&strings(&["missing", "work"]), &mut runner).expect_err("missing");
+        let error =
+            rename_with_runner(&strings(&["missing", "work"]), &mut runner).expect_err("missing");
 
         assert_eq!(error, "tabs: 0:zsh, 1:old\ntab missing not found in 03-neo");
-        assert_eq!(runner.calls.len(), 2, "must not rename when target is absent");
+        assert_eq!(
+            runner.calls.len(),
+            2,
+            "must not rename when target is absent"
+        );
     }
 
     #[test]

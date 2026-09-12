@@ -1,6 +1,7 @@
-const DISPATCH_42: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "on", handler: Handler::Sync(run_on_command) },
-];
+const DISPATCH_42: &[DispatcherEntry] = &[DispatcherEntry {
+    command: "on",
+    handler: Handler::Sync(run_on_command),
+}];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct OnCommandOptions {
@@ -89,7 +90,10 @@ fn on_keep_action_part(action_args: &[String], index: usize) -> bool {
     if arg == "--once" || arg == "--timeout" {
         return false;
     }
-    index == 0 || action_args.get(index - 1).is_none_or(|previous| previous != "--timeout")
+    index == 0
+        || action_args
+            .get(index - 1)
+            .is_none_or(|previous| previous != "--timeout")
 }
 
 fn on_validate_oracle(oracle: &str) -> Result<(), String> {
@@ -117,7 +121,10 @@ fn on_read_config(path: &std::path::Path) -> Result<serde_json::Value, String> {
     }
 }
 
-fn on_append_trigger(config: &mut serde_json::Value, options: &OnCommandOptions) -> Result<(), String> {
+fn on_append_trigger(
+    config: &mut serde_json::Value,
+    options: &OnCommandOptions,
+) -> Result<(), String> {
     if !config.is_object() {
         *config = serde_json::json!({});
     }
@@ -159,7 +166,12 @@ fn on_parse_js_i64_prefix(value: &str) -> Option<i64> {
         .take_while(char::is_ascii_digit)
         .collect::<String>();
     (!digits.is_empty())
-        .then(|| digits.parse::<i64>().ok().and_then(|number| number.checked_mul(sign)))
+        .then(|| {
+            digits
+                .parse::<i64>()
+                .ok()
+                .and_then(|number| number.checked_mul(sign))
+        })
         .flatten()
 }
 
@@ -218,8 +230,7 @@ mod on_tests {
 
     #[test]
     fn on_oracle_guard_blocks_option_injection_target() {
-        let error = on_parse_command(&strings(&["-t", "idle", "maw wake neo"]))
-            .expect_err("guard");
+        let error = on_parse_command(&strings(&["-t", "idle", "maw wake neo"])).expect_err("guard");
         assert!(error.contains("not start with '-'"));
     }
 

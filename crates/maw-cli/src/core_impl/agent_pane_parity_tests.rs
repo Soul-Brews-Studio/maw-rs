@@ -302,9 +302,15 @@ mod agent_pane_parity_tests {
                     "maw_tmux::is_agent_pane_command",
                     maw_tmux::is_agent_pane_command(Some(case.command)),
                 ),
-                ("talkto_is_agent_command", talkto_is_agent_command(case.command)),
+                (
+                    "talkto_is_agent_command",
+                    talkto_is_agent_command(case.command),
+                ),
                 ("tab_is_agent_command", tab_is_agent_command(case.command)),
-                ("awaken_is_agent_command", awaken_is_agent_command(case.command)),
+                (
+                    "awaken_is_agent_command",
+                    awaken_is_agent_command(case.command),
+                ),
                 ("is_ls_agent_command", is_ls_agent_command(case.command)),
                 (
                     "agentstatus_is_agent_command",
@@ -362,9 +368,18 @@ mod agent_pane_parity_tests {
             route_pane_looks_like_agent(command, title),
             "maw hey warned 'not an obvious agent pane' at a live Claude pane (#813)"
         );
-        assert!(talkto_is_agent_command(command), "maw talk-to refused a live Claude pane (#813)");
-        assert!(tab_is_agent_command(command), "maw tab send refused a live Claude pane (#813)");
-        assert!(awaken_is_agent_command(command), "maw awaken never saw the agent boot (#813)");
+        assert!(
+            talkto_is_agent_command(command),
+            "maw talk-to refused a live Claude pane (#813)"
+        );
+        assert!(
+            tab_is_agent_command(command),
+            "maw tab send refused a live Claude pane (#813)"
+        );
+        assert!(
+            awaken_is_agent_command(command),
+            "maw awaken never saw the agent boot (#813)"
+        );
         assert!(maw_tmux::is_agent_pane(Some(command), Some(title)));
     }
 }

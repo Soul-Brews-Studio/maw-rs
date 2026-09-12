@@ -675,12 +675,17 @@ mod x_trust_tests {
         };
         let text = render_x_trust_tofu_card(&card);
         assert!(text.contains("maw x · costs — first run"), "{text}");
-        assert!(text.contains("source   gh:acme/maw-tools/packages/costs"), "{text}");
+        assert!(
+            text.contains("source   gh:acme/maw-tools/packages/costs"),
+            "{text}"
+        );
         assert!(text.contains("artifact sha256:aaaaaaaaaaaa…"), "{text}");
         assert!(text.contains("caps     fs:read:claude-projects"), "{text}");
         assert!(text.contains("           tmux:raw:kill-pane"), "{text}");
         assert!(
-            text.contains("Trust this plugin (source + exact hash + caps)? [o]nce / [a]lways / [N]o"),
+            text.contains(
+                "Trust this plugin (source + exact hash + caps)? [o]nce / [a]lways / [N]o"
+            ),
             "{text}"
         );
         let empty = render_x_trust_tofu_card(&XTrustTofuCard {

@@ -20,13 +20,6 @@ struct InboxEnv {
     node: String,
 }
 
-
-
-
-
-
-
-
 trait InboxSender {
     fn inbox_send<'a>(
         &'a mut self,
@@ -65,16 +58,16 @@ impl InboxSender for InboxSystemSender {
 fn run_inbox_command(args: Vec<String>) -> Pin<Box<dyn Future<Output = CliOutput> + Send>> {
     Box::pin(async move {
         match inbox_run(&args, &inbox_real_env(), &mut InboxSystemSender).await {
-        Ok(stdout) => CliOutput {
-            code: 0,
-            stdout,
-            stderr: String::new(),
-        },
-        Err(message) => CliOutput {
-            code: 1,
-            stdout: String::new(),
-            stderr: format!("{message}\n"),
-        },
+            Ok(stdout) => CliOutput {
+                code: 0,
+                stdout,
+                stderr: String::new(),
+            },
+            Err(message) => CliOutput {
+                code: 1,
+                stdout: String::new(),
+                stderr: format!("{message}\n"),
+            },
         }
     })
 }
@@ -188,11 +181,7 @@ fn inbox_run_list(argv: &[String], env: &InboxEnv, now_ms: u64) -> Result<String
     let options = inbox_parse_list_args(argv)?;
     let messages = inbox_load_messages(&env.inbox_dir)?;
     let rows = inbox_list_rows(&messages, &options);
-    Ok(inbox_render_list(
-        &rows,
-        options.last.unwrap_or(20),
-        now_ms,
-    ))
+    Ok(inbox_render_list(&rows, options.last.unwrap_or(20), now_ms))
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -276,10 +265,7 @@ fn inbox_render_list(rows: &[InboxListRow<'_>], limit: usize, now_ms: u64) -> St
     if rows.is_empty() {
         return "\u{001b}[90mno inbox messages\u{001b}[0m\n".to_owned();
     }
-    let mut out = format!(
-        "\n\u{001b}[36mINBOX\u{001b}[0m ({} total)\n\n",
-        rows.len()
-    );
+    let mut out = format!("\n\u{001b}[36mINBOX\u{001b}[0m ({} total)\n\n", rows.len());
     out.push_str("  ID R FROM           WHEN       SUBJECT\n");
     out.push_str("  -- - -------------- ---------- --------------------------------------------\n");
     for row in rows.iter().take(limit) {
@@ -380,32 +366,6 @@ fn inbox_parse_write_note(argv: &[String]) -> Result<String, String> {
     Ok(note_args.join(" "))
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 fn inbox_render_show(message: &InboxMessage) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "\n\u{001b}[36m{}\u{001b}[0m", message.filename);
@@ -419,38 +379,6 @@ fn inbox_render_show(message: &InboxMessage) -> String {
     out.push('\n');
     out
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 fn inbox_json_pretty<T: serde::Serialize + ?Sized>(value: &T) -> Result<String, String> {
     serde_json::to_string_pretty(value)
@@ -543,15 +471,3 @@ fn inbox_parse_hours_seconds(value: &str) -> Result<u64, String> {
     }
     Ok(seconds)
 }
-
-
-
-
-
-
-
-
-
-
-
-

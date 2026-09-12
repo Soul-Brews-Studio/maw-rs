@@ -146,7 +146,10 @@ fn attach_execute_live_action<R: AttachLiveExecutor>(
     if attach_has_flag(opts, ATTACH_FLAG_PRINT) || attach_has_flag(opts, ATTACH_FLAG_PLAN_JSON) {
         return Ok(None);
     }
-    if matches!(action, TmuxAttachAction::Recover { .. } | TmuxAttachAction::Print { .. }) {
+    if matches!(
+        action,
+        TmuxAttachAction::Recover { .. } | TmuxAttachAction::Print { .. }
+    ) {
         return Ok(None);
     }
     let args = attach_exec_command_args(action, attach_has_flag(opts, ATTACH_FLAG_READONLY));
@@ -165,7 +168,9 @@ fn attach_execute_live_action<R: AttachLiveExecutor>(
 fn attach_resolved_target_for_options(opts: &AttachOptions) -> Result<String, CliOutput> {
     match attach_resolve_typed_target(&opts.target, &opts.alive) {
         AttachResolvedTarget::Live(session) => Ok(session),
-        AttachResolvedTarget::NotFound(candidates) => attach_not_found_output(&opts.target, &candidates),
+        AttachResolvedTarget::NotFound(candidates) => {
+            attach_not_found_output(&opts.target, &candidates)
+        }
         AttachResolvedTarget::BridgeCandidates(candidates) => attach_picker_output(
             &opts.target,
             "not found as a live session",
@@ -199,7 +204,9 @@ fn attach_resolve_typed_target(target: &str, alive: &BTreeSet<String>) -> Attach
     let candidates = local_resolver_candidates(alive);
     let query = target.split(':').next().unwrap_or(target);
     match maw_matcher::resolve_typed_target(query, &candidates) {
-        maw_matcher::ResolveTypedResult::None => AttachResolvedTarget::NotFound(deadend_suggestion_matches(target, &candidates)),
+        maw_matcher::ResolveTypedResult::None => {
+            AttachResolvedTarget::NotFound(deadend_suggestion_matches(target, &candidates))
+        }
         maw_matcher::ResolveTypedResult::Ambiguous { candidates } => {
             AttachResolvedTarget::Ambiguous(candidates)
         }
@@ -250,8 +257,15 @@ fn resolver_live_candidates(alive: &BTreeSet<String>) -> Vec<maw_matcher::Resolv
         .collect()
 }
 
-fn attach_not_found_output(target: &str, candidates: &[maw_matcher::ResolveMatch]) -> Result<String, CliOutput> {
-    Err(CliOutput { code: 1, stdout: deadend_suggestions_text("attach", target, candidates), stderr: String::new() })
+fn attach_not_found_output(
+    target: &str,
+    candidates: &[maw_matcher::ResolveMatch],
+) -> Result<String, CliOutput> {
+    Err(CliOutput {
+        code: 1,
+        stdout: deadend_suggestions_text("attach", target, candidates),
+        stderr: String::new(),
+    })
 }
 
 fn attach_alive_covers_name(alive: &BTreeSet<String>, name: &str) -> bool {
@@ -269,17 +283,25 @@ fn attach_unique_raw_live_match(
 ) -> Option<String> {
     let target = target.trim();
     let normalized_target = target.to_lowercase();
-    let exact = candidates.iter().filter(|matched| {
-        matched.candidate.kind == maw_matcher::ResolveCandidateKind::LiveSession
-            && matched.candidate.name.eq_ignore_ascii_case(target)
-    }).map(|matched| matched.candidate.name.clone()).collect::<Vec<_>>();
-    if exact.len() == 1 { return Some(exact[0].clone()); }
+    let exact = candidates
+        .iter()
+        .filter(|matched| {
+            matched.candidate.kind == maw_matcher::ResolveCandidateKind::LiveSession
+                && matched.candidate.name.eq_ignore_ascii_case(target)
+        })
+        .map(|matched| matched.candidate.name.clone())
+        .collect::<Vec<_>>();
+    if exact.len() == 1 {
+        return Some(exact[0].clone());
+    }
     let matches = candidates
         .iter()
         .filter(|matched| matched.candidate.kind == maw_matcher::ResolveCandidateKind::LiveSession)
         .filter(|matched| {
             matched.candidate.name.eq_ignore_ascii_case(target)
-                || maw_matcher::normalized_match_names(&matched.candidate.name).iter().any(|name| name == &normalized_target)
+                || maw_matcher::normalized_match_names(&matched.candidate.name)
+                    .iter()
+                    .any(|name| name == &normalized_target)
         })
         .map(|matched| matched.candidate.name.clone())
         .collect::<Vec<_>>();
@@ -454,7 +476,12 @@ fn attach_picker_detail(matched: &maw_matcher::ResolveMatch) -> Option<String> {
         })
 }
 
-fn picker_prompt(command: &str, target: &str, context: &str, rows: &[PickerRow]) -> Option<PickerRow> {
+fn picker_prompt(
+    command: &str,
+    target: &str,
+    context: &str,
+    rows: &[PickerRow],
+) -> Option<PickerRow> {
     use std::io::Write as _;
     eprint!("{}", picker_render_text(command, target, context, rows));
     let yes_hint = if rows.len() == 1 { ", Enter/y" } else { "" };

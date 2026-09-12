@@ -28,19 +28,65 @@ struct CheckToolStatus133 {
 }
 
 const CHECK_TOOLS_133: &[CheckToolDefinition133] = &[
-    CheckToolDefinition133 { name: "bun", required: true, category: CheckToolCategory133::Required, install_url: "https://bun.sh", notes: None },
-    CheckToolDefinition133 { name: "gh", required: true, category: CheckToolCategory133::Required, install_url: "https://cli.github.com", notes: None },
-    CheckToolDefinition133 { name: "ghq", required: true, category: CheckToolCategory133::Required, install_url: "https://github.com/x-motemen/ghq#install", notes: None },
-    CheckToolDefinition133 { name: "git", required: true, category: CheckToolCategory133::Required, install_url: "https://git-scm.com/downloads", notes: None },
-    CheckToolDefinition133 { name: "tmux", required: true, category: CheckToolCategory133::Required, install_url: "https://github.com/tmux/tmux/wiki/Installing", notes: None },
-    CheckToolDefinition133 { name: "uv", required: false, category: CheckToolCategory133::Optional, install_url: "https://docs.astral.sh/uv/getting-started/installation/", notes: None },
-    CheckToolDefinition133 { name: "uvx", required: false, category: CheckToolCategory133::Optional, install_url: "https://docs.astral.sh/uv/", notes: Some("provided by uv") },
+    CheckToolDefinition133 {
+        name: "bun",
+        required: true,
+        category: CheckToolCategory133::Required,
+        install_url: "https://bun.sh",
+        notes: None,
+    },
+    CheckToolDefinition133 {
+        name: "gh",
+        required: true,
+        category: CheckToolCategory133::Required,
+        install_url: "https://cli.github.com",
+        notes: None,
+    },
+    CheckToolDefinition133 {
+        name: "ghq",
+        required: true,
+        category: CheckToolCategory133::Required,
+        install_url: "https://github.com/x-motemen/ghq#install",
+        notes: None,
+    },
+    CheckToolDefinition133 {
+        name: "git",
+        required: true,
+        category: CheckToolCategory133::Required,
+        install_url: "https://git-scm.com/downloads",
+        notes: None,
+    },
+    CheckToolDefinition133 {
+        name: "tmux",
+        required: true,
+        category: CheckToolCategory133::Required,
+        install_url: "https://github.com/tmux/tmux/wiki/Installing",
+        notes: None,
+    },
+    CheckToolDefinition133 {
+        name: "uv",
+        required: false,
+        category: CheckToolCategory133::Optional,
+        install_url: "https://docs.astral.sh/uv/getting-started/installation/",
+        notes: None,
+    },
+    CheckToolDefinition133 {
+        name: "uvx",
+        required: false,
+        category: CheckToolCategory133::Optional,
+        install_url: "https://docs.astral.sh/uv/",
+        notes: Some("provided by uv"),
+    },
 ];
 
 fn run_check_command(argv: &[String]) -> CliOutput {
     let subcommand = argv.first().map_or("tools", String::as_str);
     let stdout = check_run(subcommand);
-    CliOutput { code: 0, stdout, stderr: String::new() }
+    CliOutput {
+        code: 0,
+        stdout,
+        stderr: String::new(),
+    }
 }
 
 fn check_run(subcommand: &str) -> String {
@@ -58,7 +104,11 @@ fn check_run(subcommand: &str) -> String {
 
 fn check_tool_status(definition: CheckToolDefinition133) -> CheckToolStatus133 {
     let (present, version) = check_probe_tool(definition.name);
-    CheckToolStatus133 { definition, present, version }
+    CheckToolStatus133 {
+        definition,
+        present,
+        version,
+    }
 }
 
 fn check_probe_tool(name: &str) -> (bool, Option<String>) {
@@ -94,7 +144,10 @@ fn check_run_tool_probe(program: &str, args: &[&str]) -> CheckToolProbe133 {
         .stderr(std::process::Stdio::piped())
         .spawn()
     else {
-        return CheckToolProbe133 { present: false, output: String::new() };
+        return CheckToolProbe133 {
+            present: false,
+            output: String::new(),
+        };
     };
 
     let stdout = child.stdout.take().map(check_read_probe_pipe);
@@ -107,20 +160,29 @@ fn check_run_tool_probe(program: &str, args: &[&str]) -> CheckToolProbe133 {
                 let _ = child.wait();
                 let stdout = check_join_probe_pipe(stdout);
                 let stderr = check_join_probe_pipe(stderr);
-                return CheckToolProbe133 { present: true, output: format!("{stdout}{stderr}") };
+                return CheckToolProbe133 {
+                    present: true,
+                    output: format!("{stdout}{stderr}"),
+                };
             }
             Ok(None) => {
                 if std::time::Instant::now() >= deadline {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return CheckToolProbe133 { present: false, output: String::new() };
+                    return CheckToolProbe133 {
+                        present: false,
+                        output: String::new(),
+                    };
                 }
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
             Err(_) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return CheckToolProbe133 { present: false, output: String::new() };
+                return CheckToolProbe133 {
+                    present: false,
+                    output: String::new(),
+                };
             }
         }
     }
@@ -133,9 +195,15 @@ fn check_fake_tool_probe(program: &str) -> Option<CheckToolProbe133> {
     );
     let output = std::env::var(key).ok()?;
     if output == "__missing__" {
-        Some(CheckToolProbe133 { present: false, output: String::new() })
+        Some(CheckToolProbe133 {
+            present: false,
+            output: String::new(),
+        })
     } else {
-        Some(CheckToolProbe133 { present: true, output })
+        Some(CheckToolProbe133 {
+            present: true,
+            output,
+        })
     }
 }
 
@@ -151,7 +219,9 @@ where
 }
 
 fn check_join_probe_pipe(handle: Option<std::thread::JoinHandle<String>>) -> String {
-    handle.and_then(|handle| handle.join().ok()).unwrap_or_default()
+    handle
+        .and_then(|handle| handle.join().ok())
+        .unwrap_or_default()
 }
 
 fn check_extract_version(output: &str) -> Option<String> {
@@ -200,38 +270,89 @@ fn check_render_tools(results: &[CheckToolStatus133]) -> String {
 
     let mut out = "\nmaw check tools\n\n".to_owned();
     out.push_str("Required:\n");
-    for tool in results.iter().filter(|tool| tool.definition.category == CheckToolCategory133::Required) {
+    for tool in results
+        .iter()
+        .filter(|tool| tool.definition.category == CheckToolCategory133::Required)
+    {
         if tool.present {
-            let version = tool.version.as_ref().map_or(String::new(), |version| format!("  {version}"));
-            let _ = writeln!(out, "  {GREEN}✓{RESET} {:<8}{version}", tool.definition.name);
+            let version = tool
+                .version
+                .as_ref()
+                .map_or(String::new(), |version| format!("  {version}"));
+            let _ = writeln!(
+                out,
+                "  {GREEN}✓{RESET} {:<8}{version}",
+                tool.definition.name
+            );
         } else {
-            let _ = writeln!(out, "  {RED}✗{RESET} {:<8}  {DIM}not installed{RESET}", tool.definition.name);
+            let _ = writeln!(
+                out,
+                "  {RED}✗{RESET} {:<8}  {DIM}not installed{RESET}",
+                tool.definition.name
+            );
         }
     }
 
     out.push_str("\nOptional (Python plugins):\n");
-    for tool in results.iter().filter(|tool| tool.definition.category == CheckToolCategory133::Optional) {
+    for tool in results
+        .iter()
+        .filter(|tool| tool.definition.category == CheckToolCategory133::Optional)
+    {
         if tool.present {
-            let version = tool.version.as_ref().map_or(String::new(), |version| format!("  {version}"));
-            let notes = tool.definition.notes.map_or(String::new(), |notes| format!("  {DIM}({notes}){RESET}"));
-            let _ = writeln!(out, "  {GREEN}✓{RESET} {:<8}{version}{notes}", tool.definition.name);
+            let version = tool
+                .version
+                .as_ref()
+                .map_or(String::new(), |version| format!("  {version}"));
+            let notes = tool
+                .definition
+                .notes
+                .map_or(String::new(), |notes| format!("  {DIM}({notes}){RESET}"));
+            let _ = writeln!(
+                out,
+                "  {GREEN}✓{RESET} {:<8}{version}{notes}",
+                tool.definition.name
+            );
         } else {
-            let _ = writeln!(out, "  {RED}✗{RESET} {:<8}  {DIM}not installed{RESET}", tool.definition.name);
+            let _ = writeln!(
+                out,
+                "  {RED}✗{RESET} {:<8}  {DIM}not installed{RESET}",
+                tool.definition.name
+            );
         }
     }
 
-    let missing = results.iter().filter(|tool| !tool.present).collect::<Vec<_>>();
+    let missing = results
+        .iter()
+        .filter(|tool| !tool.present)
+        .collect::<Vec<_>>();
     if !missing.is_empty() {
         out.push_str("\nMissing:\n");
         for tool in &missing {
-            let _ = writeln!(out, "  {RED}✗{RESET} {:<16}  {}", tool.definition.name, tool.definition.install_url);
+            let _ = writeln!(
+                out,
+                "  {RED}✗{RESET} {:<16}  {}",
+                tool.definition.name, tool.definition.install_url
+            );
         }
     }
 
-    let req_ok = results.iter().filter(|tool| tool.definition.required && tool.present).count();
-    let opt_ok = results.iter().filter(|tool| !tool.definition.required && tool.present).count();
-    let missing_summary = if missing.is_empty() { "0 missing".to_owned() } else { format!("{RED}{} missing{RESET}", missing.len()) };
-    let _ = writeln!(out, "\n{req_ok} required ✓  ·  {opt_ok} optional ✓  ·  {missing_summary}");
+    let req_ok = results
+        .iter()
+        .filter(|tool| tool.definition.required && tool.present)
+        .count();
+    let opt_ok = results
+        .iter()
+        .filter(|tool| !tool.definition.required && tool.present)
+        .count();
+    let missing_summary = if missing.is_empty() {
+        "0 missing".to_owned()
+    } else {
+        format!("{RED}{} missing{RESET}", missing.len())
+    };
+    let _ = writeln!(
+        out,
+        "\n{req_ok} required ✓  ·  {opt_ok} optional ✓  ·  {missing_summary}"
+    );
     out.push('\n');
     out
 }

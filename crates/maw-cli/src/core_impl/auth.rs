@@ -50,11 +50,16 @@ fn auth_validate_argv(argv: &[String]) -> Result<(), String> {
 }
 
 fn auth_validate_subcommand(argv: &[String]) -> Result<(), String> {
-    let Some(kind) = argv.first() else { return Ok(()); };
+    let Some(kind) = argv.first() else {
+        return Ok(());
+    };
     if kind == "--" || kind.starts_with('-') {
         return Err("auth subcommand must not start with '-'".to_owned());
     }
-    if AUTH_CONSENT_MUTATING_SUBCOMMANDS.iter().any(|blocked| blocked == kind) {
+    if AUTH_CONSENT_MUTATING_SUBCOMMANDS
+        .iter()
+        .any(|blocked| blocked == kind)
+    {
         return Err("auth: consent mutation requires explicit human flow; no auto-approve surface is exposed".to_owned());
     }
     Ok(())
@@ -86,7 +91,9 @@ fn auth_is_value_flag(arg: &str) -> bool {
 }
 
 fn auth_validate_flag_value(argv: &[String], index: usize, flag: &str) -> Result<(), String> {
-    let Some(value) = argv.get(index + 1) else { return Ok(()); };
+    let Some(value) = argv.get(index + 1) else {
+        return Ok(());
+    };
     if value == "--" || value.starts_with('-') {
         return Err(format!("auth: {flag} value must not start with '-'"));
     }
@@ -95,7 +102,9 @@ fn auth_validate_flag_value(argv: &[String], index: usize, flag: &str) -> Result
 
 fn auth_validate_control_free_value(flag: &str, value: &str) -> Result<(), String> {
     if value.chars().any(char::is_control) {
-        return Err(format!("auth: {flag} value must not contain control characters"));
+        return Err(format!(
+            "auth: {flag} value must not contain control characters"
+        ));
     }
     Ok(())
 }
@@ -157,7 +166,6 @@ mod auth_native_tests {
         assert!(output.stderr.contains("no auto-approve"));
         assert!(!output.stderr.contains("fake-test-token"));
     }
-
 
     const AUTH_D2_NOW: &str = "1700000000";
     const AUTH_D2_FROM: &str = "mawjs:m5";
@@ -319,7 +327,9 @@ mod auth_native_tests {
         let output = auth_run_d2(&auth_d2_ed25519_args(Some(other_key)));
         assert_eq!(output.code, 0, "{}", output.stderr);
         assert!(output.stdout.contains("\"kind\":\"reject\""));
-        assert!(output.stdout.contains("\"reason\":\"ed25519-pin-mismatch\""));
+        assert!(output
+            .stdout
+            .contains("\"reason\":\"ed25519-pin-mismatch\""));
         assert!(!output.stdout.contains(AUTH_D2_ED25519_PUBKEY));
     }
 

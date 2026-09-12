@@ -1,6 +1,12 @@
 const DISPATCH_310: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "calver", handler: Handler::Sync(run_calver_plan) },
-    DispatcherEntry { command: "worktree-window", handler: Handler::Sync(run_worktree_window_plan) },
+    DispatcherEntry {
+        command: "calver",
+        handler: Handler::Sync(run_calver_plan),
+    },
+    DispatcherEntry {
+        command: "worktree-window",
+        handler: Handler::Sync(run_worktree_window_plan),
+    },
 ];
 
 const CALVER_USAGE: &str = "usage: maw-rs calver --now <YYYY-M-DTHH:MM> [--stable|--alpha|--beta] [--package-version <version>] [--tag <tag>]... [--plan-json]\nusage: maw-rs calver constants [--plan-json]";
@@ -409,4 +415,3 @@ fn calver_constants_usage_error(message: &str) -> CliOutput {
         stderr: format!("{message}\nusage: maw-rs calver constants [--plan-json]\n"),
     }
 }
-

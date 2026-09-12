@@ -1,6 +1,7 @@
-const DISPATCH_36: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "whoami", handler: Handler::Sync(run_whoami_command) },
-];
+const DISPATCH_36: &[DispatcherEntry] = &[DispatcherEntry {
+    command: "whoami",
+    handler: Handler::Sync(run_whoami_command),
+}];
 
 fn run_whoami_command(argv: &[String]) -> CliOutput {
     let mut runner = maw_tmux::CommandTmuxRunner::new();
@@ -19,7 +20,9 @@ where
         };
     }
 
-    let short = argv.iter().any(|arg| matches!(arg.as_str(), "--short" | "-s"));
+    let short = argv
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "--short" | "-s"));
     let json = argv.iter().any(|arg| arg == "--json");
 
     if short {

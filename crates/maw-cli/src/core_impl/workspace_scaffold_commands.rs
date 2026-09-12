@@ -1,11 +1,32 @@
 const DISPATCH_93: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "work", handler: Handler::Sync(work_run_command) },
-    DispatcherEntry { command: "awake", handler: Handler::Sync(awake_run_command) },
-    DispatcherEntry { command: "scaffold", handler: Handler::Sync(scaffold_run_command) },
-    DispatcherEntry { command: "new", handler: Handler::Sync(new_run_command) },
-    DispatcherEntry { command: "promote", handler: Handler::Sync(promote_run_command) },
-    DispatcherEntry { command: "preflight", handler: Handler::Sync(preflight_run_command) },
-    DispatcherEntry { command: "snapshots", handler: Handler::Sync(snapshots_run_command) },
+    DispatcherEntry {
+        command: "work",
+        handler: Handler::Sync(work_run_command),
+    },
+    DispatcherEntry {
+        command: "awake",
+        handler: Handler::Sync(awake_run_command),
+    },
+    DispatcherEntry {
+        command: "scaffold",
+        handler: Handler::Sync(scaffold_run_command),
+    },
+    DispatcherEntry {
+        command: "new",
+        handler: Handler::Sync(new_run_command),
+    },
+    DispatcherEntry {
+        command: "promote",
+        handler: Handler::Sync(promote_run_command),
+    },
+    DispatcherEntry {
+        command: "preflight",
+        handler: Handler::Sync(preflight_run_command),
+    },
+    DispatcherEntry {
+        command: "snapshots",
+        handler: Handler::Sync(snapshots_run_command),
+    },
 ];
 
 const WORK_USAGE: &str = "usage: maw work <repo|.|path|url> [task] [--wt [slug]] [--fresh] [--name <stable>] [-e <engine>] [--layout nested|legacy]";
@@ -100,8 +121,17 @@ trait NewWorkspaceTmuxNative {
     fn new_current_session_window(&mut self) -> Result<(String, String), String>;
     fn new_split_window(&mut self, request: &NewSplitCreateNative) -> Result<String, String>;
     fn new_select_pane_title(&mut self, pane: &str, title: &str) -> Result<(), String>;
-    fn new_read_session_option(&mut self, session: &str, option: &str) -> Result<Option<String>, String>;
-    fn new_set_session_option(&mut self, session: &str, option: &str, value: &str) -> Result<(), String>;
+    fn new_read_session_option(
+        &mut self,
+        session: &str,
+        option: &str,
+    ) -> Result<Option<String>, String>;
+    fn new_set_session_option(
+        &mut self,
+        session: &str,
+        option: &str,
+        value: &str,
+    ) -> Result<(), String>;
     fn new_attach_session(&mut self, session: &str) -> Result<(), String>;
     fn new_stdin_is_terminal(&self) -> bool;
     fn new_stdout_is_terminal(&self) -> bool;
@@ -113,7 +143,11 @@ struct NewSystemTmuxNative {
 }
 
 impl NewSystemTmuxNative {
-    fn new() -> Self { Self { runner: maw_tmux::CommandTmuxRunner::new() } }
+    fn new() -> Self {
+        Self {
+            runner: maw_tmux::CommandTmuxRunner::new(),
+        }
+    }
 
     fn run(&mut self, subcommand: &str, args: &[String]) -> Result<String, String> {
         maw_tmux::TmuxRunner::run(&mut self.runner, subcommand, args).map_err(|error| error.message)
@@ -122,7 +156,8 @@ impl NewSystemTmuxNative {
 
 impl NewWorkspaceTmuxNative for NewSystemTmuxNative {
     fn new_has_session(&mut self, name: &str) -> bool {
-        self.run("has-session", &["-t".to_owned(), name.to_owned()]).is_ok()
+        self.run("has-session", &["-t".to_owned(), name.to_owned()])
+            .is_ok()
     }
 
     fn new_session_create(&mut self, request: &NewSessionCreateNative) -> Result<String, String> {
@@ -149,15 +184,31 @@ impl NewWorkspaceTmuxNative for NewSystemTmuxNative {
     fn new_first_pane_id(&mut self, target: &str) -> Option<String> {
         self.run(
             "list-panes",
-            &["-t".to_owned(), target.to_owned(), "-F".to_owned(), "#{pane_id}".to_owned()],
+            &[
+                "-t".to_owned(),
+                target.to_owned(),
+                "-F".to_owned(),
+                "#{pane_id}".to_owned(),
+            ],
         )
         .ok()
-        .and_then(|raw| raw.lines().map(str::trim).find(|line| !line.is_empty()).map(str::to_owned))
+        .and_then(|raw| {
+            raw.lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+                .map(str::to_owned)
+        })
     }
 
     fn new_current_session_window(&mut self) -> Result<(String, String), String> {
         let raw = self
-            .run("display-message", &["-p".to_owned(), "#{session_name}\t#{window_name}".to_owned()])
+            .run(
+                "display-message",
+                &[
+                    "-p".to_owned(),
+                    "#{session_name}\t#{window_name}".to_owned(),
+                ],
+            )
             .map_err(|_| "new: --split requires a current tmux client".to_owned())?;
         let mut parts = raw.trim().split('\t');
         let session = parts.next().unwrap_or_default();
@@ -188,22 +239,49 @@ impl NewWorkspaceTmuxNative for NewSystemTmuxNative {
     fn new_select_pane_title(&mut self, pane: &str, title: &str) -> Result<(), String> {
         self.run(
             "select-pane",
-            &["-t".to_owned(), pane.to_owned(), "-T".to_owned(), title.to_owned()],
+            &[
+                "-t".to_owned(),
+                pane.to_owned(),
+                "-T".to_owned(),
+                title.to_owned(),
+            ],
         )
         .map(|_| ())
     }
 
-    fn new_read_session_option(&mut self, session: &str, option: &str) -> Result<Option<String>, String> {
+    fn new_read_session_option(
+        &mut self,
+        session: &str,
+        option: &str,
+    ) -> Result<Option<String>, String> {
         Ok(self
-            .run("show-options", &["-qv".to_owned(), "-t".to_owned(), session.to_owned(), option.to_owned()])
+            .run(
+                "show-options",
+                &[
+                    "-qv".to_owned(),
+                    "-t".to_owned(),
+                    session.to_owned(),
+                    option.to_owned(),
+                ],
+            )
             .ok()
             .map(|raw| raw.trim().to_owned()))
     }
 
-    fn new_set_session_option(&mut self, session: &str, option: &str, value: &str) -> Result<(), String> {
+    fn new_set_session_option(
+        &mut self,
+        session: &str,
+        option: &str,
+        value: &str,
+    ) -> Result<(), String> {
         self.run(
             "set-option",
-            &["-t".to_owned(), session.to_owned(), option.to_owned(), value.to_owned()],
+            &[
+                "-t".to_owned(),
+                session.to_owned(),
+                option.to_owned(),
+                value.to_owned(),
+            ],
         )
         .map(|_| ())
     }
@@ -224,13 +302,22 @@ impl NewWorkspaceTmuxNative for NewSystemTmuxNative {
         if status.success() {
             Ok(())
         } else {
-            Err(format!("new: tmux attach failed with status {}", status.code().unwrap_or(1)))
+            Err(format!(
+                "new: tmux attach failed with status {}",
+                status.code().unwrap_or(1)
+            ))
         }
     }
 
-    fn new_stdin_is_terminal(&self) -> bool { std::io::IsTerminal::is_terminal(&std::io::stdin()) }
-    fn new_stdout_is_terminal(&self) -> bool { std::io::IsTerminal::is_terminal(&std::io::stdout()) }
-    fn new_env_no_prompt(&self) -> bool { new_truthy_env(std::env::var("MAW_NO_PROMPT").ok().as_deref()) }
+    fn new_stdin_is_terminal(&self) -> bool {
+        std::io::IsTerminal::is_terminal(&std::io::stdin())
+    }
+    fn new_stdout_is_terminal(&self) -> bool {
+        std::io::IsTerminal::is_terminal(&std::io::stdout())
+    }
+    fn new_env_no_prompt(&self) -> bool {
+        new_truthy_env(std::env::var("MAW_NO_PROMPT").ok().as_deref())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -251,9 +338,15 @@ struct PromoteResolvedNative {
 }
 
 impl PromoteResolvedNative {
-    fn src_target(&self) -> String { format!("{}:{}", self.src_session, self.src_window) }
-    fn dst_target(&self) -> String { format!("{}:", self.dst_session) }
-    fn placeholder_target(&self) -> String { promote_placeholder_target(&self.dst_session) }
+    fn src_target(&self) -> String {
+        format!("{}:{}", self.src_session, self.src_window)
+    }
+    fn dst_target(&self) -> String {
+        format!("{}:", self.dst_session)
+    }
+    fn placeholder_target(&self) -> String {
+        promote_placeholder_target(&self.dst_session)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -298,15 +391,21 @@ impl PromoteTmuxNative for PromoteSystemTmuxNative {
 
     fn promote_list_windows(&mut self, session: &str) -> Result<Vec<maw_tmux::TmuxWindow>, String> {
         promote_validate_tmux_name(session, "source session")?;
-        TmuxClient::local().list_windows(session).map_err(|error| error.to_string())
+        TmuxClient::local()
+            .list_windows(session)
+            .map_err(|error| error.to_string())
     }
 
     fn promote_has_session(&mut self, name: &str) -> bool {
-        if promote_validate_tmux_name(name, "destination session").is_err() { return false; }
+        if promote_validate_tmux_name(name, "destination session").is_err() {
+            return false;
+        }
         TmuxClient::local().has_session(name)
     }
 
-    fn promote_caller_in_tmux(&self) -> bool { std::env::var_os("TMUX").is_some() }
+    fn promote_caller_in_tmux(&self) -> bool {
+        std::env::var_os("TMUX").is_some()
+    }
 
     fn promote_new_session(&mut self, name: &str, window: &str) -> Result<(), String> {
         promote_validate_tmux_name(name, "destination session")?;
@@ -315,7 +414,13 @@ impl PromoteTmuxNative for PromoteSystemTmuxNative {
         maw_tmux::TmuxRunner::run(
             &mut runner,
             "new-session",
-            &["-d".to_owned(), "-s".to_owned(), name.to_owned(), "-n".to_owned(), window.to_owned()],
+            &[
+                "-d".to_owned(),
+                "-s".to_owned(),
+                name.to_owned(),
+                "-n".to_owned(),
+                window.to_owned(),
+            ],
         )
         .map(|_| ())
         .map_err(|error| error.message)
@@ -328,7 +433,12 @@ impl PromoteTmuxNative for PromoteSystemTmuxNative {
         maw_tmux::TmuxRunner::run(
             &mut runner,
             "move-window",
-            &["-s".to_owned(), src.to_owned(), "-t".to_owned(), dst.to_owned()],
+            &[
+                "-s".to_owned(),
+                src.to_owned(),
+                "-t".to_owned(),
+                dst.to_owned(),
+            ],
         )
         .map(|_| ())
         .map_err(|error| error.message)
@@ -337,16 +447,30 @@ impl PromoteTmuxNative for PromoteSystemTmuxNative {
     fn promote_kill_session(&mut self, name: &str) -> Result<(), String> {
         promote_validate_tmux_name(name, "rollback destination session")?;
         let mut runner = maw_tmux::CommandTmuxRunner::new();
-        maw_tmux::TmuxRunner::run(&mut runner, "kill-session", &["-t".to_owned(), name.to_owned()]).map(|_| ()).map_err(|error| error.message)
+        maw_tmux::TmuxRunner::run(
+            &mut runner,
+            "kill-session",
+            &["-t".to_owned(), name.to_owned()],
+        )
+        .map(|_| ())
+        .map_err(|error| error.message)
     }
 
     fn promote_kill_window(&mut self, target: &str) -> Result<(), String> {
         promote_validate_tmux_target(target, "rollback placeholder target")?;
         let mut runner = maw_tmux::CommandTmuxRunner::new();
-        maw_tmux::TmuxRunner::run(&mut runner, "kill-window", &["-t".to_owned(), target.to_owned()]).map(|_| ()).map_err(|error| error.message)
+        maw_tmux::TmuxRunner::run(
+            &mut runner,
+            "kill-window",
+            &["-t".to_owned(), target.to_owned()],
+        )
+        .map(|_| ())
+        .map_err(|error| error.message)
     }
 
-    fn promote_switch_client(&mut self, _session: &str) -> Result<(), String> { Err("promote: attach deferred to #299 attach follow-up".to_owned()) }
+    fn promote_switch_client(&mut self, _session: &str) -> Result<(), String> {
+        Err("promote: attach deferred to #299 attach follow-up".to_owned())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -382,7 +506,11 @@ fn work_run_command(argv: &[String]) -> CliOutput {
 }
 
 fn work_error(message: &str) -> CliOutput {
-    CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") }
+    CliOutput {
+        code: 1,
+        stdout: String::new(),
+        stderr: format!("{message}\n"),
+    }
 }
 
 fn awake_run_command(argv: &[String]) -> CliOutput {
@@ -403,13 +531,21 @@ fn awake_dispatch_to_existing(argv: &[String]) -> CliOutput {
 }
 
 fn awake_error(message: &str) -> CliOutput {
-    CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") }
+    CliOutput {
+        code: 1,
+        stdout: String::new(),
+        stderr: format!("{message}\n"),
+    }
 }
 
 fn scaffold_run_command(argv: &[String]) -> CliOutput {
     match scaffold_parse_args(argv, SCAFFOLD_USAGE) {
         Ok(options) => match scaffold_apply(&options) {
-            Ok(stdout) => CliOutput { code: 0, stdout, stderr: String::new() },
+            Ok(stdout) => CliOutput {
+                code: 0,
+                stdout,
+                stderr: String::new(),
+            },
             Err(message) => scaffold_error(&message),
         },
         Err(message) => scaffold_error(&message),
@@ -417,7 +553,11 @@ fn scaffold_run_command(argv: &[String]) -> CliOutput {
 }
 
 fn scaffold_error(message: &str) -> CliOutput {
-    CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") }
+    CliOutput {
+        code: 1,
+        stdout: String::new(),
+        stderr: format!("{message}\n"),
+    }
 }
 
 fn scaffold_parse_args(argv: &[String], usage: &str) -> Result<ScaffoldOptionsNative, String> {
@@ -433,8 +573,12 @@ fn scaffold_parse_args(argv: &[String], usage: &str) -> Result<ScaffoldOptionsNa
             "--rust" => language = ScaffoldLanguageNative::Rust,
             "--as" | "--assemblyscript" => language = ScaffoldLanguageNative::AssemblyScript,
             "--dry-run" => dry_run = true,
-            "--dest" => { dest = Some(scaffold_path_value(argv, &mut index, "--dest")?); }
-            value if value.starts_with("--dest=") => dest = Some(scaffold_validate_path(&value["--dest=".len()..])?),
+            "--dest" => {
+                dest = Some(scaffold_path_value(argv, &mut index, "--dest")?);
+            }
+            value if value.starts_with("--dest=") => {
+                dest = Some(scaffold_validate_path(&value["--dest=".len()..])?);
+            }
             value if value.starts_with('-') => return Err(scaffold_flag_like(value)),
             value => scaffold_set_name(&mut name, value)?,
         }
@@ -443,7 +587,12 @@ fn scaffold_parse_args(argv: &[String], usage: &str) -> Result<ScaffoldOptionsNa
     let name = name.ok_or_else(|| usage.to_owned())?;
     scaffold_validate_name(&name)?;
     let dest = dest.unwrap_or_else(|| std::path::PathBuf::from(&name));
-    Ok(ScaffoldOptionsNative { name, dest, language, dry_run })
+    Ok(ScaffoldOptionsNative {
+        name,
+        dest,
+        language,
+        dry_run,
+    })
 }
 
 fn scaffold_set_name(slot: &mut Option<String>, value: &str) -> Result<(), String> {
@@ -457,8 +606,14 @@ fn scaffold_set_name(slot: &mut Option<String>, value: &str) -> Result<(), Strin
     Ok(())
 }
 
-fn scaffold_path_value(argv: &[String], index: &mut usize, flag: &str) -> Result<std::path::PathBuf, String> {
-    let Some(value) = argv.get(*index + 1) else { return Err(format!("scaffold: {flag} requires a value")); };
+fn scaffold_path_value(
+    argv: &[String],
+    index: &mut usize,
+    flag: &str,
+) -> Result<std::path::PathBuf, String> {
+    let Some(value) = argv.get(*index + 1) else {
+        return Err(format!("scaffold: {flag} requires a value"));
+    };
     *index += 1;
     scaffold_validate_path(value)
 }
@@ -474,7 +629,12 @@ fn scaffold_validate_name(name: &str) -> Result<(), String> {
 }
 
 fn scaffold_validate_path(value: &str) -> Result<std::path::PathBuf, String> {
-    if value.is_empty() || value.trim() != value || value == "--" || value.starts_with('-') || value.contains('\0') {
+    if value.is_empty()
+        || value.trim() != value
+        || value == "--"
+        || value.starts_with('-')
+        || value.contains('\0')
+    {
         return Err("scaffold path must be non-empty, unpadded, and not start with '-'".to_owned());
     }
     if value.split('/').any(|part| part == "..") {
@@ -509,11 +669,21 @@ fn scaffold_validate_destination(path: &std::path::Path) -> Result<(), String> {
 }
 
 fn scaffold_render_plan(options: &ScaffoldOptionsNative) -> String {
-    format!("scaffold plan: create {} plugin {} at {}\n", scaffold_language_name(options.language), options.name, options.dest.display())
+    format!(
+        "scaffold plan: create {} plugin {} at {}\n",
+        scaffold_language_name(options.language),
+        options.name,
+        options.dest.display()
+    )
 }
 
 fn scaffold_render_created(options: &ScaffoldOptionsNative) -> String {
-    format!("created {} plugin {} at {}\n", scaffold_language_name(options.language), options.name, options.dest.display())
+    format!(
+        "created {} plugin {} at {}\n",
+        scaffold_language_name(options.language),
+        options.name,
+        options.dest.display()
+    )
 }
 
 fn scaffold_language_name(language: ScaffoldLanguageNative) -> &'static str {
@@ -524,20 +694,48 @@ fn scaffold_language_name(language: ScaffoldLanguageNative) -> &'static str {
 }
 
 fn scaffold_write_rust(options: &ScaffoldOptionsNative) -> Result<(), String> {
-    std::fs::create_dir_all(options.dest.join("src")).map_err(|error| format!("scaffold: create rust dirs: {error}"))?;
-    std::fs::write(options.dest.join("Cargo.toml"), scaffold_rust_cargo(&options.name)).map_err(|error| format!("scaffold: write Cargo.toml: {error}"))?;
-    std::fs::write(options.dest.join("src/lib.rs"), scaffold_rust_lib()).map_err(|error| format!("scaffold: write src/lib.rs: {error}"))?;
-    std::fs::write(options.dest.join("README.md"), scaffold_readme(&options.name, "Rust")).map_err(|error| format!("scaffold: write README.md: {error}"))?;
-    std::fs::write(options.dest.join("plugin.json"), build_manifest_json(&options.name, ScaffoldLanguage::Rust)).map_err(|error| format!("scaffold: write plugin.json: {error}"))?;
+    std::fs::create_dir_all(options.dest.join("src"))
+        .map_err(|error| format!("scaffold: create rust dirs: {error}"))?;
+    std::fs::write(
+        options.dest.join("Cargo.toml"),
+        scaffold_rust_cargo(&options.name),
+    )
+    .map_err(|error| format!("scaffold: write Cargo.toml: {error}"))?;
+    std::fs::write(options.dest.join("src/lib.rs"), scaffold_rust_lib())
+        .map_err(|error| format!("scaffold: write src/lib.rs: {error}"))?;
+    std::fs::write(
+        options.dest.join("README.md"),
+        scaffold_readme(&options.name, "Rust"),
+    )
+    .map_err(|error| format!("scaffold: write README.md: {error}"))?;
+    std::fs::write(
+        options.dest.join("plugin.json"),
+        build_manifest_json(&options.name, ScaffoldLanguage::Rust),
+    )
+    .map_err(|error| format!("scaffold: write plugin.json: {error}"))?;
     Ok(())
 }
 
 fn scaffold_write_as(options: &ScaffoldOptionsNative) -> Result<(), String> {
-    std::fs::create_dir_all(options.dest.join("assembly")).map_err(|error| format!("scaffold: create as dirs: {error}"))?;
-    std::fs::write(options.dest.join("package.json"), scaffold_as_package(&options.name)).map_err(|error| format!("scaffold: write package.json: {error}"))?;
-    std::fs::write(options.dest.join("assembly/index.ts"), scaffold_as_index()).map_err(|error| format!("scaffold: write assembly/index.ts: {error}"))?;
-    std::fs::write(options.dest.join("README.md"), scaffold_readme(&options.name, "AssemblyScript")).map_err(|error| format!("scaffold: write README.md: {error}"))?;
-    std::fs::write(options.dest.join("plugin.json"), build_manifest_json(&options.name, ScaffoldLanguage::AssemblyScript)).map_err(|error| format!("scaffold: write plugin.json: {error}"))?;
+    std::fs::create_dir_all(options.dest.join("assembly"))
+        .map_err(|error| format!("scaffold: create as dirs: {error}"))?;
+    std::fs::write(
+        options.dest.join("package.json"),
+        scaffold_as_package(&options.name),
+    )
+    .map_err(|error| format!("scaffold: write package.json: {error}"))?;
+    std::fs::write(options.dest.join("assembly/index.ts"), scaffold_as_index())
+        .map_err(|error| format!("scaffold: write assembly/index.ts: {error}"))?;
+    std::fs::write(
+        options.dest.join("README.md"),
+        scaffold_readme(&options.name, "AssemblyScript"),
+    )
+    .map_err(|error| format!("scaffold: write README.md: {error}"))?;
+    std::fs::write(
+        options.dest.join("plugin.json"),
+        build_manifest_json(&options.name, ScaffoldLanguage::AssemblyScript),
+    )
+    .map_err(|error| format!("scaffold: write plugin.json: {error}"))?;
     Ok(())
 }
 
@@ -568,13 +766,21 @@ fn new_run_command(argv: &[String]) -> CliOutput {
 
 fn new_run_command_with(argv: &[String], tmux: &mut impl NewWorkspaceTmuxNative) -> CliOutput {
     match new_parse_args(argv).and_then(|options| new_execute(&options, tmux)) {
-        Ok(stdout) => CliOutput { code: 0, stdout, stderr: String::new() },
+        Ok(stdout) => CliOutput {
+            code: 0,
+            stdout,
+            stderr: String::new(),
+        },
         Err(message) => new_error(&message),
     }
 }
 
 fn new_error(message: &str) -> CliOutput {
-    CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") }
+    CliOutput {
+        code: 1,
+        stdout: String::new(),
+        stderr: format!("{message}\n"),
+    }
 }
 
 #[allow(clippy::too_many_lines)]
@@ -605,21 +811,31 @@ fn new_parse_args(argv: &[String]) -> Result<NewOptionsNative, String> {
                 let flag = argv[index].clone();
                 raw_path = Some(new_take_value(argv, &mut index, &flag)?);
             }
-            value if value.starts_with("--path=") => raw_path = Some(value["--path=".len()..].to_owned()),
+            value if value.starts_with("--path=") => {
+                raw_path = Some(value["--path=".len()..].to_owned());
+            }
             "--window" => {
                 raw_window = Some(new_take_value(argv, &mut index, "--window")?);
             }
-            value if value.starts_with("--window=") => raw_window = Some(value["--window=".len()..].to_owned()),
+            value if value.starts_with("--window=") => {
+                raw_window = Some(value["--window=".len()..].to_owned());
+            }
             "--cmd" | "-c" => {
                 let flag = argv[index].clone();
                 raw_cmd = Some(new_take_value(argv, &mut index, &flag)?);
             }
-            value if value.starts_with("--cmd=") => raw_cmd = Some(value["--cmd=".len()..].to_owned()),
+            value if value.starts_with("--cmd=") => {
+                raw_cmd = Some(value["--cmd=".len()..].to_owned());
+            }
             "--claude" => claude = true,
             "--shell" => {}
             "--split" => split = true,
-            "--right" | "--horizontal" => new_set_split_direction(&mut split_direction, NewSplitDirectionNative::Horizontal)?,
-            "--bottom" | "--vertical" => new_set_split_direction(&mut split_direction, NewSplitDirectionNative::Vertical)?,
+            "--right" | "--horizontal" => {
+                new_set_split_direction(&mut split_direction, NewSplitDirectionNative::Horizontal)?;
+            }
+            "--bottom" | "--vertical" => {
+                new_set_split_direction(&mut split_direction, NewSplitDirectionNative::Vertical)?;
+            }
             "--print" | "--json" => machine_readable = true,
             "--dry-run" => dry_run = true,
             "--no-fleet" => no_fleet = true,
@@ -627,14 +843,24 @@ fn new_parse_args(argv: &[String]) -> Result<NewOptionsNative, String> {
                 let flag = argv[index].clone();
                 parent = Some(new_take_value(argv, &mut index, &flag)?);
             }
-            value if value.starts_with("--parent-session-id=") => parent = Some(value["--parent-session-id=".len()..].to_owned()),
-            value if value.starts_with("--parent=") => parent = Some(value["--parent=".len()..].to_owned()),
+            value if value.starts_with("--parent-session-id=") => {
+                parent = Some(value["--parent-session-id=".len()..].to_owned());
+            }
+            value if value.starts_with("--parent=") => {
+                parent = Some(value["--parent=".len()..].to_owned());
+            }
             "--session-id" => {
                 session_id = Some(new_take_value(argv, &mut index, "--session-id")?);
             }
-            value if value.starts_with("--session-id=") => session_id = Some(value["--session-id=".len()..].to_owned()),
-            "--rust" | "--as" | "--assemblyscript" | "--dest" => return Err(new_plugin_scaffold_redirect(argv[index].as_str())),
-            value if value.starts_with("--dest=") => return Err(new_plugin_scaffold_redirect("--dest")),
+            value if value.starts_with("--session-id=") => {
+                session_id = Some(value["--session-id=".len()..].to_owned());
+            }
+            "--rust" | "--as" | "--assemblyscript" | "--dest" => {
+                return Err(new_plugin_scaffold_redirect(argv[index].as_str()))
+            }
+            value if value.starts_with("--dest=") => {
+                return Err(new_plugin_scaffold_redirect("--dest"))
+            }
             value if value.starts_with('-') => {
                 return Err(format!(
                     "new: invalid session name '{value}' — use letters, numbers, dot, underscore, or dash"
@@ -657,7 +883,10 @@ fn new_parse_args(argv: &[String]) -> Result<NewOptionsNative, String> {
         return Err("new: split direction flags require --split".to_owned());
     }
     if split && raw_window.is_some() {
-        return Err("new: --window only applies when creating or reusing a workspace session, not --split".to_owned());
+        return Err(
+            "new: --window only applies when creating or reusing a workspace session, not --split"
+                .to_owned(),
+        );
     }
 
     let cwd = new_resolve_workspace_path(raw_path.as_deref())?;
@@ -669,11 +898,20 @@ fn new_parse_args(argv: &[String]) -> Result<NewOptionsNative, String> {
             .unwrap_or_else(|| "workspace".to_owned())
     });
     let startup_command = if claude {
-        Some(new_claude_startup_command(&command_name_hint, &cwd, parent.as_deref(), session_id.as_deref()))
+        Some(new_claude_startup_command(
+            &command_name_hint,
+            &cwd,
+            parent.as_deref(),
+            session_id.as_deref(),
+        ))
     } else {
         new_normalize_startup_command(raw_cmd.as_deref())?
     };
-    let auto_name_command = if claude { Some("claude") } else { startup_command.as_deref() };
+    let auto_name_command = if claude {
+        Some("claude")
+    } else {
+        startup_command.as_deref()
+    };
     let name = explicit_name
         .clone()
         .or_else(|| new_auto_workspace_session_name(&cwd, auto_name_command, raw_path.is_some()))
@@ -709,7 +947,9 @@ fn new_parse_args(argv: &[String]) -> Result<NewOptionsNative, String> {
 }
 
 fn new_take_value(argv: &[String], index: &mut usize, flag: &str) -> Result<String, String> {
-    let Some(value) = argv.get(*index + 1) else { return Err(format!("new: {flag} requires a value")); };
+    let Some(value) = argv.get(*index + 1) else {
+        return Err(format!("new: {flag} requires a value"));
+    };
     *index += 1;
     if value.is_empty() {
         return Err(format!("new: {flag} requires a non-empty value"));
@@ -717,9 +957,15 @@ fn new_take_value(argv: &[String], index: &mut usize, flag: &str) -> Result<Stri
     Ok(value.clone())
 }
 
-fn new_set_split_direction(slot: &mut Option<NewSplitDirectionNative>, value: NewSplitDirectionNative) -> Result<(), String> {
+fn new_set_split_direction(
+    slot: &mut Option<NewSplitDirectionNative>,
+    value: NewSplitDirectionNative,
+) -> Result<(), String> {
     if matches!(*slot, Some(existing) if existing != value) {
-        return Err("new: choose only one split direction (--right/--horizontal or --bottom/--vertical)".to_owned());
+        return Err(
+            "new: choose only one split direction (--right/--horizontal or --bottom/--vertical)"
+                .to_owned(),
+        );
     }
     *slot = Some(value);
     Ok(())
@@ -734,18 +980,27 @@ fn new_plugin_scaffold_redirect(flag: &str) -> String {
 fn new_resolve_workspace_path(raw_path: Option<&str>) -> Result<std::path::PathBuf, String> {
     let path = match raw_path {
         None => std::env::current_dir().map_err(|error| format!("new: cwd: {error}"))?,
-        Some(value) if value.trim().is_empty() => return Err("new: --path requires a non-empty directory".to_owned()),
+        Some(value) if value.trim().is_empty() => {
+            return Err("new: --path requires a non-empty directory".to_owned())
+        }
         Some(value) => {
             let expanded = new_expand_home_path(value);
             let candidate = std::path::PathBuf::from(expanded);
             if candidate.is_absolute() {
                 candidate
             } else {
-                std::env::current_dir().map_err(|error| format!("new: cwd: {error}"))?.join(candidate)
+                std::env::current_dir()
+                    .map_err(|error| format!("new: cwd: {error}"))?
+                    .join(candidate)
             }
         }
     };
-    let info = std::fs::metadata(&path).map_err(|_| format!("new: path does not exist: {}", raw_path.unwrap_or_else(|| path.to_str().unwrap_or("."))))?;
+    let info = std::fs::metadata(&path).map_err(|_| {
+        format!(
+            "new: path does not exist: {}",
+            raw_path.unwrap_or_else(|| path.to_str().unwrap_or("."))
+        )
+    })?;
     if !info.is_dir() {
         return Err(format!("new: path is not a directory: {}", path.display()));
     }
@@ -772,9 +1027,18 @@ fn new_normalize_startup_command(raw: Option<&str>) -> Result<Option<String>, St
     }
 }
 
-fn new_claude_startup_command(name: &str, cwd: &std::path::Path, parent: Option<&str>, session_id: Option<&str>) -> String {
+fn new_claude_startup_command(
+    name: &str,
+    cwd: &std::path::Path,
+    parent: Option<&str>,
+    session_id: Option<&str>,
+) -> String {
     let configured = workon_build_command_in_dir(name, cwd, None);
-    let command = if new_looks_like_claude_command(&configured) { configured } else { "claude".to_owned() };
+    let command = if new_looks_like_claude_command(&configured) {
+        configured
+    } else {
+        "claude".to_owned()
+    };
     let command = format!("env CLAUDECODE=1 CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 {command}");
     new_prefix_spawn_session_env(&command, parent, session_id, cwd)
 }
@@ -786,7 +1050,12 @@ fn new_looks_like_claude_command(command: &str) -> bool {
     })
 }
 
-fn new_prefix_spawn_session_env(command: &str, parent: Option<&str>, session_id: Option<&str>, cwd: &std::path::Path) -> String {
+fn new_prefix_spawn_session_env(
+    command: &str,
+    parent: Option<&str>,
+    session_id: Option<&str>,
+    cwd: &std::path::Path,
+) -> String {
     let mut assigns = Vec::<String>::new();
     if let Some(value) = new_resolve_parent_session_id(parent, cwd) {
         assigns.push(format!("MAW_PARENT_SESSION_ID={}", new_shell_quote(&value)));
@@ -794,14 +1063,24 @@ fn new_prefix_spawn_session_env(command: &str, parent: Option<&str>, session_id:
     if let Some(value) = new_clean_session_id(session_id) {
         assigns.push(format!("MAW_SESSION_ID={}", new_shell_quote(value)));
     }
-    if assigns.is_empty() { command.to_owned() } else { format!("{} {command}", assigns.join(" ")) }
+    if assigns.is_empty() {
+        command.to_owned()
+    } else {
+        format!("{} {command}", assigns.join(" "))
+    }
 }
 
 fn new_resolve_parent_session_id(explicit: Option<&str>, cwd: &std::path::Path) -> Option<String> {
     new_clean_session_id(explicit)
         .map(str::to_owned)
-        .or_else(|| new_clean_session_id(std::env::var("MAW_PARENT_SESSION_ID").ok().as_deref()).map(str::to_owned))
-        .or_else(|| new_clean_session_id(std::env::var("CLAUDE_SESSION_ID").ok().as_deref()).map(str::to_owned))
+        .or_else(|| {
+            new_clean_session_id(std::env::var("MAW_PARENT_SESSION_ID").ok().as_deref())
+                .map(str::to_owned)
+        })
+        .or_else(|| {
+            new_clean_session_id(std::env::var("CLAUDE_SESSION_ID").ok().as_deref())
+                .map(str::to_owned)
+        })
         .or_else(|| new_newest_claude_jsonl_session_id(cwd))
 }
 
@@ -812,7 +1091,13 @@ fn new_clean_session_id(value: Option<&str>) -> Option<&str> {
 fn new_newest_claude_jsonl_session_id(cwd: &std::path::Path) -> Option<String> {
     let projects_root = std::env::var_os("MAW_CLAUDE_PROJECTS_DIR")
         .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".claude").join("projects")))?;
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| {
+                std::path::PathBuf::from(home)
+                    .join(".claude")
+                    .join("projects")
+            })
+        })?;
     let mut encoded = cwd.display().to_string();
     if encoded.starts_with('/') {
         encoded.replace_range(0..1, "-");
@@ -826,7 +1111,10 @@ fn new_newest_claude_jsonl_session_id(cwd: &std::path::Path) -> Option<String> {
         if !name.ends_with(".jsonl") || name.contains("subagents") {
             continue;
         }
-        let modified = entry.metadata().and_then(|metadata| metadata.modified()).ok()?;
+        let modified = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .ok()?;
         if newest.as_ref().is_none_or(|(_, time)| modified > *time) {
             newest = Some((name.trim_end_matches(".jsonl").to_owned(), modified));
         }
@@ -861,17 +1149,33 @@ fn new_truncate_workspace_name(input: &str) -> String {
     while out.ends_with('-') || out.ends_with('_') || out.ends_with('.') {
         out.pop();
     }
-    if out.is_empty() { "workspace".to_owned() } else { out }
+    if out.is_empty() {
+        "workspace".to_owned()
+    } else {
+        out
+    }
 }
 
-fn new_auto_workspace_session_name(cwd: &std::path::Path, startup_command: Option<&str>, used_path_flag: bool) -> Option<String> {
+fn new_auto_workspace_session_name(
+    cwd: &std::path::Path,
+    startup_command: Option<&str>,
+    used_path_flag: bool,
+) -> Option<String> {
     let mut parts = Vec::<String>::new();
     if used_path_flag {
-        if let Some(name) = cwd.file_name().and_then(std::ffi::OsStr::to_str).map(new_slug_segment).filter(|name| !name.is_empty()) {
+        if let Some(name) = cwd
+            .file_name()
+            .and_then(std::ffi::OsStr::to_str)
+            .map(new_slug_segment)
+            .filter(|name| !name.is_empty())
+        {
             parts.push(name);
         }
     }
-    if let Some(command) = startup_command.map(new_slug_segment).filter(|name| !name.is_empty()) {
+    if let Some(command) = startup_command
+        .map(new_slug_segment)
+        .filter(|name| !name.is_empty())
+    {
         parts.push(command);
     }
     let raw = parts.join("-");
@@ -893,25 +1197,36 @@ fn new_validate_workspace_window_name(name: &str) -> Result<(), String> {
 fn new_validate_workspace_name(name: &str, kind: &str) -> Result<(), String> {
     let mut chars = name.chars();
     let Some(first) = chars.next() else {
-        return Err(format!("new: invalid {kind} name '{name}' — use letters, numbers, dot, underscore, or dash"));
+        return Err(format!(
+            "new: invalid {kind} name '{name}' — use letters, numbers, dot, underscore, or dash"
+        ));
     };
     if !first.is_ascii_alphanumeric()
         || name.len() > 80
         || !chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
     {
-        return Err(format!("new: invalid {kind} name '{name}' — use letters, numbers, dot, underscore, or dash"));
+        return Err(format!(
+            "new: invalid {kind} name '{name}' — use letters, numbers, dot, underscore, or dash"
+        ));
     }
     Ok(())
 }
 
-fn new_execute(options: &NewOptionsNative, tmux: &mut impl NewWorkspaceTmuxNative) -> Result<String, String> {
+fn new_execute(
+    options: &NewOptionsNative,
+    tmux: &mut impl NewWorkspaceTmuxNative,
+) -> Result<String, String> {
     let mut out = String::new();
     let mut resolved = options.clone();
 
     if !resolved.explicit_name {
         let base = resolved.name.clone();
         for suffix in 1..=99 {
-            let candidate = if suffix == 1 { base.clone() } else { format!("{base}-{suffix}") };
+            let candidate = if suffix == 1 {
+                base.clone()
+            } else {
+                format!("{base}-{suffix}")
+            };
             if !tmux.new_has_session(&candidate) {
                 resolved.name = candidate;
                 break;
@@ -923,11 +1238,17 @@ fn new_execute(options: &NewOptionsNative, tmux: &mut impl NewWorkspaceTmuxNativ
                 break;
             }
             if suffix == 99 {
-                return Err(format!("new: 99 collisions for '{base}-N' — pass explicit session name"));
+                return Err(format!(
+                    "new: 99 collisions for '{base}-N' — pass explicit session name"
+                ));
             }
         }
         if resolved.name != base && !resolved.machine_readable {
-            let _ = writeln!(out, "  \u{1b}[33m⚠\u{1b}[0m '{base}' exists with different context; using '{}'", resolved.name);
+            let _ = writeln!(
+                out,
+                "  \u{1b}[33m⚠\u{1b}[0m '{base}' exists with different context; using '{}'",
+                resolved.name
+            );
         }
     }
 
@@ -938,7 +1259,11 @@ fn new_execute(options: &NewOptionsNative, tmux: &mut impl NewWorkspaceTmuxNativ
     new_execute_session(&resolved, tmux, out)
 }
 
-fn new_execute_split(options: &NewOptionsNative, tmux: &mut impl NewWorkspaceTmuxNative, mut out: String) -> Result<String, String> {
+fn new_execute_split(
+    options: &NewOptionsNative,
+    tmux: &mut impl NewWorkspaceTmuxNative,
+    mut out: String,
+) -> Result<String, String> {
     let (session, window) = tmux.new_current_session_window()?;
     let mut pane_id = None::<String>;
     if !options.dry_run {
@@ -955,15 +1280,33 @@ fn new_execute_split(options: &NewOptionsNative, tmux: &mut impl NewWorkspaceTmu
     }
 
     if options.machine_readable {
-        out.push_str(&new_machine_payload(options, &session, &window, pane_id.as_deref(), false));
+        out.push_str(&new_machine_payload(
+            options,
+            &session,
+            &window,
+            pane_id.as_deref(),
+            false,
+        ));
     } else {
-        let mode = if options.startup_command.is_some() { "split shell + command" } else { "split shell" };
-        let verb = if options.dry_run { "\u{1b}[36m·\u{1b}[0m [dry-run] would create" } else { "\u{1b}[32m✓\u{1b}[0m created" };
+        let mode = if options.startup_command.is_some() {
+            "split shell + command"
+        } else {
+            "split shell"
+        };
+        let verb = if options.dry_run {
+            "\u{1b}[36m·\u{1b}[0m [dry-run] would create"
+        } else {
+            "\u{1b}[32m✓\u{1b}[0m created"
+        };
         let edge = match options.split_direction {
             NewSplitDirectionNative::Horizontal => "right edge",
             NewSplitDirectionNative::Vertical => "bottom edge",
         };
-        let _ = writeln!(out, "{verb} {mode} '{}' at {edge} in {session}:{window}", options.name);
+        let _ = writeln!(
+            out,
+            "{verb} {mode} '{}' at {edge} in {session}:{window}",
+            options.name
+        );
         if options.dry_run {
             new_write_dry_run_hint(&mut out);
         }
@@ -971,7 +1314,11 @@ fn new_execute_split(options: &NewOptionsNative, tmux: &mut impl NewWorkspaceTmu
     Ok(out)
 }
 
-fn new_execute_session(options: &NewOptionsNative, tmux: &mut impl NewWorkspaceTmuxNative, mut out: String) -> Result<String, String> {
+fn new_execute_session(
+    options: &NewOptionsNative,
+    tmux: &mut impl NewWorkspaceTmuxNative,
+    mut out: String,
+) -> Result<String, String> {
     let existed = tmux.new_has_session(&options.name);
     let mut pane_id = None::<String>;
     let mut payload_window = options.window.clone();
@@ -1006,9 +1353,23 @@ fn new_execute_session(options: &NewOptionsNative, tmux: &mut impl NewWorkspaceT
                 print_format: options.machine_readable.then(|| "#{pane_id}".to_owned()),
             })?;
             pane_id = new_nonempty_trimmed(&raw);
-            new_remember_workspace_launch(tmux, &options.name, &options.cwd.display().to_string(), options.startup_command.as_deref(), &options.window)?;
-            if !options.no_fleet && new_ensure_fleet_session_entry(&options.name, &options.window, &options.cwd)? == NewFleetStatusNative::Created && !options.machine_readable {
-                let _ = writeln!(out, "\u{1b}[32m+\u{1b}[0m fleet auto-registered {}", options.name);
+            new_remember_workspace_launch(
+                tmux,
+                &options.name,
+                &options.cwd.display().to_string(),
+                options.startup_command.as_deref(),
+                &options.window,
+            )?;
+            if !options.no_fleet
+                && new_ensure_fleet_session_entry(&options.name, &options.window, &options.cwd)?
+                    == NewFleetStatusNative::Created
+                && !options.machine_readable
+            {
+                let _ = writeln!(
+                    out,
+                    "\u{1b}[32m+\u{1b}[0m fleet auto-registered {}",
+                    options.name
+                );
             }
         }
         if !options.machine_readable {
@@ -1017,13 +1378,23 @@ fn new_execute_session(options: &NewOptionsNative, tmux: &mut impl NewWorkspaceT
             } else {
                 format!("{} shell", options.window)
             };
-            let verb = if options.dry_run { "\u{1b}[36m·\u{1b}[0m [dry-run] would create" } else { "\u{1b}[32m✓\u{1b}[0m created" };
+            let verb = if options.dry_run {
+                "\u{1b}[36m·\u{1b}[0m [dry-run] would create"
+            } else {
+                "\u{1b}[32m✓\u{1b}[0m created"
+            };
             let _ = writeln!(out, "{verb} workspace session '{}' ({mode})", options.name);
         }
     }
 
     if options.machine_readable {
-        out.push_str(&new_machine_payload(options, &options.name, &payload_window, pane_id.as_deref(), existed));
+        out.push_str(&new_machine_payload(
+            options,
+            &options.name,
+            &payload_window,
+            pane_id.as_deref(),
+            existed,
+        ));
     }
     if options.dry_run {
         if !options.machine_readable {
@@ -1038,7 +1409,11 @@ fn new_execute_session(options: &NewOptionsNative, tmux: &mut impl NewWorkspaceT
         }
         NewAttachDecisionNative::Skip if !options.machine_readable => {
             let _ = writeln!(out, "\u{1b}[36mRun:\u{1b}[0m maw a {}", options.name);
-            let _ = writeln!(out, "\u{1b}[90m  next: maw team bring {}\u{1b}[0m", options.name);
+            let _ = writeln!(
+                out,
+                "\u{1b}[90m  next: maw team bring {}\u{1b}[0m",
+                options.name
+            );
         }
         NewAttachDecisionNative::Skip => {}
     }
@@ -1052,12 +1427,18 @@ fn new_read_workspace_launch(
     let Some(cwd) = tmux.new_read_session_option(session, NEW_WORKSPACE_CWD_OPTION)? else {
         return Ok(None);
     };
-    let command = tmux.new_read_session_option(session, NEW_WORKSPACE_COMMAND_OPTION)?.unwrap_or_default();
+    let command = tmux
+        .new_read_session_option(session, NEW_WORKSPACE_COMMAND_OPTION)?
+        .unwrap_or_default();
     let window = tmux
         .new_read_session_option(session, NEW_WORKSPACE_WINDOW_OPTION)?
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "lead".to_owned());
-    Ok(Some(NewWorkspaceLaunchNative { cwd, command, window }))
+    Ok(Some(NewWorkspaceLaunchNative {
+        cwd,
+        command,
+        window,
+    }))
 }
 
 fn new_remember_workspace_launch(
@@ -1068,7 +1449,11 @@ fn new_remember_workspace_launch(
     window: &str,
 ) -> Result<(), String> {
     tmux.new_set_session_option(session, NEW_WORKSPACE_CWD_OPTION, cwd)?;
-    tmux.new_set_session_option(session, NEW_WORKSPACE_COMMAND_OPTION, command.unwrap_or_default())?;
+    tmux.new_set_session_option(
+        session,
+        NEW_WORKSPACE_COMMAND_OPTION,
+        command.unwrap_or_default(),
+    )?;
     tmux.new_set_session_option(session, NEW_WORKSPACE_WINDOW_OPTION, window)
 }
 
@@ -1076,7 +1461,10 @@ const NEW_WORKSPACE_CWD_OPTION: &str = "@maw_new_cwd";
 const NEW_WORKSPACE_COMMAND_OPTION: &str = "@maw_new_command";
 const NEW_WORKSPACE_WINDOW_OPTION: &str = "@maw_new_window";
 
-fn new_launch_context_matches(launch: &NewWorkspaceLaunchNative, options: &NewOptionsNative) -> bool {
+fn new_launch_context_matches(
+    launch: &NewWorkspaceLaunchNative,
+    options: &NewOptionsNative,
+) -> bool {
     launch.cwd == options.cwd.display().to_string()
         && launch.command == options.startup_command.as_deref().unwrap_or_default()
         && (!options.window_provided || launch.window == options.window)
@@ -1096,7 +1484,10 @@ fn new_machine_payload(
     if let Some(pane_id) = pane_id {
         fields.push(format!("\"pane_id\":{}", json_string(pane_id)));
     }
-    fields.push(format!("\"cwd\":{}", json_string(&options.cwd.display().to_string())));
+    fields.push(format!(
+        "\"cwd\":{}",
+        json_string(&options.cwd.display().to_string())
+    ));
     if let Some(command) = &options.startup_command {
         fields.push(format!("\"command\":{}", json_string(command)));
     }
@@ -1107,7 +1498,10 @@ fn new_machine_payload(
     format!("{{{}}}\n", fields.join(","))
 }
 
-fn new_attach_decision(options: &NewOptionsNative, tmux: &impl NewWorkspaceTmuxNative) -> NewAttachDecisionNative {
+fn new_attach_decision(
+    options: &NewOptionsNative,
+    tmux: &impl NewWorkspaceTmuxNative,
+) -> NewAttachDecisionNative {
     if options.no_attach || tmux.new_env_no_prompt() {
         return NewAttachDecisionNative::Skip;
     }
@@ -1119,7 +1513,12 @@ fn new_attach_decision(options: &NewOptionsNative, tmux: &impl NewWorkspaceTmuxN
 }
 
 fn new_truthy_env(value: Option<&str>) -> bool {
-    value.is_some_and(|raw| matches!(raw.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+    value.is_some_and(|raw| {
+        matches!(
+            raw.to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
 }
 
 fn new_nonempty_trimmed(raw: &str) -> Option<String> {
@@ -1128,10 +1527,17 @@ fn new_nonempty_trimmed(raw: &str) -> Option<String> {
 }
 
 fn new_write_dry_run_hint(out: &mut String) {
-    let _ = writeln!(out, "  \u{1b}[90mno tmux state changed (dry-run). Drop --dry-run to actually create.\u{1b}[0m");
+    let _ = writeln!(
+        out,
+        "  \u{1b}[90mno tmux state changed (dry-run). Drop --dry-run to actually create.\u{1b}[0m"
+    );
 }
 
-fn new_ensure_fleet_session_entry(session: &str, window: &str, cwd: &std::path::Path) -> Result<NewFleetStatusNative, String> {
+fn new_ensure_fleet_session_entry(
+    session: &str,
+    window: &str,
+    cwd: &std::path::Path,
+) -> Result<NewFleetStatusNative, String> {
     if !workon_safe_fleet_session_name(session) || window.trim().is_empty() {
         return Ok(NewFleetStatusNative::Skipped);
     }
@@ -1139,11 +1545,15 @@ fn new_ensure_fleet_session_entry(session: &str, window: &str, cwd: &std::path::
         return Ok(NewFleetStatusNative::Skipped);
     };
     let env = current_xdg_env();
-    if fleet_load_entries_for_env(&env).iter().any(|entry| fleet_entry_is_session(entry) && entry.session.name == session) {
+    if fleet_load_entries_for_env(&env)
+        .iter()
+        .any(|entry| fleet_entry_is_session(entry) && entry.session.name == session)
+    {
         return Ok(NewFleetStatusNative::Exists);
     }
     let fleet_dir = maw_state_path(&env, &["fleet"]);
-    std::fs::create_dir_all(&fleet_dir).map_err(|error| format!("new: create fleet dir: {error}"))?;
+    std::fs::create_dir_all(&fleet_dir)
+        .map_err(|error| format!("new: create fleet dir: {error}"))?;
     let path = fleet_dir.join(format!("{session}.json"));
     if path.exists() {
         return Ok(NewFleetStatusNative::Exists);
@@ -1154,8 +1564,13 @@ fn new_ensure_fleet_session_entry(session: &str, window: &str, cwd: &std::path::
         "auto_registered": true,
         "windows": [{"name": window, "repo": repo}],
     });
-    std::fs::write(&path, serde_json::to_string_pretty(&json).map_err(|error| format!("new: render fleet json: {error}"))? + "\n")
-        .map_err(|error| format!("new: write {}: {error}", path.display()))?;
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&json)
+            .map_err(|error| format!("new: render fleet json: {error}"))?
+            + "\n",
+    )
+    .map_err(|error| format!("new: write {}: {error}", path.display()))?;
     Ok(NewFleetStatusNative::Created)
 }
 
@@ -1166,14 +1581,24 @@ fn promote_run_command(argv: &[String]) -> CliOutput {
 
 fn promote_run_command_with(argv: &[String], tmux: &mut impl PromoteTmuxNative) -> CliOutput {
     match promote_parse_args(argv).and_then(|options| promote_execute(&options, tmux)) {
-        Ok(stdout) => CliOutput { code: 0, stdout, stderr: String::new() },
+        Ok(stdout) => CliOutput {
+            code: 0,
+            stdout,
+            stderr: String::new(),
+        },
         Err(message) => promote_error(&message),
     }
 }
 
 fn promote_error(message: &str) -> CliOutput {
-    CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}
-") }
+    CliOutput {
+        code: 1,
+        stdout: String::new(),
+        stderr: format!(
+            "{message}
+"
+        ),
+    }
 }
 
 fn promote_parse_args(argv: &[String]) -> Result<PromoteOptionsNative, String> {
@@ -1189,17 +1614,33 @@ fn promote_parse_args(argv: &[String]) -> Result<PromoteOptionsNative, String> {
             "--attach" => attach = true,
             "--force" => force = true,
             "--as" => as_session = Some(promote_take_session_value(argv, &mut index, "--as")?),
-            value if value.starts_with("--as=") => as_session = Some(promote_validate_session_name(&value["--as=".len()..], "--as")?),
+            value if value.starts_with("--as=") => {
+                as_session = Some(promote_validate_session_name(
+                    &value["--as=".len()..],
+                    "--as",
+                )?);
+            }
             value if value.starts_with('-') => return Err(promote_flag_like(value)),
             value => promote_set_target(&mut target, value)?,
         }
         index += 1;
     }
-    Ok(PromoteOptionsNative { target: target.ok_or_else(|| PROMOTE_USAGE.to_owned())?, as_session, attach, force })
+    Ok(PromoteOptionsNative {
+        target: target.ok_or_else(|| PROMOTE_USAGE.to_owned())?,
+        as_session,
+        attach,
+        force,
+    })
 }
 
-fn promote_take_session_value(argv: &[String], index: &mut usize, flag: &str) -> Result<String, String> {
-    let Some(value) = argv.get(*index + 1) else { return Err(format!("promote: {flag} requires a value")); };
+fn promote_take_session_value(
+    argv: &[String],
+    index: &mut usize,
+    flag: &str,
+) -> Result<String, String> {
+    let Some(value) = argv.get(*index + 1) else {
+        return Err(format!("promote: {flag} requires a value"));
+    };
     *index += 1;
     promote_validate_session_name(value, flag)
 }
@@ -1212,17 +1653,26 @@ fn promote_set_target(slot: &mut Option<String>, value: &str) -> Result<(), Stri
     Ok(())
 }
 
-fn promote_execute(options: &PromoteOptionsNative, tmux: &mut impl PromoteTmuxNative) -> Result<String, String> {
+fn promote_execute(
+    options: &PromoteOptionsNative,
+    tmux: &mut impl PromoteTmuxNative,
+) -> Result<String, String> {
     let planned = promote_resolve_ready(options, tmux)?;
     let ready = promote_revalidate_ready(options, &planned, tmux)?;
     let dst_exists_now = tmux.promote_has_session(&ready.dst_session);
     if dst_exists_now && !ready.force {
-        return Err(promote_destination_exists_error(&options.target, &ready.dst_session));
+        return Err(promote_destination_exists_error(
+            &options.target,
+            &ready.dst_session,
+        ));
     }
 
-    let mut state = PromoteMutationStateNative { created_dst_by_this_run: false };
+    let mut state = PromoteMutationStateNative {
+        created_dst_by_this_run: false,
+    };
     if !dst_exists_now {
-        tmux.promote_new_session(&ready.dst_session, PROMOTE_PLACEHOLDER).map_err(|error| format!("promote: tmux new-session failed — {error}"))?;
+        tmux.promote_new_session(&ready.dst_session, PROMOTE_PLACEHOLDER)
+            .map_err(|error| format!("promote: tmux new-session failed — {error}"))?;
         state.created_dst_by_this_run = true;
     }
 
@@ -1249,7 +1699,12 @@ fn promote_execute(options: &PromoteOptionsNative, tmux: &mut impl PromoteTmuxNa
 
     if !promote_window_exists(&dst_windows, &ready.src_window) {
         promote_rollback_after_verify_miss(tmux, &ready, &state, &dst_windows);
-        let suffix = if state.created_dst_by_this_run && promote_windows_only_placeholder(&dst_windows) { "; rolled back placeholder session" } else { "" };
+        let suffix =
+            if state.created_dst_by_this_run && promote_windows_only_placeholder(&dst_windows) {
+                "; rolled back placeholder session"
+            } else {
+                ""
+            };
         return Err(format!(
             "promote: tmux move verification failed — '{}' did not appear in '{}' after move-window{suffix}",
             src_target, ready.dst_session
@@ -1263,12 +1718,19 @@ fn promote_execute(options: &PromoteOptionsNative, tmux: &mut impl PromoteTmuxNa
     Ok(promote_render_success(&ready))
 }
 
-fn promote_resolve_ready(options: &PromoteOptionsNative, tmux: &mut impl PromoteTmuxNative) -> Result<PromoteResolvedNative, String> {
+fn promote_resolve_ready(
+    options: &PromoteOptionsNative,
+    tmux: &mut impl PromoteTmuxNative,
+) -> Result<PromoteResolvedNative, String> {
     let sessions = tmux.promote_list_all()?;
     promote_resolve_ready_from_sessions(options, tmux, &sessions, "promote planning")
 }
 
-fn promote_revalidate_ready(options: &PromoteOptionsNative, planned: &PromoteResolvedNative, tmux: &mut impl PromoteTmuxNative) -> Result<PromoteResolvedNative, String> {
+fn promote_revalidate_ready(
+    options: &PromoteOptionsNative,
+    planned: &PromoteResolvedNative,
+    tmux: &mut impl PromoteTmuxNative,
+) -> Result<PromoteResolvedNative, String> {
     let sessions = tmux.promote_list_all()?;
     let fresh = promote_resolve_ready_from_sessions(options, tmux, &sessions, "promote mutation")?;
     if fresh.src_session != planned.src_session || fresh.src_window != planned.src_window {
@@ -1278,7 +1740,10 @@ fn promote_revalidate_ready(options: &PromoteOptionsNative, planned: &PromoteRes
         ));
     }
     if fresh.dst_session != planned.dst_session {
-        return Err(format!("promote: destination changed before mutation (planned {}, now {})", planned.dst_session, fresh.dst_session));
+        return Err(format!(
+            "promote: destination changed before mutation (planned {}, now {})",
+            planned.dst_session, fresh.dst_session
+        ));
     }
     Ok(fresh)
 }
@@ -1290,23 +1755,40 @@ fn promote_resolve_ready_from_sessions(
     phase: &str,
 ) -> Result<PromoteResolvedNative, String> {
     let resolved = promote_resolve_target(&options.target, sessions)?;
-    let PromoteResolveResultNative::Resolved { session: src_session, window: src_window } = resolved else {
+    let PromoteResolveResultNative::Resolved {
+        session: src_session,
+        window: src_window,
+    } = resolved
+    else {
         return Err(promote_resolution_error_message(&options.target, resolved));
     };
     promote_validate_tmux_name(&src_session, "source session")?;
     promote_validate_tmux_name(&src_window, "source window")?;
-    let source_windows = tmux.promote_list_windows(&src_session).map_err(|error| format!("promote: cannot list windows in source session '{src_session}': {error}"))?;
+    let source_windows = tmux.promote_list_windows(&src_session).map_err(|error| {
+        format!("promote: cannot list windows in source session '{src_session}': {error}")
+    })?;
     if source_windows.len() <= 1 {
         return Err(promote_only_window_error(&src_session, &src_window));
     }
     if !promote_window_exists(&source_windows, &src_window) {
-        return Err(format!("promote: source '{src_session}:{src_window}' disappeared before {phase}"));
+        return Err(format!(
+            "promote: source '{src_session}:{src_window}' disappeared before {phase}"
+        ));
     }
     let dst_session = promote_destination_session(options, &src_window)?;
-    Ok(PromoteResolvedNative { src_session, src_window, dst_session, attach: options.attach, force: options.force })
+    Ok(PromoteResolvedNative {
+        src_session,
+        src_window,
+        dst_session,
+        attach: options.attach,
+        force: options.force,
+    })
 }
 
-fn promote_resolve_target(target: &str, sessions: &[TmuxSession]) -> Result<PromoteResolveResultNative, String> {
+fn promote_resolve_target(
+    target: &str,
+    sessions: &[TmuxSession],
+) -> Result<PromoteResolveResultNative, String> {
     promote_validate_target(target, "target")?;
     let explicit_session = promote_target_session(target)?;
     if let Some(explicit_window) = promote_target_window(target)? {
@@ -1314,39 +1796,84 @@ fn promote_resolve_target(target: &str, sessions: &[TmuxSession]) -> Result<Prom
     }
     let mut matches = promote_exact_window_matches(target, sessions);
     if matches.is_empty() {
-        if let Some(canonical) = promote_strip_tmux_display_suffix(target) { matches = promote_exact_window_matches(canonical, sessions); }
+        if let Some(canonical) = promote_strip_tmux_display_suffix(target) {
+            matches = promote_exact_window_matches(canonical, sessions);
+        }
     }
     Ok(match matches.len() {
         0 => PromoteResolveResultNative::None,
         1 => {
             let candidate = matches.remove(0);
-            PromoteResolveResultNative::Resolved { session: candidate.session, window: candidate.window }
+            PromoteResolveResultNative::Resolved {
+                session: candidate.session,
+                window: candidate.window,
+            }
         }
         _ => PromoteResolveResultNative::Ambiguous(matches),
     })
 }
 
-fn promote_resolve_explicit(session: &str, window: &str, sessions: &[TmuxSession]) -> Result<PromoteResolveResultNative, String> {
+fn promote_resolve_explicit(
+    session: &str,
+    window: &str,
+    sessions: &[TmuxSession],
+) -> Result<PromoteResolveResultNative, String> {
     promote_validate_tmux_name(session, "source session")?;
     promote_validate_tmux_name(window, "source window")?;
-    let Some(src_session) = sessions.iter().find(|candidate| candidate.name.eq_ignore_ascii_case(session)) else {
-        return Ok(PromoteResolveResultNative::Resolved { session: session.to_owned(), window: window.to_owned() });
+    let Some(src_session) = sessions
+        .iter()
+        .find(|candidate| candidate.name.eq_ignore_ascii_case(session))
+    else {
+        return Ok(PromoteResolveResultNative::Resolved {
+            session: session.to_owned(),
+            window: window.to_owned(),
+        });
     };
-    if let Some(exact) = src_session.windows.iter().find(|candidate| candidate.name.eq_ignore_ascii_case(window)) {
-        return Ok(PromoteResolveResultNative::Resolved { session: src_session.name.clone(), window: exact.name.clone() });
+    if let Some(exact) = src_session
+        .windows
+        .iter()
+        .find(|candidate| candidate.name.eq_ignore_ascii_case(window))
+    {
+        return Ok(PromoteResolveResultNative::Resolved {
+            session: src_session.name.clone(),
+            window: exact.name.clone(),
+        });
     }
     if let Some(canonical) = promote_strip_tmux_display_suffix(window) {
-        if let Some(exact) = src_session.windows.iter().find(|candidate| candidate.name.eq_ignore_ascii_case(canonical)) {
-            return Ok(PromoteResolveResultNative::Resolved { session: src_session.name.clone(), window: exact.name.clone() });
+        if let Some(exact) = src_session
+            .windows
+            .iter()
+            .find(|candidate| candidate.name.eq_ignore_ascii_case(canonical))
+        {
+            return Ok(PromoteResolveResultNative::Resolved {
+                session: src_session.name.clone(),
+                window: exact.name.clone(),
+            });
         }
     }
-    Ok(PromoteResolveResultNative::Resolved { session: src_session.name.clone(), window: window.to_owned() })
+    Ok(PromoteResolveResultNative::Resolved {
+        session: src_session.name.clone(),
+        window: window.to_owned(),
+    })
 }
 
-fn promote_exact_window_matches(target: &str, sessions: &[TmuxSession]) -> Vec<PromoteCandidateNative> {
-    sessions.iter().flat_map(|session| {
-        session.windows.iter().filter(move |window| window.name == target).map(move |window| PromoteCandidateNative { session: session.name.clone(), window: window.name.clone() })
-    }).collect()
+fn promote_exact_window_matches(
+    target: &str,
+    sessions: &[TmuxSession],
+) -> Vec<PromoteCandidateNative> {
+    sessions
+        .iter()
+        .flat_map(|session| {
+            session
+                .windows
+                .iter()
+                .filter(move |window| window.name == target)
+                .map(move |window| PromoteCandidateNative {
+                    session: session.name.clone(),
+                    window: window.name.clone(),
+                })
+        })
+        .collect()
 }
 
 fn promote_resolution_error_message(target: &str, resolved: PromoteResolveResultNative) -> String {
@@ -1355,18 +1882,28 @@ fn promote_resolution_error_message(target: &str, resolved: PromoteResolveResult
         PromoteResolveResultNative::Ambiguous(candidates) => {
             let mut message = format!("promote: '{target}' matches {} windows", candidates.len());
             for candidate in candidates {
-                let _ = write!(message, "
-  [90m• {}:{}[0m", candidate.session, candidate.window);
+                let _ = write!(
+                    message,
+                    "
+  [90m• {}:{}[0m",
+                    candidate.session, candidate.window
+                );
             }
-            let _ = write!(message, "
-  [90muse: maw promote <session>:<window>[0m");
+            let _ = write!(
+                message,
+                "
+  [90muse: maw promote <session>:<window>[0m"
+            );
             message
         }
         PromoteResolveResultNative::Resolved { .. } => unreachable!("resolved handled by caller"),
     }
 }
 
-fn promote_destination_session(options: &PromoteOptionsNative, src_window: &str) -> Result<String, String> {
+fn promote_destination_session(
+    options: &PromoteOptionsNative,
+    src_window: &str,
+) -> Result<String, String> {
     let destination = if let Some(value) = &options.as_session {
         promote_validate_session_name(value, "--as")?
     } else {
@@ -1376,11 +1913,23 @@ fn promote_destination_session(options: &PromoteOptionsNative, src_window: &str)
 }
 
 fn promote_validate_target(value: &str, label: &str) -> Result<String, String> {
-    if value.is_empty() || value.trim() != value || value == "--" || value.starts_with('-') || value.contains('\0') {
-        return Err(format!("promote {label} must be non-empty, unpadded, and not start with '-'"));
+    if value.is_empty()
+        || value.trim() != value
+        || value == "--"
+        || value.starts_with('-')
+        || value.contains('\0')
+    {
+        return Err(format!(
+            "promote {label} must be non-empty, unpadded, and not start with '-'"
+        ));
     }
-    if value.chars().any(|ch| ch.is_control() || ch.is_whitespace()) {
-        return Err(format!("promote {label} must not contain whitespace or control characters"));
+    if value
+        .chars()
+        .any(|ch| ch.is_control() || ch.is_whitespace())
+    {
+        return Err(format!(
+            "promote {label} must not contain whitespace or control characters"
+        ));
     }
     Ok(value.to_owned())
 }
@@ -1404,13 +1953,19 @@ fn promote_target_session(target: &str) -> Result<String, String> {
 fn promote_target_window(target: &str) -> Result<Option<String>, String> {
     let window = target.split(':').skip(1).collect::<Vec<_>>().join(":");
     let trimmed = window.trim();
-    if trimmed.is_empty() { return Ok(None); }
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
     promote_validate_tmux_name(trimmed, "source window")?;
     Ok(Some(trimmed.to_owned()))
 }
 
 fn promote_strip_tmux_display_suffix(window: &str) -> Option<&str> {
-    if window.ends_with('-') && window.len() > 1 { Some(&window[..window.len() - 1]) } else { None }
+    if window.ends_with('-') && window.len() > 1 {
+        Some(&window[..window.len() - 1])
+    } else {
+        None
+    }
 }
 
 fn promote_window_exists(windows: &[maw_tmux::TmuxWindow], name: &str) -> bool {
@@ -1418,15 +1973,19 @@ fn promote_window_exists(windows: &[maw_tmux::TmuxWindow], name: &str) -> bool {
 }
 
 fn promote_only_window_error(src_session: &str, src_window: &str) -> String {
-    format!("promote refused — '{src_window}' is the only window in session '{src_session}'.
+    format!(
+        "promote refused — '{src_window}' is the only window in session '{src_session}'.
   [90mthat would just be a session rename, not an eject.[0m
-  [90muse: tmux rename-session -t {src_session} <new-name>[0m")
+  [90muse: tmux rename-session -t {src_session} <new-name>[0m"
+    )
 }
 
 fn promote_destination_exists_error(target: &str, dst_session: &str) -> String {
-    format!("promote refused — session '{dst_session}' already exists.
+    format!(
+        "promote refused — session '{dst_session}' already exists.
   [90muse: maw promote {target} --as <new-name>[0m
-  [90mor:  maw promote {target} --force[0m  (merges into existing)")
+  [90mor:  maw promote {target} --force[0m  (merges into existing)"
+    )
 }
 
 fn promote_placeholder_target(dst_session: &str) -> String {
@@ -1451,14 +2010,24 @@ fn promote_validate_tmux_target(value: &str, label: &str) -> Result<(), String> 
 }
 
 fn promote_windows_only_placeholder(windows: &[maw_tmux::TmuxWindow]) -> bool {
-    windows.is_empty() || windows.iter().all(|window| window.name == PROMOTE_PLACEHOLDER)
+    windows.is_empty()
+        || windows
+            .iter()
+            .all(|window| window.name == PROMOTE_PLACEHOLDER)
 }
 
 fn promote_windows_have_foreign(windows: &[maw_tmux::TmuxWindow]) -> bool {
-    windows.iter().any(|window| window.name != PROMOTE_PLACEHOLDER)
+    windows
+        .iter()
+        .any(|window| window.name != PROMOTE_PLACEHOLDER)
 }
 
-fn promote_rollback_after_failure(tmux: &mut impl PromoteTmuxNative, ready: &PromoteResolvedNative, state: &PromoteMutationStateNative, reason: &str) {
+fn promote_rollback_after_failure(
+    tmux: &mut impl PromoteTmuxNative,
+    ready: &PromoteResolvedNative,
+    state: &PromoteMutationStateNative,
+    reason: &str,
+) {
     if !state.created_dst_by_this_run {
         return;
     }
@@ -1486,13 +2055,21 @@ fn promote_rollback_after_verify_miss(
     }
 }
 
-fn promote_cleanup_after_unknown_verify_failure(tmux: &mut impl PromoteTmuxNative, ready: &PromoteResolvedNative, state: &PromoteMutationStateNative) {
+fn promote_cleanup_after_unknown_verify_failure(
+    tmux: &mut impl PromoteTmuxNative,
+    ready: &PromoteResolvedNative,
+    state: &PromoteMutationStateNative,
+) {
     if state.created_dst_by_this_run {
         let _ = tmux.promote_kill_window(&ready.placeholder_target());
     }
 }
 
-fn promote_rollback_owned_placeholder_session(tmux: &mut impl PromoteTmuxNative, ready: &PromoteResolvedNative, _reason: &str) {
+fn promote_rollback_owned_placeholder_session(
+    tmux: &mut impl PromoteTmuxNative,
+    ready: &PromoteResolvedNative,
+    _reason: &str,
+) {
     if tmux.promote_kill_session(&ready.dst_session).is_err() {
         let _ = tmux.promote_kill_window(&ready.placeholder_target());
     }
@@ -1500,8 +2077,16 @@ fn promote_rollback_owned_placeholder_session(tmux: &mut impl PromoteTmuxNative,
 
 fn promote_render_success(resolved: &PromoteResolvedNative) -> String {
     let mut out = String::new();
-    let _ = writeln!(out, "  \u{001b}[32m✓\u{001b}[0m promoted — {}:{} → {}:{}", resolved.src_session, resolved.src_window, resolved.dst_session, resolved.src_window);
-    let _ = writeln!(out, "      \u{001b}[90m↻ undo: tmux move-window -s {}:{} -t {}:\u{001b}[0m", resolved.dst_session, resolved.src_window, resolved.src_session);
+    let _ = writeln!(
+        out,
+        "  \u{001b}[32m✓\u{001b}[0m promoted — {}:{} → {}:{}",
+        resolved.src_session, resolved.src_window, resolved.dst_session, resolved.src_window
+    );
+    let _ = writeln!(
+        out,
+        "      \u{001b}[90m↻ undo: tmux move-window -s {}:{} -t {}:\u{001b}[0m",
+        resolved.dst_session, resolved.src_window, resolved.src_session
+    );
     if resolved.attach {
         let _ = writeln!(out, "      \u{001b}[33m⚠\u{001b}[0m promote succeeded; --attach deferred (switch-client manual): tmux switch-client -t {}", resolved.dst_session);
     }
@@ -1514,13 +2099,21 @@ fn promote_flag_like(value: &str) -> String {
 
 fn preflight_run_command(argv: &[String]) -> CliOutput {
     match preflight_parse_args(argv).and_then(|options| preflight_run(&options)) {
-        Ok(stdout) => CliOutput { code: 0, stdout, stderr: String::new() },
+        Ok(stdout) => CliOutput {
+            code: 0,
+            stdout,
+            stderr: String::new(),
+        },
         Err(message) => preflight_error(&message),
     }
 }
 
 fn preflight_error(message: &str) -> CliOutput {
-    CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") }
+    CliOutput {
+        code: 1,
+        stdout: String::new(),
+        stderr: format!("{message}\n"),
+    }
 }
 
 fn preflight_parse_args(argv: &[String]) -> Result<PreflightOptionsNative, String> {
@@ -1535,7 +2128,10 @@ fn preflight_parse_args(argv: &[String]) -> Result<PreflightOptionsNative, Strin
             value => preflight_set_path(&mut path, value)?,
         }
     }
-    Ok(PreflightOptionsNative { path: path.unwrap_or_else(|| std::path::PathBuf::from(".")), json })
+    Ok(PreflightOptionsNative {
+        path: path.unwrap_or_else(|| std::path::PathBuf::from(".")),
+        json,
+    })
 }
 
 fn preflight_set_path(slot: &mut Option<std::path::PathBuf>, value: &str) -> Result<(), String> {
@@ -1547,8 +2143,15 @@ fn preflight_set_path(slot: &mut Option<std::path::PathBuf>, value: &str) -> Res
 }
 
 fn preflight_validate_path(value: &str) -> Result<std::path::PathBuf, String> {
-    if value.is_empty() || value.trim() != value || value == "--" || value.starts_with('-') || value.contains('\0') {
-        return Err("preflight path must be non-empty, unpadded, and not start with '-'".to_owned());
+    if value.is_empty()
+        || value.trim() != value
+        || value == "--"
+        || value.starts_with('-')
+        || value.contains('\0')
+    {
+        return Err(
+            "preflight path must be non-empty, unpadded, and not start with '-'".to_owned(),
+        );
     }
     if value.split('/').any(|part| part == "..") {
         return Err("preflight path must not contain .. segments".to_owned());
@@ -1562,20 +2165,43 @@ fn preflight_flag_like(value: &str) -> String {
 
 fn preflight_run(options: &PreflightOptionsNative) -> Result<String, String> {
     if !options.path.is_dir() {
-        return Err(format!("preflight: not a directory: {}", options.path.display()));
+        return Err(format!(
+            "preflight: not a directory: {}",
+            options.path.display()
+        ));
     }
-    let inside = preflight_git(&options.path, &["rev-parse", "--is-inside-work-tree"]).unwrap_or_default();
-    let clean = preflight_git(&options.path, &["status", "--porcelain"]).unwrap_or_else(|_| "dirty".to_owned()).trim().is_empty();
+    let inside =
+        preflight_git(&options.path, &["rev-parse", "--is-inside-work-tree"]).unwrap_or_default();
+    let clean = preflight_git(&options.path, &["status", "--porcelain"])
+        .unwrap_or_else(|_| "dirty".to_owned())
+        .trim()
+        .is_empty();
     let ok = inside.trim() == "true" && clean;
     if options.json {
-        return Ok(format!("{{\"command\":\"preflight\",\"path\":{},\"git\":{},\"clean\":{},\"ok\":{ok}}}\n", json_string(&options.path.display().to_string()), inside.trim() == "true", clean));
+        return Ok(format!(
+            "{{\"command\":\"preflight\",\"path\":{},\"git\":{},\"clean\":{},\"ok\":{ok}}}\n",
+            json_string(&options.path.display().to_string()),
+            inside.trim() == "true",
+            clean
+        ));
     }
-    Ok(format!("preflight {}: git={} clean={} ok={}\n", options.path.display(), inside.trim() == "true", clean, ok))
+    Ok(format!(
+        "preflight {}: git={} clean={} ok={}\n",
+        options.path.display(),
+        inside.trim() == "true",
+        clean,
+        ok
+    ))
 }
 
 fn preflight_git(path: &std::path::Path, args: &[&str]) -> Result<String, String> {
     preflight_validate_git_args(args)?;
-    let output = std::process::Command::new("git").arg("-C").arg(path).args(args).output().map_err(|error| format!("preflight: git failed: {error}"))?;
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(args)
+        .output()
+        .map_err(|error| format!("preflight: git failed: {error}"))?;
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
     }
@@ -1591,13 +2217,21 @@ fn preflight_validate_git_args(args: &[&str]) -> Result<(), String> {
 
 fn snapshots_run_command(argv: &[String]) -> CliOutput {
     match snapshots_parse_args(argv).and_then(|options| snapshots_run(&options)) {
-        Ok(stdout) => CliOutput { code: 0, stdout, stderr: String::new() },
+        Ok(stdout) => CliOutput {
+            code: 0,
+            stdout,
+            stderr: String::new(),
+        },
         Err(message) => snapshots_error(&message),
     }
 }
 
 fn snapshots_error(message: &str) -> CliOutput {
-    CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") }
+    CliOutput {
+        code: 1,
+        stdout: String::new(),
+        stderr: format!("{message}\n"),
+    }
 }
 
 fn snapshots_parse_args(argv: &[String]) -> Result<SnapshotsOptionsNative, String> {
@@ -1620,7 +2254,9 @@ fn snapshots_action(words: &[String]) -> Result<SnapshotsActionNative, String> {
     match words {
         [] => Ok(SnapshotsActionNative::List),
         [one] if one == "list" => Ok(SnapshotsActionNative::List),
-        [one] if one == "create" => Ok(SnapshotsActionNative::Create { name: snapshots_default_name() }),
+        [one] if one == "create" => Ok(SnapshotsActionNative::Create {
+            name: snapshots_default_name(),
+        }),
         [one] => Ok(SnapshotsActionNative::Show { name: one.clone() }),
         [cmd, name] if cmd == "create" => Ok(SnapshotsActionNative::Create { name: name.clone() }),
         [cmd, name] if cmd == "show" => Ok(SnapshotsActionNative::Show { name: name.clone() }),
@@ -1629,10 +2265,20 @@ fn snapshots_action(words: &[String]) -> Result<SnapshotsActionNative, String> {
 }
 
 fn snapshots_validate_name(value: &str) -> Result<String, String> {
-    if value.is_empty() || value.trim() != value || value == "--" || value.starts_with('-') || value.contains("..") {
-        return Err("snapshots name must be non-empty, unpadded, and not start with '-'".to_owned());
+    if value.is_empty()
+        || value.trim() != value
+        || value == "--"
+        || value.starts_with('-')
+        || value.contains("..")
+    {
+        return Err(
+            "snapshots name must be non-empty, unpadded, and not start with '-'".to_owned(),
+        );
     }
-    if !value.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_')) {
+    if !value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+    {
         return Err("snapshots name must contain only ascii letters, digits, - or _".to_owned());
     }
     Ok(value.to_owned())
@@ -1644,7 +2290,8 @@ fn snapshots_flag_like(value: &str) -> String {
 
 fn snapshots_run(options: &SnapshotsOptionsNative) -> Result<String, String> {
     let dir = snapshots_dir();
-    std::fs::create_dir_all(&dir).map_err(|error| format!("snapshots: create state dir: {error}"))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|error| format!("snapshots: create state dir: {error}"))?;
     match &options.action {
         SnapshotsActionNative::List => snapshots_list(&dir, options.json),
         SnapshotsActionNative::Create { name } => snapshots_create(&dir, name, options.json),
@@ -1657,13 +2304,20 @@ fn snapshots_dir() -> std::path::PathBuf {
 }
 
 fn snapshots_xdg_env() -> MawXdgEnv {
-    let home = std::env::var_os("HOME").map_or_else(|| std::path::PathBuf::from("."), std::path::PathBuf::from);
+    let home = std::env::var_os("HOME")
+        .map_or_else(|| std::path::PathBuf::from("."), std::path::PathBuf::from);
     let keys = ["MAW_HOME", "MAW_STATE_DIR", "MAW_XDG", "XDG_STATE_HOME"];
-    MawXdgEnv::with_vars(home, keys.into_iter().filter_map(|key| std::env::var(key).ok().map(|value| (key, value))))
+    MawXdgEnv::with_vars(
+        home,
+        keys.into_iter()
+            .filter_map(|key| std::env::var(key).ok().map(|value| (key, value))),
+    )
 }
 
 fn snapshots_default_name() -> String {
-    let seconds = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |duration| duration.as_secs());
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs());
     format!("snapshot-{seconds}")
 }
 
@@ -1674,7 +2328,10 @@ fn snapshots_file(dir: &std::path::Path, name: &str) -> Result<std::path::PathBu
 
 fn snapshots_list(dir: &std::path::Path, json: bool) -> Result<String, String> {
     let mut names = Vec::<String>::new();
-    for entry in std::fs::read_dir(dir).map_err(|error| format!("snapshots: list: {error}"))?.flatten() {
+    for entry in std::fs::read_dir(dir)
+        .map_err(|error| format!("snapshots: list: {error}"))?
+        .flatten()
+    {
         let path = entry.path();
         if path.extension().and_then(std::ffi::OsStr::to_str) == Some("json") {
             if let Some(stem) = path.file_stem().and_then(std::ffi::OsStr::to_str) {
@@ -1684,10 +2341,20 @@ fn snapshots_list(dir: &std::path::Path, json: bool) -> Result<String, String> {
     }
     names.sort();
     if json {
-        let body = names.iter().map(|name| json_string(name)).collect::<Vec<_>>().join(",");
-        return Ok(format!("{{\"command\":\"snapshots\",\"snapshots\":[{body}]}}\n"));
+        let body = names
+            .iter()
+            .map(|name| json_string(name))
+            .collect::<Vec<_>>()
+            .join(",");
+        return Ok(format!(
+            "{{\"command\":\"snapshots\",\"snapshots\":[{body}]}}\n"
+        ));
     }
-    Ok(if names.is_empty() { "no snapshots\n".to_owned() } else { format!("{}\n", names.join("\n")) })
+    Ok(if names.is_empty() {
+        "no snapshots\n".to_owned()
+    } else {
+        format!("{}\n", names.join("\n"))
+    })
 }
 
 fn snapshots_create(dir: &std::path::Path, name: &str, json: bool) -> Result<String, String> {
@@ -1696,14 +2363,26 @@ fn snapshots_create(dir: &std::path::Path, name: &str, json: bool) -> Result<Str
         return Err(format!("snapshots: snapshot exists: {name}"));
     }
     let cwd = std::env::current_dir().map_err(|error| format!("snapshots: cwd: {error}"))?;
-    let body = format!("{{\"name\":{},\"cwd\":{},\"createdBy\":\"maw snapshots\"}}\n", json_string(name), json_string(&cwd.display().to_string()));
+    let body = format!(
+        "{{\"name\":{},\"cwd\":{},\"createdBy\":\"maw snapshots\"}}\n",
+        json_string(name),
+        json_string(&cwd.display().to_string())
+    );
     std::fs::write(&file, &body).map_err(|error| format!("snapshots: write: {error}"))?;
-    if json { Ok(body) } else { Ok(format!("created snapshot {name}\n")) }
+    if json {
+        Ok(body)
+    } else {
+        Ok(format!("created snapshot {name}\n"))
+    }
 }
 
 fn snapshots_show(dir: &std::path::Path, name: &str, json: bool) -> Result<String, String> {
     let file = snapshots_file(dir, name)?;
-    let body = std::fs::read_to_string(&file).map_err(|_| format!("snapshots: snapshot not found: {name}"))?;
-    if json { Ok(body) } else { Ok(format!("{name}: {body}")) }
+    let body = std::fs::read_to_string(&file)
+        .map_err(|_| format!("snapshots: snapshot not found: {name}"))?;
+    if json {
+        Ok(body)
+    } else {
+        Ok(format!("{name}: {body}"))
+    }
 }
-

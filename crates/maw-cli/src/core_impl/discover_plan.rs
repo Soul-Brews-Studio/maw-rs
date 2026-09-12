@@ -1,6 +1,7 @@
-const DISPATCH_312: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "discover", handler: Handler::Sync(run_discover_plan) },
-];
+const DISPATCH_312: &[DispatcherEntry] = &[DispatcherEntry {
+    command: "discover",
+    handler: Handler::Sync(run_discover_plan),
+}];
 
 #[allow(clippy::too_many_lines)]
 fn run_discover_plan(argv: &[String]) -> CliOutput {
@@ -160,10 +161,7 @@ fn run_discover_plan(argv: &[String]) -> CliOutput {
     let peers_with_live = if include_live {
         mark_peer_targets_live(&live_peers, &live_state.live)
     } else {
-        live_peers
-            .iter()
-            .map(peer_with_no_live)
-            .collect::<Vec<_>>()
+        live_peers.iter().map(peer_with_no_live).collect::<Vec<_>>()
     };
     let visible_peers = if awake && !tree {
         peers_with_live

@@ -1,6 +1,7 @@
-const DISPATCH_301: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "plugin-scaffold", handler: Handler::Sync(run_plugin_scaffold_plan) },
-];
+const DISPATCH_301: &[DispatcherEntry] = &[DispatcherEntry {
+    command: "plugin-scaffold",
+    handler: Handler::Sync(run_plugin_scaffold_plan),
+}];
 
 enum XdgPlanAction {
     Paths { plan_json: bool, env: MawXdgEnv },
@@ -40,9 +41,10 @@ impl XdgResolvedPaths {
             .into_iter()
             .map(|source| path_string(source.path))
             .collect::<Vec<_>>();
-        let config_path = config_layers.last().cloned().unwrap_or_else(|| {
-            path_string(maw_config_path(env, &["maw.config.json"]))
-        });
+        let config_path = config_layers
+            .last()
+            .cloned()
+            .unwrap_or_else(|| path_string(maw_config_path(env, &["maw.config.json"])));
         Self {
             xdg_enabled: is_maw_xdg_enabled(env),
             runtime_home: path_string(maw_runtime_home_dir(env)),
@@ -237,7 +239,9 @@ fn run_plugin_scaffold_plan(argv: &[String]) -> CliOutput {
             CliOutput {
                 code: 0,
                 stdout: if plan_json {
-                    let error_json = error.as_ref().map_or("null".to_owned(), |error| json_string(error));
+                    let error_json = error
+                        .as_ref()
+                        .map_or("null".to_owned(), |error| json_string(error));
                     format!(
                         "{{\"command\":\"plugin-scaffold\",\"kind\":\"validate-name\",\"name\":{},\"valid\":{valid},\"error\":{error_json}}}\n",
                         json_string(&name)

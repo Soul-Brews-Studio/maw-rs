@@ -1,6 +1,7 @@
-const DISPATCH_109: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "scope", handler: Handler::Sync(scope_run_command) },
-];
+const DISPATCH_109: &[DispatcherEntry] = &[DispatcherEntry {
+    command: "scope",
+    handler: Handler::Sync(scope_run_command),
+}];
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 struct ScopeNativeRecord {
@@ -58,10 +59,18 @@ fn scope_run_command(cli_args: &[String]) -> CliOutput {
         Err(error) => return scope_native_error(&error),
     };
     let Some(sub) = parsed.subcommand.as_deref() else {
-        return CliOutput { code: 0, stdout: format!("{}\n", scope_native_help()), stderr: String::new() };
+        return CliOutput {
+            code: 0,
+            stdout: format!("{}\n", scope_native_help()),
+            stderr: String::new(),
+        };
     };
     if parsed.help {
-        return CliOutput { code: 0, stdout: format!("{}\n", scope_native_help()), stderr: String::new() };
+        return CliOutput {
+            code: 0,
+            stdout: format!("{}\n", scope_native_help()),
+            stderr: String::new(),
+        };
     }
     match sub {
         "list" | "ls" => scope_run_list(),
@@ -123,7 +132,9 @@ fn scope_parse_args(cli_args: &[String]) -> Result<ScopeArgs, String> {
 
 fn scope_take_value(argv: &[String], index: &mut usize, flag: &str) -> Result<String, String> {
     *index += 1;
-    let Some(value) = argv.get(*index) else { return Err(format!("scope: missing {flag} value")); };
+    let Some(value) = argv.get(*index) else {
+        return Err(format!("scope: missing {flag} value"));
+    };
     scope_validate_value(flag, value)?;
     *index += 1;
     Ok(value.clone())
@@ -155,7 +166,9 @@ fn scope_run_list() -> CliOutput {
 
 fn scope_run_create(args: &ScopeArgs) -> CliOutput {
     let Some(name) = args.positionals.get(1).map(String::as_str) else {
-        return scope_native_error("usage: maw scope create <name> --members <a,b,c> [--lead <m>] [--ttl <iso>]");
+        return scope_native_error(
+            "usage: maw scope create <name> --members <a,b,c> [--lead <m>] [--ttl <iso>]",
+        );
     };
     let Some(members_raw) = args.members.as_deref() else {
         return scope_native_error(&format!(
@@ -178,7 +191,11 @@ fn scope_run_show(args: &ScopeArgs) -> CliOutput {
     }
     match scope_load_record(name) {
         Ok(Some(scope)) => match serde_json::to_string_pretty(&scope) {
-            Ok(json) => CliOutput { code: 0, stdout: format!("{json}\n"), stderr: String::new() },
+            Ok(json) => CliOutput {
+                code: 0,
+                stdout: format!("{json}\n"),
+                stderr: String::new(),
+            },
             Err(error) => scope_native_error(&format!("scope: failed to render {name}: {error}")),
         },
         Ok(None) => scope_native_error(&format!("scope \"{name}\" not found")),
@@ -200,7 +217,11 @@ fn scope_run_delete(args: &ScopeArgs) -> CliOutput {
         };
     }
     match scope_delete_record(name) {
-        Ok(true) => CliOutput { code: 0, stdout: format!("deleted scope \"{name}\"\n"), stderr: String::new() },
+        Ok(true) => CliOutput {
+            code: 0,
+            stdout: format!("deleted scope \"{name}\"\n"),
+            stderr: String::new(),
+        },
         Ok(false) => CliOutput {
             code: 0,
             stdout: format!("no-op: scope \"{name}\" not present\n"),
@@ -229,11 +250,19 @@ If scope/trust files are corrupt, peer send fails open with a loud stderr warnin
 }
 
 fn scope_native_error(message: &str) -> CliOutput {
-    CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") }
+    CliOutput {
+        code: 1,
+        stdout: String::new(),
+        stderr: format!("{message}\n"),
+    }
 }
 
 fn scope_parse_members(raw: &str) -> Vec<String> {
-    raw.split(',').map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned).collect()
+    raw.split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 fn scope_created_output(scope: &ScopeNativeRecord) -> CliOutput {
@@ -256,10 +285,14 @@ fn scope_validate_name(name: &str) -> Result<(), String> {
         return Err("invalid scope name \"\" (must match ^[a-z0-9][a-z0-9_-]{0,63}$)".to_owned());
     };
     if name.len() > 64 || !first.is_ascii_lowercase() && !first.is_ascii_digit() {
-        return Err(format!("invalid scope name \"{name}\" (must match ^[a-z0-9][a-z0-9_-]{{0,63}}$)"));
+        return Err(format!(
+            "invalid scope name \"{name}\" (must match ^[a-z0-9][a-z0-9_-]{{0,63}}$)"
+        ));
     }
     if !chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '_' | '-')) {
-        return Err(format!("invalid scope name \"{name}\" (must match ^[a-z0-9][a-z0-9_-]{{0,63}}$)"));
+        return Err(format!(
+            "invalid scope name \"{name}\" (must match ^[a-z0-9][a-z0-9_-]{{0,63}}$)"
+        ));
     }
     Ok(())
 }
@@ -271,7 +304,8 @@ fn scope_create_record(
     ttl: Option<String>,
 ) -> Result<ScopeNativeRecord, String> {
     scope_validate_create(name, &members, lead.as_deref())?;
-    std::fs::create_dir_all(scope_native_dir()).map_err(|error| format!("scope: create scopes dir: {error}"))?;
+    std::fs::create_dir_all(scope_native_dir())
+        .map_err(|error| format!("scope: create scopes dir: {error}"))?;
     let path = scope_native_path(name);
     if path.exists() {
         return Err(format!(
@@ -284,7 +318,9 @@ fn scope_create_record(
         members,
         lead,
         created: scope_now_iso_utc(),
-        ttl: ttl.or(Some(String::new())).filter(|value| !value.is_empty()),
+        ttl: ttl
+            .or(Some(String::new()))
+            .filter(|value| !value.is_empty()),
     };
     scope_write_record(&path, &scope)?;
     Ok(scope)
@@ -295,12 +331,19 @@ fn scope_validate_create(name: &str, members: &[String], lead: Option<&str>) -> 
     if members.is_empty() {
         return Err(format!("scope \"{name}\" must have at least one member"));
     }
-    if members.iter().any(|member| member.is_empty() || member.starts_with('-')) {
-        return Err(format!("scope \"{name}\" has an empty/invalid member entry"));
+    if members
+        .iter()
+        .any(|member| member.is_empty() || member.starts_with('-'))
+    {
+        return Err(format!(
+            "scope \"{name}\" has an empty/invalid member entry"
+        ));
     }
     if let Some(lead) = lead {
         if !members.iter().any(|member| member == lead) {
-            return Err(format!("scope \"{name}\" lead \"{lead}\" is not in members"));
+            return Err(format!(
+                "scope \"{name}\" lead \"{lead}\" is not in members"
+            ));
         }
     }
     Ok(())
@@ -308,9 +351,13 @@ fn scope_validate_create(name: &str, members: &[String], lead: Option<&str>) -> 
 
 fn scope_write_record(path: &std::path::Path, scope: &ScopeNativeRecord) -> Result<(), String> {
     let tmp = path.with_extension("json.tmp");
-    let json = serde_json::to_string_pretty(scope).map_err(|error| format!("scope: render {}: {error}", scope.name))? + "\n";
-    std::fs::write(&tmp, json).map_err(|error| format!("scope: write {}: {error}", tmp.display()))?;
-    std::fs::rename(&tmp, path).map_err(|error| format!("scope: rename {}: {error}", path.display()))?;
+    let json = serde_json::to_string_pretty(scope)
+        .map_err(|error| format!("scope: render {}: {error}", scope.name))?
+        + "\n";
+    std::fs::write(&tmp, json)
+        .map_err(|error| format!("scope: write {}: {error}", tmp.display()))?;
+    std::fs::rename(&tmp, path)
+        .map_err(|error| format!("scope: rename {}: {error}", path.display()))?;
     Ok(())
 }
 
@@ -320,12 +367,14 @@ fn scope_delete_record(name: &str) -> Result<bool, String> {
     if !path.exists() {
         return Ok(false);
     }
-    std::fs::remove_file(&path).map_err(|error| format!("scope: delete {}: {error}", path.display()))?;
+    std::fs::remove_file(&path)
+        .map_err(|error| format!("scope: delete {}: {error}", path.display()))?;
     Ok(true)
 }
 
 fn scope_list_records() -> Result<Vec<ScopeNativeRecord>, String> {
-    std::fs::create_dir_all(scope_native_dir()).map_err(|error| format!("scope: create scopes dir: {error}"))?;
+    std::fs::create_dir_all(scope_native_dir())
+        .map_err(|error| format!("scope: create scopes dir: {error}"))?;
     Ok(scope_acl_load_scopes())
 }
 
@@ -433,7 +482,10 @@ fn scope_trust_parse_entries(body: &str) -> Vec<ScopeTrustEntry> {
     let Some(items) = value.as_array() else {
         return Vec::new();
     };
-    items.iter().filter_map(scope_trust_entry_from_json).collect()
+    items
+        .iter()
+        .filter_map(scope_trust_entry_from_json)
+        .collect()
 }
 
 fn scope_trust_entry_from_json(value: &serde_json::Value) -> Option<ScopeTrustEntry> {
@@ -454,10 +506,16 @@ fn scope_trust_entry_from_json(value: &serde_json::Value) -> Option<ScopeTrustEn
     })
 }
 
-fn scope_trust_write_atomic(path: &std::path::Path, entries: &[ScopeTrustEntry]) -> Result<(), String> {
+fn scope_trust_write_atomic(
+    path: &std::path::Path,
+    entries: &[ScopeTrustEntry],
+) -> Result<(), String> {
     let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
-    std::fs::create_dir_all(parent).map_err(|error| format!("scope-trust: create parent failed: {error}"))?;
-    let body = serde_json::to_string_pretty(entries).map_err(|error| format!("scope-trust: encode failed: {error}"))? + "\n";
+    std::fs::create_dir_all(parent)
+        .map_err(|error| format!("scope-trust: create parent failed: {error}"))?;
+    let body = serde_json::to_string_pretty(entries)
+        .map_err(|error| format!("scope-trust: encode failed: {error}"))?
+        + "\n";
     let tmp = scope_trust_tmp_path(path);
     {
         let mut options = std::fs::OpenOptions::new();
@@ -480,7 +538,8 @@ fn scope_trust_write_atomic(path: &std::path::Path, entries: &[ScopeTrustEntry])
         let _ = std::fs::remove_file(&tmp);
         return Err("scope-trust: tmp validation mismatch".to_owned());
     }
-    std::fs::rename(&tmp, path).map_err(|error| format!("scope-trust: atomic rename failed: {error}"))?;
+    std::fs::rename(&tmp, path)
+        .map_err(|error| format!("scope-trust: atomic rename failed: {error}"))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -511,34 +570,54 @@ fn scope_trust_validate_actor(label: &str, value: &str) -> Result<String, String
     if trimmed != value || trimmed.starts_with('-') {
         return Err(format!("scope-trust: {label} is rejected"));
     }
-    if trimmed.contains('\0') || trimmed.chars().any(char::is_control) || trimmed.chars().any(char::is_whitespace) {
-        return Err(format!("scope-trust: {label} contains a rejected character"));
+    if trimmed.contains('\0')
+        || trimmed.chars().any(char::is_control)
+        || trimmed.chars().any(char::is_whitespace)
+    {
+        return Err(format!(
+            "scope-trust: {label} contains a rejected character"
+        ));
     }
     Ok(trimmed.to_owned())
 }
 
 fn scope_trust_validate_not_self(sender: &str, target: &str) -> Result<(), String> {
     if sender == target {
-        return Err("scope-trust: refusing self-trust relationship; self-sender is already allowed".to_owned());
+        return Err(
+            "scope-trust: refusing self-trust relationship; self-sender is already allowed"
+                .to_owned(),
+        );
     }
     Ok(())
 }
 
 fn scope_trust_validate_added_at(value: &str) -> Result<(), String> {
-    if value.is_empty() || value.chars().any(char::is_control) || !value.ends_with('Z') || !value.contains('T') {
+    if value.is_empty()
+        || value.chars().any(char::is_control)
+        || !value.ends_with('Z')
+        || !value.contains('T')
+    {
         return Err("scope-trust: addedAt timestamp is rejected".to_owned());
     }
     Ok(())
 }
 
-fn scope_trust_same_relationship(left_sender: &str, left_target: &str, sender: &str, target: &str) -> bool {
-    (left_sender == sender && left_target == target) || (left_sender == target && left_target == sender)
+fn scope_trust_same_relationship(
+    left_sender: &str,
+    left_target: &str,
+    sender: &str,
+    target: &str,
+) -> bool {
+    (left_sender == sender && left_target == target)
+        || (left_sender == target && left_target == sender)
 }
 
 fn scope_trust_now_iso() -> String {
     let ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX));
+        .map_or(0, |duration| {
+            i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
+        });
     trust_iso_from_ms(ms)
 }
 
@@ -574,7 +653,8 @@ fn scope_load_record(name: &str) -> Result<Option<ScopeNativeRecord>, String> {
     if !path.exists() {
         return Ok(None);
     }
-    let text = std::fs::read_to_string(&path).map_err(|error| format!("scope: read {}: {error}", path.display()))?;
+    let text = std::fs::read_to_string(&path)
+        .map_err(|error| format!("scope: read {}: {error}", path.display()))?;
     Ok(serde_json::from_str(&text).ok())
 }
 
@@ -587,7 +667,13 @@ fn scope_format_list(rows: &[ScopeNativeRecord]) -> String {
     let widths = scope_widths(&header, &data);
     let mut lines = Vec::new();
     lines.push(scope_format_row(&header.map(str::to_owned), &widths));
-    lines.push(scope_format_row(&widths.iter().map(|width| "-".repeat(*width)).collect::<Vec<_>>(), &widths));
+    lines.push(scope_format_row(
+        &widths
+            .iter()
+            .map(|width| "-".repeat(*width))
+            .collect::<Vec<_>>(),
+        &widths,
+    ));
     lines.extend(data.iter().map(|cols| scope_format_row(cols, &widths)));
     lines.join("\n")
 }
@@ -608,7 +694,13 @@ fn scope_list_rows(rows: &[ScopeNativeRecord]) -> Vec<[String; 5]> {
 
 fn scope_widths(header: &[&str; 5], data: &[[String; 5]]) -> Vec<usize> {
     (0..header.len())
-        .map(|idx| data.iter().map(|cols| cols[idx].len()).chain([header[idx].len()]).max().unwrap_or(0))
+        .map(|idx| {
+            data.iter()
+                .map(|cols| cols[idx].len())
+                .chain([header[idx].len()])
+                .max()
+                .unwrap_or(0)
+        })
         .collect()
 }
 
@@ -620,9 +712,13 @@ fn scope_format_row(cols: &[String], widths: &[usize]) -> String {
         .join("  ")
 }
 
-fn scope_native_dir() -> std::path::PathBuf { scope_native_config_dir().join("scopes") }
+fn scope_native_dir() -> std::path::PathBuf {
+    scope_native_config_dir().join("scopes")
+}
 
-fn scope_native_path(name: &str) -> std::path::PathBuf { scope_native_dir().join(format!("{name}.json")) }
+fn scope_native_path(name: &str) -> std::path::PathBuf {
+    scope_native_dir().join(format!("{name}.json"))
+}
 
 fn scope_native_config_dir() -> std::path::PathBuf {
     let env = scope_native_current_xdg_env();
@@ -630,7 +726,8 @@ fn scope_native_config_dir() -> std::path::PathBuf {
 }
 
 fn scope_native_current_xdg_env() -> MawXdgEnv {
-    let home = std::env::var_os("HOME").map_or_else(|| std::path::PathBuf::from("."), std::path::PathBuf::from);
+    let home = std::env::var_os("HOME")
+        .map_or_else(|| std::path::PathBuf::from("."), std::path::PathBuf::from);
     let vars = [
         "MAW_HOME",
         "MAW_CONFIG_DIR",
@@ -652,7 +749,9 @@ fn scope_now_iso_utc() -> String {
     if let Ok(fake) = std::env::var("MAW_RS_SCOPE_FAKE_NOW") {
         return fake;
     }
-    let seconds = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |duration| duration.as_secs());
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs());
     format!("{seconds}")
 }
 
@@ -695,13 +794,18 @@ mod scope_acl_tests {
     }
 
     fn scope_trust_test_path(name: &str) -> std::path::PathBuf {
-        scope_acl_temp_dir(name).join("state").join("scope-trust.json")
+        scope_acl_temp_dir(name)
+            .join("state")
+            .join("scope-trust.json")
     }
 
     #[test]
     fn scope_help_matches_live_acl_golden_and_has_no_stale_wording() {
         let help = format!("{}\n", scope_native_help());
-        assert_eq!(help, include_str!("../../tests/fixtures/native-scope-acl/scope-help.stdout"));
+        assert_eq!(
+            help,
+            include_str!("../../tests/fixtures/native-scope-acl/scope-help.stdout")
+        );
         let lower = help.to_ascii_lowercase();
         let stale_terms = [
             ["de", "ferred"].concat(),
@@ -711,7 +815,10 @@ mod scope_acl_tests {
             ["not", " yet"].concat(),
         ];
         for stale in stale_terms {
-            assert!(!lower.contains(stale.as_str()), "stale scope help wording: {stale}");
+            assert!(
+                !lower.contains(stale.as_str()),
+                "stale scope help wording: {stale}"
+            );
         }
         assert!(help.contains("ACL is live for peer sends"));
         assert!(help.contains("--approve --trust"));
@@ -767,7 +874,10 @@ mod scope_acl_tests {
         std::fs::write(dir.join("note.txt"), "not a scope").expect("write non-json file");
 
         let rows = scope_acl_load_scopes_from_dir(&dir);
-        let names = rows.iter().map(|scope| scope.name.as_str()).collect::<Vec<_>>();
+        let names = rows
+            .iter()
+            .map(|scope| scope.name.as_str())
+            .collect::<Vec<_>>();
         assert_eq!(names, vec!["alpha", "zeta"]);
     }
 
@@ -836,15 +946,18 @@ mod scope_acl_tests {
     #[test]
     fn scope_trust_add_rejects_empty_self_and_injection_without_write() {
         let path = scope_trust_test_path("reject");
-        let empty = scope_trust_add_to_path(&path, "", "bob", "2026-06-26T00:00:00.000Z").expect_err("empty");
+        let empty = scope_trust_add_to_path(&path, "", "bob", "2026-06-26T00:00:00.000Z")
+            .expect_err("empty");
         assert!(empty.contains("non-empty"));
         let self_trust =
-            scope_trust_add_to_path(&path, "alice", "alice", "2026-06-26T00:00:00.000Z").expect_err("self");
+            scope_trust_add_to_path(&path, "alice", "alice", "2026-06-26T00:00:00.000Z")
+                .expect_err("self");
         assert!(self_trust.contains("self-trust"));
-        let injected =
-            scope_trust_add_to_path(&path, "-alice", "bob", "2026-06-26T00:00:00.000Z").expect_err("dash");
+        let injected = scope_trust_add_to_path(&path, "-alice", "bob", "2026-06-26T00:00:00.000Z")
+            .expect_err("dash");
         assert!(injected.contains("rejected"));
-        let bad_time = scope_trust_add_to_path(&path, "alice", "bob", "not-time").expect_err("time");
+        let bad_time =
+            scope_trust_add_to_path(&path, "alice", "bob", "not-time").expect_err("time");
         assert!(bad_time.contains("addedAt"));
         assert!(!path.exists());
     }
@@ -855,10 +968,14 @@ mod scope_acl_tests {
         let scope_path = root.join("scope-trust.json");
         let consent_path = root.join("trust.json");
         std::fs::create_dir_all(&root).expect("root");
-        std::fs::write(&consent_path, r#"[{"from":"lead","to":"peer","action":"team-invite"}]"#)
-            .expect("consent trust");
+        std::fs::write(
+            &consent_path,
+            r#"[{"from":"lead","to":"peer","action":"team-invite"}]"#,
+        )
+        .expect("consent trust");
 
-        scope_trust_add_to_path(&scope_path, "alice", "bob", "2026-06-26T00:00:00.000Z").expect("add");
+        scope_trust_add_to_path(&scope_path, "alice", "bob", "2026-06-26T00:00:00.000Z")
+            .expect("add");
 
         assert!(scope_path.exists());
         assert_eq!(
@@ -867,18 +984,28 @@ mod scope_acl_tests {
         );
         let names = std::fs::read_dir(&root)
             .expect("state listing")
-            .map(|entry| entry.expect("entry").file_name().to_string_lossy().into_owned())
+            .map(|entry| {
+                entry
+                    .expect("entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
             .collect::<Vec<_>>();
         assert!(names.contains(&"scope-trust.json".to_owned()));
         assert!(names.contains(&"trust.json".to_owned()));
-        assert!(!names
-            .iter()
-            .any(|name| std::path::Path::new(name).extension().is_some_and(|ext| ext == "tmp")));
+        assert!(!names.iter().any(|name| std::path::Path::new(name)
+            .extension()
+            .is_some_and(|ext| ext == "tmp")));
 
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(&scope_path).expect("metadata").permissions().mode() & 0o777;
+            let mode = std::fs::metadata(&scope_path)
+                .expect("metadata")
+                .permissions()
+                .mode()
+                & 0o777;
             assert_eq!(mode, 0o600);
         }
     }

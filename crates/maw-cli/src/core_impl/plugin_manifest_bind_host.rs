@@ -1,6 +1,7 @@
-const DISPATCH_302: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "bind-host", handler: Handler::Sync(run_bind_host_plan) },
-];
+const DISPATCH_302: &[DispatcherEntry] = &[DispatcherEntry {
+    command: "bind-host",
+    handler: Handler::Sync(run_bind_host_plan),
+}];
 
 fn parse_plugin_manifest_invoke_source(value: &str) -> Result<InvokeSource, String> {
     match value {
@@ -406,4 +407,3 @@ fn render_bind_host_plan_json(
         json_string(&result.hostname)
     )
 }
-
