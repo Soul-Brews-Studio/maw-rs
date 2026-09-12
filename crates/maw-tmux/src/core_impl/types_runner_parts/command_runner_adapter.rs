@@ -122,6 +122,12 @@ fn macos_socket_path(path: &str) -> Option<std::path::PathBuf> {
 
 #[cfg(target_os = "macos")]
 fn macos_socket_table_is_cold(socket: &str, table: &str) -> bool {
+    use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _};
+    let target_identity = match std::fs::symlink_metadata(socket) {
+        Ok(meta) if meta.file_type().is_socket() => Some((meta.dev(), meta.ino())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        _ => return false,
+    };
     let Some(socket) = macos_socket_path(socket) else { return false; };
     let mut lines = table.lines();
     if lines.next() != Some("Active LOCAL (UNIX) domain sockets") { return false; }
@@ -145,6 +151,11 @@ fn macos_socket_table_is_cold(socket: &str, table: &str) -> bool {
             // mistake an incomplete or warning-bearing table for a cold socket.
             let Some(bound) = macos_socket_path(rest) else { return false; };
             if bound == socket { return false; }
+            // Names are not identities on case-insensitive volumes or with hard
+            // links. A vanished bind name may still have a live alias: unknown.
+            let Ok(meta) = std::fs::metadata(&bound) else { return false; };
+            if !meta.file_type().is_socket()
+                || target_identity == Some((meta.dev(), meta.ino())) { return false; }
         }
     }
     true
