@@ -172,6 +172,12 @@ path, not a ban on Bun: Bun/JS fleet plugins and dev-tier surfaces remain first-
 plugin entering the ship-tier host must supply a prebuilt artifact with `target = "wasm"` and
 a relative `wasm` path in `plugin.json`.
 
+### Community sidecars
+
+[Oracle Workboard](https://github.com/MEYD-605/maw-workboard) is an external
+collaborative-terminal sidecar, not a bundled native verb. See the
+[compatibility and discovery notes](docs/guides/workboard.md) before installing.
+
 ---
 
 ## Build from source
