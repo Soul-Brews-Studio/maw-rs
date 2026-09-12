@@ -53,11 +53,7 @@ fn peek_with_runner<R: maw_tmux::TmuxRunner>(
                 let content = peek_fetch_remote(&peer, &target).map_err(|message| (1, message))?;
                 return Ok(CliOutput {
                     code: 0,
-                    stdout: format!(
-                        "\x1b[36m--- {}:{target} ---\x1b[0m\n{}",
-                        peer.alias,
-                        peek_trim_trailing_blank_lines(&content)
-                    ),
+                    stdout: peek_render_target(&format!("{}:{target}", peer.alias), &content),
                     stderr: String::new(),
                 });
             }
@@ -70,10 +66,7 @@ fn peek_with_runner<R: maw_tmux::TmuxRunner>(
                 .map_err(|message| (1, message))?;
         return Ok(CliOutput {
             code: 0,
-            stdout: format!(
-                "\x1b[36m--- {resolved} ---\x1b[0m\n{}",
-                peek_trim_trailing_blank_lines(&content)
-            ),
+            stdout: peek_render_target(&resolved, &content),
             stderr: String::new(),
         });
     }
@@ -120,6 +113,22 @@ fn peek_resolve_and_capture<R: maw_tmux::TmuxRunner>(
 
 fn peek_capture_has_content(content: &str) -> bool {
     content.lines().any(|line| !line.trim().is_empty())
+}
+
+fn peek_render_target(target: &str, content: &str) -> String {
+    let pending_notice = peek_pending_notice(content);
+    format!(
+        "\x1b[36m--- {target} ---\x1b[0m\n{pending_notice}{}",
+        peek_trim_trailing_blank_lines(content)
+    )
+}
+
+fn peek_pending_notice(content: &str) -> String {
+    if maw_tmux::pane_input_pending_from_capture(content) {
+        "\x1b[33m⚠ pending composer input (not submitted)\x1b[0m\n".to_owned()
+    } else {
+        String::new()
+    }
 }
 
 fn peek_parse(argv: &[String]) -> Result<PeekOptions, (i32, String)> {
@@ -249,7 +258,10 @@ fn peek_render_overview<R: maw_tmux::TmuxRunner>(
         let target = format!("{}:{}", window.session, window.index);
         peek_validate_tmux_target(&target).map_err(|message| (1, message))?;
         let summary = match peek_capture(runner, &target, 3, false) {
-            Ok(content) => peek_literal_last_line(&content).unwrap_or_else(|| "(empty)".to_owned()),
+            Ok(content) => maw_tmux::pane_pending_input_from_capture(&content).map_or_else(
+                || peek_literal_last_line(&content).unwrap_or_else(|| "(empty)".to_owned()),
+                |pending| format!("⚠ pending composer input (not submitted): {pending}"),
+            ),
             Err(_) => "(unreachable)".to_owned(),
         };
         let dot = if window.active {
@@ -399,6 +411,25 @@ mod peek_tests {
     }
 
     #[test]
+    fn peek_single_target_surfaces_pending_composer_input() {
+        let mut runner = PeekFakeRunner {
+            list: "sess|||1|||main|||1|||\n".to_owned(),
+            ..PeekFakeRunner::default()
+        };
+        runner.captures.insert(
+            "sess:1.0".to_owned(),
+            "Working\n\n› dispatch waiting\n  gpt-5.5 xhigh · Context left\n".to_owned(),
+        );
+
+        let output = peek_with_runner(&args(&["sess:1.0"]), &mut runner).expect("peek");
+
+        assert!(output
+            .stdout
+            .contains("⚠ pending composer input (not submitted)"));
+        assert!(output.stdout.contains("› dispatch waiting"));
+    }
+
+    #[test]
     fn peek_history_uses_full_capture_and_rejects_injection_before_tmux() {
         let mut runner = PeekFakeRunner::default();
         let error =
@@ -441,6 +472,24 @@ mod peek_tests {
             runner.calls[1].1,
             args(&["-p", "-t", "s:0", "-S", "-3", "-J"])
         );
+    }
+
+    #[test]
+    fn peek_overview_marks_windows_with_pending_composer_input() {
+        let mut runner = PeekFakeRunner {
+            list: "s\t0\tactive\t1\n".to_owned(),
+            ..PeekFakeRunner::default()
+        };
+        runner.captures.insert(
+            "s:0".to_owned(),
+            "› queued dispatch\n  gpt-5.5 xhigh · Context left\n".to_owned(),
+        );
+
+        let output = peek_with_runner(&args(&[]), &mut runner).expect("overview");
+
+        assert!(output
+            .stdout
+            .contains("⚠ pending composer input (not submitted): queued dispatch"));
     }
 
     #[test]

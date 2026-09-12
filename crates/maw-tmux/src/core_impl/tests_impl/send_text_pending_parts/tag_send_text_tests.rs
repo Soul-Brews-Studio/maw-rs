@@ -138,7 +138,6 @@
             SendTextReport {
                 used_buffer: false,
                 enter_attempts: 2,
-                warned_pending: false,
             }
         );
         assert_eq!(

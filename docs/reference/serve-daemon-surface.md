@@ -4,8 +4,9 @@
 ## Current maw-rs browser-origin boundary
 
 `maw serve` accepts exact `https://god.buildwithoracle.com` or exact `localhost`,
-`127.0.0.1`, and `[::1]` browser origins. Add a comma-separated
-`MAW_SERVE_ALLOWED_ORIGINS` list (16 entries/4 KiB maximum); wildcard, suffix, malformed, and `null` values fail closed. Allowlisting only reaches
+`127.0.0.1`, and `[::1]` browser origins. Configure a comma-separated
+`serve.allowed_origins` string; `MAW_SERVE_ALLOWED_ORIGINS` takes precedence, matching `MAW_SERVE_TOKEN` over `serve.token` (16 entries/4 KiB maximum).
+Wildcard, suffix, malformed, and `null` values fail closed; a startup diagnostic names an invalid entry. Allowlisting only reaches
 command-capable WebSocket authentication; Origin allowlisting is not authentication and never bypasses it. Missing-Origin native
 clients continue through the existing auth policy.
 

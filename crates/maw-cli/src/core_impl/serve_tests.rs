@@ -146,6 +146,48 @@ mod serve_tests {
         );
     }
 
+    #[test]
+    fn serve_allowed_origins_loads_config_and_env_takes_precedence() {
+        let _guard = env_test_lock();
+        let _config_restore = EnvVarRestore::capture("MAW_CONFIG_DIR");
+        let _origins_restore = EnvVarRestore::capture("MAW_SERVE_ALLOWED_ORIGINS");
+        let root = std::env::temp_dir().join(format!(
+            "serve-origins-{}-{}",
+            std::process::id(),
+            random_hex(4)
+        ));
+        std::fs::create_dir_all(&root).expect("config dir");
+        std::fs::write(
+            root.join("maw.config.json"),
+            r#"{"serve":{"allowed_origins":"https://config.example"}}"#,
+        )
+        .expect("config file");
+        std::env::set_var("MAW_CONFIG_DIR", &root);
+        std::env::remove_var("MAW_SERVE_ALLOWED_ORIGINS");
+        let from_config = load_serve_origin_policy();
+        assert!(from_config.allows("https://config.example"));
+        std::env::set_var("MAW_SERVE_ALLOWED_ORIGINS", "https://env.example");
+        let from_env = load_serve_origin_policy();
+        assert!(from_env.allows("https://env.example"));
+        assert!(!from_env.allows("https://config.example"));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            std::env::set_var(
+                "MAW_SERVE_ALLOWED_ORIGINS",
+                std::ffi::OsString::from_vec(vec![0xff]),
+            );
+            let invalid_env = load_serve_origin_policy();
+            assert!(!invalid_env.allows("https://config.example"));
+            assert!(invalid_env
+                .invalid_diagnostic()
+                .is_some_and(|message| message.contains("non-Unicode")));
+        }
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[tokio::test]
     async fn federation_ls_path_is_mounted_and_dead_api_ls_stays_404() {
         // #676: `maw ls --federation` GET'd /api/ls, which NO serve mounts, so it 404'd

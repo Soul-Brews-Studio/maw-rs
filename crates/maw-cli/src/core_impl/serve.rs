@@ -76,6 +76,7 @@ struct ServeOperatorAuth;
 #[derive(Clone)]
 struct ServeApiGateState {
     auth: ServeApiTokenAuth,
+    origin_policy: crate::serve_core::ServecoreOriginPolicy,
 }
 
 tokio::task_local! { static SERVE_OPERATOR_CONTEXT: (); }
@@ -581,9 +582,14 @@ fn serve_router_with_ws_tickets(
     ws_tickets: Arc<maw_auth::WsTicketStore>,
 ) -> Router {
     let serve_core_state = serve_core_state(&state);
+    let origin_policy = load_serve_origin_policy();
+    if let Some(diagnostic) = origin_policy.invalid_diagnostic() {
+        eprintln!("{diagnostic}");
+    }
     let plugin_serve_routes = state.plugin_serve_routes.clone();
     let api_gate = ServeApiGateState {
         auth: state.api_token_auth.clone(),
+        origin_policy: origin_policy.clone(),
     };
     let state = Arc::new(state);
     let router = Router::new();
@@ -621,14 +627,20 @@ fn serve_router_with_ws_tickets(
         .route("/api/workspace/:id/feed", get(api_workspace_feed))
         .route("/api/workspace/:id/message", post(api_workspace_message));
     let router = router.fallback(api_not_found);
-    let router = crate::serve_core::servecore_apply_pipeline(router);
+    let router = crate::serve_core::servecore_apply_pipeline_with_views_config_and_origin_policy(
+        router,
+        crate::serve_core::modules::static_views::ViewsConfig::views_from_process_env(),
+        origin_policy.clone(),
+    );
     let router = router.layer(middleware::from_fn_with_state(
         api_gate,
         serve_api_token_gate,
     ));
-    let router = router.layer(middleware::from_fn(
-        crate::serve_core::servecore_cors_preflight,
-    ));
+    let router = router
+        .layer(middleware::from_fn(
+            crate::serve_core::servecore_cors_preflight,
+        ))
+        .layer(Extension(origin_policy));
     let router = crate::serve_core::servecore_with_shared_state(router, serve_core_state);
     router.with_state(state)
 }
@@ -645,7 +657,7 @@ async fn serve_api_token_gate(
     mut req: Request<Body>,
     next: Next,
 ) -> Response {
-    if !crate::serve_core::servecore_request_origin_allowed(req.headers()) {
+    if !crate::serve_core::servecore_request_origin_allowed(req.headers(), &gate.origin_policy) {
         return (
             StatusCode::FORBIDDEN,
             Json(json!({"error":"forbidden","reason":"origin-not-allowed"})),
@@ -1838,6 +1850,28 @@ fn load_serve_api_token_auth() -> ServeApiTokenAuth {
         },
         loopback_exempt,
         forced_open: forced_open && !env_overrides,
+    }
+}
+
+fn load_serve_origin_policy() -> crate::serve_core::ServecoreOriginPolicy {
+    let config = merged_config_value_for_env(&real_xdg_env());
+    let configured = config
+        .get("serve")
+        .and_then(|serve| serve.get("allowed_origins"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    match std::env::var("MAW_SERVE_ALLOWED_ORIGINS") {
+        Ok(origins) => {
+            crate::serve_core::ServecoreOriginPolicy::from_comma_separated(Some(origins))
+        }
+        Err(std::env::VarError::NotPresent) => {
+            crate::serve_core::ServecoreOriginPolicy::from_comma_separated(configured)
+        }
+        Err(std::env::VarError::NotUnicode(_)) => {
+            crate::serve_core::ServecoreOriginPolicy::invalid(
+                "MAW_SERVE_ALLOWED_ORIGINS contains non-Unicode data",
+            )
+        }
     }
 }
 

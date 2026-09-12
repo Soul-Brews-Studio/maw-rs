@@ -147,7 +147,7 @@
         ]);
         let report = report.expect("send text ok");
 
-        assert_eq!((report.enter_attempts, report.warned_pending), (2, false));
+        assert_eq!(report.enter_attempts, 2);
         assert_eq!(runner.calls[2].0, "paste-buffer");
         assert_eq!(runner.calls[3].0, "capture-pane");
         assert_eq!(runner.calls[4].0, "send-keys");
@@ -166,7 +166,7 @@
         ]);
         let report = report.expect("send text ok");
 
-        assert_eq!((report.enter_attempts, report.warned_pending), (2, false));
+        assert_eq!(report.enter_attempts, 2);
     }
 
     #[test]
@@ -209,7 +209,6 @@
             .expect("send text ok");
 
         assert_eq!(report.enter_attempts, 1);
-        assert!(!report.warned_pending);
         assert_eq!(
             client
                 .runner
@@ -254,7 +253,6 @@
             .expect("send text ok");
 
         assert_eq!(report.enter_attempts, 2);
-        assert!(!report.warned_pending);
         assert_eq!(
             sleeps,
             vec![
