@@ -112,7 +112,14 @@ EOF
 exit 0
 EOF
 
-    chmod +x "$bin/rustc" "$bin/rustup" "$bin/cargo"
+    # Formatting behavior has its own focused test. These preflight cases need
+    # a stable no-op so existing workspace drift cannot change their verdict.
+    cat >"$bin/rustfmt" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+
+    chmod +x "$bin/rustc" "$bin/rustup" "$bin/cargo" "$bin/rustfmt"
     printf '%s' "$bin"
 }
 
