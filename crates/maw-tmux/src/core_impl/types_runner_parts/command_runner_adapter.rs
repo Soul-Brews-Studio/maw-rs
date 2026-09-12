@@ -98,7 +98,59 @@ fn tmux_socket_is_proven_cold(socket: &str) -> bool {
     })
 }
 
-#[cfg(not(target_os = "linux"))]
+// macOS netstat reads the kernel net.local.{stream,dgram}.pcblist_n tables,
+// including live sockets whose filesystem pathname has been unlinked (#941).
+#[cfg(target_os = "macos")]
+fn tmux_socket_is_proven_cold(socket: &str) -> bool {
+    use std::os::unix::fs::FileTypeExt as _;
+    let metadata_ok = match std::fs::symlink_metadata(socket) {
+        Ok(metadata) => metadata.file_type().is_socket(),
+        Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+    };
+    if !metadata_ok { return false; }
+    let Ok(output) = Command::new("/usr/sbin/netstat").args(["-an", "-f", "unix"]).output() else { return false; };
+    output.status.success() && output.stderr.is_empty()
+        && std::str::from_utf8(&output.stdout).is_ok_and(|table| macos_socket_table_is_cold(socket, table))
+}
+
+#[cfg(target_os = "macos")]
+fn macos_socket_path(path: &str) -> Option<std::path::PathBuf> {
+    let path = std::path::Path::new(path);
+    if !path.is_absolute() { return None; }
+    Some(path.parent()?.canonicalize().ok()?.join(path.file_name()?))
+}
+
+#[cfg(target_os = "macos")]
+fn macos_socket_table_is_cold(socket: &str, table: &str) -> bool {
+    let Some(socket) = macos_socket_path(socket) else { return false; };
+    let mut lines = table.lines();
+    if lines.next() != Some("Active LOCAL (UNIX) domain sockets") { return false; }
+    let Some(header) = lines.next() else { return false; };
+    if header.split_whitespace().collect::<Vec<_>>() != ["Address", "Type", "Recv-Q", "Send-Q", "Inode", "Conn", "Refs", "Nextref", "Addr"] { return false; }
+    for line in lines {
+        let mut rest = line.trim_start();
+        for column in 0..8 {
+            let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+            let word = &rest[..end];
+            let valid = match column {
+                1 => matches!(word, "stream" | "dgram"),
+                2 | 3 => word.parse::<u64>().is_ok(),
+                _ => !word.is_empty() && word.chars().all(|c| c.is_ascii_hexdigit()),
+            };
+            if !valid { return false; }
+            rest = rest[end..].trim_start();
+        }
+        if !rest.is_empty() {
+            // Unknown/deleted parent paths cannot establish absence. Never
+            // mistake an incomplete or warning-bearing table for a cold socket.
+            let Some(bound) = macos_socket_path(rest) else { return false; };
+            if bound == socket { return false; }
+        }
+    }
+    true
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn tmux_socket_is_proven_cold(_socket: &str) -> bool {
     false
 }

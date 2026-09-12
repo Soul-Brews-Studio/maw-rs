@@ -1,4 +1,47 @@
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_cold_table_refuses_incomplete_unstable_and_bound_snapshots() {
+        let header = "Active LOCAL (UNIX) domain sockets\nAddress Type Recv-Q Send-Q Inode Conn Refs Nextref Addr\n";
+        let socket = "/tmp/maw-941-table.sock";
+        assert!(macos_socket_table_is_cold(socket, header));
+        for bad in ["", "permission denied", "Active LOCAL (UNIX) domain sockets\n"] {
+            assert!(!macos_socket_table_is_cold(socket, bad));
+        }
+        for row in [
+            "Some stream sockets may have been created.",
+            "broken row",
+            "1 stream 0 0 0 0 0 0 /tmp/maw-941-table.sock",
+            "1 stream 0 0 0 0 0 0 /private/tmp/maw-941-table.sock",
+            "1 stream 0 0 0 0 0 0 relative-socket",
+        ] {
+            assert!(!macos_socket_table_is_cold(socket, &format!("{header}{row}\n")), "{row}");
+        }
+        assert!(macos_socket_table_is_cold(socket, &format!("{header}1 stream 0 0 0 0 0 0 /tmp/different.sock\n")));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_cold_probe_distinguishes_bound_unlinked_from_closed() {
+        let dir = std::env::temp_dir().join(format!("maw-941-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("fixture dir");
+        let path = dir.join("probe.sock");
+        let socket = path.to_str().expect("fixture path");
+        let listener = std::os::unix::net::UnixListener::bind(&path).expect("bind fixture");
+        assert!(!tmux_socket_is_proven_cold(socket));
+        std::fs::remove_file(&path).expect("unlink fixture");
+        assert!(!tmux_socket_is_proven_cold(socket), "live unlinked must remain fatal");
+        drop(listener);
+        // Concurrent unrelated socket churn makes netstat report an unstable
+        // snapshot; the production probe must refuse it. Retry observation only.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while !tmux_socket_is_proven_cold(socket) {
+            assert!(std::time::Instant::now() < deadline, "closed socket needs a stable kernel snapshot");
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        std::fs::remove_dir(&dir).expect("cleanup fixture");
+    }
+
     #[test]
     fn command_runner_process_adapter_handles_success_stdin_and_errors_without_tmux() {
         let mut printf_runner = CommandTmuxRunner::with_program("/usr/bin/printf");
