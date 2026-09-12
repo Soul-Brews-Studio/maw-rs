@@ -146,10 +146,16 @@ fn plugin_ls_verbose_renders_maw_js_grouped_table_and_filters_refused_plugins() 
 fn plugin_ls_rejects_unknown_args() {
     // Was `--json` until that became a real flag. The assertion is about rejecting
     // unknown arguments, so it needs an example that stays unknown.
-    let output = run(&["plugin".to_owned(), "ls".to_owned(), "--not-a-flag".to_owned()]);
+    let output = run(&[
+        "plugin".to_owned(),
+        "ls".to_owned(),
+        "--not-a-flag".to_owned(),
+    ]);
 
     assert_eq!(output.code, 2);
-    assert!(output.stderr.contains("plugin ls: unknown argument --not-a-flag"));
+    assert!(output
+        .stderr
+        .contains("plugin ls: unknown argument --not-a-flag"));
     assert!(output.stderr.contains("usage: maw-rs plugin ls"));
 }
 
@@ -342,7 +348,10 @@ fn plugin_ls_json_is_parseable_on_every_path_including_the_empty_one() {
     assert_eq!(parsed["plugins"][0]["api"], serde_json::Value::Null);
     assert_eq!(parsed["filters"], serde_json::json!([]));
     // The absolute path, not the ~-shortened form the human tables print.
-    assert_eq!(parsed["plugins"][0]["dir"], root.join("delta").display().to_string());
+    assert_eq!(
+        parsed["plugins"][0]["dir"],
+        root.join("delta").display().to_string()
+    );
 
     // A filter that matches nothing is the path where the text renderer emits an
     // English sentence. JSON must stay JSON there, or every consumer breaks on a
