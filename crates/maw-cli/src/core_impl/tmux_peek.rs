@@ -51,11 +51,7 @@ fn peek_with_runner<R: maw_tmux::TmuxRunner>(
                 let content = peek_fetch_remote(&peer, &target).map_err(|message| (1, message))?;
                 return Ok(CliOutput {
                     code: 0,
-                    stdout: format!(
-                        "\x1b[36m--- {}:{target} ---\x1b[0m\n{}",
-                        peer.alias,
-                        peek_trim_trailing_blank_lines(&content)
-                    ),
+                    stdout: peek_render_target(&format!("{}:{target}", peer.alias), &content),
                     stderr: String::new(),
                 });
             }
@@ -65,13 +61,9 @@ fn peek_with_runner<R: maw_tmux::TmuxRunner>(
         peek_validate_tmux_target(target).map_err(|message| (1, message))?;
         let (resolved, content) = peek_resolve_and_capture(runner, target, options.lines, options.history)
             .map_err(|message| (1, message))?;
-        let pending_notice = peek_pending_notice(&content);
         return Ok(CliOutput {
             code: 0,
-            stdout: format!(
-                "\x1b[36m--- {resolved} ---\x1b[0m\n{pending_notice}{}",
-                peek_trim_trailing_blank_lines(&content)
-            ),
+            stdout: peek_render_target(&resolved, &content),
             stderr: String::new(),
         });
     }
@@ -118,6 +110,14 @@ fn peek_resolve_and_capture<R: maw_tmux::TmuxRunner>(
 
 fn peek_capture_has_content(content: &str) -> bool {
     content.lines().any(|line| !line.trim().is_empty())
+}
+
+fn peek_render_target(target: &str, content: &str) -> String {
+    let pending_notice = peek_pending_notice(content);
+    format!(
+        "\x1b[36m--- {target} ---\x1b[0m\n{pending_notice}{}",
+        peek_trim_trailing_blank_lines(content)
+    )
 }
 
 fn peek_pending_notice(content: &str) -> String {
