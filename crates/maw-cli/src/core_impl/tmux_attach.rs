@@ -1,7 +1,16 @@
 const DISPATCH_305: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "send-enter", handler: Handler::Sync(run_send_enter_command) },
-    DispatcherEntry { command: "send-key", handler: Handler::Sync(run_send_key_command) },
-    DispatcherEntry { command: "send-escape", handler: Handler::Sync(run_send_escape_command) },
+    DispatcherEntry {
+        command: "send-enter",
+        handler: Handler::Sync(run_send_enter_command),
+    },
+    DispatcherEntry {
+        command: "send-key",
+        handler: Handler::Sync(run_send_key_command),
+    },
+    DispatcherEntry {
+        command: "send-escape",
+        handler: Handler::Sync(run_send_escape_command),
+    },
 ];
 
 fn run_attach_plan(argv: &[String]) -> CliOutput {
@@ -63,11 +72,26 @@ fn run_attach_plan(argv: &[String]) -> CliOutput {
         } else {
             render_attach_remote_plan_text(&target, &node, &session_name, &alias, yes)
         };
-        return CliOutput { code: 0, stdout, stderr: String::new() };
+        return CliOutput {
+            code: 0,
+            stdout,
+            stderr: String::new(),
+        };
     }
     if alive.is_empty() {
         let mut client = TmuxClient::local();
-        alive = client.list_session_names().into_iter().collect();
+        // #860: a tmux connect failure must not silently masquerade as "no
+        // live sessions" (which then reads as "target not found" below).
+        alive = match client.list_session_names() {
+            Ok(names) => names.into_iter().collect(),
+            Err(error) => {
+                return CliOutput {
+                    code: 1,
+                    stdout: String::new(),
+                    stderr: format!("attach: tmux unreachable: {error}\n"),
+                }
+            }
+        };
     }
     let resolved_target = match resolve_tmux_attach_session(&target, &alive) {
         TmuxAttachSessionResolution::Match { session }
@@ -77,7 +101,8 @@ fn run_attach_plan(argv: &[String]) -> CliOutput {
         }
     };
     let in_tmux = std::env::var_os("TMUX").is_some();
-    let action = decide_tmux_attach_action(&resolved_target, &alive, print || plan_json, false, in_tmux);
+    let action =
+        decide_tmux_attach_action(&resolved_target, &alive, print || plan_json, false, in_tmux);
     let session = attach_action_session(&action);
     let stdout = if plan_json {
         render_attach_plan_json(&target, session, &action, readonly)
@@ -123,7 +148,6 @@ fn attach_usage_text() -> String {
     "usage: maw-rs attach <target> [--print] [--readonly|-r]\n       maw-rs a <target> [--print] [--readonly|-r]\n".to_owned()
 }
 
-
 fn parse_explicit_remote_attach_target(target: &str) -> Option<(String, String)> {
     let (node, session_name) = target.split_once(':')?;
     let node = node.trim();
@@ -131,12 +155,12 @@ fn parse_explicit_remote_attach_target(target: &str) -> Option<(String, String)>
     if node.is_empty() || session_name.is_empty() {
         return None;
     }
-    if session_name
-        .split_once('.')
-        .map_or_else(|| session_name.chars().all(|c| c.is_ascii_digit()), |(window, pane)| {
+    if session_name.split_once('.').map_or_else(
+        || session_name.chars().all(|c| c.is_ascii_digit()),
+        |(window, pane)| {
             window.chars().all(|c| c.is_ascii_digit()) && pane.chars().all(|c| c.is_ascii_digit())
-        })
-    {
+        },
+    ) {
         return None;
     }
     Some((node.to_owned(), session_name.to_owned()))
@@ -238,7 +262,13 @@ fn attach_command_args(action: &TmuxAttachAction, readonly: bool) -> Vec<String>
         ];
     }
     tmux_attach_spawn_command(action).map_or_else(
-        || vec!["attach".to_owned(), "-t".to_owned(), attach_action_session(action).to_owned()],
+        || {
+            vec![
+                "attach".to_owned(),
+                "-t".to_owned(),
+                attach_action_session(action).to_owned(),
+            ]
+        },
         |command| command.args,
     )
 }
@@ -251,7 +281,6 @@ fn attach_action_session(action: &TmuxAttachAction) -> &str {
         | TmuxAttachAction::Recover { session } => session,
     }
 }
-
 
 fn run_send_enter_command(argv: &[String]) -> CliOutput {
     if wants_help(argv, &["--N", "-N", "--n"]) {
@@ -266,26 +295,40 @@ fn run_send_enter_command(argv: &[String]) -> CliOutput {
         Ok(target) => target,
         Err(message) => return command_target_error("send-enter", &message),
     };
-    for _ in 0..count {
-        if let Err(error) = client.send_enter(&resolved) {
+    send_enter_resolved(&resolved, count, |target| {
+        client.send_enter(target).map_err(|error| error.to_string())
+    })
+}
+
+fn send_enter_resolved(
+    resolved: &str,
+    count: usize,
+    mut send_enter: impl FnMut(&str) -> Result<(), String>,
+) -> CliOutput {
+    for accepted in 0..count {
+        if let Err(error) = send_enter(resolved) {
+            let request = accepted + 1;
             return command_target_error(
                 "send-enter",
-                &format!("tmux send-keys failed: {error}"),
+                &format!(
+                    "tmux send-keys returned an error on request {request} of {count} after tmux accepted {accepted} of {count} requested Enter keypresses; failed request outcome and pane state are unconfirmed, inspect pane before retrying: {error}"
+                ),
             );
         }
     }
-    let plural = if count == 1 {
-        "Enter".to_owned()
+    let keys = if count == 1 {
+        "1 Enter key".to_owned()
     } else {
-        format!("{count} Enters")
+        format!("{count} Enter keys")
     };
     CliOutput {
         code: 0,
-        stdout: format!("\x1b[32mdelivered\x1b[0m → {resolved}: {plural}\n"),
+        stdout: format!(
+            "\x1b[32mtmux accepted\x1b[0m → {resolved}: {keys} (pane state unconfirmed)\n"
+        ),
         stderr: String::new(),
     }
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SendKeyCommandArgs {
@@ -318,12 +361,26 @@ fn run_send_key_command(argv: &[String]) -> CliOutput {
         Ok(target) => target,
         Err(message) => return command_target_error("send-key", &message),
     };
-    if let Err(error) = client.send_keys(&resolved, &[options.key.to_owned()]) {
+    send_key_resolved(&resolved, options.key, |target, key| {
+        client
+            .send_keys(target, &[key.to_owned()])
+            .map_err(|error| error.to_string())
+    })
+}
+
+fn send_key_resolved(
+    resolved: &str,
+    key: &str,
+    mut send_keys: impl FnMut(&str, &str) -> Result<(), String>,
+) -> CliOutput {
+    if let Err(error) = send_keys(resolved, key) {
         return command_target_error("send-key", &format!("tmux send-keys failed: {error}"));
     }
     CliOutput {
         code: 0,
-        stdout: format!("\x1b[32mdelivered\x1b[0m → {resolved}: {}\n", options.key),
+        stdout: format!(
+            "\x1b[32mtmux accepted\x1b[0m → {resolved}: {key} (pane state unconfirmed)\n"
+        ),
         stderr: String::new(),
     }
 }
@@ -375,7 +432,11 @@ fn send_key_allowed_tmux_name(raw: &str) -> Result<&'static str, String> {
 }
 
 fn send_key_plan_output(options: &SendKeyCommandArgs) -> CliOutput {
-    let args = ["-t".to_owned(), options.target.clone(), options.key.to_owned()];
+    let args = [
+        "-t".to_owned(),
+        options.target.clone(),
+        options.key.to_owned(),
+    ];
     let stdout = if options.plan_json {
         format!(
             "{{\"command\":\"send-key\",\"target\":{},\"key\":{},\"tmuxArgs\":{}}}\n",
@@ -452,7 +513,11 @@ fn resolve_local_tmux_command_target(
     client: &mut TmuxClient<maw_tmux::CommandTmuxRunner>,
     query: &str,
 ) -> Result<String, String> {
-    let sessions = tmux_sessions_to_route_sessions(client.list_all());
+    let sessions = tmux_sessions_to_route_sessions(
+        client
+            .list_all()
+            .map_err(|error| format!("tmux unreachable: {error}"))?,
+    );
     resolve_local_tmux_target_from_sessions(query, &sessions)
 }
 
@@ -476,13 +541,83 @@ fn send_enter_usage() -> &'static str {
     "usage: maw-rs send-enter <target> [--N <count>]"
 }
 
-
 #[cfg(test)]
 mod tmux_attach_send_key_tests {
     use super::*;
 
     fn strings(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    #[test]
+    fn send_enter_reports_raw_success_without_claiming_delivery() {
+        let mut calls = Vec::new();
+        let output = send_enter_resolved("%42", 3, |target| {
+            calls.push(target.to_owned());
+            Ok(())
+        });
+        assert_eq!(calls, ["%42", "%42", "%42"]);
+        assert_eq!(
+            output.stdout,
+            "\x1b[32mtmux accepted\x1b[0m → %42: 3 Enter keys (pane state unconfirmed)\n"
+        );
+        assert_eq!(output.code, 0);
+        assert!(output.stderr.is_empty());
+        assert!(!output.stdout.contains("delivered"));
+
+        let single = send_enter_resolved("%7", 1, |_| Ok(()));
+        assert_eq!(
+            single.stdout,
+            "\x1b[32mtmux accepted\x1b[0m → %7: 1 Enter key (pane state unconfirmed)\n"
+        );
+    }
+
+    #[test]
+    fn send_enter_stops_and_reports_prior_acceptance_on_second_failure() {
+        let mut calls = Vec::new();
+        let output = send_enter_resolved("%42", 3, |target| {
+            calls.push(target.to_owned());
+            if calls.len() == 2 {
+                Err("injected failure".to_owned())
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!(calls, ["%42", "%42"]);
+        assert_eq!(output.code, 1);
+        assert!(output.stdout.is_empty());
+        assert_eq!(
+            output.stderr,
+            "send-enter: tmux send-keys returned an error on request 2 of 3 after tmux accepted 1 of 3 requested Enter keypresses; failed request outcome and pane state are unconfirmed, inspect pane before retrying: injected failure\n"
+        );
+    }
+
+    #[test]
+    fn send_key_reports_raw_success_without_claiming_delivery() {
+        let mut calls = Vec::new();
+        let output = send_key_resolved("%42", "C-c", |target, key| {
+            calls.push((target.to_owned(), key.to_owned()));
+            Ok(())
+        });
+        assert_eq!(calls, [("%42".to_owned(), "C-c".to_owned())]);
+        assert_eq!(
+            output.stdout,
+            "\x1b[32mtmux accepted\x1b[0m → %42: C-c (pane state unconfirmed)\n"
+        );
+        assert_eq!(output.code, 0);
+        assert!(output.stderr.is_empty());
+        assert!(!output.stdout.contains("delivered"));
+    }
+
+    #[test]
+    fn send_key_reports_failure_with_unconfirmed_state() {
+        let output = send_key_resolved("%42", "C-c", |_, _| Err("injected failure".to_owned()));
+        assert_eq!(output.code, 1);
+        assert!(output.stdout.is_empty());
+        assert_eq!(
+            output.stderr,
+            "send-key: tmux send-keys failed: injected failure\n"
+        );
     }
 
     #[test]
@@ -496,10 +631,7 @@ mod tmux_attach_send_key_tests {
         assert_eq!(send_key_allowed_tmux_name("left").expect("left"), "Left");
         assert_eq!(send_key_allowed_tmux_name("right").expect("right"), "Right");
         assert_eq!(send_key_allowed_tmux_name("tab").expect("tab"), "Tab");
-        assert_eq!(
-            send_key_allowed_tmux_name("ctrl-c").expect("ctrl-c"),
-            "C-c"
-        );
+        assert_eq!(send_key_allowed_tmux_name("ctrl-c").expect("ctrl-c"), "C-c");
     }
 
     #[test]
@@ -520,6 +652,8 @@ mod tmux_attach_send_key_tests {
         let output = run_send_escape_command(&strings(&["%7", "--plan-json"]));
         assert_eq!(output.code, 0);
         assert!(output.stdout.contains("\"key\":\"Escape\""));
-        assert!(output.stdout.contains("\"tmuxArgs\":[\"-t\",\"%7\",\"Escape\"]"));
+        assert!(output
+            .stdout
+            .contains("\"tmuxArgs\":[\"-t\",\"%7\",\"Escape\"]"));
     }
 }

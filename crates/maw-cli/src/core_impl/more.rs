@@ -341,7 +341,7 @@ fn more_boot_spawned_codex(
         "--repo-path".to_owned(),
         result.worktree_path.display().to_string(),
     ];
-    let (code, stdout) = wake_run(&args, &mut WakeNativeTmux)?;
+    let (code, stdout) = wake_run(&args, &mut WakeNativeTmux::default())?;
     if code == 0 {
         Ok(())
     } else {
@@ -360,7 +360,11 @@ fn more_engine_pool(engine: &str) -> &str {
         .unwrap_or("-")
 }
 
-fn more_render_codex_plan(options: &MoreCodexOptions, live: &LiveTeamState, engine: &str) -> String {
+fn more_render_codex_plan(
+    options: &MoreCodexOptions,
+    live: &LiveTeamState,
+    engine: &str,
+) -> String {
     format!(
         "would spawn {} coders in session {} with engine {}\n",
         options.count, live.session, engine

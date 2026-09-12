@@ -15,7 +15,10 @@ enum PickerSelection {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TypedPickerPlan {
     Target(String),
-    Pick { context: &'static str, rows: Vec<PickerRow> },
+    Pick {
+        context: &'static str,
+        rows: Vec<PickerRow>,
+    },
 }
 
 fn typed_picker_plan(
@@ -32,26 +35,70 @@ fn typed_picker_plan(
         }
         maw_matcher::ResolveTypedResult::Match { matched } => ("matched fuzzily", vec![matched]),
         maw_matcher::ResolveTypedResult::Ambiguous { candidates } => {
-            let best = candidates.iter().map(|item| priority(item.candidate.kind)).min().unwrap_or(u8::MAX);
-            let preferred = candidates.into_iter().filter(|item| priority(item.candidate.kind) == best).collect::<Vec<_>>();
-            if preferred.len() == 1 && preferred[0].rank != maw_matcher::ResolveMatchRank::Fuzzy {
-                return TypedPickerPlan::Target(preferred[0].candidate.name.clone());
+            let best = candidates
+                .iter()
+                .map(|item| priority(item.candidate.kind))
+                .min()
+                .unwrap_or(u8::MAX);
+            let preferred = candidates
+                .into_iter()
+                .filter(|item| priority(item.candidate.kind) == best)
+                .collect::<Vec<_>>();
+            if preferred.len() == 1 {
+                if preferred[0].rank != maw_matcher::ResolveMatchRank::Fuzzy {
+                    return TypedPickerPlan::Target(preferred[0].candidate.name.clone());
+                }
+                // #782: after the priority filter above narrows the tie down
+                // to exactly one candidate, printing "matches multiple
+                // targets" over a list of one is a straight count mismatch --
+                // it isn't ambiguous anymore, it just isn't exact (rank is
+                // Fuzzy, so it still surfaces for confirmation rather than
+                // auto-resolving). Use the same wording the no-match branch
+                // uses for "closest match, not exact" so the message agrees
+                // with what's actually printed below it.
+                ("was not found exactly", preferred)
+            } else {
+                ("matches multiple targets", preferred)
             }
-            ("matches multiple targets", preferred)
         }
-        maw_matcher::ResolveTypedResult::None => ("was not found exactly", deadend_closest_matches(target, candidates)),
+        maw_matcher::ResolveTypedResult::None => (
+            "was not found exactly",
+            deadend_closest_matches(target, candidates),
+        ),
     };
     matches.sort_by(|left, right| left.candidate.name.cmp(&right.candidate.name));
     let rows = matches.into_iter().map(row).collect::<Vec<_>>();
-    if rows.is_empty() { TypedPickerPlan::Target(target.to_owned()) } else { TypedPickerPlan::Pick { context, rows } }
+    if rows.is_empty() {
+        TypedPickerPlan::Target(target.to_owned())
+    } else {
+        TypedPickerPlan::Pick { context, rows }
+    }
 }
 
-fn picker_choose_target(command: &str, target: &str, context: &str, rows: &[PickerRow], json: bool) -> Result<String, CliOutput> {
+fn picker_choose_target(
+    command: &str,
+    target: &str,
+    context: &str,
+    rows: &[PickerRow],
+    json: bool,
+) -> Result<String, CliOutput> {
     use std::io::IsTerminal as _;
     if !std::io::stdin().is_terminal() {
-        return Err(CliOutput { code: 1, stdout: if json { picker_render_json(command, target, context, rows) } else { picker_render_text(command, target, context, rows) }, stderr: String::new() });
+        return Err(CliOutput {
+            code: 1,
+            stdout: if json {
+                picker_render_json(command, target, context, rows)
+            } else {
+                picker_render_text(command, target, context, rows)
+            },
+            stderr: String::new(),
+        });
     }
-    let row = picker_prompt(command, target, context, rows).ok_or_else(|| CliOutput { code: 1, stdout: String::new(), stderr: format!("{command}: picker cancelled\n") })?;
+    let row = picker_prompt(command, target, context, rows).ok_or_else(|| CliOutput {
+        code: 1,
+        stdout: String::new(),
+        stderr: format!("{command}: picker cancelled\n"),
+    })?;
     Ok(row.matched.candidate.name)
 }
 

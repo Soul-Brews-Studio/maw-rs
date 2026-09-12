@@ -18,16 +18,24 @@ fn plugin_run_command(argv: &[String]) -> CliOutput {
 }
 
 fn plugin_parse_kind(argv: &[String]) -> Result<&str, String> {
-    let Some(kind) = argv.first().map(String::as_str) else { return Err(String::new()); };
-    if matches!(kind, "--help" | "-h" | "help") { return Err(String::new()); }
-    if kind == "--" || kind.starts_with('-') { return Err("plugin: subcommand must not start with '-' or be '--'".to_owned()); }
+    let Some(kind) = argv.first().map(String::as_str) else {
+        return Err(String::new());
+    };
+    if matches!(kind, "--help" | "-h" | "help") {
+        return Err(String::new());
+    }
+    if kind == "--" || kind.starts_with('-') {
+        return Err("plugin: subcommand must not start with '-' or be '--'".to_owned());
+    }
     Ok(kind)
 }
 
 fn plugin_dispatch_kind(kind: &str, rest: &[String]) -> Result<CliOutput, String> {
     match kind {
         "ls" | "list" => Ok(run_plugin_plan(&plugin_with_subcommand("ls", rest))),
-        "init" | "install" | "infer-capabilities" => Ok(run_plugin_plan(&plugin_with_subcommand(kind, rest))),
+        "init" | "install" | "infer-capabilities" => {
+            Ok(run_plugin_plan(&plugin_with_subcommand(kind, rest)))
+        }
         "create" | "scaffold" => plugin_create(rest),
         "info" => plugin_info(rest),
         "enable" => plugin_enable(rest),
@@ -53,14 +61,27 @@ fn plugin_create(argv: &[String]) -> Result<CliOutput, String> {
     match init_js_plugin_dir(&parsed.name, &parsed.dir) {
         Ok(summary) => Ok(CliOutput {
             code: 0,
-            stdout: if parsed.plan_json { plugin_init_summary_json(&summary) } else { format!("created plugin {} {}\n", summary.name, path_string(&summary.dir)) },
+            stdout: if parsed.plan_json {
+                plugin_init_summary_json(&summary)
+            } else {
+                format!(
+                    "created plugin {} {}\n",
+                    summary.name,
+                    path_string(&summary.dir)
+                )
+            },
             stderr: String::new(),
         }),
         Err(message) => Err(message),
     }
 }
 
-struct PluginCreateArgs { name: String, dir: std::path::PathBuf, plan_json: bool, rust: bool }
+struct PluginCreateArgs {
+    name: String,
+    dir: std::path::PathBuf,
+    plan_json: bool,
+    rust: bool,
+}
 
 fn plugin_parse_create(argv: &[String]) -> Result<PluginCreateArgs, String> {
     let mut name = None;
@@ -72,15 +93,24 @@ fn plugin_parse_create(argv: &[String]) -> Result<PluginCreateArgs, String> {
         match argv[index].as_str() {
             "--plan-json" => plan_json = true,
             "--rust" => rust = true,
-            "--dir" => { dir = Some(plugin_take_path(argv, index, "--dir")?); index += 1; }
+            "--dir" => {
+                dir = Some(plugin_take_path(argv, index, "--dir")?);
+                index += 1;
+            }
             other if !other.starts_with('-') && name.is_none() => name = Some(other.to_owned()),
             other => return Err(format!("plugin create: unknown argument {other}")),
         }
         index += 1;
     }
-    let name = plugin_validate_name(&name.ok_or_else(|| "plugin create: name is required".to_owned())?)?;
+    let name =
+        plugin_validate_name(&name.ok_or_else(|| "plugin create: name is required".to_owned())?)?;
     let dir = dir.unwrap_or_else(|| std::path::PathBuf::from(&name));
-    Ok(PluginCreateArgs { name, dir, plan_json, rust })
+    Ok(PluginCreateArgs {
+        name,
+        dir,
+        plan_json,
+        rust,
+    })
 }
 
 fn plugin_create_rust(parsed: &PluginCreateArgs) -> Result<CliOutput, String> {
@@ -104,7 +134,11 @@ fn plugin_create_rust(parsed: &PluginCreateArgs) -> Result<CliOutput, String> {
         stdout: if parsed.plan_json {
             plugin_create_rust_summary_json(&parsed.name, &parsed.dir)
         } else {
-            format!("created plugin {} {}\n", parsed.name.replace('_', "-"), path_string(&parsed.dir))
+            format!(
+                "created plugin {} {}\n",
+                parsed.name.replace('_', "-"),
+                path_string(&parsed.dir)
+            )
         },
         stderr: String::new(),
     })
@@ -170,12 +204,23 @@ fn plugin_create_rust_summary_json(name: &str, dir: &std::path::Path) -> String 
 fn plugin_info(argv: &[String]) -> Result<CliOutput, String> {
     let parsed = plugin_parse_named_scan(argv, "info")?;
     let plugin = plugin_find_loaded(&parsed.name, &parsed.options)?;
-    Ok(CliOutput { code: 0, stdout: plugin_render_info(&plugin, parsed.json), stderr: String::new() })
+    Ok(CliOutput {
+        code: 0,
+        stdout: plugin_render_info(&plugin, parsed.json),
+        stderr: String::new(),
+    })
 }
 
-struct PluginNamedScanArgs { name: String, options: DiscoverPackagesOptions, json: bool }
+struct PluginNamedScanArgs {
+    name: String,
+    options: DiscoverPackagesOptions,
+    json: bool,
+}
 
-fn plugin_parse_named_scan(argv: &[String], subcommand: &str) -> Result<PluginNamedScanArgs, String> {
+fn plugin_parse_named_scan(
+    argv: &[String],
+    subcommand: &str,
+) -> Result<PluginNamedScanArgs, String> {
     let mut options = plugin_discover_options();
     let mut scan_dirs = Vec::new();
     let mut name = None;
@@ -184,17 +229,33 @@ fn plugin_parse_named_scan(argv: &[String], subcommand: &str) -> Result<PluginNa
     while index < argv.len() {
         match argv[index].as_str() {
             "--json" => json = true,
-            "--scan-dir" | "--root" => { scan_dirs.push(plugin_take_path(argv, index, argv[index].as_str())?); index += 1; }
-            "--disabled" => { options.disabled_plugins.push(plugin_take_value(argv, index, "--disabled")?); index += 1; }
+            "--scan-dir" | "--root" => {
+                scan_dirs.push(plugin_take_path(argv, index, argv[index].as_str())?);
+                index += 1;
+            }
+            "--disabled" => {
+                options
+                    .disabled_plugins
+                    .push(plugin_take_value(argv, index, "--disabled")?);
+                index += 1;
+            }
             other if !other.starts_with('-') && name.is_none() => name = Some(other.to_owned()),
             other => return Err(format!("plugin {subcommand}: unknown argument {other}")),
         }
         index += 1;
     }
-    if !scan_dirs.is_empty() { options.scan_dirs = scan_dirs; }
+    if !scan_dirs.is_empty() {
+        options.scan_dirs = scan_dirs;
+    }
     plugin_add_registry_disabled(&mut options);
-    let name = plugin_validate_name(&name.ok_or_else(|| format!("plugin {subcommand}: name is required"))?)?;
-    Ok(PluginNamedScanArgs { name, options, json })
+    let name = plugin_validate_name(
+        &name.ok_or_else(|| format!("plugin {subcommand}: name is required"))?,
+    )?;
+    Ok(PluginNamedScanArgs {
+        name,
+        options,
+        json,
+    })
 }
 
 fn plugin_enable(argv: &[String]) -> Result<CliOutput, String> {
@@ -203,21 +264,35 @@ fn plugin_enable(argv: &[String]) -> Result<CliOutput, String> {
     let before = disabled.len();
     disabled.retain(|name| !toggle.names.contains(name));
     plugin_write_disabled(&toggle.root, &disabled)?;
-    Ok(plugin_ok(&format!("enabled {} plugin{} ({} changed)", toggle.names.len(), plugin_plural(toggle.names.len()), before - disabled.len())))
+    Ok(plugin_ok(&format!(
+        "enabled {} plugin{} ({} changed)",
+        toggle.names.len(),
+        plugin_plural(toggle.names.len()),
+        before - disabled.len()
+    )))
 }
 
 fn plugin_disable(argv: &[String]) -> Result<CliOutput, String> {
     let toggle = plugin_parse_toggle(argv, false)?;
     let mut disabled = plugin_read_disabled(&toggle.root);
     for name in &toggle.names {
-        if !disabled.contains(name) { disabled.push(name.clone()); }
+        if !disabled.contains(name) {
+            disabled.push(name.clone());
+        }
     }
     disabled.sort();
     plugin_write_disabled(&toggle.root, &disabled)?;
-    Ok(plugin_ok(&format!("disabled {} plugin{}", toggle.names.len(), plugin_plural(toggle.names.len()))))
+    Ok(plugin_ok(&format!(
+        "disabled {} plugin{}",
+        toggle.names.len(),
+        plugin_plural(toggle.names.len())
+    )))
 }
 
-struct PluginToggleArgs { root: std::path::PathBuf, names: Vec<String> }
+struct PluginToggleArgs {
+    root: std::path::PathBuf,
+    names: Vec<String>,
+}
 
 fn plugin_parse_toggle(argv: &[String], many: bool) -> Result<PluginToggleArgs, String> {
     let mut root = None;
@@ -225,27 +300,47 @@ fn plugin_parse_toggle(argv: &[String], many: bool) -> Result<PluginToggleArgs, 
     let mut index = 0;
     while index < argv.len() {
         match argv[index].as_str() {
-            "--root" | "--scan-dir" => { root = Some(plugin_take_path(argv, index, argv[index].as_str())?); index += 1; }
+            "--root" | "--scan-dir" => {
+                root = Some(plugin_take_path(argv, index, argv[index].as_str())?);
+                index += 1;
+            }
             other if !other.starts_with('-') => names.push(plugin_validate_name(other)?),
             other => return Err(format!("plugin toggle: unknown argument {other}")),
         }
         index += 1;
     }
-    if names.is_empty() { return Err("plugin toggle: name is required".to_owned()); }
-    if !many && names.len() != 1 { return Err("plugin disable: expected exactly one name".to_owned()); }
-    Ok(PluginToggleArgs { root: root.unwrap_or_else(plugin_default_root), names })
+    if names.is_empty() {
+        return Err("plugin toggle: name is required".to_owned());
+    }
+    if !many && names.len() != 1 {
+        return Err("plugin disable: expected exactly one name".to_owned());
+    }
+    Ok(PluginToggleArgs {
+        root: root.unwrap_or_else(plugin_default_root),
+        names,
+    })
 }
 
 fn plugin_remove(argv: &[String]) -> Result<CliOutput, String> {
     let removal = plugin_parse_remove(argv)?;
     let plugin = plugin_find_loaded(&removal.name, &removal.options)?;
     let archive = plugin_archive_dir(&removal.archive_root, &removal.name);
-    std::fs::create_dir_all(&removal.archive_root).map_err(|error| format!("plugin remove: archive root failed: {error}"))?;
-    std::fs::rename(&plugin.dir, &archive).map_err(|error| format!("plugin remove: archive failed: {error}"))?;
-    Ok(plugin_ok(&format!("removed {} -> {}", removal.name, path_string(&archive))))
+    std::fs::create_dir_all(&removal.archive_root)
+        .map_err(|error| format!("plugin remove: archive root failed: {error}"))?;
+    std::fs::rename(&plugin.dir, &archive)
+        .map_err(|error| format!("plugin remove: archive failed: {error}"))?;
+    Ok(plugin_ok(&format!(
+        "removed {} -> {}",
+        removal.name,
+        path_string(&archive)
+    )))
 }
 
-struct PluginRemoveArgs { name: String, options: DiscoverPackagesOptions, archive_root: std::path::PathBuf }
+struct PluginRemoveArgs {
+    name: String,
+    options: DiscoverPackagesOptions,
+    archive_root: std::path::PathBuf,
+}
 
 fn plugin_parse_remove(argv: &[String]) -> Result<PluginRemoveArgs, String> {
     let mut options = plugin_discover_options();
@@ -257,49 +352,108 @@ fn plugin_parse_remove(argv: &[String]) -> Result<PluginRemoveArgs, String> {
     while index < argv.len() {
         match argv[index].as_str() {
             "--yes" | "-y" => yes = true,
-            "--scan-dir" | "--root" => { scan_dirs.push(plugin_take_path(argv, index, argv[index].as_str())?); index += 1; }
-            "--archive-root" => { archive_root = plugin_take_path(argv, index, "--archive-root")?; index += 1; }
+            "--scan-dir" | "--root" => {
+                scan_dirs.push(plugin_take_path(argv, index, argv[index].as_str())?);
+                index += 1;
+            }
+            "--archive-root" => {
+                archive_root = plugin_take_path(argv, index, "--archive-root")?;
+                index += 1;
+            }
             other if !other.starts_with('-') && name.is_none() => name = Some(other.to_owned()),
             other => return Err(format!("plugin remove: unknown argument {other}")),
         }
         index += 1;
     }
-    if !yes { return Err("plugin remove: refusing without --yes".to_owned()); }
-    if !scan_dirs.is_empty() { options.scan_dirs = scan_dirs; }
-    let name = plugin_validate_name(&name.ok_or_else(|| "plugin remove: name is required".to_owned())?)?;
-    Ok(PluginRemoveArgs { name, options, archive_root })
+    if !yes {
+        return Err("plugin remove: refusing without --yes".to_owned());
+    }
+    if !scan_dirs.is_empty() {
+        options.scan_dirs = scan_dirs;
+    }
+    let name =
+        plugin_validate_name(&name.ok_or_else(|| "plugin remove: name is required".to_owned())?)?;
+    Ok(PluginRemoveArgs {
+        name,
+        options,
+        archive_root,
+    })
 }
 
-fn plugin_find_loaded(name: &str, options: &DiscoverPackagesOptions) -> Result<LoadedPlugin, String> {
-    discover_packages(options).plugins.into_iter().find(|plugin| plugin.manifest.name == name).ok_or_else(|| format!("plugin '{name}' not found"))
+fn plugin_find_loaded(
+    name: &str,
+    options: &DiscoverPackagesOptions,
+) -> Result<LoadedPlugin, String> {
+    discover_packages(options)
+        .plugins
+        .into_iter()
+        .find(|plugin| plugin.manifest.name == name)
+        .ok_or_else(|| format!("plugin '{name}' not found"))
 }
 
 fn plugin_render_info(plugin: &LoadedPlugin, json: bool) -> String {
-    if json { return plugin_info_json(plugin); }
+    if json {
+        return plugin_info_json(plugin);
+    }
     let manifest = &plugin.manifest;
-    format!("{}@{}\n  tier: {}\n  kind: {}\n  disabled: {}\n  dir: {}\n  entry: {}\n  wasm: {}\n", manifest.name, manifest.version, manifest.tier.unwrap_or(PluginTier::Core).as_str(), plugin.kind.as_str(), plugin.disabled, path_string(&plugin.dir), plugin.entry_path.as_ref().map_or_else(|| "-".to_owned(), path_string), if plugin.wasm_path.as_os_str().is_empty() { "-".to_owned() } else { path_string(&plugin.wasm_path) })
+    format!(
+        "{}@{}\n  tier: {}\n  kind: {}\n  disabled: {}\n  dir: {}\n  entry: {}\n  wasm: {}\n",
+        manifest.name,
+        manifest.version,
+        maw_plugin_manifest::effective_tier(manifest).as_str(),
+        plugin.kind.as_str(),
+        plugin.disabled,
+        path_string(&plugin.dir),
+        plugin
+            .entry_path
+            .as_ref()
+            .map_or_else(|| "-".to_owned(), path_string),
+        if plugin.wasm_path.as_os_str().is_empty() {
+            "-".to_owned()
+        } else {
+            path_string(&plugin.wasm_path)
+        }
+    )
 }
 
 fn plugin_info_json(plugin: &LoadedPlugin) -> String {
     let manifest = &plugin.manifest;
-    format!("{{\"name\":{},\"version\":{},\"tier\":{},\"kind\":{},\"disabled\":{},\"dir\":{},\"entryPath\":{},\"wasmPath\":{}}}\n", json_string(&manifest.name), json_string(&manifest.version), json_string(manifest.tier.unwrap_or(PluginTier::Core).as_str()), json_string(plugin.kind.as_str()), plugin.disabled, json_string(&path_string(&plugin.dir)), plugin.entry_path.as_ref().map_or_else(|| "null".to_owned(), |path| json_string(&path_string(path))), if plugin.wasm_path.as_os_str().is_empty() { "null".to_owned() } else { json_string(&path_string(&plugin.wasm_path)) })
+    format!("{{\"name\":{},\"version\":{},\"tier\":{},\"kind\":{},\"disabled\":{},\"dir\":{},\"entryPath\":{},\"wasmPath\":{}}}\n", json_string(&manifest.name), json_string(&manifest.version), json_string(maw_plugin_manifest::effective_tier(manifest).as_str()), json_string(plugin.kind.as_str()), plugin.disabled, json_string(&path_string(&plugin.dir)), plugin.entry_path.as_ref().map_or_else(|| "null".to_owned(), |path| json_string(&path_string(path))), if plugin.wasm_path.as_os_str().is_empty() { "null".to_owned() } else { json_string(&path_string(&plugin.wasm_path)) })
 }
 
 #[derive(Debug, Clone)]
-struct PluginBuildArgs { dir: std::path::PathBuf, watch: bool }
+struct PluginBuildArgs {
+    dir: std::path::PathBuf,
+    watch: bool,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PluginProjectKind {
-    RustWasm { name: String, wasm: String },
-    TsAssemblyScript { name: String, entry: String, export: String },
+    RustWasm {
+        name: String,
+        wasm: String,
+    },
+    TsAssemblyScript {
+        name: String,
+        entry: String,
+        export: String,
+    },
     UnsupportedWasm(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct PluginCargoOutput { status: i32, stdout: String, stderr: String }
+struct PluginCargoOutput {
+    status: i32,
+    stdout: String,
+    stderr: String,
+}
 
 trait PluginBuildRunner {
-    fn plugin_run_cargo(&mut self, dir: &std::path::Path, args: &[String]) -> Result<PluginCargoOutput, String>;
+    fn plugin_run_cargo(
+        &mut self,
+        dir: &std::path::Path,
+        args: &[String],
+    ) -> Result<PluginCargoOutput, String>;
     fn plugin_run_assemblyscript(
         &mut self,
         sdk_dir: &std::path::Path,
@@ -316,7 +470,11 @@ trait PluginBuildRunner {
 struct PluginRealBuildRunner;
 
 impl PluginBuildRunner for PluginRealBuildRunner {
-    fn plugin_run_cargo(&mut self, dir: &std::path::Path, args: &[String]) -> Result<PluginCargoOutput, String> {
+    fn plugin_run_cargo(
+        &mut self,
+        dir: &std::path::Path,
+        args: &[String],
+    ) -> Result<PluginCargoOutput, String> {
         let child = std::process::Command::new("cargo")
             .args(args)
             .current_dir(dir)
@@ -348,20 +506,25 @@ impl PluginBuildRunner for PluginRealBuildRunner {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
-            .map_err(|error| format!("plugin build: failed to run AssemblyScript compiler: {error}"))?;
+            .map_err(|error| {
+                format!("plugin build: failed to run AssemblyScript compiler: {error}")
+            })?;
         plugin_wait_for_build_tool("AssemblyScript compiler", child)
     }
 }
 
-fn plugin_wait_for_build_tool(tool: &str, mut child: std::process::Child) -> Result<PluginCargoOutput, String> {
+fn plugin_wait_for_build_tool(
+    tool: &str,
+    mut child: std::process::Child,
+) -> Result<PluginCargoOutput, String> {
     let timeout = plugin_build_timeout();
     let start = std::time::Instant::now();
     loop {
         match child.try_wait() {
             Ok(Some(_)) => {
-                let output = child
-                    .wait_with_output()
-                    .map_err(|error| format!("plugin build: failed to collect {tool} output: {error}"))?;
+                let output = child.wait_with_output().map_err(|error| {
+                    format!("plugin build: failed to collect {tool} output: {error}")
+                })?;
                 return Ok(PluginCargoOutput {
                     status: output.status.code().unwrap_or(1),
                     stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -392,20 +555,31 @@ fn plugin_build_timeout() -> std::time::Duration {
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|millis| (1_000..=900_000).contains(millis))
-        .map_or_else(|| std::time::Duration::from_mins(5), std::time::Duration::from_millis)
+        .map_or_else(
+            || std::time::Duration::from_mins(5),
+            std::time::Duration::from_millis,
+        )
 }
 
 fn plugin_build_or_dev(kind: &str, argv: &[String]) -> Result<CliOutput, String> {
     plugin_build_or_dev_with_runner(kind, argv, &mut PluginRealBuildRunner)
 }
 
-fn plugin_build_or_dev_with_runner(kind: &str, argv: &[String], runner: &mut impl PluginBuildRunner) -> Result<CliOutput, String> {
+fn plugin_build_or_dev_with_runner(
+    kind: &str,
+    argv: &[String],
+    runner: &mut impl PluginBuildRunner,
+) -> Result<CliOutput, String> {
     let parsed = plugin_parse_build_args(kind, argv)?;
     match plugin_detect_project_kind(&parsed.dir)? {
-        PluginProjectKind::RustWasm { name, wasm } => plugin_build_rust_wasm(kind, &parsed, &name, &wasm, runner),
-        PluginProjectKind::TsAssemblyScript { name, entry, export } => {
-            plugin_build_ts_assemblyscript(kind, &parsed, &name, &entry, &export, runner)
+        PluginProjectKind::RustWasm { name, wasm } => {
+            plugin_build_rust_wasm(kind, &parsed, &name, &wasm, runner)
         }
+        PluginProjectKind::TsAssemblyScript {
+            name,
+            entry,
+            export,
+        } => plugin_build_ts_assemblyscript(kind, &parsed, &name, &entry, &export, runner),
         PluginProjectKind::UnsupportedWasm(message) => Err(message),
     }
 }
@@ -419,7 +593,9 @@ fn plugin_parse_build_args(kind: &str, argv: &[String]) -> Result<PluginBuildArg
             "--watch" if kind == "build" => watch = true,
             "--types" => {}
             "--" => return Err(format!("plugin {kind}: -- separator is not allowed")),
-            value if value.starts_with('-') => return Err(format!("plugin {kind}: unknown argument {value}")),
+            value if value.starts_with('-') => {
+                return Err(format!("plugin {kind}: unknown argument {value}"))
+            }
             value if dir.is_none() => dir = Some(plugin_validate_build_dir(value)?),
             other => return Err(format!("plugin {kind}: unexpected argument {other}")),
         }
@@ -427,17 +603,26 @@ fn plugin_parse_build_args(kind: &str, argv: &[String]) -> Result<PluginBuildArg
     }
     let dir = match dir {
         Some(path) => path,
-        None => std::env::current_dir().map_err(|error| format!("plugin {kind}: current dir failed: {error}"))?,
+        None => std::env::current_dir()
+            .map_err(|error| format!("plugin {kind}: current dir failed: {error}"))?,
     };
     Ok(PluginBuildArgs { dir, watch })
 }
 
 fn plugin_detect_project_kind(dir: &std::path::Path) -> Result<PluginProjectKind, String> {
     let manifest_path = dir.join("plugin.json");
-    if !manifest_path.exists() { return Err(format!("no plugin.json in {}", dir.display())); }
-    let text = std::fs::read_to_string(&manifest_path).map_err(|error| format!("invalid plugin.json: {error}"))?;
-    let raw: serde_json::Value = serde_json::from_str(&text).map_err(|error| format!("invalid plugin.json: {error}"))?;
-    let name = raw.get("name").and_then(serde_json::Value::as_str).unwrap_or("plugin").to_owned();
+    if !manifest_path.exists() {
+        return Err(format!("no plugin.json in {}", dir.display()));
+    }
+    let text = std::fs::read_to_string(&manifest_path)
+        .map_err(|error| format!("invalid plugin.json: {error}"))?;
+    let raw: serde_json::Value =
+        serde_json::from_str(&text).map_err(|error| format!("invalid plugin.json: {error}"))?;
+    let name = raw
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("plugin")
+        .to_owned();
     let target = raw.get("target").and_then(serde_json::Value::as_str);
     let source_entry = plugin_source_manifest_entry(&raw)?;
     let has_js_artifact = raw
@@ -451,7 +636,11 @@ fn plugin_detect_project_kind(dir: &std::path::Path) -> Result<PluginProjectKind
             "plugin build: JS artifact manifests need a .ts source entry for the AssemblyScript ship-tier build".to_owned()
         })?;
         let export = plugin_manifest_entry_export(&raw)?;
-        return Ok(PluginProjectKind::TsAssemblyScript { name, entry, export });
+        return Ok(PluginProjectKind::TsAssemblyScript {
+            name,
+            entry,
+            export,
+        });
     }
     let Some(wasm) = wasm else {
         return Ok(PluginProjectKind::UnsupportedWasm(
@@ -459,14 +648,21 @@ fn plugin_detect_project_kind(dir: &std::path::Path) -> Result<PluginProjectKind
         ));
     };
     if !dir.join("Cargo.toml").exists() {
-        return Ok(PluginProjectKind::UnsupportedWasm("plugin build: wasm project is not a Rust cargo plugin yet (#70-out)".to_owned()));
+        return Ok(PluginProjectKind::UnsupportedWasm(
+            "plugin build: wasm project is not a Rust cargo plugin yet (#70-out)".to_owned(),
+        ));
     }
     plugin_validate_wasm_manifest_path(wasm)?;
-    Ok(PluginProjectKind::RustWasm { name, wasm: wasm.to_owned() })
+    Ok(PluginProjectKind::RustWasm {
+        name,
+        wasm: wasm.to_owned(),
+    })
 }
 
 fn plugin_source_manifest_entry(raw: &serde_json::Value) -> Result<Option<String>, String> {
-    let Some(entry) = raw.get("entry") else { return Ok(None); };
+    let Some(entry) = raw.get("entry") else {
+        return Ok(None);
+    };
     if let Some(path) = entry.as_str() {
         if plugin_path_has_wasm_extension(path) {
             return Ok(None);
@@ -504,14 +700,19 @@ fn plugin_build_ts_assemblyscript(
 ) -> Result<CliOutput, String> {
     let entry_path = parsed.dir.join(entry);
     if !entry_path.is_file() {
-        return Err(format!("plugin {kind}: TS entry not found: {}", entry_path.display()));
+        return Err(format!(
+            "plugin {kind}: TS entry not found: {}",
+            entry_path.display()
+        ));
     }
     let sdk_dir = plugin_wasm_sdk_dir()?;
     let build_dir = parsed.dir.join(".maw-build");
-    std::fs::create_dir_all(&build_dir).map_err(|error| format!("plugin {kind}: build dir create failed: {error}"))?;
+    std::fs::create_dir_all(&build_dir)
+        .map_err(|error| format!("plugin {kind}: build dir create failed: {error}"))?;
     let wasm_path = build_dir.join("plugin.wasm");
     let _ = std::fs::remove_file(&wasm_path);
-    let output = runner.plugin_run_assemblyscript(&sdk_dir, &parsed.dir, &entry_path, &wasm_path)?;
+    let output =
+        runner.plugin_run_assemblyscript(&sdk_dir, &parsed.dir, &entry_path, &wasm_path)?;
     if output.status != 0 {
         return Err(format!(
             "plugin {kind}: AssemblyScript build failed{}",
@@ -519,35 +720,68 @@ fn plugin_build_ts_assemblyscript(
         ));
     }
     if !wasm_path.is_file() {
-        return Err(format!("plugin {kind}: AssemblyScript output missing: {}", wasm_path.display()));
+        return Err(format!(
+            "plugin {kind}: AssemblyScript output missing: {}",
+            wasm_path.display()
+        ));
     }
     let artifact = plugin_emit_ts_wasm_ship_artifact(&parsed.dir, &wasm_path, export)?;
-    if parsed.watch { runner.plugin_after_build_watch(&parsed.dir)?; }
-    let digest = artifact.sha256.strip_prefix("sha256:").unwrap_or(&artifact.sha256);
+    if parsed.watch {
+        runner.plugin_after_build_watch(&parsed.dir)?;
+    }
+    let digest = artifact
+        .sha256
+        .strip_prefix("sha256:")
+        .unwrap_or(&artifact.sha256);
     let mut stdout = format!(
         "ship tier ready: plugin.wasm (sha256 {digest}) — remove \"runtime\": \"bun-dev\" or leave it as dev fallback\n"
     );
-    if parsed.watch { stdout.push_str("  watch: bounded one-shot\n"); }
-    Ok(CliOutput { code: 0, stdout, stderr: String::new() })
+    if parsed.watch {
+        stdout.push_str("  watch: bounded one-shot\n");
+    }
+    Ok(CliOutput {
+        code: 0,
+        stdout,
+        stderr: String::new(),
+    })
 }
 
-fn plugin_build_rust_wasm(kind: &str, parsed: &PluginBuildArgs, name: &str, wasm: &str, runner: &mut impl PluginBuildRunner) -> Result<CliOutput, String> {
+fn plugin_build_rust_wasm(
+    kind: &str,
+    parsed: &PluginBuildArgs,
+    name: &str,
+    wasm: &str,
+    runner: &mut impl PluginBuildRunner,
+) -> Result<CliOutput, String> {
     let cargo_args = plugin_cargo_build_args();
     let output = runner.plugin_run_cargo(&parsed.dir, &cargo_args)?;
     if output.status != 0 {
-        return Err(format!("plugin {kind}: cargo build failed{}", plugin_cargo_failure_detail(&output)));
+        return Err(format!(
+            "plugin {kind}: cargo build failed{}",
+            plugin_cargo_failure_detail(&output)
+        ));
     }
     let wasm_path = parsed.dir.join(wasm);
-    if !wasm_path.is_file() { return Err(format!("plugin {kind}: wasm output missing: {wasm}")); }
+    if !wasm_path.is_file() {
+        return Err(format!("plugin {kind}: wasm output missing: {wasm}"));
+    }
     let artifact = plugin_emit_wasm_dist(&parsed.dir, &wasm_path)?;
-    if parsed.watch { runner.plugin_after_build_watch(&parsed.dir)?; }
+    if parsed.watch {
+        runner.plugin_after_build_watch(&parsed.dir)?;
+    }
     let mut stdout = format!(
         "built Rust WASM plugin {name}\n  target: wasm32-unknown-unknown\n  wasm: {wasm}\n  dist: {}\n  sha256: {}\n",
         "dist/plugin.wasm",
         artifact.sha256
     );
-    if parsed.watch { stdout.push_str("  watch: bounded one-shot\n"); }
-    Ok(CliOutput { code: 0, stdout, stderr: String::new() })
+    if parsed.watch {
+        stdout.push_str("  watch: bounded one-shot\n");
+    }
+    Ok(CliOutput {
+        code: 0,
+        stdout,
+        stderr: String::new(),
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -555,16 +789,24 @@ struct PluginWasmDistArtifact {
     sha256: String,
 }
 
-fn plugin_emit_ts_wasm_ship_artifact(dir: &std::path::Path, wasm_path: &std::path::Path, export: &str) -> Result<PluginWasmDistArtifact, String> {
+fn plugin_emit_ts_wasm_ship_artifact(
+    dir: &std::path::Path,
+    wasm_path: &std::path::Path,
+    export: &str,
+) -> Result<PluginWasmDistArtifact, String> {
     let manifest_path = dir.join("plugin.json");
-    let text = std::fs::read_to_string(&manifest_path).map_err(|error| format!("invalid plugin.json: {error}"))?;
-    let mut raw: serde_json::Value = serde_json::from_str(&text).map_err(|error| format!("invalid plugin.json: {error}"))?;
+    let text = std::fs::read_to_string(&manifest_path)
+        .map_err(|error| format!("invalid plugin.json: {error}"))?;
+    let mut raw: serde_json::Value =
+        serde_json::from_str(&text).map_err(|error| format!("invalid plugin.json: {error}"))?;
     let object = raw
         .as_object_mut()
         .ok_or_else(|| "plugin.json: manifest root must be an object".to_owned())?;
     let bundle_path = dir.join("plugin.wasm");
-    std::fs::copy(wasm_path, &bundle_path).map_err(|error| format!("plugin build: copy wasm failed: {error}"))?;
-    let sha256 = hash_file(&bundle_path).map_err(|error| format!("plugin build: wasm hash failed: {error}"))?;
+    std::fs::copy(wasm_path, &bundle_path)
+        .map_err(|error| format!("plugin build: copy wasm failed: {error}"))?;
+    let sha256 = hash_file(&bundle_path)
+        .map_err(|error| format!("plugin build: wasm hash failed: {error}"))?;
     object.insert("target".to_owned(), serde_json::json!("wasm"));
     object.insert("wasm".to_owned(), serde_json::json!("./plugin.wasm"));
     object.insert(
@@ -585,10 +827,15 @@ fn plugin_emit_ts_wasm_ship_artifact(dir: &std::path::Path, wasm_path: &std::pat
     Ok(PluginWasmDistArtifact { sha256 })
 }
 
-fn plugin_emit_wasm_dist(dir: &std::path::Path, wasm_path: &std::path::Path) -> Result<PluginWasmDistArtifact, String> {
+fn plugin_emit_wasm_dist(
+    dir: &std::path::Path,
+    wasm_path: &std::path::Path,
+) -> Result<PluginWasmDistArtifact, String> {
     let manifest_path = dir.join("plugin.json");
-    let text = std::fs::read_to_string(&manifest_path).map_err(|error| format!("invalid plugin.json: {error}"))?;
-    let mut raw: serde_json::Value = serde_json::from_str(&text).map_err(|error| format!("invalid plugin.json: {error}"))?;
+    let text = std::fs::read_to_string(&manifest_path)
+        .map_err(|error| format!("invalid plugin.json: {error}"))?;
+    let mut raw: serde_json::Value =
+        serde_json::from_str(&text).map_err(|error| format!("invalid plugin.json: {error}"))?;
     let export = raw
         .get("entry")
         .and_then(|entry| entry.get("export"))
@@ -599,10 +846,13 @@ fn plugin_emit_wasm_dist(dir: &std::path::Path, wasm_path: &std::path::Path) -> 
         .as_object_mut()
         .ok_or_else(|| "plugin.json: manifest root must be an object".to_owned())?;
     let dist_dir = dir.join("dist");
-    std::fs::create_dir_all(&dist_dir).map_err(|error| format!("plugin build: dist create failed: {error}"))?;
+    std::fs::create_dir_all(&dist_dir)
+        .map_err(|error| format!("plugin build: dist create failed: {error}"))?;
     let bundle_path = dist_dir.join("plugin.wasm");
-    std::fs::copy(wasm_path, &bundle_path).map_err(|error| format!("plugin build: copy wasm failed: {error}"))?;
-    let sha256 = hash_file(&bundle_path).map_err(|error| format!("plugin build: wasm hash failed: {error}"))?;
+    std::fs::copy(wasm_path, &bundle_path)
+        .map_err(|error| format!("plugin build: copy wasm failed: {error}"))?;
+    let sha256 = hash_file(&bundle_path)
+        .map_err(|error| format!("plugin build: wasm hash failed: {error}"))?;
     object.insert("target".to_owned(), serde_json::json!("wasm"));
     object.insert("wasm".to_owned(), serde_json::json!("plugin.wasm"));
     object.insert(
@@ -747,12 +997,24 @@ fn plugin_symlink_dir(target: &std::path::Path, link: &std::path::Path) -> std::
 }
 
 fn plugin_cargo_failure_detail(output: &PluginCargoOutput) -> String {
-    let detail = if output.stderr.trim().is_empty() { output.stdout.trim() } else { output.stderr.trim() };
-    if detail.is_empty() { String::new() } else { format!(": {detail}") }
+    let detail = if output.stderr.trim().is_empty() {
+        output.stdout.trim()
+    } else {
+        output.stderr.trim()
+    };
+    if detail.is_empty() {
+        String::new()
+    } else {
+        format!(": {detail}")
+    }
 }
 
 fn plugin_assemblyscript_failure_detail(output: &PluginCargoOutput) -> String {
-    let detail = if output.stderr.trim().is_empty() { output.stdout.trim() } else { output.stderr.trim() };
+    let detail = if output.stderr.trim().is_empty() {
+        output.stdout.trim()
+    } else {
+        output.stderr.trim()
+    };
     if detail.is_empty() {
         format!(": {PLUGIN_AS_TS_BOUNDARY}")
     } else {
@@ -761,14 +1023,22 @@ fn plugin_assemblyscript_failure_detail(output: &PluginCargoOutput) -> String {
 }
 
 fn plugin_validate_build_dir(value: &str) -> Result<std::path::PathBuf, String> {
-    if value.trim() != value || value.is_empty() || value.starts_with('-') || value.chars().any(char::is_control) {
+    if value.trim() != value
+        || value.is_empty()
+        || value.starts_with('-')
+        || value.chars().any(char::is_control)
+    {
         return Err("plugin build: dir must be non-empty, unpadded, not start with '-', and contain no control characters".to_owned());
     }
     let path = std::path::PathBuf::from(value);
-    if path.components().any(|component| matches!(component, std::path::Component::ParentDir)) {
+    if path
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
         return Err("plugin build: dir must not contain .. segments".to_owned());
     }
-    path.canonicalize().map_err(|error| format!("plugin build: invalid dir: {error}"))
+    path.canonicalize()
+        .map_err(|error| format!("plugin build: invalid dir: {error}"))
 }
 
 fn plugin_path_has_wasm_extension(value: &str) -> bool {
@@ -784,12 +1054,22 @@ fn plugin_path_has_ts_extension(value: &str) -> bool {
 }
 
 fn plugin_validate_ts_entry_manifest_path(value: &str) -> Result<(), String> {
-    if value.trim() != value || value.is_empty() || value.starts_with('-') || value.chars().any(char::is_control) {
+    if value.trim() != value
+        || value.is_empty()
+        || value.starts_with('-')
+        || value.chars().any(char::is_control)
+    {
         return Err("plugin build: TS entry must be non-empty, unpadded, not start with '-', and contain no control characters".to_owned());
     }
     let path = std::path::Path::new(value);
-    if path.is_absolute() || path.components().any(|component| matches!(component, std::path::Component::ParentDir)) {
-        return Err("plugin build: TS entry must be relative and stay inside plugin dir".to_owned());
+    if path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(
+            "plugin build: TS entry must be relative and stay inside plugin dir".to_owned(),
+        );
     }
     if plugin_path_has_ts_extension(value) {
         Ok(())
@@ -801,16 +1081,31 @@ fn plugin_validate_ts_entry_manifest_path(value: &str) -> Result<(), String> {
 }
 
 fn plugin_validate_wasm_manifest_path(value: &str) -> Result<(), String> {
-    if value.trim() != value || value.is_empty() || value.starts_with('-') || value.chars().any(char::is_control) {
+    if value.trim() != value
+        || value.is_empty()
+        || value.starts_with('-')
+        || value.chars().any(char::is_control)
+    {
         return Err("plugin build: wasm path must be non-empty, unpadded, not start with '-', and contain no control characters".to_owned());
     }
     let path = std::path::Path::new(value);
-    if path.is_absolute() || path.components().any(|component| matches!(component, std::path::Component::ParentDir)) {
-        return Err("plugin build: wasm path must be relative and stay inside plugin dir".to_owned());
+    if path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(
+            "plugin build: wasm path must be relative and stay inside plugin dir".to_owned(),
+        );
     }
     let normalized = value.strip_prefix("./").unwrap_or(value);
-    if !normalized.starts_with("target/wasm32-unknown-unknown/release/") || !plugin_path_has_wasm_extension(normalized) {
-        return Err("plugin build: Rust wasm path must target wasm32-unknown-unknown release output".to_owned());
+    if !normalized.starts_with("target/wasm32-unknown-unknown/release/")
+        || !plugin_path_has_wasm_extension(normalized)
+    {
+        return Err(
+            "plugin build: Rust wasm path must target wasm32-unknown-unknown release output"
+                .to_owned(),
+        );
     }
     Ok(())
 }
@@ -826,47 +1121,96 @@ fn plugin_discover_options() -> DiscoverPackagesOptions {
 }
 
 fn plugin_add_registry_disabled(options: &mut DiscoverPackagesOptions) {
-    if let Some(root) = options.scan_dirs.first() { options.disabled_plugins.extend(plugin_read_disabled(root)); }
+    if let Some(root) = options.scan_dirs.first() {
+        options.disabled_plugins.extend(plugin_read_disabled(root));
+    }
 }
 
 fn plugin_read_disabled(root: &std::path::Path) -> Vec<String> {
     let path = plugin_disabled_path(root);
-    let Ok(text) = std::fs::read_to_string(path) else { return Vec::new(); };
-    serde_json::from_str::<Vec<String>>(&text).unwrap_or_default().into_iter().filter(|name| plugin_validate_name(name).is_ok()).collect()
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    serde_json::from_str::<Vec<String>>(&text)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|name| plugin_validate_name(name).is_ok())
+        .collect()
 }
 
 fn plugin_write_disabled(root: &std::path::Path, names: &[String]) -> Result<(), String> {
-    std::fs::create_dir_all(root).map_err(|error| format!("plugin toggle: root failed: {error}"))?;
-    let text = serde_json::to_string_pretty(names).map_err(|error| format!("plugin toggle: serialize failed: {error}"))? + "\n";
-    std::fs::write(plugin_disabled_path(root), text).map_err(|error| format!("plugin toggle: write failed: {error}"))
+    std::fs::create_dir_all(root)
+        .map_err(|error| format!("plugin toggle: root failed: {error}"))?;
+    let text = serde_json::to_string_pretty(names)
+        .map_err(|error| format!("plugin toggle: serialize failed: {error}"))?
+        + "\n";
+    std::fs::write(plugin_disabled_path(root), text)
+        .map_err(|error| format!("plugin toggle: write failed: {error}"))
 }
 
-fn plugin_disabled_path(root: &std::path::Path) -> std::path::PathBuf { root.join(".disabled.json") }
+fn plugin_disabled_path(root: &std::path::Path) -> std::path::PathBuf {
+    root.join(".disabled.json")
+}
 
 fn plugin_archive_dir(root: &std::path::Path, name: &str) -> std::path::PathBuf {
     root.join(format!("maw-plugin-{name}-{}", now_iso_utc()))
 }
 
-fn plugin_default_root() -> std::path::PathBuf { maw_data_path(&real_xdg_env(), &["plugins"]) }
+fn plugin_default_root() -> std::path::PathBuf {
+    maw_data_path(&real_xdg_env(), &["plugins"])
+}
 
 fn plugin_validate_name(value: &str) -> Result<String, String> {
-    if value.is_empty() || value.starts_with('-') || value == "--" || value.chars().any(char::is_whitespace) { return Err(format!("plugin: invalid plugin name {value:?}")); }
+    if value.is_empty()
+        || value.starts_with('-')
+        || value == "--"
+        || value.chars().any(char::is_whitespace)
+    {
+        return Err(format!("plugin: invalid plugin name {value:?}"));
+    }
     Ok(value.to_owned())
 }
 
 fn plugin_take_value(argv: &[String], index: usize, flag: &str) -> Result<String, String> {
-    argv.get(index + 1).filter(|value| !value.starts_with('-')).cloned().ok_or_else(|| format!("plugin: missing {flag} value"))
+    argv.get(index + 1)
+        .filter(|value| !value.starts_with('-'))
+        .cloned()
+        .ok_or_else(|| format!("plugin: missing {flag} value"))
 }
 
-fn plugin_take_path(argv: &[String], index: usize, flag: &str) -> Result<std::path::PathBuf, String> {
-    Ok(std::path::PathBuf::from(plugin_take_value(argv, index, flag)?))
+fn plugin_take_path(
+    argv: &[String],
+    index: usize,
+    flag: &str,
+) -> Result<std::path::PathBuf, String> {
+    Ok(std::path::PathBuf::from(plugin_take_value(
+        argv, index, flag,
+    )?))
 }
 
-fn plugin_plural(count: usize) -> &'static str { if count == 1 { "" } else { "s" } }
+fn plugin_plural(count: usize) -> &'static str {
+    if count == 1 {
+        ""
+    } else {
+        "s"
+    }
+}
 
-fn plugin_ok(message: &str) -> CliOutput { CliOutput { code: 0, stdout: format!("{message}\n"), stderr: String::new() } }
+fn plugin_ok(message: &str) -> CliOutput {
+    CliOutput {
+        code: 0,
+        stdout: format!("{message}\n"),
+        stderr: String::new(),
+    }
+}
 
-fn plugin_error(code: i32, message: &str) -> CliOutput { CliOutput { code, stdout: String::new(), stderr: format!("{message}\n{PLUGIN_USAGE}\n") } }
+fn plugin_error(code: i32, message: &str) -> CliOutput {
+    CliOutput {
+        code,
+        stdout: String::new(),
+        stderr: format!("{message}\n{PLUGIN_USAGE}\n"),
+    }
+}
 
 #[cfg(test)]
 mod plugin_native_tests {
@@ -877,10 +1221,15 @@ mod plugin_native_tests {
     };
     use std::path::{Path, PathBuf};
 
-    fn plugin_args(values: &[&str]) -> Vec<String> { values.iter().map(|value| (*value).to_owned()).collect() }
+    fn plugin_args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_owned()).collect()
+    }
 
     fn plugin_temp_root(label: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!("maw-rs-plugin-native-{label}-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "maw-rs-plugin-native-{label}-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("temp root");
         root
@@ -896,7 +1245,11 @@ mod plugin_native_tests {
     fn plugin_write_rust(root: &Path, name: &str) -> PathBuf {
         let dir = root.join(name);
         std::fs::create_dir_all(dir.join("target/wasm32-unknown-unknown/release")).expect("target");
-        std::fs::write(dir.join("Cargo.toml"), "[package]\nname=\"route_probe\"\nversion=\"0.1.0\"\nedition=\"2021\"\n").expect("cargo");
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname=\"route_probe\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
+        )
+        .expect("cargo");
         std::fs::write(
             dir.join("plugin.json"),
             format!(r#"{{"name":"{name}","version":"0.1.0","sdk":"*","wasm":"./target/wasm32-unknown-unknown/release/route_probe.wasm"}}"#),
@@ -913,10 +1266,22 @@ mod plugin_native_tests {
     }
 
     impl PluginBuildRunner for FakeBuildRunner {
-        fn plugin_run_cargo(&mut self, dir: &Path, args: &[String]) -> Result<PluginCargoOutput, String> {
+        fn plugin_run_cargo(
+            &mut self,
+            dir: &Path,
+            args: &[String],
+        ) -> Result<PluginCargoOutput, String> {
             self.cargo_calls.push(args.to_vec());
-            std::fs::write(dir.join("target/wasm32-unknown-unknown/release/route_probe.wasm"), b"\0asm").expect("fake wasm");
-            Ok(PluginCargoOutput { status: 0, stdout: String::new(), stderr: String::new() })
+            std::fs::write(
+                dir.join("target/wasm32-unknown-unknown/release/route_probe.wasm"),
+                b"\0asm",
+            )
+            .expect("fake wasm");
+            Ok(PluginCargoOutput {
+                status: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+            })
         }
 
         fn plugin_run_assemblyscript(
@@ -926,13 +1291,21 @@ mod plugin_native_tests {
             entry_path: &Path,
             output_path: &Path,
         ) -> Result<PluginCargoOutput, String> {
-            self.assemblyscript_calls
-                .push(plugin_assemblyscript_args(sdk_dir, dir, entry_path, output_path));
+            self.assemblyscript_calls.push(plugin_assemblyscript_args(
+                sdk_dir,
+                dir,
+                entry_path,
+                output_path,
+            ));
             if let Some(error) = &self.assemblyscript_error {
                 return Err(error.clone());
             }
             std::fs::write(output_path, b"\0asm").expect("fake wasm");
-            Ok(PluginCargoOutput { status: 0, stdout: String::new(), stderr: String::new() })
+            Ok(PluginCargoOutput {
+                status: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+            })
         }
 
         fn plugin_after_build_watch(&mut self, _dir: &Path) -> Result<(), String> {
@@ -951,10 +1324,19 @@ mod plugin_native_tests {
     fn plugin_management_ls_and_info_are_full_native() {
         let root = plugin_temp_root("info");
         plugin_write(&root, "alpha");
-        let ls = plugin_run_command(&plugin_args(&["ls", "--scan-dir", &root.display().to_string()]));
+        let ls = plugin_run_command(&plugin_args(&[
+            "ls",
+            "--scan-dir",
+            &root.display().to_string(),
+        ]));
         assert_eq!(ls.code, 0, "{}", ls.stderr);
         assert!(ls.stdout.contains("1 plugin (1 active, 0 disabled)"));
-        let info = plugin_run_command(&plugin_args(&["info", "alpha", "--scan-dir", &root.display().to_string()]));
+        let info = plugin_run_command(&plugin_args(&[
+            "info",
+            "alpha",
+            "--scan-dir",
+            &root.display().to_string(),
+        ]));
         assert_eq!(info.code, 0, "{}", info.stderr);
         assert!(info.stdout.contains("alpha@1.0.0"));
         assert!(info.stdout.contains("kind: ts"));
@@ -967,8 +1349,16 @@ mod plugin_native_tests {
         let dir = root.join("alpha");
         let canonical_dir = dir.canonicalize().expect("canonical plugin dir");
         let mut runner = FakeBuildRunner::default();
-        let out = plugin_build_or_dev_with_runner("build", &plugin_args(&[&dir.display().to_string()]), &mut runner).expect("build");
-        assert!(runner.cargo_calls.is_empty(), "TS build must not call cargo");
+        let out = plugin_build_or_dev_with_runner(
+            "build",
+            &plugin_args(&[&dir.display().to_string()]),
+            &mut runner,
+        )
+        .expect("build");
+        assert!(
+            runner.cargo_calls.is_empty(),
+            "TS build must not call cargo"
+        );
         let sdk_dir = plugin_wasm_sdk_dir().expect("pinned wasm-sdk dir");
         assert_eq!(
             runner.assemblyscript_calls,
@@ -980,15 +1370,24 @@ mod plugin_native_tests {
             )]
         );
         let args = &runner.assemblyscript_calls[0];
-        let path_index = args.iter().position(|arg| arg == "--path").expect("asc --path present");
+        let path_index = args
+            .iter()
+            .position(|arg| arg == "--path")
+            .expect("asc --path present");
         assert_eq!(
             args[path_index + 1],
             path_string(sdk_dir.join("node_modules")),
             "asc must resolve bare imports against the pinned SDK node_modules"
         );
-        assert!(out.stdout.starts_with("ship tier ready: plugin.wasm (sha256 "), "{}", out.stdout);
         assert!(
-            out.stdout.contains("remove \"runtime\": \"bun-dev\" or leave it as dev fallback"),
+            out.stdout
+                .starts_with("ship tier ready: plugin.wasm (sha256 "),
+            "{}",
+            out.stdout
+        );
+        assert!(
+            out.stdout
+                .contains("remove \"runtime\": \"bun-dev\" or leave it as dev fallback"),
             "{}",
             out.stdout
         );
@@ -1013,11 +1412,18 @@ mod plugin_native_tests {
             ),
             ..FakeBuildRunner::default()
         };
-        let err = plugin_build_or_dev_with_runner("build", &plugin_args(&[&dir.display().to_string()]), &mut runner)
-            .expect_err("missing toolchain");
+        let err = plugin_build_or_dev_with_runner(
+            "build",
+            &plugin_args(&[&dir.display().to_string()]),
+            &mut runner,
+        )
+        .expect_err("missing toolchain");
         assert!(err.contains("AssemblyScript compiler not found"), "{err}");
         assert!(err.contains("npm ci --prefix"), "{err}");
-        assert!(runner.cargo_calls.is_empty(), "missing TS toolchain must not call cargo");
+        assert!(
+            runner.cargo_calls.is_empty(),
+            "missing TS toolchain must not call cargo"
+        );
     }
 
     #[test]
@@ -1049,7 +1455,8 @@ mod plugin_native_tests {
         let manifest = std::fs::read_to_string(dir.join("plugin.json")).expect("plugin.json");
         assert!(manifest.contains(r#""name": "route-probe""#), "{manifest}");
         assert!(
-            manifest.contains(r#""wasm": "./target/wasm32-unknown-unknown/release/route_probe.wasm""#),
+            manifest
+                .contains(r#""wasm": "./target/wasm32-unknown-unknown/release/route_probe.wasm""#),
             "{manifest}"
         );
         assert!(!manifest.contains("DELEGATED-MAW"));
@@ -1079,13 +1486,19 @@ mod plugin_native_tests {
         let root = plugin_temp_root("rust-build");
         let dir = plugin_write_rust(&root, "route-probe");
         let mut runner = FakeBuildRunner::default();
-        let out = plugin_build_or_dev_with_runner("build", &plugin_args(&[&dir.display().to_string()]), &mut runner).expect("build");
+        let out = plugin_build_or_dev_with_runner(
+            "build",
+            &plugin_args(&[&dir.display().to_string()]),
+            &mut runner,
+        )
+        .expect("build");
         assert_eq!(runner.cargo_calls, vec![plugin_cargo_build_args()]);
         assert_eq!(
             out.stdout,
             include_str!("../../tests/fixtures/native-plugin-build/plugin-build-rust.stdout")
         );
-        let manifest = std::fs::read_to_string(dir.join("dist/plugin.json")).expect("dist manifest");
+        let manifest =
+            std::fs::read_to_string(dir.join("dist/plugin.json")).expect("dist manifest");
         assert!(manifest.contains("\"artifact\""), "{manifest}");
         assert!(manifest.contains("sha256:"), "{manifest}");
         assert!(dir.join("dist/plugin.wasm").is_file());
@@ -1097,7 +1510,12 @@ mod plugin_native_tests {
         let root = plugin_temp_root("rust-dev");
         let dir = plugin_write_rust(&root, "route-probe");
         let mut runner = FakeBuildRunner::default();
-        let out = plugin_build_or_dev_with_runner("dev", &plugin_args(&[&dir.display().to_string()]), &mut runner).expect("dev");
+        let out = plugin_build_or_dev_with_runner(
+            "dev",
+            &plugin_args(&[&dir.display().to_string()]),
+            &mut runner,
+        )
+        .expect("dev");
         assert_eq!(runner.cargo_calls, vec![plugin_cargo_build_args()]);
         assert!(runner.watched);
         assert!(out.stdout.contains("watch: bounded one-shot"));
@@ -1107,23 +1525,48 @@ mod plugin_native_tests {
     fn plugin_build_rejects_bad_paths_before_runner() {
         let root = plugin_temp_root("rust-guard");
         let dir = plugin_write_rust(&root, "route-probe");
-        std::fs::write(dir.join("plugin.json"), r#"{"name":"bad","version":"0.1.0","wasm":"../bad.wasm"}"#).expect("bad manifest");
+        std::fs::write(
+            dir.join("plugin.json"),
+            r#"{"name":"bad","version":"0.1.0","wasm":"../bad.wasm"}"#,
+        )
+        .expect("bad manifest");
         let mut runner = FakeBuildRunner::default();
-        let err = plugin_build_or_dev_with_runner("build", &plugin_args(&[&dir.display().to_string()]), &mut runner).expect_err("guard");
+        let err = plugin_build_or_dev_with_runner(
+            "build",
+            &plugin_args(&[&dir.display().to_string()]),
+            &mut runner,
+        )
+        .expect_err("guard");
         assert!(err.contains("wasm path must be relative"));
-        assert!(runner.cargo_calls.is_empty(), "guard must reject before cargo runner");
+        assert!(
+            runner.cargo_calls.is_empty(),
+            "guard must reject before cargo runner"
+        );
     }
 
     #[test]
     fn plugin_enable_disable_write_temp_registry() {
         let root = plugin_temp_root("toggle");
-        let disable = plugin_run_command(&plugin_args(&["disable", "alpha", "--root", &root.display().to_string()]));
+        let disable = plugin_run_command(&plugin_args(&[
+            "disable",
+            "alpha",
+            "--root",
+            &root.display().to_string(),
+        ]));
         assert_eq!(disable.code, 0, "{}", disable.stderr);
         let text = std::fs::read_to_string(root.join(".disabled.json")).expect("disabled registry");
         assert!(text.contains("alpha"));
-        let enable = plugin_run_command(&plugin_args(&["enable", "alpha", "--root", &root.display().to_string()]));
+        let enable = plugin_run_command(&plugin_args(&[
+            "enable",
+            "alpha",
+            "--root",
+            &root.display().to_string(),
+        ]));
         assert_eq!(enable.code, 0, "{}", enable.stderr);
-        assert_eq!(std::fs::read_to_string(root.join(".disabled.json")).expect("registry"), "[]\n");
+        assert_eq!(
+            std::fs::read_to_string(root.join(".disabled.json")).expect("registry"),
+            "[]\n"
+        );
     }
 
     #[test]
@@ -1131,13 +1574,29 @@ mod plugin_native_tests {
         let root = plugin_temp_root("remove");
         let archive = root.join("archive");
         plugin_write(&root, "alpha");
-        let refused = plugin_run_command(&plugin_args(&["remove", "alpha", "--scan-dir", &root.display().to_string()]));
+        let refused = plugin_run_command(&plugin_args(&[
+            "remove",
+            "alpha",
+            "--scan-dir",
+            &root.display().to_string(),
+        ]));
         assert_eq!(refused.code, 2);
         assert!(refused.stderr.contains("refusing without --yes"));
-        let removed = plugin_run_command(&plugin_args(&["remove", "alpha", "--yes", "--scan-dir", &root.display().to_string(), "--archive-root", &archive.display().to_string()]));
+        let removed = plugin_run_command(&plugin_args(&[
+            "remove",
+            "alpha",
+            "--yes",
+            "--scan-dir",
+            &root.display().to_string(),
+            "--archive-root",
+            &archive.display().to_string(),
+        ]));
         assert_eq!(removed.code, 0, "{}", removed.stderr);
         assert!(!root.join("alpha").exists());
-        assert!(std::fs::read_dir(&archive).expect("archive root").next().is_some());
+        assert!(std::fs::read_dir(&archive)
+            .expect("archive root")
+            .next()
+            .is_some());
     }
 
     #[test]

@@ -24,6 +24,7 @@ const SERVEENGINE_CHILD_TIMEOUT_ENV: &str = "MAW_RS_SERVE_CHILD_TIMEOUT_SECS";
 const SERVEENGINE_FAKE_TMUX_LOG_ENV: &str = "MAW_RS_SERVECORE_FAKE_TMUX_LOG";
 const SERVEENGINE_FAKE_CAPTURE_ENV: &str = "MAW_RS_SERVECORE_FAKE_CAPTURE";
 const SERVEENGINE_PTY_PROGRAM_ENV: &str = "MAW_RS_SERVECORE_PTY_PROGRAM";
+const SERVEENGINE_PTY_TERM: &str = "screen-256color";
 
 #[derive(Debug)]
 pub struct ServecoreNativeEngine;
@@ -128,15 +129,38 @@ pub(crate) fn serveengine_run_with_timeout(
 }
 
 pub(crate) fn serveengine_tmux_capture(target: &str) -> Result<String, String> {
+    serveengine_tmux_capture_lines(target, None)
+}
+
+pub(crate) fn serveengine_tmux_capture_lines(
+    target: &str,
+    lines: Option<u32>,
+) -> Result<String, String> {
     let target = serveengine_ws_validate_target(target)?;
     if let Ok(capture) = std::env::var(SERVEENGINE_FAKE_CAPTURE_ENV) {
-        return Ok(capture);
+        return Ok(serveengine_tail_capture_lines(capture, lines));
     }
     let mut tmux = maw_tmux::TmuxClient::local();
-    let sessions = tmux.list_all();
+    let sessions = tmux
+        .list_all()
+        .map_err(|error| format!("tmux unreachable: {error}"))?;
     let resolved = serveengine_resolve_capture_target(&target, &sessions);
-    tmux.capture(&resolved, None)
+    let capture_lines = lines.filter(|line_count| *line_count > 50);
+    tmux.capture(&resolved, capture_lines)
+        .map(|capture| serveengine_tail_capture_lines(capture, lines))
         .map_err(|error| format!("serve-ws: capture failed: {}", error.message))
+}
+
+fn serveengine_tail_capture_lines(capture: String, lines: Option<u32>) -> String {
+    let Some(lines) = lines.filter(|line_count| *line_count <= 50) else {
+        return capture;
+    };
+    let lines = usize::try_from(lines).unwrap_or(usize::MAX);
+    let chunks = capture.split_inclusive('\n').collect::<Vec<_>>();
+    if chunks.len() <= lines {
+        return capture;
+    }
+    chunks[chunks.len() - lines..].concat()
 }
 
 fn serveengine_resolve_capture_target(target: &str, sessions: &[TmuxSession]) -> String {
@@ -463,7 +487,7 @@ fn serveengine_pty_attach(
         .map_err(|error| format!("pty_open_failed: {error}"))?;
     let mut child = pair
         .slave
-        .spawn_command(CommandBuilder::from_argv(serveengine_pty_argv(&target)))
+        .spawn_command(serveengine_pty_command(&target))
         .map_err(|error| format!("pty_spawn_failed: {error}"))?;
     drop(pair.slave);
     let killer = child.clone_killer();
@@ -530,14 +554,21 @@ fn serveengine_pty_resolve_target(
     if target.contains(':') {
         return Ok(target);
     }
-    for pane in state.servecore_agents_panes() {
+    // #880: PROPAGATE. Resolving a bare name into `session:window.pane` is
+    // entirely a question about live tmux state. With the reads swallowed,
+    // an unreachable tmux made both lookups miss, resolution fell through to
+    // the raw string, and the client got `{"type":"attached"}` for a target
+    // nobody had verified -- a successful-looking attach to a pane that may
+    // not exist. This socket already carries a typed error frame
+    // (`serveengine_ws_error`), so the failure travels down it for free.
+    for pane in state.servecore_agents_panes()? {
         if pane.id == target || pane.title == target {
             return serveengine_ws_validate_target(&pane.target);
         }
     }
     Ok(serveengine_resolve_capture_target(
         &target,
-        &state.servecore_tmux_sessions(),
+        &state.servecore_tmux_sessions()?,
     ))
 }
 
@@ -551,6 +582,14 @@ fn serveengine_pty_argv(target: &str) -> Vec<OsString> {
         .collect()
 }
 
+fn serveengine_pty_command(target: &str) -> CommandBuilder {
+    let mut command = CommandBuilder::from_argv(serveengine_pty_argv(target));
+    // tmux uses screen-256color inside sessions, and it is widely available
+    // across macOS and Linux terminfo databases used by cross-node portals.
+    command.env("TERM", SERVEENGINE_PTY_TERM);
+    command
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -560,16 +599,30 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
+    /// #757: holds the crate-wide env lock for its whole lifetime.
+    ///
+    /// Previously this mutated process-global env with no serialization,
+    /// because `core_impl`'s lock is a private fn in a private module and
+    /// `serve_core` is a sibling — unreachable, not merely unused. Owning the
+    /// guard rather than asking callers to take it first makes the protection
+    /// inherited: a test added next month cannot forget. The lock is
+    /// re-entrant per thread, so nesting two of these is safe.
     struct EnvGuard {
         key: &'static str,
         old: Option<std::ffi::OsString>,
+        _lock: crate::test_env::EnvLockGuard,
     }
 
     impl EnvGuard {
         fn set_os(key: &'static str, value: &std::ffi::OsStr) -> Self {
+            let lock = crate::test_env::env_test_lock();
             let old = std::env::var_os(key);
             std::env::set_var(key, value);
-            Self { key, old }
+            Self {
+                key,
+                old,
+                _lock: lock,
+            }
         }
 
         fn set_path(key: &'static str, value: &Path) -> Self {
@@ -587,6 +640,35 @@ mod tests {
                 std::env::set_var(self.key, old);
             } else {
                 std::env::remove_var(self.key);
+            }
+        }
+    }
+
+    /// Run a script this same process just wrote, retrying on `ETXTBSY`.
+    ///
+    /// `fs::write` holds a write fd on the script. The fd is `O_CLOEXEC`, but
+    /// `O_CLOEXEC` only closes at `execve` — not at `fork`. Any other test
+    /// thread that spawns a child inside that window leaks the write fd into a
+    /// child that has not `execve`d yet, so the kernel still sees an open
+    /// writer and our `execve` fails with `ETXTBSY` ("Text file busy").
+    /// The window is microseconds wide, which is why this only ever showed up
+    /// as a rare flake under a full parallel `cargo test` run.
+    fn run_freshly_written(
+        bin: &Path,
+        argv: &[String],
+        cwd: &Path,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        const ETXTBSY: &str = "os error 26";
+        let mut attempt = 0_u32;
+        loop {
+            let result = serveengine_run_with_timeout(bin, argv, cwd, timeout);
+            match &result {
+                Err(error) if error.contains(ETXTBSY) && attempt < 5 => {
+                    attempt += 1;
+                    std::thread::sleep(Duration::from_millis(5 * u64::from(attempt)));
+                }
+                _ => return result,
             }
         }
     }
@@ -631,6 +713,16 @@ mod tests {
     }
 
     #[test]
+    fn serveengine_pty_command_sets_portable_tmux_term() {
+        let command = serveengine_pty_command("demo:1.0");
+
+        assert_eq!(
+            command.get_env("TERM"),
+            Some(std::ffi::OsStr::new("screen-256color"))
+        );
+    }
+
+    #[test]
     fn serveengine_runner_reaches_marker_with_argv_and_cwd() {
         let root = temp_dir("marker");
         let bin = root.join("maw-marker");
@@ -646,7 +738,7 @@ printf '{{"cwd":"%s","argv":["%s","%s","%s","%s"]}}' "$(pwd)" "$1" "$2" "$3" "$4
         )
         .expect("script");
         fs::set_permissions(&bin, fs::Permissions::from_mode(0o700)).expect("chmod");
-        serveengine_run_with_timeout(
+        run_freshly_written(
             &bin,
             &[
                 "workon".to_owned(),
@@ -670,8 +762,8 @@ printf '{{"cwd":"%s","argv":["%s","%s","%s","%s"]}}' "$(pwd)" "$1" "$2" "$3" "$4
         let bin = root.join("maw-sleep");
         fs::write(&bin, "#!/bin/sh\n/bin/sleep 2\n").expect("script");
         fs::set_permissions(&bin, fs::Permissions::from_mode(0o700)).expect("chmod");
-        let err = serveengine_run_with_timeout(&bin, &[], &root, Duration::from_millis(10))
-            .expect_err("timeout");
+        let err =
+            run_freshly_written(&bin, &[], &root, Duration::from_millis(10)).expect_err("timeout");
         assert_eq!(err, "serve-orchestration: workon timed out");
     }
 
@@ -708,6 +800,24 @@ printf '{{"cwd":"%s","argv":["%s","%s","%s","%s"]}}' "$(pwd)" "$1" "$2" "$3" "$4
         assert!(log.contains(r#""send-keys""#));
         assert!(log.contains(r#""ls""#));
         fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn serveengine_short_capture_lines_match_maw_js_tail_behavior() {
+        let capture = "one\ntwo\nthree\nfour\n".to_owned();
+
+        assert_eq!(
+            serveengine_tail_capture_lines(capture.clone(), Some(2)),
+            "three\nfour\n"
+        );
+        assert_eq!(
+            serveengine_tail_capture_lines(capture.clone(), Some(80)),
+            capture
+        );
+        assert_eq!(
+            serveengine_tail_capture_lines(capture.clone(), None),
+            capture
+        );
     }
 
     #[test]

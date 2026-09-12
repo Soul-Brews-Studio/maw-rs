@@ -1,5 +1,3 @@
-const PEER_DEFAULT_ORACLE: &str = "mawjs";
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ParsedRemoteIdentity {
     pubkey: Option<String>,
@@ -22,10 +20,13 @@ fn parse_remote_identity(identity: &ProbeRemoteIdentity) -> Option<ParsedRemoteI
         .map(str::to_owned);
     let node = node.as_deref().filter(|value| !value.is_empty());
     let identity = node.map(|node| PeerIdentity {
+        // A peer that does not report an oracle stores "" — rendered as "-"/"—" downstream —
+        // never a fabricated "mawjs" default. A default that looks like probed data is the
+        // bug, not the missing data (#677).
         oracle: oracle
             .as_deref()
             .filter(|value| !value.is_empty())
-            .unwrap_or(PEER_DEFAULT_ORACLE)
+            .unwrap_or_default()
             .to_owned(),
         node: node.to_owned(),
     });
@@ -48,6 +49,7 @@ fn probe_failure(error: ProbeLastError) -> ProbePeerResult {
         pubkey: None,
         identity: None,
         error: Some(error),
+        ..Default::default()
     }
 }
 
@@ -55,6 +57,8 @@ fn probe_failure(error: ProbeLastError) -> ProbePeerResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PeerRecord {
     pub url: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub addresses: Vec<String>,
     #[serde(default)]
     pub node: Option<String>,
     #[serde(rename = "addedAt")]
@@ -75,6 +79,38 @@ pub struct PeerRecord {
     pub one_way: Option<bool>,
     #[serde(default, rename = "lastSymmetricCheck")]
     pub last_symmetric_check: Option<String>,
+    /// Last read-only auth probe: whether OUR signed requests are trusted by this
+    /// peer (`POST /api/probe`). `None` = not checked / unreachable.
+    #[serde(default, rename = "authOk")]
+    pub auth_ok: Option<bool>,
+}
+
+/// Order configured peer addresses without I/O. Probe health describes the
+/// first address: a newer failure demotes it behind the stable alternatives.
+#[must_use]
+pub fn ordered_peer_addresses(
+    addresses: &[String],
+    last_seen: Option<&str>,
+    last_error: Option<&ProbeLastError>,
+) -> Vec<String> {
+    let mut ordered = Vec::new();
+    for address in addresses.iter().filter(|address| !address.trim().is_empty()) {
+        if !ordered.contains(address) {
+            ordered.push(address.clone());
+        }
+    }
+    let primary_failed = last_error.is_some_and(|error| {
+        last_seen.is_none_or(|seen| {
+            match (parse_timestamp_ms(&error.at), parse_timestamp_ms(seen)) {
+                (Some(failed), Some(seen)) => failed >= seen,
+                _ => true,
+            }
+        })
+    });
+    if primary_failed && ordered.len() > 1 {
+        ordered.rotate_left(1);
+    }
+    ordered
 }
 
 /// Peer store file shape, ported from maw-js peers `store.ts` schema v1.
@@ -218,3 +254,40 @@ fn legacy_peer_store_path(env: &PeerStoreEnv) -> Option<PathBuf> {
     (legacy != peer_store_path(env)).then_some(legacy)
 }
 
+#[cfg(test)]
+mod parse_remote_identity_tests {
+    use super::*;
+
+    fn body(oracle: Option<&str>) -> ProbeRemoteIdentity {
+        ProbeRemoteIdentity::Body {
+            pubkey: Some("pk".to_owned()),
+            oracle: oracle.map(str::to_owned),
+            node: Some("black".to_owned()),
+        }
+    }
+
+    #[test]
+    fn present_oracle_is_stored_verbatim() {
+        let parsed = parse_remote_identity(&body(Some("arra"))).expect("identity");
+        assert_eq!(parsed.identity.expect("identity").oracle, "arra");
+    }
+
+    #[test]
+    fn absent_oracle_stores_empty_never_a_fabricated_default() {
+        // #677: a peer that does not report an oracle must NOT be labelled "mawjs" (or any
+        // constant). Empty renders as "-"/"—"; the masquerade would make an unknown look probed.
+        // Reverting parse_remote_identity to `.unwrap_or("mawjs")` MUST turn this test red.
+        let parsed = parse_remote_identity(&body(None)).expect("identity");
+        let oracle = parsed.identity.expect("identity").oracle;
+        assert_eq!(oracle, "");
+        assert_ne!(oracle, "mawjs");
+    }
+
+    #[test]
+    fn empty_oracle_string_is_treated_as_absent() {
+        // The empty case is exactly what /api/identity now emits: the field is omitted →
+        // deserializes to None → stored as "". Confirm it never resurrects a default.
+        let parsed = parse_remote_identity(&body(Some(""))).expect("identity");
+        assert_eq!(parsed.identity.expect("identity").oracle, "");
+    }
+}

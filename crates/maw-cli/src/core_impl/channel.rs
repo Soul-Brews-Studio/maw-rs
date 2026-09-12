@@ -1,4 +1,7 @@
-const DISPATCH_120: &[DispatcherEntry] = &[DispatcherEntry { command: "channel", handler: Handler::Sync(channel_run_command) }];
+const DISPATCH_120: &[DispatcherEntry] = &[DispatcherEntry {
+    command: "channel",
+    handler: Handler::Sync(channel_run_command),
+}];
 
 const CHANNEL_HELP: &str = "usage: maw channel <subcommand> [args]\n\nsubcommands:\n  ls [oracle] [--json] [-v] list channels (all or for specific oracle)\n  add <oracle> <plugin>    add channel plugin to oracle\n  rm <oracle> <plugin>     remove channel plugin from oracle\n  providers                list available channel providers\n  setup <oracle>           interactive channel setup wizard\n  test <oracle>            test channel configuration\n  migrate --to-repo [...]  copy global ~/.claude/channels/<oracle>/config.json\n                           into each oracle's <repo>/.claude/channel.json\n                           ([oracle...] empty = all; --dry-run / --remove-global)\n\nshorthand: discord → plugin:discord@claude-plugins-official\ngithub: prefix → delegates to setup wizard";
 
@@ -49,7 +52,6 @@ struct ChannelProvider {
     plugin_id: String,
     kind: &'static str,
 }
-
 
 #[derive(Debug, Clone)]
 struct ChannelSetupArgs {
@@ -103,7 +105,6 @@ struct ChannelAccessConfig {
     pending: serde_json::Value,
 }
 
-
 #[derive(Debug, Clone)]
 struct ChannelMigrateArgs {
     targets: Vec<String>,
@@ -120,8 +121,16 @@ struct ChannelMigrateCounts {
 
 fn channel_run_command(argv: &[String]) -> CliOutput {
     match channel_run(argv) {
-        Ok(stdout) | Err((0, stdout)) => CliOutput { code: 0, stdout, stderr: String::new() },
-        Err((code, message)) => CliOutput { code, stdout: String::new(), stderr: format!("{message}\n") },
+        Ok(stdout) | Err((0, stdout)) => CliOutput {
+            code: 0,
+            stdout,
+            stderr: String::new(),
+        },
+        Err((code, message)) => CliOutput {
+            code,
+            stdout: String::new(),
+            stderr: format!("{message}\n"),
+        },
     }
 }
 
@@ -150,12 +159,21 @@ fn channel_add(argv: &[String]) -> Result<String, (i32, String)> {
     let add_args = channel_parse_add(argv)?;
     let path = channel_config_path_for_add(&add_args.oracle, add_args.repo_path.as_deref());
     let mut config = channel_load_config_at(&path).unwrap_or_default();
-    if config.plugins.iter().any(|plugin| plugin.id == add_args.plugin_id) {
-        return Ok(format!("  \x1b[33m⚠\x1b[0m '{}' already registered for {}\n", add_args.plugin_id, add_args.oracle));
+    if config
+        .plugins
+        .iter()
+        .any(|plugin| plugin.id == add_args.plugin_id)
+    {
+        return Ok(format!(
+            "  \x1b[33m⚠\x1b[0m '{}' already registered for {}\n",
+            add_args.plugin_id, add_args.oracle
+        ));
     }
 
     let plugin = channel_new_plugin(&add_args);
-    if let Some(pass_key) = &add_args.pass_key { config.token_source = Some(format!("pass:{pass_key}")); }
+    if let Some(pass_key) = &add_args.pass_key {
+        config.token_source = Some(format!("pass:{pass_key}"));
+    }
     config.plugins.push(plugin.clone());
     channel_archive_existing_config(&path)?;
     channel_save_config_at(&path, &config)?;
@@ -163,12 +181,24 @@ fn channel_add(argv: &[String]) -> Result<String, (i32, String)> {
     let mut stdout = String::new();
     if let Some(repo_path) = &add_args.repo_path {
         channel_save_repo_gitignore(repo_path)?;
-        let _ = writeln!(stdout, "  \x1b[36m📁\x1b[0m repo mode — wrote {}/.claude/channel.json", repo_path.display());
+        let _ = writeln!(
+            stdout,
+            "  \x1b[36m📁\x1b[0m repo mode — wrote {}/.claude/channel.json",
+            repo_path.display()
+        );
     }
-    let _ = writeln!(stdout, "  \x1b[32m✅\x1b[0m channel added: {} → {}", add_args.oracle, add_args.plugin_id);
+    let _ = writeln!(
+        stdout,
+        "  \x1b[32m✅\x1b[0m channel added: {} → {}",
+        add_args.oracle, add_args.plugin_id
+    );
     channel_push_added_env(&mut stdout, &plugin);
     channel_push_added_token(&mut stdout, &config);
-    let _ = writeln!(stdout, "     next: \x1b[36mmaw wake {}\x1b[0m (channels auto-injected)", add_args.oracle);
+    let _ = writeln!(
+        stdout,
+        "     next: \x1b[36mmaw wake {}\x1b[0m (channels auto-injected)",
+        add_args.oracle
+    );
     Ok(stdout)
 }
 
@@ -177,18 +207,24 @@ fn channel_rm(argv: &[String]) -> Result<String, (i32, String)> {
     let Some(mut config) = channel_load_oracle_config(&oracle) else {
         return Ok(format!("  \x1b[90mno channels for {oracle}\x1b[0m\n"));
     };
-    if config.plugins.is_empty() { return Ok(format!("  \x1b[90mno channels for {oracle}\x1b[0m\n")); }
+    if config.plugins.is_empty() {
+        return Ok(format!("  \x1b[90mno channels for {oracle}\x1b[0m\n"));
+    }
 
     let path = channel_oracle_config_path(&oracle);
     channel_archive_existing_config(&path)?;
     if let Some(plugin_id) = plugin {
         config.plugins.retain(|plugin| plugin.id != plugin_id);
         channel_save_config_at(&path, &config)?;
-        Ok(format!("  \x1b[32m✓\x1b[0m removed {plugin_id} from {oracle}\n"))
+        Ok(format!(
+            "  \x1b[32m✓\x1b[0m removed {plugin_id} from {oracle}\n"
+        ))
     } else {
         config.plugins.clear();
         channel_save_config_at(&path, &config)?;
-        Ok(format!("  \x1b[32m✓\x1b[0m removed all channels from {oracle}\n"))
+        Ok(format!(
+            "  \x1b[32m✓\x1b[0m removed all channels from {oracle}\n"
+        ))
     }
 }
 
@@ -221,29 +257,51 @@ fn channel_parse_add(argv: &[String]) -> Result<ChannelAddArgs, (i32, String)> {
                 index += 2;
             }
             "--" => return Err((2, "channel: -- separator is not supported".to_owned())),
-            other if other.starts_with('-') => return Err((2, format!("channel add: unknown flag {other}"))),
+            other if other.starts_with('-') => {
+                return Err((2, format!("channel add: unknown flag {other}")))
+            }
             other => return Err((2, format!("channel add: unexpected argument {other}"))),
         }
     }
-    Ok(ChannelAddArgs { oracle, plugin_id, repo_path, env, pass_key })
+    Ok(ChannelAddArgs {
+        oracle,
+        plugin_id,
+        repo_path,
+        env,
+        pass_key,
+    })
 }
 
 fn channel_parse_rm(argv: &[String]) -> Result<(String, Option<String>), (i32, String)> {
     match argv {
         [] => Err((1, "usage: maw channel rm <oracle> [plugin-id]".to_owned())),
         [oracle] => Ok((channel_validate_name("oracle", oracle)?, None)),
-        [oracle, plugin] => Ok((channel_validate_name("oracle", oracle)?, Some(channel_expand_plugin_id(plugin)?))),
-        _ => Err((2, "channel rm accepts oracle and optional plugin only".to_owned())),
+        [oracle, plugin] => Ok((
+            channel_validate_name("oracle", oracle)?,
+            Some(channel_expand_plugin_id(plugin)?),
+        )),
+        _ => Err((
+            2,
+            "channel rm accepts oracle and optional plugin only".to_owned(),
+        )),
     }
 }
 
 fn channel_new_plugin(args: &ChannelAddArgs) -> ChannelPlugin {
     let mut env = args.env.clone();
     if args.plugin_id.contains("discord") && !env.contains_key("DISCORD_STATE_DIR") {
-        let state_dir = if args.repo_path.is_some() { ".claude/channel-state".to_owned() } else { format!("~/.claude/channels/{}", args.oracle) };
+        let state_dir = if args.repo_path.is_some() {
+            ".claude/channel-state".to_owned()
+        } else {
+            format!("~/.claude/channels/{}", args.oracle)
+        };
         env.insert("DISCORD_STATE_DIR".to_owned(), state_dir);
     }
-    ChannelPlugin { id: args.plugin_id.clone(), env: (!env.is_empty()).then_some(env), ..ChannelPlugin::default() }
+    ChannelPlugin {
+        id: args.plugin_id.clone(),
+        env: (!env.is_empty()).then_some(env),
+        ..ChannelPlugin::default()
+    }
 }
 
 fn channel_push_added_env(stdout: &mut String, plugin: &ChannelPlugin) {
@@ -268,10 +326,17 @@ fn channel_push_added_token(stdout: &mut String, config: &ChannelConfig) {
 
 fn channel_expand_plugin_id(value: &str) -> Result<String, (i32, String)> {
     if value.starts_with("github:") {
-        return Err((1, "channel add: github providers are handled by the setup slice".to_owned()));
+        return Err((
+            1,
+            "channel add: github providers are handled by the setup slice".to_owned(),
+        ));
     }
     channel_validate_plugin_id(value)?;
-    if value.contains(':') || value.contains('@') { Ok(value.to_owned()) } else { Ok(format!("plugin:{value}@claude-plugins-official")) }
+    if value.contains(':') || value.contains('@') {
+        Ok(value.to_owned())
+    } else {
+        Ok(format!("plugin:{value}@claude-plugins-official"))
+    }
 }
 
 fn channel_validate_plugin_id(value: &str) -> Result<(), (i32, String)> {
@@ -284,13 +349,20 @@ fn channel_validate_plugin_id(value: &str) -> Result<(), (i32, String)> {
     {
         return Err((2, "channel: invalid plugin".to_owned()));
     }
-    if !value.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | ':' | '/' | '@')) {
+    if !value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | ':' | '/' | '@'))
+    {
         return Err((2, "channel: invalid plugin".to_owned()));
     }
     Ok(())
 }
 
-fn channel_take_flag_value<'a>(argv: &'a [String], index: usize, flag: &str) -> Result<&'a str, (i32, String)> {
+fn channel_take_flag_value<'a>(
+    argv: &'a [String],
+    index: usize,
+    flag: &str,
+) -> Result<&'a str, (i32, String)> {
     argv.get(index + 1)
         .map(String::as_str)
         .filter(|value| !value.is_empty())
@@ -304,11 +376,15 @@ fn channel_validate_env_assignment(value: &str) -> Result<(String, String), (i32
     if key.is_empty()
         || key.starts_with('-')
         || key.chars().any(char::is_control)
-        || !key.chars().all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_')
+        || !key
+            .chars()
+            .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_')
     {
         return Err((2, "channel: invalid env key".to_owned()));
     }
-    if env_value.chars().any(char::is_control) { return Err((2, "channel: invalid env value".to_owned())); }
+    if env_value.chars().any(char::is_control) {
+        return Err((2, "channel: invalid env value".to_owned()));
+    }
     Ok((key.to_owned(), env_value.to_owned()))
 }
 
@@ -332,7 +408,9 @@ fn channel_validate_repo_path(value: &str) -> Result<std::path::PathBuf, (i32, S
     }
     for component in path.components() {
         match component {
-            std::path::Component::ParentDir => return Err((2, "channel: invalid repo path".to_owned())),
+            std::path::Component::ParentDir => {
+                return Err((2, "channel: invalid repo path".to_owned()))
+            }
             std::path::Component::Normal(name) if name.to_string_lossy().starts_with('-') => {
                 return Err((2, "channel: invalid repo path".to_owned()));
             }
@@ -342,29 +420,38 @@ fn channel_validate_repo_path(value: &str) -> Result<std::path::PathBuf, (i32, S
     if path.is_absolute() {
         Ok(path.to_path_buf())
     } else {
-        std::env::current_dir().map(|cwd| cwd.join(path)).map_err(|error| (1, format!("channel: cannot resolve repo path: {error}")))
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .map_err(|error| (1, format!("channel: cannot resolve repo path: {error}")))
     }
 }
-
-
 
 fn channel_migrate(input: &[String]) -> Result<String, (i32, String)> {
     use std::fmt::Write as _;
 
     let migrate_args = channel_parse_migrate(input)?;
     let stems = if migrate_args.targets.is_empty() {
-        channel_list_all_configs().into_iter().map(|(oracle, _)| oracle).collect::<Vec<_>>()
+        channel_list_all_configs()
+            .into_iter()
+            .map(|(oracle, _)| oracle)
+            .collect::<Vec<_>>()
     } else {
         migrate_args.targets.clone()
     };
-    if stems.is_empty() { return Ok("  no oracles with global channel config to migrate\n".to_owned()); }
+    if stems.is_empty() {
+        return Ok("  no oracles with global channel config to migrate\n".to_owned());
+    }
 
     let mut counts = ChannelMigrateCounts::default();
     let mut stdout = String::new();
     for stem in stems {
         channel_migrate_one(&stem, &migrate_args, &mut counts, &mut stdout)?;
     }
-    let _ = writeln!(stdout, "\n  {} migrated, {} skipped, {} failed", counts.migrated, counts.skipped, counts.failed);
+    let _ = writeln!(
+        stdout,
+        "\n  {} migrated, {} skipped, {} failed",
+        counts.migrated, counts.skipped, counts.failed
+    );
     if counts.migrated > 0 && !migrate_args.remove_global && !migrate_args.dry_run {
         stdout.push_str("  tip: re-run with --remove-global to delete the global config copies.\n");
     }
@@ -382,19 +469,32 @@ fn channel_parse_migrate(argv: &[String]) -> Result<ChannelMigrateArgs, (i32, St
             "--dry-run" => dry_run = true,
             "--remove-global" => remove_global = true,
             "--" => return Err((2, "channel: -- separator is not supported".to_owned())),
-            value if value.starts_with('-') => return Err((2, format!("channel migrate: unknown flag {value}"))),
+            value if value.starts_with('-') => {
+                return Err((2, format!("channel migrate: unknown flag {value}")))
+            }
             value => targets.push(channel_validate_name("oracle", value)?),
         }
     }
-    if !to_repo { return Err((1, channel_migrate_usage())); }
-    Ok(ChannelMigrateArgs { targets, dry_run, remove_global })
+    if !to_repo {
+        return Err((1, channel_migrate_usage()));
+    }
+    Ok(ChannelMigrateArgs {
+        targets,
+        dry_run,
+        remove_global,
+    })
 }
 
 fn channel_migrate_usage() -> String {
     "usage: maw channel migrate --to-repo [oracle...] [--dry-run] [--remove-global]\n  copies global ~/.claude/channels/<oracle>/config.json into\n  <repo>/.claude/channel.json so config travels with the repo (#1195).\n\n  no [oracle...] args = migrate every oracle with global config.\n  --dry-run            = show what would happen, no writes.\n  --remove-global      = delete the global config after a successful copy.".to_owned()
 }
 
-fn channel_migrate_one(stem: &str, args: &ChannelMigrateArgs, counts: &mut ChannelMigrateCounts, stdout: &mut String) -> Result<(), (i32, String)> {
+fn channel_migrate_one(
+    stem: &str,
+    args: &ChannelMigrateArgs,
+    counts: &mut ChannelMigrateCounts,
+    stdout: &mut String,
+) -> Result<(), (i32, String)> {
     use std::fmt::Write as _;
 
     let Some(global) = channel_load_oracle_config(stem) else {
@@ -414,15 +514,26 @@ fn channel_migrate_one(stem: &str, args: &ChannelMigrateArgs, counts: &mut Chann
         return Ok(());
     }
     if args.dry_run {
-        let _ = writeln!(stdout, "  \x1b[36m·\x1b[0m DRY-RUN {stem}: would write {}/.claude/channel.json ({} plugin(s))", repo_path.display(), global.plugins.len());
+        let _ = writeln!(
+            stdout,
+            "  \x1b[36m·\x1b[0m DRY-RUN {stem}: would write {}/.claude/channel.json ({} plugin(s))",
+            repo_path.display(),
+            global.plugins.len()
+        );
         counts.migrated += 1;
         return Ok(());
     }
 
     channel_save_config_at(&repo_config, &global)?;
     channel_save_repo_gitignore(&repo_path)?;
-    let _ = writeln!(stdout, "  \x1b[32m✓\x1b[0m {stem}: → {}/.claude/channel.json", repo_path.display());
-    if args.remove_global { channel_remove_global_after_copy(stem, stdout)?; }
+    let _ = writeln!(
+        stdout,
+        "  \x1b[32m✓\x1b[0m {stem}: → {}/.claude/channel.json",
+        repo_path.display()
+    );
+    if args.remove_global {
+        channel_remove_global_after_copy(stem, stdout)?;
+    }
     counts.migrated += 1;
     Ok(())
 }
@@ -431,24 +542,45 @@ fn channel_resolve_repo_for_stem(stem: &str) -> Option<std::path::PathBuf> {
     let candidates = channel_repo_candidates(stem);
     if let Some(root) = std::env::var_os("MAW_RS_CHANNEL_FAKE_GHQ_ROOT") {
         let root = std::path::PathBuf::from(root);
-        return candidates.into_iter().map(|candidate| root.join(candidate)).find(|path| path.exists());
+        return candidates
+            .into_iter()
+            .map(|candidate| root.join(candidate))
+            .find(|path| path.exists());
     }
-    let output = std::process::Command::new("ghq").arg("list").arg("--full-path").output().ok()?;
-    if !output.status.success() { return None; }
+    let output = std::process::Command::new("ghq")
+        .arg("list")
+        .arg("--full-path")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
     let listing = String::from_utf8_lossy(&output.stdout);
-    candidates.into_iter().find_map(|candidate| channel_match_repo_listing(&listing, &candidate))
+    candidates
+        .into_iter()
+        .find_map(|candidate| channel_match_repo_listing(&listing, &candidate))
 }
 
 fn channel_repo_candidates(stem: &str) -> Vec<String> {
-    let alternate = stem.strip_suffix("-oracle").map_or_else(|| format!("{stem}-oracle"), str::to_owned);
+    let alternate = stem
+        .strip_suffix("-oracle")
+        .map_or_else(|| format!("{stem}-oracle"), str::to_owned);
     vec![stem.to_owned(), alternate]
 }
 
 fn channel_match_repo_listing(listing: &str, candidate: &str) -> Option<std::path::PathBuf> {
     let suffix = format!("/{candidate}");
-    listing.lines().map(str::trim).filter(|line| !line.is_empty()).find_map(|line| {
-        if line.ends_with(&suffix) || line.ends_with(candidate) { Some(std::path::PathBuf::from(line)) } else { None }
-    })
+    listing
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .find_map(|line| {
+            if line.ends_with(&suffix) || line.ends_with(candidate) {
+                Some(std::path::PathBuf::from(line))
+            } else {
+                None
+            }
+        })
 }
 
 fn channel_remove_global_after_copy(stem: &str, stdout: &mut String) -> Result<(), (i32, String)> {
@@ -463,7 +595,10 @@ fn channel_remove_global_after_copy(stem: &str, stdout: &mut String) -> Result<(
             stdout.push_str("    \x1b[90m✓ removed global config\x1b[0m\n");
         }
         Err(error) => {
-            let _ = writeln!(stdout, "    \x1b[33m⚠ failed to remove global: {error}\x1b[0m");
+            let _ = writeln!(
+                stdout,
+                "    \x1b[33m⚠ failed to remove global: {error}\x1b[0m"
+            );
         }
     }
     Ok(())
@@ -507,11 +642,19 @@ fn channel_parse_setup(argv: &[String]) -> Result<ChannelSetupArgs, (i32, String
             }
             "--no-interactive" => index += 1,
             "--" => return Err((2, "channel: -- separator is not supported".to_owned())),
-            other if other.starts_with('-') => return Err((2, format!("channel setup: unknown flag {other}"))),
+            other if other.starts_with('-') => {
+                return Err((2, format!("channel setup: unknown flag {other}")))
+            }
             other => return Err((2, format!("channel setup: unexpected argument {other}"))),
         }
     }
-    Ok(ChannelSetupArgs { oracle, provider, pass_key, guild_id, env })
+    Ok(ChannelSetupArgs {
+        oracle,
+        provider,
+        pass_key,
+        guild_id,
+        env,
+    })
 }
 
 fn channel_validate_setup_provider(value: &str) -> Result<ChannelSetupProvider, (i32, String)> {
@@ -539,14 +682,21 @@ fn channel_validate_github_repo(value: &str) -> Result<(), (i32, String)> {
         if part.starts_with('-') || part.chars().any(char::is_control) {
             return Err((2, "channel setup: invalid github provider".to_owned()));
         }
-        if !part.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.')) {
+        if !part
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
+        {
             return Err((2, "channel setup: invalid github provider".to_owned()));
         }
     }
     Ok(())
 }
 
-fn channel_take_setup_flag_value<'a>(argv: &'a [String], index: usize, flag: &str) -> Result<&'a str, (i32, String)> {
+fn channel_take_setup_flag_value<'a>(
+    argv: &'a [String],
+    index: usize,
+    flag: &str,
+) -> Result<&'a str, (i32, String)> {
     argv.get(index + 1)
         .map(String::as_str)
         .filter(|value| !value.is_empty())
@@ -602,16 +752,26 @@ impl ChannelGithubRunner for ChannelSystemGithubRunner {
 
             let path = std::path::PathBuf::from(log_path);
             if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent).map_err(|error| (1, format!("channel setup: fake ghq log dir failed: {error}")))?;
+                std::fs::create_dir_all(parent).map_err(|error| {
+                    (
+                        1,
+                        format!("channel setup: fake ghq log dir failed: {error}"),
+                    )
+                })?;
             }
             let mut file = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(&path)
                 .map_err(|error| (1, format!("channel setup: fake ghq log failed: {error}")))?;
-            writeln!(file, "ghq get {url}").map_err(|error| (1, format!("channel setup: fake ghq log failed: {error}")))?;
-            std::fs::create_dir_all(channel_github_repo_path(root, repo))
-                .map_err(|error| (1, format!("channel setup: fake ghq create repo failed: {error}")))?;
+            writeln!(file, "ghq get {url}")
+                .map_err(|error| (1, format!("channel setup: fake ghq log failed: {error}")))?;
+            std::fs::create_dir_all(channel_github_repo_path(root, repo)).map_err(|error| {
+                (
+                    1,
+                    format!("channel setup: fake ghq create repo failed: {error}"),
+                )
+            })?;
             return Ok(());
         }
         let _ = repo;
@@ -626,7 +786,10 @@ impl ChannelGithubRunner for ChannelSystemGithubRunner {
         match std::fs::read_to_string(path) {
             Ok(raw) => Ok(Some(raw)),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err((1, format!("channel setup: read {} failed: {error}", path.display()))),
+            Err(error) => Err((
+                1,
+                format!("channel setup: read {} failed: {error}", path.display()),
+            )),
         }
     }
 
@@ -636,14 +799,20 @@ impl ChannelGithubRunner for ChannelSystemGithubRunner {
 
             let path = std::path::PathBuf::from(log_path);
             if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent).map_err(|error| (1, format!("channel setup: fake bun log dir failed: {error}")))?;
+                std::fs::create_dir_all(parent).map_err(|error| {
+                    (
+                        1,
+                        format!("channel setup: fake bun log dir failed: {error}"),
+                    )
+                })?;
             }
             let mut file = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(&path)
                 .map_err(|error| (1, format!("channel setup: fake bun log failed: {error}")))?;
-            writeln!(file, "bun install --cwd {}", repo.display()).map_err(|error| (1, format!("channel setup: fake bun log failed: {error}")))?;
+            writeln!(file, "bun install --cwd {}", repo.display())
+                .map_err(|error| (1, format!("channel setup: fake bun log failed: {error}")))?;
         }
         if std::env::var_os("MAW_RS_CHANNEL_FAKE_BUN_INSTALL_FAIL").is_some() {
             return Err((1, "channel setup: bun install failed".to_owned()));
@@ -656,11 +825,18 @@ fn channel_setup_github(args: &ChannelSetupArgs) -> Result<String, (i32, String)
     channel_setup_github_with_runner(args, &ChannelSystemGithubRunner)
 }
 
-fn channel_setup_github_with_runner(args: &ChannelSetupArgs, runner: &dyn ChannelGithubRunner) -> Result<String, (i32, String)> {
+#[allow(clippy::too_many_lines)]
+fn channel_setup_github_with_runner(
+    args: &ChannelSetupArgs,
+    runner: &dyn ChannelGithubRunner,
+) -> Result<String, (i32, String)> {
     use std::fmt::Write as _;
 
     let ChannelSetupProvider::Github(repo) = &args.provider else {
-        return Err((2, "channel setup: github runner used for non-github provider".to_owned()));
+        return Err((
+            2,
+            "channel setup: github runner used for non-github provider".to_owned(),
+        ));
     };
     let root_raw = runner.ghq_root()?;
     let root = channel_canonicalize_ghq_root(&root_raw)?;
@@ -687,7 +863,11 @@ fn channel_setup_github_with_runner(args: &ChannelSetupArgs, runner: &dyn Channe
     if let Some(pass_key) = &args.pass_key {
         config.token_source = Some(format!("pass:{pass_key}"));
     }
-    if config.plugins.iter().any(|existing| existing.id == plugin.id) {
+    if config
+        .plugins
+        .iter()
+        .any(|existing| existing.id == plugin.id)
+    {
         if args.pass_key.is_some() {
             channel_archive_existing_config(&config_path)?;
             channel_save_config_private_at(&config_path, &config)?;
@@ -701,7 +881,11 @@ fn channel_setup_github_with_runner(args: &ChannelSetupArgs, runner: &dyn Channe
     }
 
     let mut stdout = String::new();
-    let _ = writeln!(stdout, "\n  \x1b[36;1m🔧 Git Channel Setup for {}\x1b[0m", args.oracle);
+    let _ = writeln!(
+        stdout,
+        "\n  \x1b[36;1m🔧 Git Channel Setup for {}\x1b[0m",
+        args.oracle
+    );
     let _ = writeln!(stdout, "  {}", "─".repeat(45));
     let _ = writeln!(stdout, "\n  \x1b[36mStep 1/4: Locate repo\x1b[0m");
     let _ = writeln!(stdout, "  source: github:{repo}");
@@ -714,26 +898,51 @@ fn channel_setup_github_with_runner(args: &ChannelSetupArgs, runner: &dyn Channe
     }
     let _ = writeln!(stdout, "\n  \x1b[36mStep 2/4: Token + dependencies\x1b[0m");
     if let Some(pass_key) = &args.pass_key {
-        let _ = writeln!(stdout, "  \x1b[32m✓\x1b[0m token source: pass:{pass_key} (reference only)");
+        let _ = writeln!(
+            stdout,
+            "  \x1b[32m✓\x1b[0m token source: pass:{pass_key} (reference only)"
+        );
     } else {
         stdout.push_str("  \x1b[90m· token source not configured\x1b[0m\n");
     }
     match bun_result {
-        Some(Ok(())) => stdout.push_str("  \x1b[33m⚠\x1b[0m package.json found — bun install stubbed/best-effort; continuing\n"),
+        Some(Ok(())) => stdout.push_str(
+            "  \x1b[33m⚠\x1b[0m package.json found — bun install stubbed/best-effort; continuing\n",
+        ),
         Some(Err((_, message))) => {
             let _ = writeln!(stdout, "  \x1b[33m⚠\x1b[0m {message}; continuing");
         }
         None => stdout.push_str("  \x1b[90m· no package.json — bun install skipped\x1b[0m\n"),
     }
     let _ = writeln!(stdout, "\n  \x1b[36mStep 3/4: MCP record\x1b[0m");
-    let untrusted_label = if mcp.config.untrusted == Some(true) { " (untrusted .mcp.json, validated)" } else { " (native default)" };
-    let _ = writeln!(stdout, "  \x1b[32m✓\x1b[0m {} → {}{}{}", mcp.plugin_id, mcp.config.command, channel_display_args(&mcp.config.args), untrusted_label);
-    stdout.push_str("  \x1b[90m· setup records MCP only; it does not spawn the MCP command\x1b[0m\n");
+    let untrusted_label = if mcp.config.untrusted == Some(true) {
+        " (untrusted .mcp.json, validated)"
+    } else {
+        " (native default)"
+    };
+    let _ = writeln!(
+        stdout,
+        "  \x1b[32m✓\x1b[0m {} → {}{}{}",
+        mcp.plugin_id,
+        mcp.config.command,
+        channel_display_args(&mcp.config.args),
+        untrusted_label
+    );
+    stdout
+        .push_str("  \x1b[90m· setup records MCP only; it does not spawn the MCP command\x1b[0m\n");
     let _ = writeln!(stdout, "\n  \x1b[36mStep 4/4: Register config\x1b[0m");
     if wrote_config {
-        let _ = writeln!(stdout, "  \x1b[32m✓\x1b[0m wrote {} (0600)", channel_tilde_path(&config_path));
+        let _ = writeln!(
+            stdout,
+            "  \x1b[32m✓\x1b[0m wrote {} (0600)",
+            channel_tilde_path(&config_path)
+        );
     } else {
-        let _ = writeln!(stdout, "  \x1b[32m✓\x1b[0m already registered: {} → {}", args.oracle, plugin.id);
+        let _ = writeln!(
+            stdout,
+            "  \x1b[32m✓\x1b[0m already registered: {} → {}",
+            args.oracle, plugin.id
+        );
     }
     stdout.push_str("  \x1b[90m· dev-server spawn is out of scope for setup\x1b[0m\n");
     stdout.push_str("\n  \x1b[32m✅ Git channel setup complete\x1b[0m\n");
@@ -746,7 +955,12 @@ struct ChannelGithubMcp {
     config: ChannelMcpConfig,
 }
 
-fn channel_github_plugin(args: &ChannelSetupArgs, repo: &str, repo_path: &std::path::Path, mcp: &ChannelGithubMcp) -> ChannelPlugin {
+fn channel_github_plugin(
+    args: &ChannelSetupArgs,
+    repo: &str,
+    repo_path: &std::path::Path,
+    mcp: &ChannelGithubMcp,
+) -> ChannelPlugin {
     ChannelPlugin {
         id: mcp.plugin_id.clone(),
         env: (!args.env.is_empty()).then_some(args.env.clone()),
@@ -757,14 +971,22 @@ fn channel_github_plugin(args: &ChannelSetupArgs, repo: &str, repo_path: &std::p
     }
 }
 
-fn channel_github_mcp_config(runner: &dyn ChannelGithubRunner, repo_path: &std::path::Path) -> Result<ChannelGithubMcp, (i32, String)> {
+fn channel_github_mcp_config(
+    runner: &dyn ChannelGithubRunner,
+    repo_path: &std::path::Path,
+) -> Result<ChannelGithubMcp, (i32, String)> {
     let path = repo_path.join(".mcp.json");
     let Some(raw) = runner.read_to_string(&path)? else {
         return Ok(ChannelGithubMcp {
             plugin_id: "server:relay".to_owned(),
             config: ChannelMcpConfig {
                 command: "bun".to_owned(),
-                args: vec!["run".to_owned(), "--cwd".to_owned(), repo_path.display().to_string(), "start".to_owned()],
+                args: vec![
+                    "run".to_owned(),
+                    "--cwd".to_owned(),
+                    repo_path.display().to_string(),
+                    "start".to_owned(),
+                ],
                 untrusted: None,
             },
         });
@@ -772,9 +994,12 @@ fn channel_github_mcp_config(runner: &dyn ChannelGithubRunner, repo_path: &std::
     channel_parse_untrusted_mcp(&raw, repo_path)
 }
 
-fn channel_parse_untrusted_mcp(raw: &str, repo_path: &std::path::Path) -> Result<ChannelGithubMcp, (i32, String)> {
-    let value: serde_json::Value =
-        serde_json::from_str(raw).map_err(|error| (2, format!("channel setup: invalid .mcp.json: {error}")))?;
+fn channel_parse_untrusted_mcp(
+    raw: &str,
+    repo_path: &std::path::Path,
+) -> Result<ChannelGithubMcp, (i32, String)> {
+    let value: serde_json::Value = serde_json::from_str(raw)
+        .map_err(|error| (2, format!("channel setup: invalid .mcp.json: {error}")))?;
     let servers = value
         .get("mcpServers")
         .and_then(serde_json::Value::as_object)
@@ -785,7 +1010,10 @@ fn channel_parse_untrusted_mcp(raw: &str, repo_path: &std::path::Path) -> Result
         .next()
         .ok_or_else(|| (2, "channel setup: .mcp.json missing mcpServers".to_owned()))?;
     let server_name = channel_validate_mcp_server_name(name)?;
-    let command = server.get("command").and_then(serde_json::Value::as_str).unwrap_or("bun");
+    let command = server
+        .get("command")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("bun");
     let command = channel_validate_mcp_command(command)?;
     let args = server
         .get("args")
@@ -804,7 +1032,11 @@ fn channel_parse_untrusted_mcp(raw: &str, repo_path: &std::path::Path) -> Result
         .unwrap_or_default();
     Ok(ChannelGithubMcp {
         plugin_id: format!("server:{server_name}"),
-        config: ChannelMcpConfig { command, args, untrusted: Some(true) },
+        config: ChannelMcpConfig {
+            command,
+            args,
+            untrusted: Some(true),
+        },
     })
 }
 
@@ -816,7 +1048,9 @@ fn channel_validate_mcp_server_name(value: &str) -> Result<String, (i32, String)
         || value.contains('/')
         || value.contains('\\')
         || value.chars().any(char::is_control)
-        || !value.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
+        || !value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
     {
         return Err((2, "channel setup: invalid .mcp.json server name".to_owned()));
     }
@@ -824,13 +1058,20 @@ fn channel_validate_mcp_server_name(value: &str) -> Result<String, (i32, String)
 }
 
 fn channel_validate_mcp_command(value: &str) -> Result<String, (i32, String)> {
-    if channel_mcp_token_invalid(value) || value.contains('/') || value.contains('\\') || value.chars().any(char::is_whitespace) {
+    if channel_mcp_token_invalid(value)
+        || value.contains('/')
+        || value.contains('\\')
+        || value.chars().any(char::is_whitespace)
+    {
         return Err((2, "channel setup: invalid .mcp.json command".to_owned()));
     }
     Ok(value.to_owned())
 }
 
-fn channel_validate_mcp_arg(value: &str, repo_path: &std::path::Path) -> Result<String, (i32, String)> {
+fn channel_validate_mcp_arg(
+    value: &str,
+    repo_path: &std::path::Path,
+) -> Result<String, (i32, String)> {
     let resolved = value.replace("${CLAUDE_PLUGIN_ROOT}", &repo_path.display().to_string());
     if channel_mcp_token_invalid(&resolved) {
         return Err((2, "channel setup: invalid .mcp.json args".to_owned()));
@@ -843,11 +1084,20 @@ fn channel_mcp_token_invalid(value: &str) -> bool {
         || value.trim() != value
         || value.starts_with('-')
         || value.chars().any(char::is_control)
-        || value.chars().any(|ch| matches!(ch, ';' | '&' | '|' | '$' | '<' | '>' | '`' | '"' | '\'' | '(' | ')' | '{' | '}'))
+        || value.chars().any(|ch| {
+            matches!(
+                ch,
+                ';' | '&' | '|' | '$' | '<' | '>' | '`' | '"' | '\'' | '(' | ')' | '{' | '}'
+            )
+        })
 }
 
 fn channel_display_args(args: &[String]) -> String {
-    if args.is_empty() { String::new() } else { format!(" {}", args.join(" ")) }
+    if args.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", args.join(" "))
+    }
 }
 
 fn channel_github_repo_path(root: &std::path::Path, repo: &str) -> std::path::PathBuf {
@@ -855,16 +1105,25 @@ fn channel_github_repo_path(root: &std::path::Path, repo: &str) -> std::path::Pa
     root.join("github.com").join(org).join(name)
 }
 
-fn channel_canonicalize_ghq_root(path: &std::path::Path) -> Result<std::path::PathBuf, (i32, String)> {
-    let root = path.canonicalize().map_err(|error| (1, format!("channel setup: ghq root unavailable: {error}")))?;
+fn channel_canonicalize_ghq_root(
+    path: &std::path::Path,
+) -> Result<std::path::PathBuf, (i32, String)> {
+    let root = path
+        .canonicalize()
+        .map_err(|error| (1, format!("channel setup: ghq root unavailable: {error}")))?;
     if !root.is_dir() {
         return Err((1, "channel setup: ghq root is not a directory".to_owned()));
     }
     Ok(root)
 }
 
-fn channel_canonicalize_github_repo(root: &std::path::Path, repo_path: &std::path::Path) -> Result<std::path::PathBuf, (i32, String)> {
-    let repo = repo_path.canonicalize().map_err(|error| (1, format!("channel setup: cloned repo missing: {error}")))?;
+fn channel_canonicalize_github_repo(
+    root: &std::path::Path,
+    repo_path: &std::path::Path,
+) -> Result<std::path::PathBuf, (i32, String)> {
+    let repo = repo_path
+        .canonicalize()
+        .map_err(|error| (1, format!("channel setup: cloned repo missing: {error}")))?;
     if repo == root || !repo.starts_with(root) {
         return Err((1, "channel setup: cloned repo escaped ghq root".to_owned()));
     }
@@ -883,10 +1142,14 @@ fn channel_run_ghq(args: &[&str], timeout: std::time::Duration) -> Result<String
         .map_err(|error| (1, format!("channel setup: ghq unavailable: {error}")))?;
     let start = std::time::Instant::now();
     loop {
-        if let Some(status) = child.try_wait().map_err(|error| (1, format!("channel setup: ghq wait failed: {error}")))? {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| (1, format!("channel setup: ghq wait failed: {error}")))?
+        {
             let mut stdout = String::new();
             if let Some(mut pipe) = child.stdout.take() {
-                pipe.read_to_string(&mut stdout).map_err(|error| (1, format!("channel setup: ghq stdout failed: {error}")))?;
+                pipe.read_to_string(&mut stdout)
+                    .map_err(|error| (1, format!("channel setup: ghq stdout failed: {error}")))?;
             }
             if !status.success() {
                 return Err((1, "channel setup: ghq command failed".to_owned()));
@@ -907,9 +1170,17 @@ fn channel_setup_official(args: &ChannelSetupArgs) -> Result<String, (i32, Strin
 
     let provider = args.provider.name();
     let plugin_id = args.provider.plugin_id();
-    let total = if matches!(args.provider, ChannelSetupProvider::Imessage) { 4 } else { 7 };
+    let total = if matches!(args.provider, ChannelSetupProvider::Imessage) {
+        4
+    } else {
+        7
+    };
     let mut stdout = String::new();
-    let _ = writeln!(stdout, "\n  \x1b[36;1m🔧 {provider} Channel Setup for {}\x1b[0m", args.oracle);
+    let _ = writeln!(
+        stdout,
+        "\n  \x1b[36;1m🔧 {provider} Channel Setup for {}\x1b[0m",
+        args.oracle
+    );
     let _ = writeln!(stdout, "  {}", "─".repeat(45));
 
     channel_push_setup_step(&mut stdout, 1, total, "Plugin check");
@@ -917,7 +1188,10 @@ fn channel_setup_official(args: &ChannelSetupArgs) -> Result<String, (i32, Strin
         let _ = writeln!(stdout, "  \x1b[32m✓\x1b[0m {plugin_id} installed");
     } else {
         let _ = writeln!(stdout, "  \x1b[31m✗\x1b[0m {plugin_id} not installed");
-        let _ = writeln!(stdout, "  \x1b[90mrun: /plugin install {provider}@claude-plugins-official\x1b[0m");
+        let _ = writeln!(
+            stdout,
+            "  \x1b[90mrun: /plugin install {provider}@claude-plugins-official\x1b[0m"
+        );
         return Ok(stdout);
     }
 
@@ -929,8 +1203,14 @@ fn channel_setup_official(args: &ChannelSetupArgs) -> Result<String, (i32, Strin
     let state_dir = channel_state_dir(&args.oracle);
     channel_push_setup_step(&mut stdout, 3, total, "State directory");
     channel_create_private_dir(&state_dir)?;
-    let _ = writeln!(stdout, "  \x1b[32m✓\x1b[0m {}/", channel_tilde_path(&state_dir));
-    if args.pass_key.is_none() { channel_rewrite_existing_env(provider, &state_dir, &token, &mut stdout)?; }
+    let _ = writeln!(
+        stdout,
+        "  \x1b[32m✓\x1b[0m {}/",
+        channel_tilde_path(&state_dir)
+    );
+    if args.pass_key.is_none() {
+        channel_rewrite_existing_env(provider, &state_dir, &token, &mut stdout)?;
+    }
 
     if matches!(args.provider, ChannelSetupProvider::Discord) {
         channel_setup_discord_guild(args, &token, &mut stdout, total);
@@ -946,19 +1226,29 @@ fn channel_setup_official(args: &ChannelSetupArgs) -> Result<String, (i32, Strin
     Ok(stdout)
 }
 
-fn channel_setup_imessage(args: &ChannelSetupArgs, mut stdout: String, total: usize, plugin_id: &str) -> Result<String, (i32, String)> {
+fn channel_setup_imessage(
+    args: &ChannelSetupArgs,
+    mut stdout: String,
+    total: usize,
+    plugin_id: &str,
+) -> Result<String, (i32, String)> {
     channel_push_setup_step(&mut stdout, 2, total, "macOS check");
     if !channel_platform_is_macos() {
         stdout.push_str("  \x1b[31m✗\x1b[0m iMessage requires macOS\n");
         return Ok(stdout);
     }
     stdout.push_str("  \x1b[32m✓\x1b[0m macOS detected\n");
-    stdout.push_str("  \x1b[90mℹ Full Disk Access required for Messages.app — grant when prompted\x1b[0m\n");
+    stdout.push_str(
+        "  \x1b[90mℹ Full Disk Access required for Messages.app — grant when prompted\x1b[0m\n",
+    );
     channel_push_setup_step(&mut stdout, 3, total, "Register channel");
     let path = channel_oracle_config_path(&args.oracle);
     let mut config = channel_load_config_at(&path).unwrap_or_default();
     if !config.plugins.iter().any(|plugin| plugin.id == plugin_id) {
-        config.plugins.push(ChannelPlugin { id: plugin_id.to_owned(), ..ChannelPlugin::default() });
+        config.plugins.push(ChannelPlugin {
+            id: plugin_id.to_owned(),
+            ..ChannelPlugin::default()
+        });
         channel_archive_existing_config(&path)?;
         channel_save_config_at(&path, &config)?;
     }
@@ -968,7 +1258,11 @@ fn channel_setup_imessage(args: &ChannelSetupArgs, mut stdout: String, total: us
     Ok(stdout)
 }
 
-fn channel_setup_token(args: &ChannelSetupArgs, stdout: &mut String, total: usize) -> Result<String, (i32, String)> {
+fn channel_setup_token(
+    args: &ChannelSetupArgs,
+    stdout: &mut String,
+    total: usize,
+) -> Result<String, (i32, String)> {
     use std::fmt::Write as _;
 
     let provider = args.provider.name();
@@ -1002,12 +1296,25 @@ fn channel_setup_token(args: &ChannelSetupArgs, stdout: &mut String, total: usiz
         return Ok(token);
     }
     let _ = writeln!(stdout, "  \x1b[33m⚠\x1b[0m no token found");
-    let _ = writeln!(stdout, "  \x1b[90mstore with: pass insert {provider}/{}-token\x1b[0m", args.oracle);
-    let _ = writeln!(stdout, "  \x1b[90mthen: maw channel setup {} {provider} --pass {provider}/{}-token\x1b[0m", args.oracle, args.oracle);
+    let _ = writeln!(
+        stdout,
+        "  \x1b[90mstore with: pass insert {provider}/{}-token\x1b[0m",
+        args.oracle
+    );
+    let _ = writeln!(
+        stdout,
+        "  \x1b[90mthen: maw channel setup {} {provider} --pass {provider}/{}-token\x1b[0m",
+        args.oracle, args.oracle
+    );
     Err((0, stdout.clone()))
 }
 
-fn channel_setup_discord_guild(args: &ChannelSetupArgs, token: &str, stdout: &mut String, total: usize) {
+fn channel_setup_discord_guild(
+    args: &ChannelSetupArgs,
+    token: &str,
+    stdout: &mut String,
+    total: usize,
+) {
     use std::fmt::Write as _;
 
     channel_push_setup_step(stdout, 4, total, "Guild / Server");
@@ -1020,18 +1327,35 @@ fn channel_setup_discord_guild(args: &ChannelSetupArgs, token: &str, stdout: &mu
         return;
     }
     for (index, guild) in guilds.iter().enumerate() {
-        let selected = if args.guild_id.as_ref().is_some_and(|id| id == &guild.id) { " ←" } else { "" };
-        let _ = writeln!(stdout, "    {}. {} ({}){selected}", index + 1, guild.name, guild.id);
+        let selected = if args.guild_id.as_ref().is_some_and(|id| id == &guild.id) {
+            " ←"
+        } else {
+            ""
+        };
+        let _ = writeln!(
+            stdout,
+            "    {}. {} ({}){selected}",
+            index + 1,
+            guild.name,
+            guild.id
+        );
     }
     let chosen = args
         .guild_id
         .as_ref()
         .and_then(|id| guilds.iter().find(|guild| &guild.id == id))
         .or_else(|| (args.guild_id.is_none()).then(|| guilds.first()).flatten());
-    if let Some(guild) = chosen { let _ = writeln!(stdout, "  \x1b[32m✓\x1b[0m guild: {}", guild.name); }
+    if let Some(guild) = chosen {
+        let _ = writeln!(stdout, "  \x1b[32m✓\x1b[0m guild: {}", guild.name);
+    }
 }
 
-fn channel_setup_register(args: &ChannelSetupArgs, plugin_id: &str, stdout: &mut String, total: usize) -> Result<(), (i32, String)> {
+fn channel_setup_register(
+    args: &ChannelSetupArgs,
+    plugin_id: &str,
+    stdout: &mut String,
+    total: usize,
+) -> Result<(), (i32, String)> {
     use std::fmt::Write as _;
 
     channel_push_setup_step(stdout, 6, total, "Register channel");
@@ -1039,17 +1363,32 @@ fn channel_setup_register(args: &ChannelSetupArgs, plugin_id: &str, stdout: &mut
     let mut config = channel_load_config_at(&path).unwrap_or_default();
     let mut env = args.env.clone();
     if matches!(args.provider, ChannelSetupProvider::Discord) {
-        env.entry("DISCORD_STATE_DIR".to_owned()).or_insert_with(|| format!("~/.claude/channels/{}", args.oracle));
+        env.entry("DISCORD_STATE_DIR".to_owned())
+            .or_insert_with(|| format!("~/.claude/channels/{}", args.oracle));
     }
-    let plugin = ChannelPlugin { id: plugin_id.to_owned(), env: (!env.is_empty()).then_some(env), ..ChannelPlugin::default() };
-    if let Some(pass_key) = &args.pass_key { config.token_source = Some(format!("pass:{pass_key}")); }
-    if config.plugins.iter().any(|existing| existing.id == plugin_id) {
+    let plugin = ChannelPlugin {
+        id: plugin_id.to_owned(),
+        env: (!env.is_empty()).then_some(env),
+        ..ChannelPlugin::default()
+    };
+    if let Some(pass_key) = &args.pass_key {
+        config.token_source = Some(format!("pass:{pass_key}"));
+    }
+    if config
+        .plugins
+        .iter()
+        .any(|existing| existing.id == plugin_id)
+    {
         stdout.push_str("  \x1b[32m✓\x1b[0m already registered\n");
     } else {
         config.plugins.push(plugin);
         channel_archive_existing_config(&path)?;
         channel_save_config_at(&path, &config)?;
-        let _ = writeln!(stdout, "  \x1b[32m✓\x1b[0m registered: {} → {plugin_id}", args.oracle);
+        let _ = writeln!(
+            stdout,
+            "  \x1b[32m✓\x1b[0m registered: {} → {plugin_id}",
+            args.oracle
+        );
     }
     Ok(())
 }
@@ -1066,8 +1405,12 @@ fn channel_push_setup_done(stdout: &mut String, oracle: &str, provider: &str) {
     stdout.push_str("\n  \x1b[32m✅ Setup complete!\x1b[0m\n\n");
     stdout.push_str("  Start oracle with channels:\n");
     let _ = writeln!(stdout, "    \x1b[36mmaw wake {oracle}\x1b[0m\n");
-    stdout.push_str("  \x1b[90mNat pre-approved — no pairing needed. Bot responds immediately.\x1b[0m\n");
-    if provider != "imessage" { stdout.push_str("  \x1b[90mAdd others: /discord:access allow <user-id>\x1b[0m\n"); }
+    stdout.push_str(
+        "  \x1b[90mNat pre-approved — no pairing needed. Bot responds immediately.\x1b[0m\n",
+    );
+    if provider != "imessage" {
+        stdout.push_str("  \x1b[90mAdd others: /discord:access allow <user-id>\x1b[0m\n");
+    }
 }
 
 fn channel_state_dir(oracle: &str) -> std::path::PathBuf {
@@ -1075,25 +1418,45 @@ fn channel_state_dir(oracle: &str) -> std::path::PathBuf {
 }
 
 fn channel_create_private_dir(path: &std::path::Path) -> Result<(), (i32, String)> {
-    std::fs::create_dir_all(path).map_err(|error| (1, format!("channel: create state dir failed: {error}")))?;
+    std::fs::create_dir_all(path)
+        .map_err(|error| (1, format!("channel: create state dir failed: {error}")))?;
     channel_chmod(path, 0o700)
 }
 
-fn channel_rewrite_existing_env(provider: &str, state_dir: &std::path::Path, token: &str, stdout: &mut String) -> Result<(), (i32, String)> {
-    let token_key = if provider == "discord" { "DISCORD_BOT_TOKEN" } else { "TELEGRAM_BOT_TOKEN" };
+fn channel_rewrite_existing_env(
+    provider: &str,
+    state_dir: &std::path::Path,
+    token: &str,
+    stdout: &mut String,
+) -> Result<(), (i32, String)> {
+    let token_key = if provider == "discord" {
+        "DISCORD_BOT_TOKEN"
+    } else {
+        "TELEGRAM_BOT_TOKEN"
+    };
     let env_file = state_dir.join(".env");
-    if !env_file.exists() { return Ok(()); }
+    if !env_file.exists() {
+        return Ok(());
+    }
     channel_atomic_write_private(&env_file, &format!("{token_key}={token}\n"), 0o600)?;
     stdout.push_str("  \x1b[32m✓\x1b[0m .env written (0o600)\n");
     Ok(())
 }
 
 fn channel_read_env_token(provider: &str, env_file: &std::path::Path) -> Option<String> {
-    let token_key = if provider == "discord" { "DISCORD_BOT_TOKEN" } else { "TELEGRAM_BOT_TOKEN" };
+    let token_key = if provider == "discord" {
+        "DISCORD_BOT_TOKEN"
+    } else {
+        "TELEGRAM_BOT_TOKEN"
+    };
     let raw = std::fs::read_to_string(env_file).ok()?;
     for line in raw.lines() {
-        let Some((key, value)) = line.split_once('=') else { continue; };
-        if key == token_key && !value.trim().is_empty() { return Some(value.trim().to_owned()); }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key == token_key && !value.trim().is_empty() {
+            return Some(value.trim().to_owned());
+        }
     }
     None
 }
@@ -1102,24 +1465,37 @@ fn channel_pass_show(pass_key: &str) -> Result<String, ()> {
     if let Some(fake) = std::env::var_os("MAW_RS_CHANNEL_FAKE_PASS_TOKEN") {
         return Ok(fake.to_string_lossy().trim().to_owned());
     }
-    let output = std::process::Command::new("pass").arg("show").arg(pass_key).output().map_err(|_| ())?;
-    if !output.status.success() { return Err(()); }
+    let output = std::process::Command::new("pass")
+        .arg("show")
+        .arg(pass_key)
+        .output()
+        .map_err(|_| ())?;
+    if !output.status.success() {
+        return Err(());
+    }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
 fn channel_discord_guilds(_token: &str) -> Vec<ChannelDiscordGuild> {
-    let Ok(raw) = std::env::var("MAW_RS_CHANNEL_FAKE_DISCORD_GUILDS") else { return Vec::new(); };
+    let Ok(raw) = std::env::var("MAW_RS_CHANNEL_FAKE_DISCORD_GUILDS") else {
+        return Vec::new();
+    };
     raw.split(';')
         .filter_map(|entry| {
             let (id, name) = entry.split_once(':')?;
-            Some(ChannelDiscordGuild { id: id.to_owned(), name: name.to_owned() })
+            Some(ChannelDiscordGuild {
+                id: id.to_owned(),
+                name: name.to_owned(),
+            })
         })
         .collect()
 }
 
 fn channel_extract_client_id(token: &str) -> Option<String> {
     let first = token.split('.').next()?;
-    channel_decode_base64_segment(first).ok().filter(|value| !value.is_empty())
+    channel_decode_base64_segment(first)
+        .ok()
+        .filter(|value| !value.is_empty())
 }
 
 fn channel_decode_base64_segment(value: &str) -> Result<String, ()> {
@@ -1128,8 +1504,15 @@ fn channel_decode_base64_segment(value: &str) -> Result<String, ()> {
     let mut bit_count = 0u8;
     let mut bytes = Vec::new();
     for byte in value.bytes() {
-        let normalized = match byte { b'-' => b'+', b'_' => b'/', b'=' => continue, other => other };
-        let Some(index) = TABLE.iter().position(|candidate| *candidate == normalized) else { return Err(()); };
+        let normalized = match byte {
+            b'-' => b'+',
+            b'_' => b'/',
+            b'=' => continue,
+            other => other,
+        };
+        let Some(index) = TABLE.iter().position(|candidate| *candidate == normalized) else {
+            return Err(());
+        };
         let sextet = u32::try_from(index).map_err(|_| ())?;
         bits = (bits << 6) | sextet;
         bit_count += 6;
@@ -1141,12 +1524,17 @@ fn channel_decode_base64_segment(value: &str) -> Result<String, ()> {
     String::from_utf8(bytes).map_err(|_| ())
 }
 
-fn channel_seed_access_json(state_dir: &std::path::Path, stdout: &mut String) -> Result<(), (i32, String)> {
+fn channel_seed_access_json(
+    state_dir: &std::path::Path,
+    stdout: &mut String,
+) -> Result<(), (i32, String)> {
     let access_path = state_dir.join("access.json");
     let seed = channel_access_seed();
     if !access_path.exists() {
         channel_save_access_json(&access_path, &seed)?;
-        stdout.push_str("  \x1b[32m✓\x1b[0m access.json seeded (Nat pre-approved, dmPolicy: allowlist)\n");
+        stdout.push_str(
+            "  \x1b[32m✓\x1b[0m access.json seeded (Nat pre-approved, dmPolicy: allowlist)\n",
+        );
         stdout.push_str("  \x1b[90mno pairing needed — Nat can DM immediately\x1b[0m\n");
         return Ok(());
     }
@@ -1177,18 +1565,31 @@ fn channel_read_access_json(path: &std::path::Path) -> Option<serde_json::Value>
     Some(value)
 }
 
-fn channel_save_access_json(path: &std::path::Path, access: &ChannelAccessConfig) -> Result<(), (i32, String)> {
-    let json = serde_json::to_string_pretty(access).map_err(|error| (1, format!("channel: serialize access failed: {error}")))?;
+fn channel_save_access_json(
+    path: &std::path::Path,
+    access: &ChannelAccessConfig,
+) -> Result<(), (i32, String)> {
+    let json = serde_json::to_string_pretty(access)
+        .map_err(|error| (1, format!("channel: serialize access failed: {error}")))?;
     channel_atomic_write(path, &(json + "\n"))
 }
 
-fn channel_atomic_write_private(path: &std::path::Path, contents: &str, mode: u32) -> Result<(), (i32, String)> {
-    let parent = path.parent().ok_or_else(|| (1, "channel: private path has no parent".to_owned()))?;
-    std::fs::create_dir_all(parent).map_err(|error| (1, format!("channel: create private dir failed: {error}")))?;
+fn channel_atomic_write_private(
+    path: &std::path::Path,
+    contents: &str,
+    mode: u32,
+) -> Result<(), (i32, String)> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| (1, "channel: private path has no parent".to_owned()))?;
+    std::fs::create_dir_all(parent)
+        .map_err(|error| (1, format!("channel: create private dir failed: {error}")))?;
     let tmp_path = parent.join(channel_tmp_file_name(path));
-    std::fs::write(&tmp_path, contents).map_err(|error| (1, format!("channel: write temp private failed: {error}")))?;
+    std::fs::write(&tmp_path, contents)
+        .map_err(|error| (1, format!("channel: write temp private failed: {error}")))?;
     channel_chmod(&tmp_path, mode)?;
-    std::fs::rename(&tmp_path, path).map_err(|error| (1, format!("channel: rename temp private failed: {error}")))?;
+    std::fs::rename(&tmp_path, path)
+        .map_err(|error| (1, format!("channel: rename temp private failed: {error}")))?;
     channel_chmod(path, mode)
 }
 
@@ -1197,25 +1598,36 @@ fn channel_chmod(path: &std::path::Path, mode: u32) -> Result<(), (i32, String)>
     use std::os::unix::fs::PermissionsExt as _;
 
     let permissions = std::fs::Permissions::from_mode(mode);
-    std::fs::set_permissions(path, permissions).map_err(|error| (1, format!("channel: chmod failed: {error}")))
+    std::fs::set_permissions(path, permissions)
+        .map_err(|error| (1, format!("channel: chmod failed: {error}")))
 }
 
 #[cfg(not(unix))]
-fn channel_chmod(_path: &std::path::Path, _mode: u32) -> Result<(), (i32, String)> { Ok(()) }
+fn channel_chmod(_path: &std::path::Path, _mode: u32) -> Result<(), (i32, String)> {
+    Ok(())
+}
 
 fn channel_tilde_path(path: &std::path::Path) -> String {
     let home = channel_home();
-    path.strip_prefix(&home).map_or_else(|_| path.display().to_string(), |rest| format!("~/{}", rest.display()))
+    path.strip_prefix(&home).map_or_else(
+        |_| path.display().to_string(),
+        |rest| format!("~/{}", rest.display()),
+    )
 }
 
 fn channel_platform_is_macos() -> bool {
-    std::env::var("MAW_RS_CHANNEL_FAKE_PLATFORM").map_or(cfg!(target_os = "macos"), |value| value == "darwin")
+    std::env::var("MAW_RS_CHANNEL_FAKE_PLATFORM")
+        .map_or(cfg!(target_os = "macos"), |value| value == "darwin")
 }
 
 fn channel_ls(argv: &[String]) -> Result<String, (i32, String)> {
     let (target, json, verbose) = channel_parse_ls(argv)?;
-    if json { return Ok(channel_ls_json(target.as_deref())); }
-    if let Some(target) = target { return Ok(channel_ls_one(&target, verbose)); }
+    if json {
+        return Ok(channel_ls_json(target.as_deref()));
+    }
+    if let Some(target) = target {
+        return Ok(channel_ls_one(&target, verbose));
+    }
     Ok(channel_ls_all(verbose))
 }
 
@@ -1228,9 +1640,13 @@ fn channel_parse_ls(argv: &[String]) -> Result<(Option<String>, bool, bool), (i3
             "--json" => json = true,
             "--verbose" | "-v" => verbose = true,
             "--" => return Err((2, "channel: -- separator is not supported".to_owned())),
-            value if value.starts_with('-') => return Err((2, format!("channel: unknown ls flag {value}"))),
+            value if value.starts_with('-') => {
+                return Err((2, format!("channel: unknown ls flag {value}")))
+            }
             value => {
-                if target.is_some() { return Err((2, "channel ls accepts at most one oracle".to_owned())); }
+                if target.is_some() {
+                    return Err((2, "channel ls accepts at most one oracle".to_owned()));
+                }
                 target = Some(channel_validate_name("oracle", value)?);
             }
         }
@@ -1243,14 +1659,31 @@ fn channel_providers(argv: &[String]) -> Result<String, (i32, String)> {
 
     channel_reject_extra_args("providers", argv)?;
     let providers = channel_get_providers();
-    let mut stdout = format!("  \x1b[36;1mChannel Providers\x1b[0m ({} available)\n\n", providers.len());
-    stdout.push_str("  Provider        Type       Plugin ID                                     Status\n");
-    stdout.push_str("  ─────────────── ────────── ───────────────────────────────────────────── ──────────\n");
+    let mut stdout = format!(
+        "  \x1b[36;1mChannel Providers\x1b[0m ({} available)\n\n",
+        providers.len()
+    );
+    stdout.push_str(
+        "  Provider        Type       Plugin ID                                     Status\n",
+    );
+    stdout.push_str(
+        "  ─────────────── ────────── ───────────────────────────────────────────── ──────────\n",
+    );
     for provider in providers {
-        let status = if channel_is_plugin_installed(&provider.short_name) { "\x1b[32m✓ installed\x1b[0m" } else { "\x1b[90mnot installed\x1b[0m" };
-        let _ = writeln!(stdout, "  {:<15} {:<10} {:<45} {status}", provider.short_name, provider.kind, provider.plugin_id);
+        let status = if channel_is_plugin_installed(&provider.short_name) {
+            "\x1b[32m✓ installed\x1b[0m"
+        } else {
+            "\x1b[90mnot installed\x1b[0m"
+        };
+        let _ = writeln!(
+            stdout,
+            "  {:<15} {:<10} {:<45} {status}",
+            provider.short_name, provider.kind, provider.plugin_id
+        );
     }
-    stdout.push_str("\n  Install: \x1b[36m/plugin install <provider>@claude-plugins-official\x1b[0m\n");
+    stdout.push_str(
+        "\n  Install: \x1b[36m/plugin install <provider>@claude-plugins-official\x1b[0m\n",
+    );
     stdout.push_str("  Custom:  \x1b[36mmaw channel add <oracle> server:<name>\x1b[0m (for .mcp.json servers)\n");
     Ok(stdout)
 }
@@ -1260,7 +1693,9 @@ fn channel_test(argv: &[String]) -> Result<String, (i32, String)> {
     let Some(config) = channel_load_oracle_config(&target) else {
         return Err((1, format!("  \x1b[31m✗\x1b[0m no channels for {target}")));
     };
-    if config.plugins.is_empty() { return Err((1, format!("  \x1b[31m✗\x1b[0m no channels for {target}"))); }
+    if config.plugins.is_empty() {
+        return Err((1, format!("  \x1b[31m✗\x1b[0m no channels for {target}")));
+    }
     let env = channel_effective_env(&config);
     let mut stdout = format!("  \x1b[36;1mChannel Test: {target}\x1b[0m\n\n");
     for plugin in &config.plugins {
@@ -1285,8 +1720,15 @@ fn channel_parse_test(argv: &[String]) -> Result<String, (i32, String)> {
 }
 
 fn channel_reject_extra_args(subcommand: &str, argv: &[String]) -> Result<(), (i32, String)> {
-    if argv.iter().any(|arg| arg == "--") { return Err((2, "channel: -- separator is not supported".to_owned())); }
-    if let Some(arg) = argv.first() { return Err((2, format!("channel {subcommand}: unexpected argument {arg}"))); }
+    if argv.iter().any(|arg| arg == "--") {
+        return Err((2, "channel: -- separator is not supported".to_owned()));
+    }
+    if let Some(arg) = argv.first() {
+        return Err((
+            2,
+            format!("channel {subcommand}: unexpected argument {arg}"),
+        ));
+    }
     Ok(())
 }
 
@@ -1303,7 +1745,10 @@ fn channel_validate_name(label: &str, value: &str) -> Result<String, (i32, Strin
     {
         return Err((2, format!("channel: invalid {label}")));
     }
-    if !value.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.')) {
+    if !value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
+    {
         return Err((2, format!("channel: invalid {label}")));
     }
     Ok(value.to_owned())
@@ -1311,23 +1756,44 @@ fn channel_validate_name(label: &str, value: &str) -> Result<String, (i32, Strin
 
 fn channel_ls_json(target: Option<&str>) -> String {
     if let Some(target) = target {
-        let config = channel_redacted_config(channel_load_oracle_config(target).unwrap_or_default());
-        let mut value = serde_json::to_value(config).expect("channel config json");
-        if let serde_json::Value::Object(map) = &mut value { map.insert("oracle".to_owned(), serde_json::json!(target)); }
-        return format!("{}\n", serde_json::to_string_pretty(&value).expect("json"));
+        let config =
+            channel_redacted_config(channel_load_oracle_config(target).unwrap_or_default());
+        let mut value = match serde_json::to_value(config) {
+            Ok(value) => value,
+            Err(error) => {
+                return channel_json_error(&format!("channel: render config json: {error}"))
+            }
+        };
+        if let serde_json::Value::Object(map) = &mut value {
+            map.insert("oracle".to_owned(), serde_json::json!(target));
+        }
+        return channel_json_string(&value);
     }
     let oracles = channel_list_all_configs()
         .into_iter()
         .map(|(oracle, config)| serde_json::json!({ "oracle": oracle, "plugins": channel_redacted_config(config).plugins }))
         .collect::<Vec<_>>();
-    format!("{}\n", serde_json::to_string_pretty(&serde_json::json!({ "oracles": oracles })).expect("json"))
+    channel_json_string(&serde_json::json!({ "oracles": oracles }))
+}
+
+fn channel_json_string(value: &serde_json::Value) -> String {
+    match serde_json::to_string_pretty(value) {
+        Ok(json) => format!("{json}\n"),
+        Err(error) => channel_json_error(&format!("channel: render json: {error}")),
+    }
+}
+
+fn channel_json_error(message: &str) -> String {
+    format!("{}\n", serde_json::json!({ "error": message }))
 }
 
 fn channel_redacted_config(mut config: ChannelConfig) -> ChannelConfig {
     for plugin in &mut config.plugins {
         if let Some(env) = &mut plugin.env {
             for (key, value) in env.iter_mut() {
-                if channel_is_secret_key(key) { "<redacted>".clone_into(value); }
+                if channel_is_secret_key(key) {
+                    "<redacted>".clone_into(value);
+                }
             }
         }
     }
@@ -1338,8 +1804,12 @@ fn channel_redacted_config(mut config: ChannelConfig) -> ChannelConfig {
 }
 
 fn channel_ls_one(target: &str, verbose: bool) -> String {
-    let Some(config) = channel_load_oracle_config(target) else { return format!("  \x1b[90mno channels for {target}\x1b[0m\n"); };
-    if config.plugins.is_empty() { return format!("  \x1b[90mno channels for {target}\x1b[0m\n"); }
+    let Some(config) = channel_load_oracle_config(target) else {
+        return format!("  \x1b[90mno channels for {target}\x1b[0m\n");
+    };
+    if config.plugins.is_empty() {
+        return format!("  \x1b[90mno channels for {target}\x1b[0m\n");
+    }
     let mut stdout = format!("  \x1b[36;1m{target}\x1b[0m\n");
     for plugin in &config.plugins {
         stdout.push_str("    ");
@@ -1348,7 +1818,9 @@ fn channel_ls_one(target: &str, verbose: bool) -> String {
         channel_push_plugin_env(&mut stdout, plugin, 6);
     }
     channel_push_token_source(&mut stdout, &config, 4);
-    if verbose { channel_push_permission(&mut stdout, &config, 4); }
+    if verbose {
+        channel_push_permission(&mut stdout, &config, 4);
+    }
     stdout
 }
 
@@ -1390,7 +1862,11 @@ fn channel_push_permission(stdout: &mut String, config: &ChannelConfig, indent: 
     use std::fmt::Write as _;
 
     if let Some(mode) = &config.permission_mode {
-        let _ = writeln!(stdout, "{}\x1b[90mpermissionMode: {mode}\x1b[0m", " ".repeat(indent));
+        let _ = writeln!(
+            stdout,
+            "{}\x1b[90mpermissionMode: {mode}\x1b[0m",
+            " ".repeat(indent)
+        );
     }
 }
 
@@ -1399,82 +1875,172 @@ fn channel_push_token_source(stdout: &mut String, config: &ChannelConfig, indent
 
     if let Some(token_source) = &config.token_source {
         let token_source = channel_display_token_source(token_source);
-        let _ = writeln!(stdout, "{}\x1b[90mtoken: {token_source}\x1b[0m", " ".repeat(indent));
+        let _ = writeln!(
+            stdout,
+            "{}\x1b[90mtoken: {token_source}\x1b[0m",
+            " ".repeat(indent)
+        );
     }
 }
 
 fn channel_display_env_value(key: &str, value: &str) -> String {
-    if channel_is_secret_key(key) { "<redacted>".to_owned() } else { value.to_owned() }
+    if channel_is_secret_key(key) {
+        "<redacted>".to_owned()
+    } else {
+        value.to_owned()
+    }
 }
 
 fn channel_display_token_source(value: &str) -> String {
-    if matches!(value.split_once(':'), Some(("pass" | "env" | "keychain", _))) { value.to_owned() } else { "<redacted>".to_owned() }
+    if matches!(
+        value.split_once(':'),
+        Some(("pass" | "env" | "keychain", _))
+    ) {
+        value.to_owned()
+    } else {
+        "<redacted>".to_owned()
+    }
 }
 
 fn channel_is_secret_key(key: &str) -> bool {
     let upper = key.to_ascii_uppercase();
-    ["TOKEN", "SECRET", "PASSWORD", "PASS", "PRIVATE_KEY"].iter().any(|needle| upper.contains(needle))
+    ["TOKEN", "SECRET", "PASSWORD", "PASS", "PRIVATE_KEY"]
+        .iter()
+        .any(|needle| upper.contains(needle))
 }
 
 fn channel_get_providers() -> Vec<ChannelProvider> {
     let mut providers = vec![
         channel_provider("discord", "plugin:discord@claude-plugins-official", "chat"),
-        channel_provider("telegram", "plugin:telegram@claude-plugins-official", "chat"),
-        channel_provider("imessage", "plugin:imessage@claude-plugins-official", "chat"),
-        channel_provider("fakechat", "plugin:fakechat@claude-plugins-official", "chat"),
+        channel_provider(
+            "telegram",
+            "plugin:telegram@claude-plugins-official",
+            "chat",
+        ),
+        channel_provider(
+            "imessage",
+            "plugin:imessage@claude-plugins-official",
+            "chat",
+        ),
+        channel_provider(
+            "fakechat",
+            "plugin:fakechat@claude-plugins-official",
+            "chat",
+        ),
     ];
     providers.extend(channel_custom_providers());
     providers
 }
 
 fn channel_provider(short_name: &str, plugin_id: &str, kind: &'static str) -> ChannelProvider {
-    ChannelProvider { short_name: short_name.to_owned(), plugin_id: plugin_id.to_owned(), kind }
+    ChannelProvider {
+        short_name: short_name.to_owned(),
+        plugin_id: plugin_id.to_owned(),
+        kind,
+    }
 }
 
 fn channel_custom_providers() -> Vec<ChannelProvider> {
     let mut providers = Vec::new();
-    for path in [std::env::current_dir().ok().map(|cwd| cwd.join(".mcp.json")), Some(channel_home().join(".claude.json"))].into_iter().flatten() {
-        let Some(json) = channel_read_json(&path) else { continue; };
-        let Some(servers) = json.get("mcpServers").and_then(serde_json::Value::as_object) else { continue; };
+    for path in [
+        std::env::current_dir()
+            .ok()
+            .map(|cwd| cwd.join(".mcp.json")),
+        Some(channel_home().join(".claude.json")),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let Some(json) = channel_read_json(&path) else {
+            continue;
+        };
+        let Some(servers) = json
+            .get("mcpServers")
+            .and_then(serde_json::Value::as_object)
+        else {
+            continue;
+        };
         for name in servers.keys() {
-            if channel_validate_name("server", name).is_ok() { providers.push(channel_provider(name, &format!("server:{name}"), "custom")); }
+            if channel_validate_name("server", name).is_ok() {
+                providers.push(channel_provider(name, &format!("server:{name}"), "custom"));
+            }
         }
     }
     providers
 }
 
 fn channel_is_plugin_installed(short_name: &str) -> bool {
-    channel_home().join(".claude/plugins/cache/claude-plugins-official").join(short_name).exists()
+    channel_home()
+        .join(".claude/plugins/cache/claude-plugins-official")
+        .join(short_name)
+        .exists()
 }
 
-fn channel_checks(plugin: &ChannelPlugin, config: &ChannelConfig, env: &std::collections::BTreeMap<String, String>) -> Vec<String> {
+fn channel_checks(
+    plugin: &ChannelPlugin,
+    config: &ChannelConfig,
+    env: &std::collections::BTreeMap<String, String>,
+) -> Vec<String> {
     let mut checks = Vec::new();
     if plugin.id.starts_with("plugin:") {
-        let name = plugin.id.split(':').nth(1).and_then(|value| value.split('@').next()).unwrap_or_default();
-        if channel_is_plugin_installed(name) { checks.push("\x1b[32m✓ plugin installed\x1b[0m".to_owned()); } else { checks.push("\x1b[31m✗ plugin not installed\x1b[0m".to_owned()); }
+        let name = plugin
+            .id
+            .split(':')
+            .nth(1)
+            .and_then(|value| value.split('@').next())
+            .unwrap_or_default();
+        if channel_is_plugin_installed(name) {
+            checks.push("\x1b[32m✓ plugin installed\x1b[0m".to_owned());
+        } else {
+            checks.push("\x1b[31m✗ plugin not installed\x1b[0m".to_owned());
+        }
     }
-    if let Some(dir) = env.get("DISCORD_STATE_DIR").or_else(|| plugin.env.as_ref().and_then(|map| map.get("DISCORD_STATE_DIR"))) {
-        if std::path::Path::new(dir).exists() { checks.push("\x1b[32m✓ state dir exists\x1b[0m".to_owned()); } else { checks.push(format!("\x1b[31m✗ state dir missing: {dir}\x1b[0m")); }
+    if let Some(dir) = env.get("DISCORD_STATE_DIR").or_else(|| {
+        plugin
+            .env
+            .as_ref()
+            .and_then(|map| map.get("DISCORD_STATE_DIR"))
+    }) {
+        if std::path::Path::new(dir).exists() {
+            checks.push("\x1b[32m✓ state dir exists\x1b[0m".to_owned());
+        } else {
+            checks.push(format!("\x1b[31m✗ state dir missing: {dir}\x1b[0m"));
+        }
     }
-    if env.contains_key("DISCORD_BOT_TOKEN") || env.contains_key("TELEGRAM_BOT_TOKEN") { checks.push("\x1b[32m✓ token available\x1b[0m".to_owned()); } else if let Some(token_source) = &config.token_source { checks.push(format!("\x1b[32m✓ token source: {token_source}\x1b[0m")); } else { checks.push("\x1b[33m⚠ no token configured\x1b[0m".to_owned()); }
+    if env.contains_key("DISCORD_BOT_TOKEN") || env.contains_key("TELEGRAM_BOT_TOKEN") {
+        checks.push("\x1b[32m✓ token available\x1b[0m".to_owned());
+    } else if let Some(token_source) = &config.token_source {
+        checks.push(format!("\x1b[32m✓ token source: {token_source}\x1b[0m"));
+    } else {
+        checks.push("\x1b[33m⚠ no token configured\x1b[0m".to_owned());
+    }
     checks
 }
 
 fn channel_effective_env(config: &ChannelConfig) -> std::collections::BTreeMap<String, String> {
     let mut env = std::collections::BTreeMap::new();
     for plugin in &config.plugins {
-        if let Some(plugin_env) = &plugin.env { env.extend(plugin_env.clone()); }
+        if let Some(plugin_env) = &plugin.env {
+            env.extend(plugin_env.clone());
+        }
     }
     let home = channel_home();
     for value in env.values_mut() {
-        if let Some(stripped) = value.strip_prefix("~/") { *value = home.join(stripped).to_string_lossy().into_owned(); }
+        if let Some(stripped) = value.strip_prefix("~/") {
+            *value = home.join(stripped).to_string_lossy().into_owned();
+        }
     }
     env
 }
 
-
-fn channel_config_path_for_add(oracle: &str, repo_path: Option<&std::path::Path>) -> std::path::PathBuf {
-    repo_path.map_or_else(|| channel_oracle_config_path(oracle), channel_repo_config_path)
+fn channel_config_path_for_add(
+    oracle: &str,
+    repo_path: Option<&std::path::Path>,
+) -> std::path::PathBuf {
+    repo_path.map_or_else(
+        || channel_oracle_config_path(oracle),
+        channel_repo_config_path,
+    )
 }
 
 fn channel_oracle_config_path(oracle: &str) -> std::path::PathBuf {
@@ -1489,26 +2055,42 @@ fn channel_load_config_at(path: &std::path::Path) -> Option<ChannelConfig> {
     channel_read_json(path).and_then(|value| serde_json::from_value(value).ok())
 }
 
-fn channel_save_config_at(path: &std::path::Path, config: &ChannelConfig) -> Result<(), (i32, String)> {
-    let json = serde_json::to_string_pretty(config).map_err(|error| (1, format!("channel: serialize config failed: {error}")))?;
+fn channel_save_config_at(
+    path: &std::path::Path,
+    config: &ChannelConfig,
+) -> Result<(), (i32, String)> {
+    let json = serde_json::to_string_pretty(config)
+        .map_err(|error| (1, format!("channel: serialize config failed: {error}")))?;
     channel_atomic_write(path, &(json + "\n"))
 }
 
-fn channel_save_config_private_at(path: &std::path::Path, config: &ChannelConfig) -> Result<(), (i32, String)> {
-    let json = serde_json::to_string_pretty(config).map_err(|error| (1, format!("channel: serialize config failed: {error}")))?;
+fn channel_save_config_private_at(
+    path: &std::path::Path,
+    config: &ChannelConfig,
+) -> Result<(), (i32, String)> {
+    let json = serde_json::to_string_pretty(config)
+        .map_err(|error| (1, format!("channel: serialize config failed: {error}")))?;
     channel_atomic_write_private(path, &(json + "\n"), 0o600)
 }
 
 fn channel_atomic_write(path: &std::path::Path, contents: &str) -> Result<(), (i32, String)> {
-    let parent = path.parent().ok_or_else(|| (1, "channel: config path has no parent".to_owned()))?;
-    std::fs::create_dir_all(parent).map_err(|error| (1, format!("channel: create config dir failed: {error}")))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| (1, "channel: config path has no parent".to_owned()))?;
+    std::fs::create_dir_all(parent)
+        .map_err(|error| (1, format!("channel: create config dir failed: {error}")))?;
     let tmp_path = parent.join(channel_tmp_file_name(path));
-    std::fs::write(&tmp_path, contents).map_err(|error| (1, format!("channel: write temp config failed: {error}")))?;
-    std::fs::rename(&tmp_path, path).map_err(|error| (1, format!("channel: rename temp config failed: {error}")))
+    std::fs::write(&tmp_path, contents)
+        .map_err(|error| (1, format!("channel: write temp config failed: {error}")))?;
+    std::fs::rename(&tmp_path, path)
+        .map_err(|error| (1, format!("channel: rename temp config failed: {error}")))
 }
 
 fn channel_tmp_file_name(path: &std::path::Path) -> String {
-    let name = path.file_name().and_then(|value| value.to_str()).unwrap_or("config.json");
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("config.json");
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
@@ -1516,15 +2098,22 @@ fn channel_tmp_file_name(path: &std::path::Path) -> String {
 }
 
 fn channel_archive_existing_config(path: &std::path::Path) -> Result<(), (i32, String)> {
-    let Ok(contents) = std::fs::read_to_string(path) else { return Ok(()); };
-    let parent = path.parent().ok_or_else(|| (1, "channel: config path has no parent".to_owned()))?;
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return Ok(());
+    };
+    let parent = path
+        .parent()
+        .ok_or_else(|| (1, "channel: config path has no parent".to_owned()))?;
     let archive_dir = parent.join("archive");
     let archive_name = channel_archive_file_name(path);
     channel_atomic_write(&archive_dir.join(archive_name), &contents)
 }
 
 fn channel_archive_file_name(path: &std::path::Path) -> String {
-    let name = path.file_name().and_then(|value| value.to_str()).unwrap_or("config.json");
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("config.json");
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
@@ -1535,23 +2124,35 @@ fn channel_save_repo_gitignore(repo_path: &std::path::Path) -> Result<(), (i32, 
     let gitignore = repo_path.join(".gitignore");
     let entry = ".claude/.env";
     let existing = std::fs::read_to_string(&gitignore).unwrap_or_default();
-    if existing.lines().any(|line| line.trim() == entry) { return Ok(()); }
+    if existing.lines().any(|line| line.trim() == entry) {
+        return Ok(());
+    }
     let mut next = existing;
-    if !next.is_empty() && !next.ends_with('\n') { next.push('\n'); }
+    if !next.is_empty() && !next.ends_with('\n') {
+        next.push('\n');
+    }
     next.push_str("\n# Channel bot token — never commit\n.claude/.env\n");
     channel_atomic_write(&gitignore, &next)
 }
 
 fn channel_list_all_configs() -> Vec<(String, ChannelConfig)> {
     let base = channel_channels_base();
-    let Ok(entries) = std::fs::read_dir(base) else { return Vec::new(); };
+    let Ok(entries) = std::fs::read_dir(base) else {
+        return Vec::new();
+    };
     let mut configs = Vec::new();
     for entry in entries.flatten() {
-        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) { continue; }
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
         let oracle = entry.file_name().to_string_lossy().into_owned();
-        if channel_validate_name("oracle", &oracle).is_err() { continue; }
+        if channel_validate_name("oracle", &oracle).is_err() {
+            continue;
+        }
         if let Some(config) = channel_load_oracle_config(&oracle) {
-            if !config.plugins.is_empty() { configs.push((oracle, config)); }
+            if !config.plugins.is_empty() {
+                configs.push((oracle, config));
+            }
         }
     }
     configs.sort_by(|left, right| left.0.cmp(&right.0));
@@ -1568,7 +2169,9 @@ fn channel_read_json(path: &std::path::Path) -> Option<serde_json::Value> {
     serde_json::from_str(&raw).ok()
 }
 
-fn channel_channels_base() -> std::path::PathBuf { channel_home().join(".claude").join("channels") }
+fn channel_channels_base() -> std::path::PathBuf {
+    channel_home().join(".claude").join("channels")
+}
 
 fn channel_home() -> std::path::PathBuf {
     std::env::var_os("HOME").map_or_else(|| std::path::PathBuf::from("."), std::path::PathBuf::from)
@@ -1595,12 +2198,22 @@ mod channel_pr301_tests {
         }"#;
         let config: ChannelConfig = serde_json::from_str(raw).expect("schema parses");
         let plugin = config.plugins.first().expect("plugin");
-        assert_eq!(plugin.source.as_deref(), Some("github:ARRA-01/claude-channel-relay"));
-        assert_eq!(plugin.path.as_deref(), Some("/tmp/ghq/github.com/ARRA-01/claude-channel-relay"));
+        assert_eq!(
+            plugin.source.as_deref(),
+            Some("github:ARRA-01/claude-channel-relay")
+        );
+        assert_eq!(
+            plugin.path.as_deref(),
+            Some("/tmp/ghq/github.com/ARRA-01/claude-channel-relay")
+        );
         assert_eq!(plugin.dev, Some(true));
         assert_eq!(
             plugin.mcp.as_ref().expect("mcp"),
-            &ChannelMcpConfig { command: "node".to_owned(), args: vec!["server.js".to_owned()], untrusted: None }
+            &ChannelMcpConfig {
+                command: "node".to_owned(),
+                args: vec!["server.js".to_owned()],
+                untrusted: None
+            }
         );
         let serialized = serde_json::to_string(&config).expect("serialize");
         assert!(serialized.contains("\"source\""));
@@ -1618,11 +2231,19 @@ mod channel_pr301_tests {
 
     impl FakeGithubRunner {
         fn new(root: std::path::PathBuf) -> Self {
-            Self { root, bun_fail: false, calls: std::cell::RefCell::new(Vec::new()) }
+            Self {
+                root,
+                bun_fail: false,
+                calls: std::cell::RefCell::new(Vec::new()),
+            }
         }
 
         fn with_bun_fail(root: std::path::PathBuf) -> Self {
-            Self { root, bun_fail: true, calls: std::cell::RefCell::new(Vec::new()) }
+            Self {
+                root,
+                bun_fail: true,
+                calls: std::cell::RefCell::new(Vec::new()),
+            }
         }
     }
 
@@ -1633,23 +2254,34 @@ mod channel_pr301_tests {
         }
 
         fn repo_exists(&self, path: &std::path::Path) -> bool {
-            self.calls.borrow_mut().push(format!("exists {}", path.display()));
+            self.calls
+                .borrow_mut()
+                .push(format!("exists {}", path.display()));
             path.exists()
         }
 
-        fn ghq_get(&self, repo: &str, url: &str, root: &std::path::Path) -> Result<(), (i32, String)> {
+        fn ghq_get(
+            &self,
+            repo: &str,
+            url: &str,
+            root: &std::path::Path,
+        ) -> Result<(), (i32, String)> {
             self.calls.borrow_mut().push(format!("ghq get {url}"));
             std::fs::create_dir_all(channel_github_repo_path(root, repo)).expect("fake clone");
             Ok(())
         }
 
         fn file_exists(&self, path: &std::path::Path) -> bool {
-            self.calls.borrow_mut().push(format!("file-exists {}", path.display()));
+            self.calls
+                .borrow_mut()
+                .push(format!("file-exists {}", path.display()));
             path.exists()
         }
 
         fn read_to_string(&self, path: &std::path::Path) -> Result<Option<String>, (i32, String)> {
-            self.calls.borrow_mut().push(format!("read {}", path.display()));
+            self.calls
+                .borrow_mut()
+                .push(format!("read {}", path.display()));
             match std::fs::read_to_string(path) {
                 Ok(raw) => Ok(Some(raw)),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -1658,7 +2290,9 @@ mod channel_pr301_tests {
         }
 
         fn bun_install_stub(&self, repo: &std::path::Path) -> Result<(), (i32, String)> {
-            self.calls.borrow_mut().push(format!("bun-stub {}", repo.display()));
+            self.calls
+                .borrow_mut()
+                .push(format!("bun-stub {}", repo.display()));
             if self.bun_fail {
                 Err((1, "channel setup: bun install failed".to_owned()))
             } else {
@@ -1689,7 +2323,11 @@ mod channel_pr301_tests {
         }
     }
 
-    fn seed_repo(root: &std::path::Path, mcp: Option<&str>, package_json: bool) -> std::path::PathBuf {
+    fn seed_repo(
+        root: &std::path::Path,
+        mcp: Option<&str>,
+        package_json: bool,
+    ) -> std::path::PathBuf {
         let repo = channel_github_repo_path(root, "ARRA-01/claude-channel-relay");
         std::fs::create_dir_all(&repo).expect("repo");
         if let Some(mcp) = mcp {
@@ -1721,15 +2359,33 @@ mod channel_pr301_tests {
         assert!(!stdout.contains("ghp_"));
         let calls = runner.calls.borrow().join("\n");
         assert!(calls.contains("bun-stub"));
-        assert!(!calls.contains("bun run start"), "mcp command must not spawn at setup: {calls}");
+        assert!(
+            !calls.contains("bun run start"),
+            "mcp command must not spawn at setup: {calls}"
+        );
 
-        let config = channel_load_config_at(&channel_oracle_config_path("relay-oracle")).expect("config");
-        assert_eq!(config.token_source.as_deref(), Some("pass:github/relay-token"));
+        let config =
+            channel_load_config_at(&channel_oracle_config_path("relay-oracle")).expect("config");
+        assert_eq!(
+            config.token_source.as_deref(),
+            Some("pass:github/relay-token")
+        );
         assert_eq!(config.plugins.len(), 1);
         let plugin = &config.plugins[0];
         assert_eq!(plugin.id, "server:relay");
-        assert_eq!(plugin.source.as_deref(), Some("github:ARRA-01/claude-channel-relay"));
-        assert_eq!(plugin.path.as_deref(), Some(repo.canonicalize().expect("repo canon").to_string_lossy().as_ref()));
+        assert_eq!(
+            plugin.source.as_deref(),
+            Some("github:ARRA-01/claude-channel-relay")
+        );
+        assert_eq!(
+            plugin.path.as_deref(),
+            Some(
+                repo.canonicalize()
+                    .expect("repo canon")
+                    .to_string_lossy()
+                    .as_ref()
+            )
+        );
         assert_eq!(plugin.dev, Some(true));
         let mcp = plugin.mcp.as_ref().expect("mcp");
         assert_eq!(mcp.command, "bun");
@@ -1751,7 +2407,8 @@ mod channel_pr301_tests {
         );
         let runner = FakeGithubRunner::new(ghq);
 
-        let err = channel_setup_github_with_runner(&github_args(), &runner).expect_err("reject untrusted arg");
+        let err = channel_setup_github_with_runner(&github_args(), &runner)
+            .expect_err("reject untrusted arg");
         assert_eq!(err.0, 2);
         assert!(err.1.contains("invalid .mcp.json args"));
         assert!(!channel_oracle_config_path("relay-oracle").exists());
@@ -1771,12 +2428,18 @@ mod channel_pr301_tests {
 
         let stdout = channel_setup_github_with_runner(&github_args(), &runner).expect("setup");
         assert!(stdout.contains("bun install failed; continuing"));
-        let config = channel_load_config_at(&channel_oracle_config_path("relay-oracle")).expect("config");
+        let config =
+            channel_load_config_at(&channel_oracle_config_path("relay-oracle")).expect("config");
         let mcp = config.plugins[0].mcp.as_ref().expect("mcp");
         assert_eq!(mcp.untrusted, None);
         assert_eq!(
             mcp.args,
-            vec!["run".to_owned(), "--cwd".to_owned(), repo.canonicalize().expect("repo").display().to_string(), "start".to_owned()]
+            vec![
+                "run".to_owned(),
+                "--cwd".to_owned(),
+                repo.canonicalize().expect("repo").display().to_string(),
+                "start".to_owned()
+            ]
         );
     }
 }

@@ -29,5 +29,15 @@
     "hasPsi": true,
     "hasFleetConfig": true,
     "isLive": false
+  },
+  "layers": {
+    "manifest": "edge",
+    "disk": "__REPO_PLACEHOLDER__",
+    "session": "alpha",
+    "registry": "__CONFIG_PLACEHOLDER__/maw/fleet/alpha.json",
+    "github": {
+      "status": "skipped",
+      "reason": "--no-remote"
+    }
   }
 }

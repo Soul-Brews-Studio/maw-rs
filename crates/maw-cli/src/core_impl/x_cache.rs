@@ -31,8 +31,7 @@ pub const X_CACHE_TMP_DIR: &str = ".tmp";
 pub const X_CACHE_GC_PROTECT_RECENT_SECS: u64 = 7 * 24 * 60 * 60;
 
 /// Process-monotonic counter for unique temp/trash names (never pid alone).
-static X_CACHE_UNIQUE_COUNTER: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+static X_CACHE_UNIQUE_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 fn x_cache_unique_suffix() -> String {
     let counter = X_CACHE_UNIQUE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -154,7 +153,9 @@ fn normalize_x_cache_sha256(value: &str) -> Result<String, String> {
 }
 
 fn x_cache_hex(normalized_pin: &str) -> &str {
-    normalized_pin.strip_prefix("sha256:").unwrap_or(normalized_pin)
+    normalized_pin
+        .strip_prefix("sha256:")
+        .unwrap_or(normalized_pin)
 }
 
 fn read_x_cache_meta(dir: &std::path::Path) -> Option<XCacheMeta> {
@@ -165,8 +166,12 @@ fn read_x_cache_meta(dir: &std::path::Path) -> Option<XCacheMeta> {
 fn write_x_cache_meta(dir: &std::path::Path, meta: &XCacheMeta) -> Result<(), String> {
     let text = serde_json::to_string_pretty(meta)
         .map_err(|error| format!("x cache: serialize meta: {error}"))?;
-    std::fs::write(dir.join(X_CACHE_META_FILE), text)
-        .map_err(|error| format!("x cache: write {}: {error}", dir.join(X_CACHE_META_FILE).display()))
+    std::fs::write(dir.join(X_CACHE_META_FILE), text).map_err(|error| {
+        format!(
+            "x cache: write {}: {error}",
+            dir.join(X_CACHE_META_FILE).display()
+        )
+    })
 }
 
 fn read_x_cache_entry(dir: &std::path::Path, hex: &str) -> Option<XCacheEntry> {
@@ -225,11 +230,7 @@ pub fn x_cache_put(
     request: &XCachePutRequest<'_>,
 ) -> Result<XCacheEntry, String> {
     let name = request.artifact_name;
-    if name.is_empty()
-        || name.starts_with('.')
-        || name.contains('/')
-        || name.contains('\\')
-    {
+    if name.is_empty() || name.starts_with('.') || name.contains('/') || name.contains('\\') {
         return Err(format!(
             "x cache: artifact name must be a bare file name not starting with '.': {name:?}"
         ));
@@ -243,8 +244,8 @@ pub fn x_cache_put(
     let staged = tmp_dir.join(format!("put-{}", x_cache_unique_suffix()));
     std::fs::write(&staged, request.bytes)
         .map_err(|error| format!("x cache: stage {}: {error}", staged.display()))?;
-    let observed = hash_file(&staged)
-        .map_err(|error| format!("x cache: hash staged artifact: {error}"))?;
+    let observed =
+        hash_file(&staged).map_err(|error| format!("x cache: hash staged artifact: {error}"))?;
     if observed != pin {
         let _ = x_cache_move_to_trash(root, &staged, "refused-put");
         return Err(format!(
@@ -256,8 +257,8 @@ pub fn x_cache_put(
     std::fs::create_dir_all(&dir)
         .map_err(|error| format!("x cache: create {}: {error}", dir.display()))?;
     let destination = dir.join(name);
-    let healthy = destination.is_file()
-        && hash_file(&destination).is_ok_and(|existing| existing == pin);
+    let healthy =
+        destination.is_file() && hash_file(&destination).is_ok_and(|existing| existing == pin);
     if healthy {
         // Immutable CAS: the verified bytes are already present.
         let _ = x_cache_move_to_trash(root, &staged, "duplicate-put");
@@ -301,11 +302,7 @@ pub fn x_cache_put(
 /// Returns an error when the pin is malformed, the entry is not cached, the
 /// artifact file is missing, the re-hash does not match the pin (poisoned
 /// entry), or the meta write-back fails.
-pub fn x_cache_get(
-    root: &std::path::Path,
-    sha256: &str,
-    now: u64,
-) -> Result<XCacheEntry, String> {
+pub fn x_cache_get(root: &std::path::Path, sha256: &str, now: u64) -> Result<XCacheEntry, String> {
     let pin = normalize_x_cache_sha256(sha256)?;
     let hex = x_cache_hex(&pin).to_owned();
     let dir = x_cache_entry_dir(root, &hex);
@@ -636,7 +633,11 @@ mod x_cache_tests {
         assert!(error.contains("sha256 mismatch"), "{error}");
         assert!(error.contains("refusing to store"), "{error}");
         assert!(x_cache_ls(&root).expect("ls").is_empty(), "nothing stored");
-        assert_eq!(trash_entries(&root), 1, "staged bytes quarantined, not deleted");
+        assert_eq!(
+            trash_entries(&root),
+            1,
+            "staged bytes quarantined, not deleted"
+        );
 
         // Malformed pin refused before any bytes are staged.
         let error = x_cache_put(
@@ -734,12 +735,19 @@ mod x_cache_tests {
         };
         let dry = x_cache_gc(&root, now, &age_options, true).expect("dry run");
         assert_eq!(
-            dry.evict.iter().map(|entry| entry.sha256.clone()).collect::<Vec<_>>(),
+            dry.evict
+                .iter()
+                .map(|entry| entry.sha256.clone())
+                .collect::<Vec<_>>(),
             vec![oldest.sha256.clone()]
         );
         assert_eq!(dry.reclaimed_bytes, 10);
         assert_eq!(dry.kept_bytes, 50);
-        assert_eq!(x_cache_ls(&root).expect("ls").len(), 3, "dry run evicts nothing");
+        assert_eq!(
+            x_cache_ls(&root).expect("ls").len(),
+            3,
+            "dry run evicts nothing"
+        );
 
         // Real run matches the dry-run plan exactly.
         let real = x_cache_gc(&root, now, &age_options, false).expect("gc");
@@ -748,10 +756,12 @@ mod x_cache_tests {
         assert_eq!(trash_entries(&root), 1, "evicted to trash, not deleted");
         let listed = x_cache_ls(&root).expect("ls");
         assert_eq!(
-            listed.iter().map(|entry| entry.sha256.clone()).collect::<Vec<_>>(),
+            listed
+                .iter()
+                .map(|entry| entry.sha256.clone())
+                .collect::<Vec<_>>(),
             {
-                let mut keep: Vec<_> =
-                    real.keep.iter().map(|entry| entry.sha256.clone()).collect();
+                let mut keep: Vec<_> = real.keep.iter().map(|entry| entry.sha256.clone()).collect();
                 keep.sort();
                 keep
             }
@@ -765,7 +775,10 @@ mod x_cache_tests {
         };
         let plan = x_cache_gc(&root, now, &size_options, false).expect("gc size");
         assert_eq!(
-            plan.evict.iter().map(|entry| entry.sha256.clone()).collect::<Vec<_>>(),
+            plan.evict
+                .iter()
+                .map(|entry| entry.sha256.clone())
+                .collect::<Vec<_>>(),
             vec![middle.sha256.clone()]
         );
         assert_eq!(plan.kept_bytes, 30);
@@ -807,8 +820,11 @@ mod x_cache_tests {
         // A pinned wasm package verifies through the WI-1 fork.
         let package = root.join("pkg");
         std::fs::create_dir_all(&package).expect("package dir");
-        std::fs::write(package.join("plugin.wasm"), b"\0asm\x01\x00\x00\x00x-cache-seam")
-            .expect("wasm artifact");
+        std::fs::write(
+            package.join("plugin.wasm"),
+            b"\0asm\x01\x00\x00\x00x-cache-seam",
+        )
+        .expect("wasm artifact");
         let sha256 = maw_plugin_manifest::hash_file(&package.join("plugin.wasm")).expect("hash");
         std::fs::write(
             package.join("plugin.json"),
@@ -817,11 +833,17 @@ mod x_cache_tests {
             ),
         )
         .expect("manifest");
-        assert_eq!(x_cache_verify_package_dir(&package, Some(&sha256)), Ok(true));
+        assert_eq!(
+            x_cache_verify_package_dir(&package, Some(&sha256)),
+            Ok(true)
+        );
 
         // Tampered artifact refuses via the same shared fork.
-        std::fs::write(package.join("plugin.wasm"), b"\0asm\x01\x00\x00\x00TAMPERED")
-            .expect("tamper");
+        std::fs::write(
+            package.join("plugin.wasm"),
+            b"\0asm\x01\x00\x00\x00TAMPERED",
+        )
+        .expect("tamper");
         let error = x_cache_verify_package_dir(&package, Some(&sha256)).expect_err("refused");
         assert!(error.contains("sha256 mismatch"), "{error}");
 

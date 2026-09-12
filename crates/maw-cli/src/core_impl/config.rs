@@ -3,7 +3,8 @@ const DISPATCH_136: &[DispatcherEntry] = &[DispatcherEntry {
     handler: Handler::Sync(config_run_command),
 }];
 
-const CONFIG_USAGE: &str = "usage: maw config <show|sources|explain <key>|set <key> <value>> [--json]";
+const CONFIG_USAGE: &str =
+    "usage: maw config <show|sources|explain <key>|set <key> <value>> [--json]";
 
 fn config_run_command(argv: &[String]) -> CliOutput {
     match config_dispatch(argv) {
@@ -105,9 +106,11 @@ fn config_sources(json: bool) -> Result<String, String> {
                 })
             })
             .collect();
-        return serde_json::to_string_pretty(&serde_json::json!({ "sources": rows, "warnings": loaded.warnings }))
-            .map(|body| format!("{body}\n"))
-            .map_err(|error| format!("maw config: failed to render JSON: {error}"));
+        return serde_json::to_string_pretty(
+            &serde_json::json!({ "sources": rows, "warnings": loaded.warnings }),
+        )
+        .map(|body| format!("{body}\n"))
+        .map_err(|error| format!("maw config: failed to render JSON: {error}"));
     }
     let mut out = String::new();
     for source in loaded.sources {
@@ -135,7 +138,9 @@ fn config_explain(argv: &[String], json: bool) -> Result<String, String> {
         .ok_or_else(|| "usage: maw config explain <key> [--json]".to_owned())?;
     let loaded = config_load_layers()?;
     let mut entries = config_provenance_at_path(&loaded.provenance, key);
-    let mut final_value = config_value_at_path(&loaded.config, key).cloned().unwrap_or(serde_json::Value::Null);
+    let mut final_value = config_value_at_path(&loaded.config, key)
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
     if config_is_secret_path(key) {
         final_value = config_mask_secret(&final_value);
         for entry in &mut entries {
@@ -156,19 +161,27 @@ fn config_explain(argv: &[String], json: bool) -> Result<String, String> {
                 })
             })
             .collect();
-        return serde_json::to_string_pretty(&serde_json::json!({ "key": key, "finalValue": final_value, "entries": rows }))
-            .map(|body| format!("{body}\n"))
-            .map_err(|error| format!("maw config: failed to render JSON: {error}"));
+        return serde_json::to_string_pretty(&serde_json::json!({
+            "key": key,
+            "finalValue": final_value,
+            "entries": rows,
+            "notes": config_explain_key_notes(key),
+        }))
+        .map(|body| format!("{body}\n"))
+        .map_err(|error| format!("maw config: failed to render JSON: {error}"));
     }
     let mut out = String::new();
     let _ = writeln!(out, "key: {key}");
-    for entry in &entries {
+    let winner_is_project = entries.last().is_some_and(|entry| entry.scope == "project");
+    for (index, entry) in entries.iter().enumerate() {
         let local = if entry.is_local { ".local" } else { "" };
         let value = serde_json::to_string(&entry.value)
             .map_err(|error| format!("maw config: failed to render value: {error}"))?;
+        let shadowed = entry.scope == "project" && !winner_is_project && index + 1 < entries.len();
+        let tag = if shadowed { " [SHADOWED]" } else { "" };
         let _ = writeln!(
             out,
-            "{} {}{} {} {}",
+            "{} {}{} {} {}{tag}",
             entry.weight, entry.scope, local, entry.action, entry.path
         );
         let _ = writeln!(out, "  {value}");
@@ -176,9 +189,24 @@ fn config_explain(argv: &[String], json: bool) -> Result<String, String> {
     let final_json = serde_json::to_string(&final_value)
         .map_err(|error| format!("maw config: failed to render value: {error}"))?;
     let _ = writeln!(out, "FINAL {final_json}");
+    for note in config_explain_key_notes(key) {
+        let _ = writeln!(out, "{note}");
+    }
     Ok(out)
 }
 
+/// Advisory lines that apply to the key being explained — currently the legacy
+/// alias table (#682), so `maw config explain defaultEngine` states which key
+/// engine resolution actually consults instead of showing a bare value.
+fn config_explain_key_notes(key: &str) -> Vec<String> {
+    CONFIG_LEGACY_ALIASES
+        .iter()
+        .filter(|(alias, _)| *alias == key)
+        .map(|(alias, canonical)| {
+            format!("note: `{alias}` is a legacy maw-js key — maw-rs honours it as an alias of {canonical}; see maw-rs#682")
+        })
+        .collect()
+}
 
 type ConfigLayerSource = maw_xdg::MawConfigLayerSource;
 
@@ -253,7 +281,87 @@ fn config_load_layers() -> Result<ConfigLoadedLayers, String> {
             }
         }
     }
-    Ok(ConfigLoadedLayers { config: merged, sources, provenance, warnings: Vec::new() })
+    let mut warnings = config_shadow_warnings(&provenance);
+    warnings.extend(config_legacy_alias_warnings(&merged));
+    Ok(ConfigLoadedLayers {
+        config: merged,
+        sources,
+        provenance,
+        warnings,
+    })
+}
+
+/// Legacy maw-js-era top-level key naming the default engine (#682). Still
+/// present in real fleet configs; honoured by `wake_config_default_engine_alias`
+/// in `wake_engine_command.rs`, and reported here so `sources`/`explain` say
+/// which key actually wins instead of leaving the operator to guess.
+const CONFIG_LEGACY_DEFAULT_ENGINE_KEY: &str = "defaultEngine";
+
+/// Top-level keys maw-rs reads only as an alias of a canonical key. A config
+/// carrying one is not broken, but it is not the key that documentation or
+/// `maw config explain` points at, so `sources` names the mapping (#682).
+const CONFIG_LEGACY_ALIASES: &[(&str, &str)] = &[(
+    CONFIG_LEGACY_DEFAULT_ENGINE_KEY,
+    "wake.engine (engine resolution order: -e when it has a commands entry > commands.<window> > commands.<oracle>-oracle > commands glob > -e literally > wake.engine > defaultEngine > commands.default > built-in)",
+)];
+
+/// One advisory line per legacy alias key present in the merged config (#682).
+fn config_legacy_alias_warnings(config: &serde_json::Value) -> Vec<String> {
+    CONFIG_LEGACY_ALIASES
+        .iter()
+        .filter(|(key, _)| config.get(*key).is_some())
+        .map(|(key, canonical)| {
+            format!("note: `{key}` is a legacy maw-js key — maw-rs honours it as an alias of {canonical}; see maw-rs#682")
+        })
+        .collect()
+}
+
+const CONFIG_SHADOW_KEY_CAP: usize = 6;
+
+/// (project path, project weight, winner scope, winner path, winner weight)
+type ConfigShadowPair = (String, u32, &'static str, String, u32);
+
+fn config_shadow_warnings(
+    provenance: &BTreeMap<String, Vec<ConfigProvenanceEntry>>,
+) -> Vec<String> {
+    let mut pairs: BTreeMap<ConfigShadowPair, Vec<String>> = BTreeMap::new();
+    for (key, entries) in provenance {
+        let Some((winner, earlier)) = entries.split_last() else {
+            continue;
+        };
+        if winner.scope == "project" {
+            continue;
+        }
+        for entry in earlier {
+            if entry.scope != "project" {
+                continue;
+            }
+            pairs
+                .entry((
+                    entry.path.clone(),
+                    entry.weight,
+                    winner.scope,
+                    winner.path.clone(),
+                    winner.weight,
+                ))
+                .or_default()
+                .push(key.clone());
+        }
+    }
+    pairs
+        .into_iter()
+        .map(|((project_path, project_weight, winner_scope, winner_path, winner_weight), mut keys)| {
+            keys.sort();
+            keys.dedup();
+            let mut list = keys[..keys.len().min(CONFIG_SHADOW_KEY_CAP)].join(", ");
+            if keys.len() > CONFIG_SHADOW_KEY_CAP {
+                let _ = write!(list, " (+{} more)", keys.len() - CONFIG_SHADOW_KEY_CAP);
+            }
+            format!(
+                "warning: project layer {project_path} (weight {project_weight}) shadowed by {winner_scope} layer {winner_path} (weight {winner_weight}) on keys: {list} — see maw-rs#623 (project band is 80; anything <= the user weight is silently overridden)"
+            )
+        })
+        .collect()
 }
 
 fn config_record_provenance(
@@ -262,20 +370,36 @@ fn config_record_provenance(
     value: &serde_json::Value,
     parent: &str,
 ) {
-    let Some(map) = value.as_object() else { return; };
+    let Some(map) = value.as_object() else {
+        return;
+    };
     for (key, child) in map {
-        let key_path = if parent.is_empty() { key.clone() } else { format!("{parent}.{key}") };
+        let key_path = if parent.is_empty() {
+            key.clone()
+        } else {
+            format!("{parent}.{key}")
+        };
         if child.is_null() {
-            provenance.entry(key_path).or_default().push(config_provenance_entry(source, child.clone(), "delete"));
+            provenance
+                .entry(key_path)
+                .or_default()
+                .push(config_provenance_entry(source, child.clone(), "delete"));
         } else if child.is_object() {
             config_record_provenance(provenance, source, child, &key_path);
         } else {
-            provenance.entry(key_path).or_default().push(config_provenance_entry(source, child.clone(), "set"));
+            provenance
+                .entry(key_path)
+                .or_default()
+                .push(config_provenance_entry(source, child.clone(), "set"));
         }
     }
 }
 
-fn config_provenance_entry(source: &ConfigLayerSource, value: serde_json::Value, action: &'static str) -> ConfigProvenanceEntry {
+fn config_provenance_entry(
+    source: &ConfigLayerSource,
+    value: serde_json::Value,
+    action: &'static str,
+) -> ConfigProvenanceEntry {
     ConfigProvenanceEntry {
         path: source.path.display().to_string(),
         weight: source.weight,
@@ -286,7 +410,10 @@ fn config_provenance_entry(source: &ConfigLayerSource, value: serde_json::Value,
     }
 }
 
-fn config_provenance_at_path(provenance: &BTreeMap<String, Vec<ConfigProvenanceEntry>>, key_path: &str) -> Vec<ConfigProvenanceEntry> {
+fn config_provenance_at_path(
+    provenance: &BTreeMap<String, Vec<ConfigProvenanceEntry>>,
+    key_path: &str,
+) -> Vec<ConfigProvenanceEntry> {
     if let Some(entries) = provenance.get(key_path) {
         return entries.clone();
     }
@@ -300,7 +427,10 @@ fn config_provenance_at_path(provenance: &BTreeMap<String, Vec<ConfigProvenanceE
     Vec::new()
 }
 
-fn config_value_at_path<'a>(root: &'a serde_json::Value, key_path: &str) -> Option<&'a serde_json::Value> {
+fn config_value_at_path<'a>(
+    root: &'a serde_json::Value,
+    key_path: &str,
+) -> Option<&'a serde_json::Value> {
     let mut cursor = root;
     for part in key_path.split('.') {
         cursor = cursor.get(part)?;
@@ -392,28 +522,118 @@ fn config_target_path() -> std::path::PathBuf {
     }
 }
 
-fn config_atomic_write(path: &std::path::Path, body: &str) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
+/// Atomic, owner-only (0600) write — the one mechanic behind every writer of a
+/// secret-bearing file.
+///
+/// #838: `maw.config.json` carries `federationToken` and
+/// `env.CLAUDE_CODE_OAUTH_TOKEN`, but the writers here used `std::fs::write`,
+/// which creates `0666 & ~umask` — 0644 on a stock box, i.e. every local
+/// account could read the tokens.
+///
+/// Three details are load-bearing:
+/// * the temp file is *opened* 0600, so it is never briefly world-readable;
+/// * it is then chmod'ed 0600 through its own fd — `open` honours the umask
+///   (0177 would leave 0400) and the temp path may be a leftover with a looser
+///   mode, while an explicit chmod is exact and race-free;
+/// * `create` rather than `create_new`, so a temp file left behind by a killed
+///   process cannot brick every later write of the real file.
+///
+/// `rename` carries the inode's mode over, so the published file is 0600 —
+/// which also tightens configs that were written loose before this fix.
+fn atomic_write_0600(
+    path: &std::path::Path,
+    tmp: &std::path::Path,
+    body: &str,
+    context: &str,
+) -> Result<(), String> {
+    use std::io::Write as _;
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
         std::fs::create_dir_all(parent)
-            .map_err(|error| format!("maw config: failed to create config dir: {error}"))?;
+            .map_err(|error| format!("{context}: create {} failed: {error}", parent.display()))?;
     }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options
+        .open(tmp)
+        .map_err(|error| format!("{context}: create tmp {} failed: {error}", tmp.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))
+            .map_err(|error| format!("{context}: chmod tmp {} failed: {error}", tmp.display()))?;
+    }
+    file.write_all(body.as_bytes())
+        .map_err(|error| format!("{context}: write tmp {} failed: {error}", tmp.display()))?;
+    file.sync_all()
+        .map_err(|error| format!("{context}: sync tmp {} failed: {error}", tmp.display()))?;
+    drop(file);
+    std::fs::rename(tmp, path).map_err(|error| {
+        let _ = std::fs::remove_file(tmp);
+        format!(
+            "{context}: atomic rename {} failed: {error}",
+            path.display()
+        )
+    })
+}
+
+/// Force `path` to 0600 after the fact — for files maw creates by copying
+/// rather than writing. `std::fs::copy` carries the *source's* permission bits
+/// over, so backing up a legacy 0644 config minted a fresh world-readable
+/// credential file (#838).
+fn set_owner_only(path: &std::path::Path, context: &str) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|error| format!("{context}: chmod 0600 {} failed: {error}", path.display()))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path, context);
+    }
+    Ok(())
+}
+
+fn config_atomic_write(path: &std::path::Path, body: &str) -> Result<(), String> {
     let file_name = path
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or("maw.config.json");
     let tmp = path.with_file_name(format!("{file_name}.tmp"));
-    std::fs::write(&tmp, body)
-        .map_err(|error| format!("maw config: failed to write temp file: {error}"))?;
-    std::fs::rename(&tmp, path)
-        .map_err(|error| format!("maw config: failed to replace config: {error}"))
+    atomic_write_0600(path, &tmp, body, "maw config")
 }
 
-fn config_audit_write(path: &std::path::Path, before: &serde_json::Value, after: &serde_json::Value) {
-    let before_keys = before.as_object().map_or_else(Vec::new, |map| map.keys().cloned().collect::<Vec<_>>());
-    let after_keys = after.as_object().map_or_else(Vec::new, |map| map.keys().cloned().collect::<Vec<_>>());
-    let added = after_keys.iter().filter(|key| !before_keys.contains(key)).cloned().collect::<Vec<_>>();
-    let removed = before_keys.iter().filter(|key| !after_keys.contains(key)).cloned().collect::<Vec<_>>();
-    let changed = after_keys.iter().filter(|key| before.get(*key) != after.get(*key) && before.get(*key).is_some()).cloned().collect::<Vec<_>>();
+fn config_audit_write(
+    path: &std::path::Path,
+    before: &serde_json::Value,
+    after: &serde_json::Value,
+) {
+    let before_keys = before
+        .as_object()
+        .map_or_else(Vec::new, |map| map.keys().cloned().collect::<Vec<_>>());
+    let after_keys = after
+        .as_object()
+        .map_or_else(Vec::new, |map| map.keys().cloned().collect::<Vec<_>>());
+    let added = after_keys
+        .iter()
+        .filter(|key| !before_keys.contains(key))
+        .cloned()
+        .collect::<Vec<_>>();
+    let removed = before_keys
+        .iter()
+        .filter(|key| !after_keys.contains(key))
+        .cloned()
+        .collect::<Vec<_>>();
+    let changed = after_keys
+        .iter()
+        .filter(|key| before.get(*key) != after.get(*key) && before.get(*key).is_some())
+        .cloned()
+        .collect::<Vec<_>>();
     let row = serde_json::json!({
         "ts": cli_dispatch_now_iso(),
         "cmd": "config-write",
@@ -497,7 +717,9 @@ mod config_tests {
     fn config_unknown_subcommand_reports_native_usage() {
         let output = super::config_run_command(&["unknown".to_owned()]);
         assert_eq!(output.code, 1);
-        assert!(output.stderr.contains("usage: maw config <show|sources|explain <key>|set <key> <value>> [--json]"));
+        assert!(output
+            .stderr
+            .contains("usage: maw config <show|sources|explain <key>|set <key> <value>> [--json]"));
     }
 
     #[test]
@@ -582,6 +804,201 @@ mod config_tests {
         assert!(!stdout.contains("peer-secret-4321"));
         assert!(!stdout.contains("pubkey-secret-8765"));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn shadow_entry(path: &str, weight: u32, scope: &'static str) -> super::ConfigProvenanceEntry {
+        super::ConfigProvenanceEntry {
+            path: path.to_owned(),
+            weight,
+            scope,
+            is_local: false,
+            value: serde_json::json!("v"),
+            action: "set",
+        }
+    }
+
+    #[test]
+    fn config_shadow_warning_names_both_layers_and_key() {
+        let mut provenance = std::collections::BTreeMap::new();
+        provenance.insert(
+            "node".to_owned(),
+            vec![
+                shadow_entry("/repo/.maw/maw.config.40.json", 40, "project"),
+                shadow_entry("/home/u/.config/maw/maw.config.50.json", 50, "user"),
+            ],
+        );
+        let warnings = super::config_shadow_warnings(&provenance);
+        assert_eq!(warnings.len(), 1);
+        let warning = &warnings[0];
+        assert!(warning.contains("project layer /repo/.maw/maw.config.40.json (weight 40)"));
+        assert!(warning
+            .contains("shadowed by user layer /home/u/.config/maw/maw.config.50.json (weight 50)"));
+        assert!(warning.contains("on keys: node"));
+        assert!(warning.contains("maw-rs#623"));
+    }
+
+    #[test]
+    fn config_shadow_warning_aggregates_and_caps_keys() {
+        let mut provenance = std::collections::BTreeMap::new();
+        for key in ["a", "b", "c", "d", "e", "f", "g", "h"] {
+            provenance.insert(
+                key.to_owned(),
+                vec![
+                    shadow_entry("/repo/.maw/maw.config.40.json", 40, "project"),
+                    shadow_entry("/home/u/.config/maw/maw.config.50.json", 50, "user"),
+                ],
+            );
+        }
+        let warnings = super::config_shadow_warnings(&provenance);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("on keys: a, b, c, d, e, f (+2 more)"));
+    }
+
+    #[test]
+    fn config_shadow_warnings_empty_without_collision() {
+        let mut provenance = std::collections::BTreeMap::new();
+        provenance.insert(
+            "node".to_owned(),
+            vec![shadow_entry("/repo/.maw/maw.config.40.json", 40, "project")],
+        );
+        provenance.insert(
+            "port".to_owned(),
+            vec![shadow_entry(
+                "/home/u/.config/maw/maw.config.50.json",
+                50,
+                "user",
+            )],
+        );
+        assert!(super::config_shadow_warnings(&provenance).is_empty());
+    }
+
+    #[test]
+    fn config_shadow_warnings_empty_for_user_only_layers() {
+        let mut provenance = std::collections::BTreeMap::new();
+        provenance.insert(
+            "node".to_owned(),
+            vec![
+                shadow_entry("/home/u/.config/maw/maw.config.50.json", 50, "user"),
+                shadow_entry("/home/u/.config/maw/maw.config.60.json", 60, "user"),
+            ],
+        );
+        assert!(super::config_shadow_warnings(&provenance).is_empty());
+    }
+
+    #[test]
+    fn config_shadow_warnings_empty_when_project_wins() {
+        let mut provenance = std::collections::BTreeMap::new();
+        provenance.insert(
+            "node".to_owned(),
+            vec![
+                shadow_entry("/home/u/.config/maw/maw.config.50.json", 50, "user"),
+                shadow_entry("/repo/.maw/maw.config.80.json", 80, "project"),
+            ],
+        );
+        assert!(super::config_shadow_warnings(&provenance).is_empty());
+    }
+
+    #[test]
+    fn config_shadow_warnings_ignore_shadowed_legacy_scope() {
+        let mut provenance = std::collections::BTreeMap::new();
+        provenance.insert(
+            "node".to_owned(),
+            vec![
+                shadow_entry("/home/u/.config/maw/maw.config.json", 50, "legacy"),
+                shadow_entry("/home/u/.config/maw/maw.config.60.json", 60, "user"),
+            ],
+        );
+        assert!(super::config_shadow_warnings(&provenance).is_empty());
+    }
+
+    #[test]
+    fn config_explain_tags_shadowed_project_entry() {
+        let _lock = super::env_test_lock();
+        let _home = EnvVarRestore::capture("MAW_HOME");
+        let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
+        let (root, project) = config_seed_shadow_fixture("explain");
+        let cwd = ConfigCwdRestore::enter(&project);
+        let stdout = config_dispatch(&["explain".to_owned(), "node".to_owned()]).expect("explain");
+        assert_eq!(
+            stdout
+                .lines()
+                .filter(|line| line.ends_with(" [SHADOWED]"))
+                .count(),
+            1
+        );
+        assert!(stdout
+            .lines()
+            .any(|line| line.contains("project") && line.ends_with(" [SHADOWED]")));
+        assert!(!stdout
+            .lines()
+            .any(|line| line.contains(" user ") && line.contains("[SHADOWED]")));
+        assert!(stdout.contains("FINAL \"user-node\""));
+        drop(cwd);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn config_sources_json_includes_shadow_warnings() {
+        let _lock = super::env_test_lock();
+        let _home = EnvVarRestore::capture("MAW_HOME");
+        let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
+        let (root, project) = config_seed_shadow_fixture("sources-json");
+        let cwd = ConfigCwdRestore::enter(&project);
+        let stdout =
+            config_dispatch(&["sources".to_owned(), "--json".to_owned()]).expect("sources json");
+        let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("parseable json");
+        assert!(parsed["sources"]
+            .as_array()
+            .is_some_and(|rows| !rows.is_empty()));
+        let warnings = parsed["warnings"].as_array().expect("warnings array");
+        assert_eq!(warnings.len(), 1);
+        let warning = warnings[0].as_str().expect("warning string");
+        assert!(warning.contains("maw.config.40.json (weight 40)"));
+        assert!(warning.contains("shadowed by user layer"));
+        assert!(warning.contains("maw.config.50.json (weight 50)"));
+        assert!(warning.contains("on keys: node"));
+        drop(cwd);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    struct ConfigCwdRestore(std::path::PathBuf);
+
+    impl ConfigCwdRestore {
+        fn enter(dir: &std::path::Path) -> Self {
+            let previous = std::env::current_dir().expect("current dir");
+            std::env::set_current_dir(dir).expect("chdir");
+            Self(previous)
+        }
+    }
+
+    impl Drop for ConfigCwdRestore {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.0);
+        }
+    }
+
+    fn config_seed_shadow_fixture(label: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let root = std::env::temp_dir().join(format!(
+            "maw-rs-config-shadow-{label}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::env::remove_var("MAW_HOME");
+        std::env::set_var("MAW_CONFIG_DIR", root.join("config"));
+        std::fs::create_dir_all(root.join("config")).expect("config dir");
+        std::fs::write(
+            root.join("config/maw.config.50.json"),
+            "{\"node\":\"user-node\"}\n",
+        )
+        .expect("user layer");
+        let project = root.join("project");
+        std::fs::create_dir_all(project.join(".maw")).expect("project dir");
+        std::fs::write(
+            project.join(".maw/maw.config.40.json"),
+            "{\"node\":\"proj-node\"}\n",
+        )
+        .expect("project layer");
+        (root, project)
     }
 
     fn config_seed_secret_fixture(label: &str) -> std::path::PathBuf {

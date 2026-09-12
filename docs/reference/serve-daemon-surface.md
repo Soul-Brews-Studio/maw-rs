@@ -1,6 +1,41 @@
 # serve-* Surface for native serve-daemon design (maw-rs #86-94)
 > Gathered from maw-js source (read-only) 2026-06-25 for Bigboy's serve-daemon architecture draft → TK.
 
+## Current maw-rs browser-origin boundary
+
+`maw serve` accepts exact `https://god.buildwithoracle.com` or exact `localhost`,
+`127.0.0.1`, and `[::1]` browser origins. Configure a comma-separated
+`serve.allowed_origins` string; `MAW_SERVE_ALLOWED_ORIGINS` takes precedence, matching `MAW_SERVE_TOKEN` over `serve.token` (16 entries/4 KiB maximum).
+Wildcard, suffix, malformed, and `null` values fail closed; a startup diagnostic names an invalid entry. Allowlisting only reaches
+command-capable WebSocket authentication; Origin allowlisting is not authentication and never bypasses it. Missing-Origin native
+clients continue through the existing auth policy.
+
+For an allowed browser origin, an exact configured `MAW_SERVE_TOKEN` in Bearer or
+`X-Maw-Token` form grants HTTP operator authority. It can mint an Origin/path-bound,
+30-second one-use credential with `POST /api/auth/ws-ticket` and JSON `{"path":"/ws"}`
+(also `/ws/pty` or `/ws/tmux`). Success is exactly `{"ticket":...,"protocol":"maw.ws.v1"}`
+with `Cache-Control: no-store`; keep the ticket in memory. Minting never falls open to
+open mode, loopback exemption, query credentials, or preflight. Origin-present WebSockets must
+offer `["maw.ws.v1", ticket]`; consumption precedes handler work and echoes only `maw.ws.v1`.
+An accepted attempt can burn on later extractor/engine failure; mint a fresh ticket before retrying.
+Native no-Origin token and loopback behavior is unchanged.
+
+The ticket is **one-use and per-path**: `/ws` and `/ws/pty` each need their own, and
+every reconnect needs a fresh one. Minting once during authentication and caching the
+value works exactly once. A rejected mint answers `400` with
+`{"error":"bad-request","reason":...}` naming which contract it broke —
+`content-type-not-json`, `query-string-not-allowed`, `body-too-large` (128-byte cap),
+`body-not-a-ws-ticket-request` (`{"path":...}` only, unknown fields denied), or
+`path-not-allowed`. The startup banner reports the enforced state, not just the
+resolved token: both open modes print that browser clients are refused, because with
+no token there is nothing to mint or validate a ticket against (#955).
+
+The God UI connector's `GET /api/config` response is a daemon-start snapshot
+containing exactly `node`, `agents`, and named-peer `{name,url}` rows. It is a
+typed, secret-free projection rather than a config export: query strings are
+rejected and no mutation method is mounted. Missing/blank `node` uses the same
+nonempty machine-name fallback as `/info`.
+
 ## TOP REFRAME
 serve-* are **NOT standalone CLI commands**. They are **serve-lifecycle plugins** that all mount onto the *single* `maw serve` Bun HTTP+WS server. No `maw serve-ws` entrypoint. maw-rs #86-94 → 8 native **modules registering into one shared gateway**, not 8 processes.
 - One server: `startBunGatewayServer` `src/core/server.ts:271-540` → one `Bun.serve({fetch,websocket})` (`:488`).

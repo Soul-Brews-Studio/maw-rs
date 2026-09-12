@@ -1,0 +1,27 @@
+<meta charset=utf-8><title>maw federation</title>
+<style>
+body{background:#0d1117;color:#c9d1d9;font:13px ui-monospace,SFMono-Regular,Menlo,monospace;margin:0;padding:28px}
+h1{font-size:18px;margin:0 0 4px;color:#fff} .sub{color:#8b949e;margin-bottom:18px}
+table{border-collapse:collapse;width:100%;max-width:1200px}
+th{text-align:left;padding:8px 10px;border-bottom:2px solid #30363d;color:#8b949e;font-weight:600;font-size:11px;letter-spacing:.5px;text-transform:uppercase}
+td{padding:7px 10px;border-bottom:1px solid #21262d}
+tr.ok td:nth-child(2){color:#3fb950} tr.warn td:nth-child(2){color:#d29922} tr.bad td:nth-child(2){color:#f85149}
+tr.ok{border-left:3px solid #3fb950} tr.warn{border-left:3px solid #d29922} tr.bad{border-left:3px solid #f85149}
+td.s{font-weight:700} .f{color:#f85149;font-weight:600;font-size:11px}
+.self{background:#161b22;padding:12px 14px;border-radius:6px;margin-bottom:18px;border-left:3px solid #58a6ff}
+.k{color:#8b949e} .foot{color:#484f58;margin-top:16px;font-size:11px}
+</style>
+<h1>🌐 maw federation</h1>
+<div class=sub>3/9 peers reachable · cached (age 0s) · <a href="?probe=1" style="color:#58a6ff">probe now</a> · auto-refresh 15s</div>
+<div class=self><span class=k>self</span> &nbsp;<b>m5</b> &nbsp; <span class=k>oracle</span> maw-rs &nbsp; <span class=k>version</span> 26.7.23-alpha.1711 &nbsp; <span class=k>bind</span> 0.0.0.0:3456 &nbsp; <span class=k>token</span> <b style="color:#f85149">none ⚠</b></div>
+<table><tr><th>alias</th><th>reach</th><th>send</th><th>resolved ip</th><th>node</th><th>oracle</th><th>version</th><th>last error</th><th>age</th><th>flags</th></tr>
+<tr class=warn><td>arra</td><td class=s>HTTP_4XX</td><td class=s>?</td><td>?</td><td>arra@m5</td><td>arra</td><td>?</td><td>HTTP_4XX</td><td>52d</td><td></td></tr>
+<tr class=warn><td>blackmachine</td><td class=s>OK</td><td class=s>401</td><td>192.168.1.184</td><td>local</td><td>mawjs</td><td>26.7.23-alpha.1617</td><td></td><td>0h</td><td><b class=f>node!unique</b> <b class=f>oracle=default</b> <b class=f>ver-skew</b></td></tr>
+<tr class=bad><td>m5</td><td class=s>TIMEOUT</td><td class=s>—</td><td>127.0.0.1 ⚠self</td><td>m5</td><td>mawjs</td><td>—</td><td>TIMEOUT</td><td>39d</td><td><b class=f>oracle=default</b> <b class=f>loopback-self</b></td></tr>
+<tr class=bad><td>oracle-world</td><td class=s>REFUSED</td><td class=s>?</td><td>?</td><td>oracle-world</td><td>mawjs</td><td>?</td><td>REFUSED</td><td>52d</td><td><b class=f>oracle=default</b></td></tr>
+<tr class=bad><td>oracle-world-oracle</td><td class=s>REFUSED</td><td class=s>?</td><td>?</td><td>oracle-world-oracle</td><td>oracle</td><td>?</td><td>REFUSED</td><td>19d</td><td></td></tr>
+<tr class=bad><td>oracle-world-sila</td><td class=s>REFUSED</td><td class=s>?</td><td>?</td><td>oracle-world-sila</td><td>mawjs</td><td>?</td><td>REFUSED</td><td>52d</td><td><b class=f>oracle=default</b></td></tr>
+<tr class=ok><td>white</td><td class=s>OK</td><td class=s>?</td><td>10.20.0.7</td><td>white</td><td>mawjs</td><td>?</td><td></td><td>0h</td><td><b class=f>oracle=default</b></td></tr>
+<tr class=ok><td>white-lan</td><td class=s>OK</td><td class=s>?</td><td>192.168.1.7</td><td>white</td><td>mawjs</td><td>?</td><td></td><td>0h</td><td><b class=f>oracle=default</b></td></tr>
+<tr class=bad><td>white-noah</td><td class=s>REFUSED</td><td class=s>?</td><td>?</td><td>white-noah</td><td>—</td><td>?</td><td>REFUSED</td><td>never</td><td></td></tr></table>
+<div class=foot>server-rendered · no JS · reads probe cache · ssh/sshUser redacted off-loopback</div>

@@ -32,7 +32,7 @@ Rust as a build-only dependency. The stable formula never invokes Cargo.
 
 ## Release installer
 
-The signed-off release path also supports macOS arm64 and static Linux x86_64 binaries:
+The signed-off release path also supports macOS arm64 and Linux x86_64 binaries:
 
 ```bash
 curl -fsSLO https://github.com/Soul-Brews-Studio/maw-rs/releases/latest/download/install.sh
@@ -41,6 +41,44 @@ sh install.sh
 
 Pin a CalVer release with `sh install.sh v26.7.5` or `MAW_VERSION=v26.7.5 sh install.sh`.
 The installer verifies the adjacent `.sha256` asset before replacing `maw`.
+
+### Linux: two binaries, and why the choice matters
+
+Every release ships two Linux x86_64 builds from the same commit with the same
+feature set. They differ only in C library:
+
+| asset | linkage | `.local` / mDNS |
+| --- | --- | --- |
+| `maw-rs-linux-x86_64-gnu` | dynamic, needs a glibc host | **resolves** through the system resolver (NSS) |
+| `maw-rs-linux-x86_64-musl` | static, runs on any distro | **cannot resolve** |
+
+musl has no glibc NSS, so a musl binary never loads `mdns4_minimal` from
+`/etc/nsswitch.conf` and cannot resolve `*.local` names at all (#812). On a
+fleet where peers are addressed by `.local` hostnames, that breaks every
+cross-machine peer except loopback — so a glibc host wants `-gnu`.
+
+`install.sh` and `maw update` detect the host libc the same way and prefer
+`-gnu` when glibc is proven, falling back to `-musl` whenever the evidence is
+unclear (a static binary that runs beats a dynamic one that does not):
+
+1. `MAW_LIBC=gnu|musl` forces the answer.
+2. `ldd --version` naming musl means musl.
+3. `ldd --version` naming GNU/GLIBC means glibc.
+4. a glibc dynamic loader on disk (e.g. `/lib/x86_64-linux-gnu/libc.so.6`) means glibc.
+5. otherwise musl.
+
+```bash
+MAW_LIBC=gnu sh install.sh     # force the glibc build
+MAW_LIBC=musl sh install.sh    # force the static build
+```
+
+The `-gnu` asset is built against the CI runner's glibc, so a host with an
+older glibc cannot run it. Rather than hardcode a version floor that drifts
+with the runner image, `install.sh` runs the downloaded binary once
+(`--version`) before installing it and silently re-downloads the musl asset if
+it will not start. `maw update` proves the new binary the same way, restores
+the previous one when the proof fails, and tells you to retry with
+`MAW_LIBC=musl`.
 
 ## Build from source
 

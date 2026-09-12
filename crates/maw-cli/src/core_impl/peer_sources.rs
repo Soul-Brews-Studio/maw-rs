@@ -1,6 +1,12 @@
 const DISPATCH_314: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "federation-sync", handler: Handler::Sync(run_federation_sync_plan) },
-    DispatcherEntry { command: "peer-sources", handler: Handler::Sync(run_peer_sources_plan) },
+    DispatcherEntry {
+        command: "federation-sync",
+        handler: Handler::Sync(run_federation_sync_plan),
+    },
+    DispatcherEntry {
+        command: "peer-sources",
+        handler: Handler::Sync(run_peer_sources_plan),
+    },
 ];
 
 fn run_peer_probe_handshake_constants_plan(argv: &[String]) -> CliOutput {
@@ -355,8 +361,11 @@ fn run_federation_sync_plan(argv: &[String]) -> CliOutput {
                     return federation_sync_usage_error("federation-sync: missing --agent value");
                 };
                 match parse_key_value(value, "federation-sync: --agent must use <oracle=node>") {
+                    // #605: invalid names are skipped, never inserted.
                     Ok((oracle, node)) => {
-                        agents.insert(oracle, node);
+                        if agent_name_is_valid(&oracle) {
+                            agents.insert(oracle, node);
+                        }
                     }
                     Err(message) => return federation_sync_usage_error(&message),
                 }
@@ -412,4 +421,3 @@ fn run_federation_sync_plan(argv: &[String]) -> CliOutput {
         stderr: String::new(),
     }
 }
-

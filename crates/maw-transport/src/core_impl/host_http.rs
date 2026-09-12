@@ -32,21 +32,20 @@ impl ReqwestHttpTransportIo {
         let method = reqwest::Method::from_bytes(request.method.as_bytes())
             .map_err(|error| format!("invalid HTTP method: {error}"))?;
         let timeout = request.timeout_ms.unwrap_or(self.timeout_ms());
-        let client = if request.pinned_addr.is_some() || !request.follow_redirects {
-            let mut builder = reqwest::Client::builder().timeout(std::time::Duration::from_millis(timeout));
-            if !request.follow_redirects {
-                builder = builder.redirect(reqwest::redirect::Policy::none());
-            }
-            if let Some(addr) = request.pinned_addr {
-                let host = url_host(&request.url)?;
-                builder = builder.resolve(&host, addr);
-            }
-            builder
-                .build()
-                .map_err(|error| format!("http client build failed: {error}"))?
-        } else {
-            self.client.clone()
-        };
+        // Never trust guest `follow_redirects` for the client policy: a followed
+        // redirect would land past the pin, the private-IP gate, and the `net:`
+        // allowlist, none of which re-apply past the first hop (#959). A caller
+        // that wants to follow re-validates and reissues each hop itself.
+        let mut builder = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(timeout))
+            .redirect(reqwest::redirect::Policy::none());
+        if let Some(addr) = request.pinned_addr {
+            let host = url_host(&request.url)?;
+            builder = builder.resolve(&host, addr);
+        }
+        let client = builder
+            .build()
+            .map_err(|error| format!("http client build failed: {error}"))?;
         let mut builder = client
             .request(method, &request.url)
             .timeout(std::time::Duration::from_millis(timeout));

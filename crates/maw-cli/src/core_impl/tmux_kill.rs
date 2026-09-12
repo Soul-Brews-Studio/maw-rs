@@ -64,7 +64,9 @@ fn tmux_kill_parse_args(argv: &[String]) -> Result<TmuxKillArgs, String> {
             "--session" | "-s" => session = true,
             "--force" => force = true,
             value if value.starts_with('-') => {
-                return Err(format!("\"{value}\" looks like a flag, not a tmux kill target"));
+                return Err(format!(
+                    "\"{value}\" looks like a flag, not a tmux kill target"
+                ));
             }
             value => {
                 if !target.is_empty() {
@@ -263,15 +265,16 @@ fn tmux_kill_validate_user_target(value: &str) -> Result<(), String> {
         return Err("target must not have surrounding whitespace".to_owned());
     }
     if value == "--" || value.starts_with('-') {
-        return Err(format!("\"{value}\" looks like a flag, not a tmux kill target"));
+        return Err(format!(
+            "\"{value}\" looks like a flag, not a tmux kill target"
+        ));
     }
     if value.chars().any(|ch| ch == '\0' || ch.is_control()) {
         return Err("target must not contain NUL/control characters".to_owned());
     }
-    if !value
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | ':' | '.' | '/' | '@' | '%'))
-    {
+    if !value.chars().all(|ch| {
+        ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | ':' | '.' | '/' | '@' | '%')
+    }) {
         return Err("target contains unsupported characters".to_owned());
     }
     Ok(())
@@ -385,8 +388,11 @@ mod tmux_kill_tests {
             sessions: "07-demo\n".to_owned(),
             ..TmuxKillFakeRunner::default()
         };
-        let output = tmux_kill_run_with(&fake_args(&["07-demo", "--session", "--force"]), &mut runner)
-            .expect("forced kill session");
+        let output = tmux_kill_run_with(
+            &fake_args(&["07-demo", "--session", "--force"]),
+            &mut runner,
+        )
+        .expect("forced kill session");
         assert!(output.contains("killed session 07-demo"));
         assert_eq!(runner.calls[1].subcommand, "kill-session");
     }
@@ -401,7 +407,10 @@ mod tmux_kill_tests {
             .expect_err("protected pane session refused");
         assert!(error.contains("protected fleet/view session"));
         assert_eq!(runner.calls.len(), 1);
-        assert!(!runner.calls.iter().any(|call| call.subcommand == "kill-pane"));
+        assert!(!runner
+            .calls
+            .iter()
+            .any(|call| call.subcommand == "kill-pane"));
     }
 
     #[test]
@@ -443,7 +452,10 @@ mod tmux_kill_tests {
         let partial = tmux_kill_run_with(&fake_args(&["ftkzz", "--session"]), &mut runner)
             .expect_err("partial must not kill");
         assert!(partial.contains("session 'ftkzz' not found"));
-        assert!(!runner.calls.iter().any(|call| call.subcommand == "kill-session"));
+        assert!(!runner
+            .calls
+            .iter()
+            .any(|call| call.subcommand == "kill-session"));
         let alive = tmux_kill_list_sessions(&mut runner).expect("sessions still list");
         assert_eq!(alive, ["ftkzz-a", "ftkzz-b"]);
 
@@ -454,7 +466,10 @@ mod tmux_kill_tests {
         let partial = tmux_kill_run_with(&fake_args(&["ftkzz", "--session"]), &mut runner)
             .expect_err("unique partial must not kill");
         assert!(partial.contains("session 'ftkzz' not found"));
-        assert!(!runner.calls.iter().any(|call| call.subcommand == "kill-session"));
+        assert!(!runner
+            .calls
+            .iter()
+            .any(|call| call.subcommand == "kill-session"));
         let alive = tmux_kill_list_sessions(&mut runner).expect("solo still lists");
         assert_eq!(alive, ["ftkzz-solo"]);
 

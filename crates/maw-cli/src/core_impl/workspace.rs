@@ -1,6 +1,12 @@
 const DISPATCH_140: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "workspace", handler: Handler::Sync(run_workspace_command) },
-    DispatcherEntry { command: "ws", handler: Handler::Sync(run_workspace_command) },
+    DispatcherEntry {
+        command: "workspace",
+        handler: Handler::Sync(run_workspace_command),
+    },
+    DispatcherEntry {
+        command: "ws",
+        handler: Handler::Sync(run_workspace_command),
+    },
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,11 +20,17 @@ struct WorkspaceConfig134 {
 }
 
 fn run_workspace_command(argv: &[String]) -> CliOutput {
-    CliOutput { code: 0, stdout: workspace_run(argv), stderr: String::new() }
+    CliOutput {
+        code: 0,
+        stdout: workspace_run(argv),
+        stderr: String::new(),
+    }
 }
 
 fn workspace_run(argv: &[String]) -> String {
-    let subcommand = argv.first().map_or_else(|| "ls".to_owned(), |arg| arg.to_lowercase());
+    let subcommand = argv
+        .first()
+        .map_or_else(|| "ls".to_owned(), |arg| arg.to_lowercase());
     match subcommand.as_str() {
         "ls" | "list" | "" => workspace_render_ls(&workspace_load_all()),
         _ => workspace_help(),
@@ -29,7 +41,11 @@ fn workspace_dirs() -> Vec<std::path::PathBuf> {
     let env = current_xdg_env();
     let primary = maw_data_path(&env, &["workspaces"]);
     let legacy = maw_config_path(&env, &["workspaces"]);
-    if primary == legacy { vec![primary] } else { vec![primary, legacy] }
+    if primary == legacy {
+        vec![primary]
+    } else {
+        vec![primary, legacy]
+    }
 }
 
 fn workspace_load_all() -> Vec<WorkspaceConfig134> {
@@ -38,7 +54,9 @@ fn workspace_load_all() -> Vec<WorkspaceConfig134> {
     let mut dirs = workspace_dirs();
     dirs.reverse();
     for dir in dirs {
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue; };
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         let mut files = entries
             .flatten()
             .map(|entry| entry.path())
@@ -46,10 +64,23 @@ fn workspace_load_all() -> Vec<WorkspaceConfig134> {
             .collect::<Vec<_>>();
         files.sort();
         for path in files {
-            let Ok(raw) = std::fs::read_to_string(&path) else { continue; };
-            let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else { continue; };
-            let Some(workspace) = workspace_normalize(&value) else { continue; };
-            let index = by_id.get(&workspace.id).map_or_else(|| { let current = order; order += 1; current }, |(existing, _)| *existing);
+            let Ok(raw) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+                continue;
+            };
+            let Some(workspace) = workspace_normalize(&value) else {
+                continue;
+            };
+            let index = by_id.get(&workspace.id).map_or_else(
+                || {
+                    let current = order;
+                    order += 1;
+                    current
+                },
+                |(existing, _)| *existing,
+            );
             by_id.insert(workspace.id.clone(), (index, workspace));
         }
     }
@@ -61,9 +92,19 @@ fn workspace_load_all() -> Vec<WorkspaceConfig134> {
 fn workspace_normalize(value: &serde_json::Value) -> Option<WorkspaceConfig134> {
     let object = value.as_object()?;
     let id = object.get("id")?.as_str()?.to_owned();
-    if id.is_empty() { return None; }
-    let name = object.get("name").and_then(serde_json::Value::as_str).unwrap_or("(unnamed)").to_owned();
-    let hub_url = object.get("hubUrl").and_then(serde_json::Value::as_str).unwrap_or("").to_owned();
+    if id.is_empty() {
+        return None;
+    }
+    let name = object
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("(unnamed)")
+        .to_owned();
+    let hub_url = object
+        .get("hubUrl")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+        .to_owned();
     let joined_at = object
         .get("joinedAt")
         .and_then(serde_json::Value::as_str)
@@ -73,14 +114,27 @@ fn workspace_normalize(value: &serde_json::Value) -> Option<WorkspaceConfig134> 
     let shared_agents = object
         .get("sharedAgents")
         .and_then(serde_json::Value::as_array)
-        .map(|agents| agents.iter().filter_map(serde_json::Value::as_str).map(str::to_owned).collect())
+        .map(|agents| {
+            agents
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
         .unwrap_or_default();
     let last_status = object
         .get("lastStatus")
         .and_then(serde_json::Value::as_str)
         .filter(|status| matches!(*status, "connected" | "disconnected"))
         .map(str::to_owned);
-    Some(WorkspaceConfig134 { id, name, hub_url, shared_agents, joined_at, last_status })
+    Some(WorkspaceConfig134 {
+        id,
+        name,
+        hub_url,
+        shared_agents,
+        joined_at,
+        last_status,
+    })
 }
 
 fn workspace_render_ls(workspaces: &[WorkspaceConfig134]) -> String {
@@ -98,20 +152,38 @@ fn workspace_render_ls(workspaces: &[WorkspaceConfig134]) -> String {
         );
     }
 
-    let mut out = format!("\n{CYAN_BOLD}Workspaces{RESET}  {DIM}{} joined{RESET}\n\n", workspaces.len());
+    let mut out = format!(
+        "\n{CYAN_BOLD}Workspaces{RESET}  {DIM}{} joined{RESET}\n\n",
+        workspaces.len()
+    );
     for workspace in workspaces {
-        let status_dot = if workspace.last_status.as_deref() == Some("connected") { format!("{GREEN}●{RESET}") } else { format!("{RED}●{RESET}") };
+        let status_dot = if workspace.last_status.as_deref() == Some("connected") {
+            format!("{GREEN}●{RESET}")
+        } else {
+            format!("{RED}●{RESET}")
+        };
         let agent_count = workspace.shared_agents.len();
         let agent_label = if agent_count == 0 {
             format!("{DIM}no agents shared{RESET}")
         } else {
-            format!("{agent_count} agent{} shared", if agent_count == 1 { "" } else { "s" })
+            format!(
+                "{agent_count} agent{} shared",
+                if agent_count == 1 { "" } else { "s" }
+            )
         };
-        let _ = writeln!(out, "  {status_dot}  {WHITE_BOLD}{}{RESET}  {DIM}({}){RESET}", workspace.name, workspace.id);
+        let _ = writeln!(
+            out,
+            "  {status_dot}  {WHITE_BOLD}{}{RESET}  {DIM}({}){RESET}",
+            workspace.name, workspace.id
+        );
         let _ = writeln!(out, "     {CYAN}Hub:{RESET}     {}", workspace.hub_url);
         let _ = writeln!(out, "     {CYAN}Agents:{RESET}  {agent_label}");
         if !workspace.shared_agents.is_empty() {
-            let _ = writeln!(out, "     {DIM}         {}{RESET}", workspace.shared_agents.join(", "));
+            let _ = writeln!(
+                out,
+                "     {DIM}         {}{RESET}",
+                workspace.shared_agents.join(", ")
+            );
         }
         let _ = writeln!(out, "     {DIM}Joined:  {}{RESET}", workspace.joined_at);
     }

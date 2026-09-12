@@ -117,7 +117,7 @@ fn ls_plan_verbose_json_keeps_channels_filter_and_statuses() {
         output.stdout,
         concat!(
             "{\"command\":\"ls\",\"mode\":\"verbose\",\"scope\":\"local\",\"json\":true,",
-            "\"panes\":[{\"id\":\"%2\",\"target\":\"zzunique-scratch:2.0\",\"session\":\"zzunique-scratch\",\"command\":\"node\",\"title\":\"worker\",\"status\":\"idle\",\"ageSec\":50,\"agent\":true,\"annotation\":\"orphan\"}]}
+            "\"panes\":[{\"id\":\"%2\",\"target\":\"zzunique-scratch:2.0\",\"session\":\"zzunique-scratch\",\"command\":\"node\",\"title\":\"worker\",\"status\":\"idle\",\"ageSec\":50,\"agent\":false,\"annotation\":\"orphan\"}]}
 "
         )
     );

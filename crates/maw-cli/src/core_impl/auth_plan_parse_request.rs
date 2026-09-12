@@ -195,10 +195,9 @@ fn parse_auth_verify_args(argv: &[String]) -> Result<AuthPlanAction, String> {
             }
             "--peer-ip" => {
                 let raw = take_auth_value(argv, index, "--peer-ip")?;
-                peer_ip = Some(
-                    raw.parse::<IpAddr>()
-                        .map_err(|_| "auth verify-request: --peer-ip must be an IP address".to_owned())?,
-                );
+                peer_ip = Some(raw.parse::<IpAddr>().map_err(|_| {
+                    "auth verify-request: --peer-ip must be an IP address".to_owned()
+                })?);
                 index += 1;
             }
             "--workspace-key-env" => {
@@ -453,4 +452,3 @@ fn render_auth_verify_v3_from_json(
         render_auth_decision_fields(decision).join(",")
     )
 }
-

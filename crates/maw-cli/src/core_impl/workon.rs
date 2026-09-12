@@ -1,6 +1,7 @@
-const DISPATCH_49: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "workon", handler: Handler::Sync(run_workon_command) },
-];
+const DISPATCH_49: &[DispatcherEntry] = &[DispatcherEntry {
+    command: "workon",
+    handler: Handler::Sync(run_workon_command),
+}];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WorkonOptions {
@@ -64,7 +65,9 @@ enum WorkonWorktreePlan {
 }
 
 impl maw_matcher::Named for WorkonWorktree {
-    fn name(&self) -> &str { &self.name }
+    fn name(&self) -> &str {
+        &self.name
+    }
 }
 
 fn run_workon_command(argv: &[String]) -> CliOutput {
@@ -72,11 +75,20 @@ fn run_workon_command(argv: &[String]) -> CliOutput {
         return help_output(workon_usage());
     }
     match workon_parse_args(argv).and_then(|options| workon_cmd(&options)) {
-        Ok(stdout) => CliOutput { code: 0, stdout, stderr: String::new() },
-        Err(message) => CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") },
+        Ok(stdout) => CliOutput {
+            code: 0,
+            stdout,
+            stderr: String::new(),
+        },
+        Err(message) => CliOutput {
+            code: 1,
+            stdout: String::new(),
+            stderr: format!("{message}\n"),
+        },
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn workon_parse_args(argv: &[String]) -> Result<WorkonOptions, String> {
     let mut positional = Vec::new();
     let mut layout = WorkonLayout::Nested;
@@ -89,7 +101,9 @@ fn workon_parse_args(argv: &[String]) -> Result<WorkonOptions, String> {
         match argv[index].as_str() {
             "--help" | "-h" => return Err(workon_usage()),
             "--layout" => {
-                let Some(value) = argv.get(index + 1) else { return Err("workon: --layout must be nested or legacy".to_owned()); };
+                let Some(value) = argv.get(index + 1) else {
+                    return Err("workon: --layout must be nested or legacy".to_owned());
+                };
                 layout = workon_parse_layout(value)?;
                 index += 2;
             }
@@ -118,7 +132,9 @@ fn workon_parse_args(argv: &[String]) -> Result<WorkonOptions, String> {
                 index += 1;
             }
             "--name" => {
-                let Some(value) = argv.get(index + 1) else { return Err("workon: --name requires a value".to_owned()); };
+                let Some(value) = argv.get(index + 1) else {
+                    return Err("workon: --name requires a value".to_owned());
+                };
                 workon_validate_slug_input(value, "--name")?;
                 name = Some(value.clone());
                 index += 2;
@@ -130,7 +146,9 @@ fn workon_parse_args(argv: &[String]) -> Result<WorkonOptions, String> {
                 index += 1;
             }
             "-e" | "--engine" => {
-                let Some(value) = argv.get(index + 1) else { return Err(format!("workon: {} requires a value", argv[index])); };
+                let Some(value) = argv.get(index + 1) else {
+                    return Err(format!("workon: {} requires a value", argv[index]));
+                };
                 workon_validate_query(value, "engine")?;
                 engine = Some(value.clone());
                 index += 2;
@@ -148,17 +166,31 @@ fn workon_parse_args(argv: &[String]) -> Result<WorkonOptions, String> {
             }
         }
     }
-    let Some(repo) = positional.first().cloned() else { return Err(workon_usage()); };
-    if positional.len() > 2 { return Err(workon_usage()); }
+    let Some(repo) = positional.first().cloned() else {
+        return Err(workon_usage());
+    };
+    if positional.len() > 2 {
+        return Err(workon_usage());
+    }
     workon_validate_query(&repo, "repo")?;
-    if let Some(task) = positional.get(1) { workon_validate_slug_input(task, "task")?; }
+    if let Some(task) = positional.get(1) {
+        workon_validate_slug_input(task, "task")?;
+    }
     if wt.is_some() && positional.len() > 1 {
         return Err("workon: use either positional task or --wt, not both".to_owned());
     }
     if wt.is_none() && positional.len() == 1 && (fresh || name.is_some()) {
         return Err("workon: --fresh/--name requires --wt or a task".to_owned());
     }
-    Ok(WorkonOptions { repo, task: positional.get(1).cloned(), wt, fresh, name, engine, layout })
+    Ok(WorkonOptions {
+        repo,
+        task: positional.get(1).cloned(),
+        wt,
+        fresh,
+        name,
+        engine,
+        layout,
+    })
 }
 
 fn workon_parse_layout(raw: &str) -> Result<WorkonLayout, String> {
@@ -179,8 +211,11 @@ fn workon_help_value_flags() -> &'static [&'static str] {
 
 fn workon_cmd(options: &WorkonOptions) -> Result<String, String> {
     let repo = workon_resolve_repo(&options.repo)?;
-    let (stdout, attach_session) = workon_cmd_with_runner(options, &repo, &mut maw_tmux::CommandTmuxRunner::new())?;
-    let Some(session) = attach_session else { return Ok(stdout) };
+    let (stdout, attach_session) =
+        workon_cmd_with_runner(options, &repo, &mut maw_tmux::CommandTmuxRunner::new())?;
+    let Some(session) = attach_session else {
+        return Ok(stdout);
+    };
     if !std::io::IsTerminal::is_terminal(&std::io::stdout()) {
         return Ok(format!("{stdout}run: tmux attach -t {session}\n"));
     }
@@ -197,9 +232,14 @@ fn workon_attach_interactive(session: &str) -> Result<(), String> {
         .stderr(std::process::Stdio::inherit())
         .status()
         .map_err(|error| format!("workon: failed to attach tmux: {error}"))?;
-    if status.success() { Ok(()) } else { Err(format!("workon: tmux attach exited with status {status}")) }
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("workon: tmux attach exited with status {status}"))
+    }
 }
 
+#[allow(clippy::too_many_lines)]
 fn workon_cmd_with_runner<R: maw_tmux::TmuxRunner>(
     options: &WorkonOptions,
     repo: &WorkonRepo,
@@ -213,15 +253,35 @@ fn workon_cmd_with_runner<R: maw_tmux::TmuxRunner>(
     if let Some(request) = workon_resolve_worktree_name(options)? {
         let worktrees = workon_find_worktrees(&repo.parent_dir, &repo.repo_name);
         let branches = workon_agent_branches(&repo.repo_path)?;
-        match workon_plan_worktree(repo, &request, options.fresh, options.layout, &worktrees, &branches)? {
+        match workon_plan_worktree(
+            repo,
+            &request,
+            options.fresh,
+            options.layout,
+            &worktrees,
+            &branches,
+        )? {
             WorkonWorktreePlan::Reuse { path } => {
-                let _ = writeln!(stdout, "\x1b[33m⚡\x1b[0m reusing worktree: {}", path.display());
+                let _ = writeln!(
+                    stdout,
+                    "\x1b[33m⚡\x1b[0m reusing worktree: {}",
+                    path.display()
+                );
                 target_path = path;
             }
-            WorkonWorktreePlan::Create { wt_path, branch, branch_exists, .. } => {
+            WorkonWorktreePlan::Create {
+                wt_path,
+                branch,
+                branch_exists,
+                ..
+            } => {
                 workon_create_worktree(repo, &wt_path, &branch, branch_exists, options.layout)?;
                 let suffix = if branch_exists { ", reused branch" } else { "" };
-                let _ = writeln!(stdout, "\x1b[32m+\x1b[0m worktree: {} ({branch}{suffix})", wt_path.display());
+                let _ = writeln!(
+                    stdout,
+                    "\x1b[32m+\x1b[0m worktree: {} ({branch}{suffix})",
+                    wt_path.display()
+                );
                 target_path = wt_path;
             }
         }
@@ -232,7 +292,9 @@ fn workon_cmd_with_runner<R: maw_tmux::TmuxRunner>(
 
     if std::env::var_os("TMUX").is_some() {
         let session = workon_tmux_run(runner, "display-message", &["-p", "#{session_name}"])?;
-        if session.is_empty() { return Err("could not detect current tmux session".to_owned()); }
+        if session.is_empty() {
+            return Err("could not detect current tmux session".to_owned());
+        }
         workon_ensure_window(
             runner,
             WorkonWindowLaunch {
@@ -255,15 +317,38 @@ fn workon_cmd_with_runner<R: maw_tmux::TmuxRunner>(
             workon_tmux_run(
                 runner,
                 "new-session",
-                &["-d", "-s", &session, "-c", workon_path_str(&target_path)?, "-n", &window_name],
+                &[
+                    "-d",
+                    "-s",
+                    &session,
+                    "-c",
+                    workon_path_str(&target_path)?,
+                    "-n",
+                    &window_name,
+                ],
             )?;
-            workon_send_window_command(runner, &session, &window_name, &target_path, options.engine.as_deref())?;
+            workon_send_window_command(
+                runner,
+                &session,
+                &window_name,
+                &target_path,
+                options.engine.as_deref(),
+            )?;
             if taskless_oracle {
-                if let WorkonFleetStatus::Created = workon_ensure_fleet_session_entry(&session, &window_name, &target_path)? {
-                    let _ = writeln!(stdout, "\x1b[32m+\x1b[0m fleet registered {session}:{window_name}");
+                if let WorkonFleetStatus::Created =
+                    workon_ensure_fleet_session_entry(&session, &window_name, &target_path)?
+                {
+                    let _ = writeln!(
+                        stdout,
+                        "\x1b[32m+\x1b[0m fleet registered {session}:{window_name}"
+                    );
                 }
             }
-            let _ = writeln!(stdout, "\x1b[32m✅\x1b[0m workon '{window_name}' in new session {session} → {}", target_path.display());
+            let _ = writeln!(
+                stdout,
+                "\x1b[32m✅\x1b[0m workon '{window_name}' in new session {session} → {}",
+                target_path.display()
+            );
             Ok((stdout, Some(session)))
         }
         WorkonOutsideSession::Existing(session) => {
@@ -338,8 +423,15 @@ fn workon_ensure_window<R: maw_tmux::TmuxRunner>(
 
     let windows = workon_list_windows(runner, session)?;
     if !force_new_window && windows.iter().any(|name| name == window_name) {
-        workon_tmux_run(runner, "select-window", &["-t", &format!("{session}:{window_name}")])?;
-        let _ = writeln!(stdout, "\x1b[33m⚡\x1b[0m reusing existing window '{window_name}' in {session}");
+        workon_tmux_run(
+            runner,
+            "select-window",
+            &["-t", &format!("{session}:{window_name}")],
+        )?;
+        let _ = writeln!(
+            stdout,
+            "\x1b[33m⚡\x1b[0m reusing existing window '{window_name}' in {session}"
+        );
         return Ok(());
     }
 
@@ -347,12 +439,21 @@ fn workon_ensure_window<R: maw_tmux::TmuxRunner>(
     workon_send_window_command_to_target(runner, &new_target, window_name, target_path, engine)?;
 
     if taskless_oracle {
-        if let WorkonFleetStatus::Created = workon_ensure_fleet_session_entry(session, window_name, target_path)? {
-            let _ = writeln!(stdout, "\x1b[32m+\x1b[0m fleet registered {session}:{window_name}");
+        if let WorkonFleetStatus::Created =
+            workon_ensure_fleet_session_entry(session, window_name, target_path)?
+        {
+            let _ = writeln!(
+                stdout,
+                "\x1b[32m+\x1b[0m fleet registered {session}:{window_name}"
+            );
         }
     }
 
-    let _ = writeln!(stdout, "\x1b[32m✅\x1b[0m workon '{window_name}' in {session} → {}", target_path.display());
+    let _ = writeln!(
+        stdout,
+        "\x1b[32m✅\x1b[0m workon '{window_name}' in {session} → {}",
+        target_path.display()
+    );
     Ok(())
 }
 
@@ -406,11 +507,19 @@ fn workon_new_window<R: maw_tmux::TmuxRunner>(
             workon_path_str(target_path)?,
         ],
     )?;
-    Ok(if window_id.is_empty() { format!("{session}:{window_name}") } else { window_id })
+    Ok(if window_id.is_empty() {
+        format!("{session}:{window_name}")
+    } else {
+        window_id
+    })
 }
 
-fn workon_resolve_worktree_name(options: &WorkonOptions) -> Result<Option<WorkonResolvedWorktreeName>, String> {
-    let Some(raw) = workon_raw_worktree_slug(options) else { return Ok(None); };
+fn workon_resolve_worktree_name(
+    options: &WorkonOptions,
+) -> Result<Option<WorkonResolvedWorktreeName>, String> {
+    let Some(raw) = workon_raw_worktree_slug(options) else {
+        return Ok(None);
+    };
     let requested = workon_sanitize_task_slug(&raw);
     if requested.is_empty() {
         return Err("workon: worktree slug collapsed to empty".to_owned());
@@ -432,7 +541,10 @@ fn workon_resolve_worktree_name(options: &WorkonOptions) -> Result<Option<Workon
     if slug.is_empty() {
         return Err("workon: worktree slug collapsed to empty".to_owned());
     }
-    Ok(Some(WorkonResolvedWorktreeName { slug, named: stable.is_some() && !options.fresh }))
+    Ok(Some(WorkonResolvedWorktreeName {
+        slug,
+        named: stable.is_some() && !options.fresh,
+    }))
 }
 
 fn workon_raw_worktree_slug(options: &WorkonOptions) -> Option<String> {
@@ -466,7 +578,12 @@ fn workon_plan_worktree(
         let wt_path = workon_worktree_path_for_layout(repo, &wt_name, layout);
         let branch = format!("agents/{wt_name}");
         let branch_exists = branches.contains(&branch);
-        return Ok(WorkonWorktreePlan::Create { wt_name, wt_path, branch, branch_exists });
+        return Ok(WorkonWorktreePlan::Create {
+            wt_name,
+            wt_path,
+            branch,
+            branch_exists,
+        });
     }
 
     let wt_name = request.slug.clone();
@@ -475,7 +592,12 @@ fn workon_plan_worktree(
     let plain_collides = workon_worktree_name_or_path_exists(&wt_name, &wt_path, worktrees)
         || branches.contains(&branch);
     if !plain_collides {
-        return Ok(WorkonWorktreePlan::Create { wt_name, wt_path, branch, branch_exists: false });
+        return Ok(WorkonWorktreePlan::Create {
+            wt_name,
+            wt_path,
+            branch,
+            branch_exists: false,
+        });
     }
 
     let mut next = workon_next_worktree_number(worktrees, branches);
@@ -488,9 +610,17 @@ fn workon_plan_worktree(
             next += 1;
             continue;
         }
-        return Ok(WorkonWorktreePlan::Create { wt_name, wt_path, branch, branch_exists: false });
+        return Ok(WorkonWorktreePlan::Create {
+            wt_name,
+            wt_path,
+            branch,
+            branch_exists: false,
+        });
     }
-    Err(format!("workon: could not allocate worktree for {}", request.slug))
+    Err(format!(
+        "workon: could not allocate worktree for {}",
+        request.slug
+    ))
 }
 
 fn workon_worktree_name_or_path_exists(
@@ -498,7 +628,9 @@ fn workon_worktree_name_or_path_exists(
     wt_path: &std::path::Path,
     worktrees: &[WorkonWorktree],
 ) -> bool {
-    worktrees.iter().any(|wt| wt.name == wt_name || wt.path == wt_path)
+    worktrees
+        .iter()
+        .any(|wt| wt.name == wt_name || wt.path == wt_path)
 }
 
 fn workon_find_reusable_worktree(
@@ -508,17 +640,26 @@ fn workon_find_reusable_worktree(
     match maw_matcher::resolve_worktree_target(slug, worktrees) {
         ResolveResult::Exact { matched } | ResolveResult::Fuzzy { matched } => Ok(Some(matched)),
         ResolveResult::None { .. } => Ok(None),
-        ResolveResult::Ambiguous { candidates } => Err(workon_ambiguous_worktree_error(slug, &candidates)),
+        ResolveResult::Ambiguous { candidates } => {
+            Err(workon_ambiguous_worktree_error(slug, &candidates))
+        }
     }
 }
 
 fn workon_ambiguous_worktree_error(slug: &str, candidates: &[WorkonWorktree]) -> String {
     let mut out = String::new();
-    let _ = writeln!(out, "\x1b[31m✗\x1b[0m '{slug}' is ambiguous — matches {} worktrees:", candidates.len());
+    let _ = writeln!(
+        out,
+        "\x1b[31m✗\x1b[0m '{slug}' is ambiguous — matches {} worktrees:",
+        candidates.len()
+    );
     for candidate in candidates {
         let _ = writeln!(out, "\x1b[90m    • {}\x1b[0m", candidate.name);
     }
-    let _ = writeln!(out, "\x1b[90m  use the full name: maw workon <repo> <exact-worktree>\x1b[0m");
+    let _ = writeln!(
+        out,
+        "\x1b[90m  use the full name: maw workon <repo> <exact-worktree>\x1b[0m"
+    );
     out.trim_end().to_owned()
 }
 
@@ -534,9 +675,15 @@ fn workon_create_worktree(
             .map_err(|error| format!("workon: create agents dir: {error}"))?;
     }
     if branch_exists {
-        workon_git(&repo.repo_path, &["worktree", "add", workon_path_str(wt_path)?, branch])?;
+        workon_git(
+            &repo.repo_path,
+            &["worktree", "add", workon_path_str(wt_path)?, branch],
+        )?;
     } else {
-        workon_git(&repo.repo_path, &["worktree", "add", workon_path_str(wt_path)?, "-b", branch])?;
+        workon_git(
+            &repo.repo_path,
+            &["worktree", "add", workon_path_str(wt_path)?, "-b", branch],
+        )?;
     }
     Ok(())
 }
@@ -555,14 +702,27 @@ fn workon_resolve_repo(repo: &str) -> Result<WorkonRepo, String> {
         }
     }
     let search_term = repo.rsplit('/').next().unwrap_or(repo);
-    let Some(repo_path) = workon_ghq_find(search_term) else { return Err(format!("repo not found: {repo}")); };
+    let Some(repo_path) = workon_ghq_find(search_term) else {
+        return Err(format!("repo not found: {repo}"));
+    };
     workon_resolve_repo_from_ghq_path(repo_path)
 }
 
 fn workon_resolve_repo_from_ghq_path(repo_path: std::path::PathBuf) -> Result<WorkonRepo, String> {
-    let repo_name = repo_path.file_name().and_then(std::ffi::OsStr::to_str).unwrap_or_default().to_owned();
-    let parent_dir = repo_path.parent().ok_or_else(|| format!("workon: repo has no parent: {}", repo_path.display()))?.to_path_buf();
-    Ok(WorkonRepo { repo_path, repo_name, parent_dir })
+    let repo_name = repo_path
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or_default()
+        .to_owned();
+    let parent_dir = repo_path
+        .parent()
+        .ok_or_else(|| format!("workon: repo has no parent: {}", repo_path.display()))?
+        .to_path_buf();
+    Ok(WorkonRepo {
+        repo_path,
+        repo_name,
+        parent_dir,
+    })
 }
 
 fn workon_resolve_repo_from_path(dir: &std::path::Path) -> Result<WorkonRepo, String> {
@@ -570,21 +730,41 @@ fn workon_resolve_repo_from_path(dir: &std::path::Path) -> Result<WorkonRepo, St
         .map_err(|_| format!("workon: '{}' is not inside a git repository", dir.display()))?;
     let repo_path = std::path::PathBuf::from(toplevel.trim());
     if repo_path.as_os_str().is_empty() {
-        return Err(format!("workon: cannot resolve git toplevel for '{}'", dir.display()));
+        return Err(format!(
+            "workon: cannot resolve git toplevel for '{}'",
+            dir.display()
+        ));
     }
-    let repo_name = repo_path.file_name().and_then(std::ffi::OsStr::to_str).unwrap_or_default().to_owned();
-    let parent_dir = repo_path.parent().ok_or_else(|| format!("workon: repo has no parent: {}", repo_path.display()))?.to_path_buf();
-    Ok(WorkonRepo { repo_path, repo_name, parent_dir })
+    let repo_name = repo_path
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or_default()
+        .to_owned();
+    let parent_dir = repo_path
+        .parent()
+        .ok_or_else(|| format!("workon: repo has no parent: {}", repo_path.display()))?
+        .to_path_buf();
+    Ok(WorkonRepo {
+        repo_path,
+        repo_name,
+        parent_dir,
+    })
 }
 
 fn workon_ghq_find(search_term: &str) -> Option<std::path::PathBuf> {
-    if search_term.is_empty() || search_term.starts_with('-') || search_term.contains("..") { return None; }
+    if search_term.is_empty() || search_term.starts_with('-') || search_term.contains("..") {
+        return None;
+    }
     let root = ghq_root().join("github.com");
     let mut matches = Vec::new();
-    let Ok(orgs) = std::fs::read_dir(root) else { return None; };
+    let Ok(orgs) = std::fs::read_dir(root) else {
+        return None;
+    };
     for org in orgs.flatten() {
         let candidate = org.path().join(search_term);
-        if candidate.is_dir() { matches.push(candidate); }
+        if candidate.is_dir() {
+            matches.push(candidate);
+        }
     }
     matches.sort();
     matches.into_iter().next()
@@ -592,7 +772,10 @@ fn workon_ghq_find(search_term: &str) -> Option<std::path::PathBuf> {
 
 fn workon_github_slug(value: &str) -> Option<String> {
     let mut raw = value.trim().trim_end_matches('/').trim_end_matches(".git");
-    if let Some(rest) = raw.strip_prefix("https://github.com/").or_else(|| raw.strip_prefix("http://github.com/")) {
+    if let Some(rest) = raw
+        .strip_prefix("https://github.com/")
+        .or_else(|| raw.strip_prefix("http://github.com/"))
+    {
         raw = rest;
     } else if let Some(rest) = raw.strip_prefix("git@github.com:") {
         raw = rest;
@@ -614,11 +797,16 @@ fn workon_valid_github_segment(value: &str) -> bool {
         && value.trim() == value
         && !value.starts_with('-')
         && !value.contains("..")
-        && value.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
 }
 
 fn workon_ghq_get(input: &str, slug: &str) -> Result<(), String> {
-    let target = if input.starts_with("http://") || input.starts_with("https://") || input.starts_with("git@") {
+    let target = if input.starts_with("http://")
+        || input.starts_with("https://")
+        || input.starts_with("git@")
+    {
         input.to_owned()
     } else {
         format!("github.com/{slug}")
@@ -631,7 +819,11 @@ fn workon_ghq_get(input: &str, slug: &str) -> Result<(), String> {
         return Ok(());
     }
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-    Err(if stderr.is_empty() { "workon: ghq get failed".to_owned() } else { format!("workon: ghq get failed: {stderr}") })
+    Err(if stderr.is_empty() {
+        "workon: ghq get failed".to_owned()
+    } else {
+        format!("workon: ghq get failed: {stderr}")
+    })
 }
 
 fn workon_find_worktrees(parent_dir: &std::path::Path, repo_name: &str) -> Vec<WorkonWorktree> {
@@ -642,7 +834,10 @@ fn workon_find_worktrees(parent_dir: &std::path::Path, repo_name: &str) -> Vec<W
             let name = entry.file_name().to_string_lossy().into_owned();
             let prefix = format!("{repo_name}.wt-");
             if path.is_dir() && name.starts_with(&prefix) && path.join(".git").exists() {
-                out.push(WorkonWorktree { name: name[prefix.len()..].to_owned(), path });
+                out.push(WorkonWorktree {
+                    name: name[prefix.len()..].to_owned(),
+                    path,
+                });
             }
         }
     }
@@ -651,7 +846,10 @@ fn workon_find_worktrees(parent_dir: &std::path::Path, repo_name: &str) -> Vec<W
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() && path.join(".git").exists() {
-                out.push(WorkonWorktree { name: entry.file_name().to_string_lossy().into_owned(), path });
+                out.push(WorkonWorktree {
+                    name: entry.file_name().to_string_lossy().into_owned(),
+                    path,
+                });
             }
         }
     }
@@ -660,9 +858,23 @@ fn workon_find_worktrees(parent_dir: &std::path::Path, repo_name: &str) -> Vec<W
     out
 }
 
-fn workon_agent_branches(repo_path: &std::path::Path) -> Result<std::collections::BTreeSet<String>, String> {
-    let raw = workon_git(repo_path, &["for-each-ref", "--format=%(refname:short)", "refs/heads/agents"])?;
-    Ok(raw.lines().map(str::trim).filter(|line| !line.is_empty()).map(ToOwned::to_owned).collect())
+fn workon_agent_branches(
+    repo_path: &std::path::Path,
+) -> Result<std::collections::BTreeSet<String>, String> {
+    let raw = workon_git(
+        repo_path,
+        &[
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "refs/heads/agents",
+        ],
+    )?;
+    Ok(raw
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect())
 }
 
 fn workon_sanitize_task_slug(task: &str) -> String {
@@ -692,9 +904,24 @@ fn workon_next_worktree_number(
     worktrees: &[WorkonWorktree],
     branches: &std::collections::BTreeSet<String>,
 ) -> i32 {
-    let worktree_max = worktrees.iter().filter_map(|wt| workon_parse_js_i32_prefix(&wt.name)).max();
-    let branch_max = branches.iter().filter_map(|branch| branch.strip_prefix("agents/").and_then(workon_parse_js_i32_prefix)).max();
-    worktree_max.into_iter().chain(branch_max).max().unwrap_or(0) + 1
+    let worktree_max = worktrees
+        .iter()
+        .filter_map(|wt| workon_parse_js_i32_prefix(&wt.name))
+        .max();
+    let branch_max = branches
+        .iter()
+        .filter_map(|branch| {
+            branch
+                .strip_prefix("agents/")
+                .and_then(workon_parse_js_i32_prefix)
+        })
+        .max();
+    worktree_max
+        .into_iter()
+        .chain(branch_max)
+        .max()
+        .unwrap_or(0)
+        + 1
 }
 
 fn workon_parse_js_i32_prefix(value: &str) -> Option<i32> {
@@ -707,13 +934,24 @@ fn workon_parse_js_i32_prefix(value: &str) -> Option<i32> {
         .take_while(char::is_ascii_digit)
         .collect::<String>();
     (!digits.is_empty())
-        .then(|| digits.parse::<i32>().ok().and_then(|number| number.checked_mul(sign)))
+        .then(|| {
+            digits
+                .parse::<i32>()
+                .ok()
+                .and_then(|number| number.checked_mul(sign))
+        })
         .flatten()
 }
 
-fn workon_worktree_path_for_layout(repo: &WorkonRepo, wt_name: &str, layout: WorkonLayout) -> std::path::PathBuf {
+fn workon_worktree_path_for_layout(
+    repo: &WorkonRepo,
+    wt_name: &str,
+    layout: WorkonLayout,
+) -> std::path::PathBuf {
     match layout {
-        WorkonLayout::Legacy => repo.parent_dir.join(format!("{}.wt-{wt_name}", repo.repo_name)),
+        WorkonLayout::Legacy => repo
+            .parent_dir
+            .join(format!("{}.wt-{wt_name}", repo.repo_name)),
         WorkonLayout::Nested => repo.repo_path.join("agents").join(wt_name),
     }
 }
@@ -725,21 +963,45 @@ fn workon_git(repo_path: &std::path::Path, args: &[&str]) -> Result<String, Stri
         .args(args)
         .output()
         .map_err(|error| format!("workon: failed to execute git: {error}"))?;
-    if output.status.success() { return Ok(String::from_utf8_lossy(&output.stdout).into_owned()); }
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
+    }
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-    Err(if stderr.is_empty() { "workon: git failed".to_owned() } else { format!("workon: git failed: {stderr}") })
+    Err(if stderr.is_empty() {
+        "workon: git failed".to_owned()
+    } else {
+        format!("workon: git failed: {stderr}")
+    })
 }
 
-fn workon_tmux_run<R: maw_tmux::TmuxRunner>(runner: &mut R, subcommand: &str, args: &[&str]) -> Result<String, String> {
+fn workon_tmux_run<R: maw_tmux::TmuxRunner>(
+    runner: &mut R,
+    subcommand: &str,
+    args: &[&str],
+) -> Result<String, String> {
     runner
-        .run(subcommand, &args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>())
+        .run(
+            subcommand,
+            &args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>(),
+        )
         .map(|out| out.trim().to_owned())
         .map_err(|error| error.message)
 }
 
-fn workon_list_windows<R: maw_tmux::TmuxRunner>(runner: &mut R, session: &str) -> Result<Vec<String>, String> {
-    let raw = workon_tmux_run(runner, "list-windows", &["-t", session, "-F", "#{window_name}"])?;
-    Ok(raw.lines().map(str::to_owned).filter(|line| !line.is_empty()).collect())
+fn workon_list_windows<R: maw_tmux::TmuxRunner>(
+    runner: &mut R,
+    session: &str,
+) -> Result<Vec<String>, String> {
+    let raw = workon_tmux_run(
+        runner,
+        "list-windows",
+        &["-t", session, "-F", "#{window_name}"],
+    )?;
+    Ok(raw
+        .lines()
+        .map(str::to_owned)
+        .filter(|line| !line.is_empty())
+        .collect())
 }
 
 fn workon_list_sessions<R: maw_tmux::TmuxRunner>(runner: &mut R) -> Vec<String> {
@@ -758,23 +1020,20 @@ fn workon_list_sessions<R: maw_tmux::TmuxRunner>(runner: &mut R) -> Vec<String> 
         .unwrap_or_default()
 }
 
-fn workon_build_command_in_dir(agent_name: &str, cwd: &std::path::Path, engine: Option<&str>) -> String {
+/// `workon` and `wake` used to resolve `commands` through two near-identical
+/// hand-written lookups, which is how wake ended up missing the per-agent and
+/// glob tiers entirely (#761). Both now go through
+/// `wake_resolve_command_from_config` so they cannot drift again; the only
+/// difference left is the built-in fallback binary — `workon` has always
+/// defaulted to claude, `wake` to codex.
+fn workon_build_command_in_dir(
+    agent_name: &str,
+    cwd: &std::path::Path,
+    engine: Option<&str>,
+) -> String {
     let config = merged_config_value_in_dir(cwd);
-    let commands = config.get("commands");
-    let command = if let Some(engine) = engine {
-        commands
-            .and_then(|commands| commands.get(engine))
-            .and_then(serde_json::Value::as_str)
-            .map_or_else(|| engine.to_owned(), str::to_owned)
-    } else {
-        commands
-            .and_then(|commands| {
-                commands.get(agent_name).and_then(serde_json::Value::as_str)
-                    .or_else(|| commands.get("default").and_then(serde_json::Value::as_str))
-            })
-            .map_or_else(|| "claude".to_owned(), str::to_owned)
-    };
-    workon_prefix_zai_pool(&config, command)
+    let resolution = wake_resolve_command_from_config(&config, agent_name, engine, None, "claude");
+    workon_prefix_zai_pool(&config, resolution.command)
 }
 
 /// Fleet token-pool spawn wiring (#293): when merged config names a fleet
@@ -783,31 +1042,60 @@ fn workon_build_command_in_dir(agent_name: &str, cwd: &std::path::Path, engine: 
 /// `tokenPool.<group>` before the global pool. Group names are validated to
 /// stay shell-safe; anything else keeps the command untouched.
 fn workon_prefix_zai_pool(config: &serde_json::Value, command: String) -> String {
-    let Some(group) = config.get("zaiPool").and_then(serde_json::Value::as_str) else { return command; };
-    if !zai_safe_group(group) || command.starts_with("MAW_ZAI_POOL=") { return command; }
+    let Some(group) = config.get("zaiPool").and_then(serde_json::Value::as_str) else {
+        return command;
+    };
+    if !zai_safe_group(group) || command.starts_with("MAW_ZAI_POOL=") {
+        return command;
+    }
     format!("MAW_ZAI_POOL={group} {command}")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum WorkonFleetStatus { Created, Exists, Skipped }
+enum WorkonFleetStatus {
+    Created,
+    Exists,
+    Skipped,
+}
 
-fn workon_ensure_fleet_session_entry(session: &str, window: &str, cwd: &std::path::Path) -> Result<WorkonFleetStatus, String> {
-    if !workon_safe_fleet_session_name(session) || window.trim().is_empty() { return Ok(WorkonFleetStatus::Skipped); }
-    let repo = workon_repo_from_cwd(cwd).ok_or(WorkonFleetStatus::Skipped).map_err(|_| "workon: skipped fleet registration".to_owned())?;
+fn workon_ensure_fleet_session_entry(
+    session: &str,
+    window: &str,
+    cwd: &std::path::Path,
+) -> Result<WorkonFleetStatus, String> {
+    if !workon_safe_fleet_session_name(session) || window.trim().is_empty() {
+        return Ok(WorkonFleetStatus::Skipped);
+    }
+    let repo = workon_repo_from_cwd(cwd)
+        .ok_or(WorkonFleetStatus::Skipped)
+        .map_err(|_| "workon: skipped fleet registration".to_owned())?;
     let env = current_xdg_env();
-    if fleet_load_entries_for_env(&env).iter().any(|entry| fleet_entry_is_session(entry) && entry.session.name == session) { return Ok(WorkonFleetStatus::Exists); }
+    if fleet_load_entries_for_env(&env)
+        .iter()
+        .any(|entry| fleet_entry_is_session(entry) && entry.session.name == session)
+    {
+        return Ok(WorkonFleetStatus::Exists);
+    }
     let fleet_dir = maw_state_path(&env, &["fleet"]);
-    std::fs::create_dir_all(&fleet_dir).map_err(|error| format!("workon: create fleet dir: {error}"))?;
+    std::fs::create_dir_all(&fleet_dir)
+        .map_err(|error| format!("workon: create fleet dir: {error}"))?;
     let path = fleet_dir.join(format!("{session}.json"));
-    if path.exists() { return Ok(WorkonFleetStatus::Exists); }
+    if path.exists() {
+        return Ok(WorkonFleetStatus::Exists);
+    }
     let json = serde_json::json!({
         "name": session,
         "created_by": "maw workon",
         "auto_registered": true,
         "windows": [{"name": window, "repo": repo}],
     });
-    std::fs::write(&path, serde_json::to_string_pretty(&json).map_err(|error| format!("workon: render fleet json: {error}"))? + "\n")
-        .map_err(|error| format!("workon: write {}: {error}", path.display()))?;
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&json)
+            .map_err(|error| format!("workon: render fleet json: {error}"))?
+            + "\n",
+    )
+    .map_err(|error| format!("workon: write {}: {error}", path.display()))?;
     Ok(WorkonFleetStatus::Created)
 }
 
@@ -821,30 +1109,51 @@ fn workon_repo_from_cwd(cwd: &std::path::Path) -> Option<String> {
 }
 
 fn workon_safe_fleet_session_name(session: &str) -> bool {
-    !session.is_empty() && session.trim() == session && !session.starts_with('-') && session.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
+    !session.is_empty()
+        && session.trim() == session
+        && !session.starts_with('-')
+        && session
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
 }
 
 fn workon_validate_query(value: &str, name: &str) -> Result<(), String> {
     if value.is_empty() || value.trim() != value || value.starts_with('-') || value.contains("..") {
-        Err(format!("workon: {name} must be non-empty, unpadded, and not start with '-'"))
-    } else { Ok(()) }
+        Err(format!(
+            "workon: {name} must be non-empty, unpadded, and not start with '-'"
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 fn workon_validate_slug_input(value: &str, name: &str) -> Result<(), String> {
-    if value.is_empty() || value.trim() != value || value.starts_with('-') || value.contains('\0') || value.chars().any(char::is_control) {
-        Err(format!("workon: {name} must be non-empty, unpadded, and not start with '-'"))
-    } else { Ok(()) }
+    if value.is_empty()
+        || value.trim() != value
+        || value.starts_with('-')
+        || value.contains('\0')
+        || value.chars().any(char::is_control)
+    {
+        Err(format!(
+            "workon: {name} must be non-empty, unpadded, and not start with '-'"
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 fn workon_validate_tmux_target(target: &str) -> Result<(), String> {
     if target.is_empty() || target.trim() != target || target.starts_with('-') {
-        return Err("tmux target/session must be non-empty, unpadded, and not start with '-'".to_owned());
+        return Err(
+            "tmux target/session must be non-empty, unpadded, and not start with '-'".to_owned(),
+        );
     }
     Ok(())
 }
 
 fn workon_path_str(path: &std::path::Path) -> Result<&str, String> {
-    path.to_str().ok_or_else(|| format!("workon: path is not utf8: {}", path.display()))
+    path.to_str()
+        .ok_or_else(|| format!("workon: path is not utf8: {}", path.display()))
 }
 
 #[cfg(test)]
@@ -862,31 +1171,55 @@ mod workon_tests {
     }
 
     impl maw_tmux::TmuxRunner for WorkonMockTmux {
-        fn run(&mut self, subcommand: &str, args: &[String]) -> Result<String, maw_tmux::TmuxError> {
+        fn run(
+            &mut self,
+            subcommand: &str,
+            args: &[String],
+        ) -> Result<String, maw_tmux::TmuxError> {
             self.calls.push((subcommand.to_owned(), args.to_vec()));
             match subcommand {
                 "display-message" => Ok(self.session.clone()),
                 "list-sessions" => Ok(self.sessions.clone()),
                 "list-windows" => Ok(self.windows.clone()),
                 "has-session" => {
-                    if self.has_session { Ok(String::new()) } else { Err(maw_tmux::TmuxError::new("no session")) }
+                    if self.has_session {
+                        Ok(String::new())
+                    } else {
+                        Err(maw_tmux::TmuxError::new("no session"))
+                    }
                 }
-                "new-window" | "new-session" | "send-keys" | "select-window" | "capture-pane" => Ok(String::new()),
+                "new-window" | "new-session" | "send-keys" | "select-window" | "capture-pane" => {
+                    Ok(String::new())
+                }
                 other => Err(maw_tmux::TmuxError::new(format!("unexpected {other}"))),
             }
         }
     }
 
-    fn workon_strings(values: &[&str]) -> Vec<String> { values.iter().map(|value| (*value).to_owned()).collect() }
+    fn workon_strings(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_owned()).collect()
+    }
 
     #[test]
     fn workon_prefix_zai_pool_exports_group_only_when_safe() {
         let scoped = serde_json::json!({"zaiPool": "3e"});
-        assert_eq!(workon_prefix_zai_pool(&scoped, "codex".to_owned()), "MAW_ZAI_POOL=3e codex");
-        assert_eq!(workon_prefix_zai_pool(&scoped, "MAW_ZAI_POOL=zai codex".to_owned()), "MAW_ZAI_POOL=zai codex");
+        assert_eq!(
+            workon_prefix_zai_pool(&scoped, "codex".to_owned()),
+            "MAW_ZAI_POOL=3e codex"
+        );
+        assert_eq!(
+            workon_prefix_zai_pool(&scoped, "MAW_ZAI_POOL=zai codex".to_owned()),
+            "MAW_ZAI_POOL=zai codex"
+        );
         let unsafe_group = serde_json::json!({"zaiPool": "3e; rm -rf"});
-        assert_eq!(workon_prefix_zai_pool(&unsafe_group, "codex".to_owned()), "codex");
-        assert_eq!(workon_prefix_zai_pool(&serde_json::json!({}), "codex".to_owned()), "codex");
+        assert_eq!(
+            workon_prefix_zai_pool(&unsafe_group, "codex".to_owned()),
+            "codex"
+        );
+        assert_eq!(
+            workon_prefix_zai_pool(&serde_json::json!({}), "codex".to_owned()),
+            "codex"
+        );
     }
 
     fn workon_test_options(repo: &str, task: Option<&str>) -> WorkonOptions {
@@ -916,7 +1249,10 @@ mod workon_tests {
     fn workon_temp_root(label: &str) -> std::path::PathBuf {
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let seq = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!("maw-rs-workon-{label}-{}-{seq}", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "maw-rs-workon-{label}-{}-{seq}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("temp root");
         path
@@ -924,10 +1260,18 @@ mod workon_tests {
 
     #[test]
     fn workon_parse_layout_and_usage() {
-        assert!(workon_parse_args(&[]).expect_err("usage").contains("usage: maw workon"));
+        assert!(workon_parse_args(&[])
+            .expect_err("usage")
+            .contains("usage: maw workon"));
         assert!(workon_parse_args(&workon_strings(&["repo", "task", "extra"])).is_err());
-        assert!(workon_parse_args(&workon_strings(&["repo", "--layout", "wide"])).expect_err("layout").contains("nested or legacy"));
-        let parsed = workon_parse_args(&workon_strings(&["repo", "--wt", "--fresh", "-e", "codex"])).expect("bare wt");
+        assert!(
+            workon_parse_args(&workon_strings(&["repo", "--layout", "wide"]))
+                .expect_err("layout")
+                .contains("nested or legacy")
+        );
+        let parsed =
+            workon_parse_args(&workon_strings(&["repo", "--wt", "--fresh", "-e", "codex"]))
+                .expect("bare wt");
         assert_eq!(parsed.wt, Some(WorkonWorktreeRequest::Auto));
         assert!(parsed.fresh);
         assert_eq!(parsed.engine.as_deref(), Some("codex"));
@@ -955,19 +1299,28 @@ mod workon_tests {
         options.wt = Some(WorkonWorktreeRequest::Auto);
         assert_eq!(
             workon_resolve_worktree_name(&options).expect("name"),
-            Some(WorkonResolvedWorktreeName { slug: "codex".to_owned(), named: false })
+            Some(WorkonResolvedWorktreeName {
+                slug: "codex".to_owned(),
+                named: false
+            })
         );
 
         options.name = Some("Stable".to_owned());
         assert_eq!(
             workon_resolve_worktree_name(&options).expect("stable"),
-            Some(WorkonResolvedWorktreeName { slug: "stable".to_owned(), named: true })
+            Some(WorkonResolvedWorktreeName {
+                slug: "stable".to_owned(),
+                named: true
+            })
         );
 
         options.wt = Some(WorkonWorktreeRequest::Named("Issue 139".to_owned()));
         assert_eq!(
             workon_resolve_worktree_name(&options).expect("combined stable"),
-            Some(WorkonResolvedWorktreeName { slug: "stable-issue-139".to_owned(), named: true })
+            Some(WorkonResolvedWorktreeName {
+                slug: "stable-issue-139".to_owned(),
+                named: true
+            })
         );
     }
 
@@ -975,9 +1328,20 @@ mod workon_tests {
     fn workon_plan_uses_plain_slug_in_clean_repo() {
         let root = std::path::PathBuf::from("/tmp/workon-clean");
         let repo = workon_test_repo(&root);
-        let request = WorkonResolvedWorktreeName { slug: "feat".to_owned(), named: false };
+        let request = WorkonResolvedWorktreeName {
+            slug: "feat".to_owned(),
+            named: false,
+        };
 
-        let plan = workon_plan_worktree(&repo, &request, false, WorkonLayout::Nested, &[], &workon_branch_set(&["main"])).expect("plan");
+        let plan = workon_plan_worktree(
+            &repo,
+            &request,
+            false,
+            WorkonLayout::Nested,
+            &[],
+            &workon_branch_set(&["main"]),
+        )
+        .expect("plan");
 
         assert_eq!(
             plan,
@@ -994,11 +1358,25 @@ mod workon_tests {
     fn workon_plan_prefixes_only_for_same_name_collision() {
         let root = std::path::PathBuf::from("/tmp/workon-collision");
         let repo = workon_test_repo(&root);
-        let worktrees = vec![WorkonWorktree { name: "feat".to_owned(), path: repo.repo_path.join("agents/feat") }];
+        let worktrees = vec![WorkonWorktree {
+            name: "feat".to_owned(),
+            path: repo.repo_path.join("agents/feat"),
+        }];
         let branches = workon_branch_set(&["agents/feat", "main"]);
-        let request = WorkonResolvedWorktreeName { slug: "feat".to_owned(), named: false };
+        let request = WorkonResolvedWorktreeName {
+            slug: "feat".to_owned(),
+            named: false,
+        };
 
-        let plan = workon_plan_worktree(&repo, &request, true, WorkonLayout::Nested, &worktrees, &branches).expect("plan");
+        let plan = workon_plan_worktree(
+            &repo,
+            &request,
+            true,
+            WorkonLayout::Nested,
+            &worktrees,
+            &branches,
+        )
+        .expect("plan");
 
         assert_eq!(
             plan,
@@ -1015,11 +1393,25 @@ mod workon_tests {
     fn workon_plan_ignores_unrelated_stale_agent_branches_for_plain_slug() {
         let root = std::path::PathBuf::from("/tmp/workon-stale");
         let repo = workon_test_repo(&root);
-        let worktrees = vec![WorkonWorktree { name: "1-old".to_owned(), path: repo.repo_path.join("agents/1-old") }];
+        let worktrees = vec![WorkonWorktree {
+            name: "1-old".to_owned(),
+            path: repo.repo_path.join("agents/1-old"),
+        }];
         let branches = workon_branch_set(&["agents/4-stale", "agents/fix-probe", "main"]);
-        let request = WorkonResolvedWorktreeName { slug: "fix-probe2".to_owned(), named: false };
+        let request = WorkonResolvedWorktreeName {
+            slug: "fix-probe2".to_owned(),
+            named: false,
+        };
 
-        let plan = workon_plan_worktree(&repo, &request, false, WorkonLayout::Nested, &worktrees, &branches).expect("plan");
+        let plan = workon_plan_worktree(
+            &repo,
+            &request,
+            false,
+            WorkonLayout::Nested,
+            &worktrees,
+            &branches,
+        )
+        .expect("plan");
 
         assert_eq!(
             plan,
@@ -1037,14 +1429,41 @@ mod workon_tests {
         let root = std::path::PathBuf::from("/tmp/workon-reuse");
         let repo = workon_test_repo(&root);
         let existing_path = repo.repo_path.join("agents/2-feat");
-        let worktrees = vec![WorkonWorktree { name: "2-feat".to_owned(), path: existing_path.clone() }];
+        let worktrees = vec![WorkonWorktree {
+            name: "2-feat".to_owned(),
+            path: existing_path.clone(),
+        }];
         let branches = workon_branch_set(&["agents/2-feat"]);
-        let request = WorkonResolvedWorktreeName { slug: "feat".to_owned(), named: false };
+        let request = WorkonResolvedWorktreeName {
+            slug: "feat".to_owned(),
+            named: false,
+        };
 
-        let reused = workon_plan_worktree(&repo, &request, false, WorkonLayout::Nested, &worktrees, &branches).expect("reuse");
-        assert_eq!(reused, WorkonWorktreePlan::Reuse { path: existing_path });
+        let reused = workon_plan_worktree(
+            &repo,
+            &request,
+            false,
+            WorkonLayout::Nested,
+            &worktrees,
+            &branches,
+        )
+        .expect("reuse");
+        assert_eq!(
+            reused,
+            WorkonWorktreePlan::Reuse {
+                path: existing_path
+            }
+        );
 
-        let fresh = workon_plan_worktree(&repo, &request, true, WorkonLayout::Nested, &worktrees, &branches).expect("fresh");
+        let fresh = workon_plan_worktree(
+            &repo,
+            &request,
+            true,
+            WorkonLayout::Nested,
+            &worktrees,
+            &branches,
+        )
+        .expect("fresh");
         assert_eq!(
             fresh,
             WorkonWorktreePlan::Create {
@@ -1060,10 +1479,15 @@ mod workon_tests {
     fn workon_plan_named_stable_worktree_reuses_existing_branch() {
         let root = std::path::PathBuf::from("/tmp/workon-stable");
         let repo = workon_test_repo(&root);
-        let request = WorkonResolvedWorktreeName { slug: "stable-issue".to_owned(), named: true };
+        let request = WorkonResolvedWorktreeName {
+            slug: "stable-issue".to_owned(),
+            named: true,
+        };
         let branches = workon_branch_set(&["agents/stable-issue"]);
 
-        let plan = workon_plan_worktree(&repo, &request, false, WorkonLayout::Nested, &[], &branches).expect("stable plan");
+        let plan =
+            workon_plan_worktree(&repo, &request, false, WorkonLayout::Nested, &[], &branches)
+                .expect("stable plan");
 
         assert_eq!(
             plan,
@@ -1079,24 +1503,45 @@ mod workon_tests {
     #[test]
     fn workon_reuses_existing_window_before_spawn() {
         let temp = std::env::temp_dir().join("maw-rs-workon-unit");
-        let repo = WorkonRepo { repo_path: temp.join("acme/demo"), repo_name: "demo".to_owned(), parent_dir: temp.join("acme") };
+        let repo = WorkonRepo {
+            repo_path: temp.join("acme/demo"),
+            repo_name: "demo".to_owned(),
+            parent_dir: temp.join("acme"),
+        };
         let options = workon_test_options("demo", None);
-        let mut runner = WorkonMockTmux { session: "50-mawjs\n".to_owned(), windows: "demo\n".to_owned(), ..Default::default() };
+        let mut runner = WorkonMockTmux {
+            session: "50-mawjs\n".to_owned(),
+            windows: "demo\n".to_owned(),
+            ..Default::default()
+        };
         let _guard = env_test_lock();
         let _restore = EnvVarRestore::capture("TMUX");
         std::env::set_var("TMUX", "/tmp/tmux,1,0");
 
         let (stdout, attach) = workon_cmd_with_runner(&options, &repo, &mut runner).expect("reuse");
 
-        assert_eq!(stdout, "\x1b[33m⚡\x1b[0m reusing existing window 'demo' in 50-mawjs\n");
+        assert_eq!(
+            stdout,
+            "\x1b[33m⚡\x1b[0m reusing existing window 'demo' in 50-mawjs\n"
+        );
         assert!(attach.is_none());
-        assert_eq!(runner.calls[2], ("select-window".to_owned(), workon_strings(&["-t", "50-mawjs:demo"])));
+        assert_eq!(
+            runner.calls[2],
+            (
+                "select-window".to_owned(),
+                workon_strings(&["-t", "50-mawjs:demo"])
+            )
+        );
     }
 
     #[test]
     fn workon_outside_tmux_creates_session_and_requests_attach() {
         let temp = std::env::temp_dir().join("maw-rs-workon-unit");
-        let repo = WorkonRepo { repo_path: temp.join("acme/demo"), repo_name: "demo".to_owned(), parent_dir: temp.join("acme") };
+        let repo = WorkonRepo {
+            repo_path: temp.join("acme/demo"),
+            repo_name: "demo".to_owned(),
+            parent_dir: temp.join("acme"),
+        };
         let options = workon_test_options("demo", None);
         let mut runner = WorkonMockTmux {
             sessions: "team-demo\n188-other\n".to_owned(),
@@ -1106,27 +1551,49 @@ mod workon_tests {
         let _restore = EnvVarRestore::capture("TMUX");
         std::env::remove_var("TMUX");
 
-        let (stdout, attach) = workon_cmd_with_runner(&options, &repo, &mut runner).expect("create session");
+        let (stdout, attach) =
+            workon_cmd_with_runner(&options, &repo, &mut runner).expect("create session");
 
         assert_eq!(attach.as_deref(), Some("demo"));
-        assert!(stdout.contains("workon 'demo' in new session demo"), "{stdout}");
-        assert_eq!(runner.calls[0], ("has-session".to_owned(), workon_strings(&["-t", "=demo"])));
-        assert_eq!(runner.calls[1], ("list-sessions".to_owned(), workon_strings(&["-F", "#{session_name}"])));
+        assert!(
+            stdout.contains("workon 'demo' in new session demo"),
+            "{stdout}"
+        );
+        assert_eq!(
+            runner.calls[0],
+            ("has-session".to_owned(), workon_strings(&["-t", "=demo"]))
+        );
+        assert_eq!(
+            runner.calls[1],
+            (
+                "list-sessions".to_owned(),
+                workon_strings(&["-F", "#{session_name}"])
+            )
+        );
         assert_eq!(runner.calls[2].0, "new-session");
-        assert_eq!(&runner.calls[2].1[..3], &workon_strings(&["-d", "-s", "demo"])[..]);
-        assert_eq!(&runner.calls[2].1[5..], &workon_strings(&["-n", "demo"])[..]);
+        assert_eq!(
+            &runner.calls[2].1[..3],
+            &workon_strings(&["-d", "-s", "demo"])[..]
+        );
+        assert_eq!(
+            &runner.calls[2].1[5..],
+            &workon_strings(&["-n", "demo"])[..]
+        );
         assert_eq!(runner.calls[3].0, "display-message");
-        assert_eq!(runner.calls[4].0, "send-keys");
         assert_eq!(runner.calls[5].0, "send-keys");
-        assert_eq!(runner.calls[6].0, "capture-pane");
+        assert_eq!(runner.calls[6].0, "send-keys");
         assert_eq!(runner.calls[7].0, "capture-pane");
-        assert_eq!(runner.calls.len(), 8);
+        assert_eq!(runner.calls.len(), 9);
     }
 
     #[test]
     fn workon_outside_tmux_exact_session_wins_before_numbered_fleet() {
         let temp = std::env::temp_dir().join("maw-rs-workon-unit");
-        let repo = WorkonRepo { repo_path: temp.join("acme/demo"), repo_name: "demo".to_owned(), parent_dir: temp.join("acme") };
+        let repo = WorkonRepo {
+            repo_path: temp.join("acme/demo"),
+            repo_name: "demo".to_owned(),
+            parent_dir: temp.join("acme"),
+        };
         let options = workon_test_options("demo", None);
         let mut runner = WorkonMockTmux {
             has_session: true,
@@ -1138,20 +1605,34 @@ mod workon_tests {
         let _restore = EnvVarRestore::capture("TMUX");
         std::env::remove_var("TMUX");
 
-        let (stdout, attach) = workon_cmd_with_runner(&options, &repo, &mut runner).expect("reuse session");
+        let (stdout, attach) =
+            workon_cmd_with_runner(&options, &repo, &mut runner).expect("reuse session");
 
         assert_eq!(attach.as_deref(), Some("demo"));
-        assert!(stdout.contains("reusing existing window 'demo' in demo"), "{stdout}");
+        assert!(
+            stdout.contains("reusing existing window 'demo' in demo"),
+            "{stdout}"
+        );
         assert_eq!(runner.calls[0].0, "has-session");
         assert_eq!(runner.calls[1].0, "list-windows");
-        assert_eq!(runner.calls[2], ("select-window".to_owned(), workon_strings(&["-t", "demo:demo"])));
+        assert_eq!(
+            runner.calls[2],
+            (
+                "select-window".to_owned(),
+                workon_strings(&["-t", "demo:demo"])
+            )
+        );
         assert_eq!(runner.calls.len(), 3);
     }
 
     #[test]
     fn workon_outside_tmux_reuses_numbered_fleet_session() {
         let temp = std::env::temp_dir().join("maw-rs-workon-unit");
-        let repo = WorkonRepo { repo_path: temp.join("acme/maw-rs"), repo_name: "maw-rs".to_owned(), parent_dir: temp.join("acme") };
+        let repo = WorkonRepo {
+            repo_path: temp.join("acme/maw-rs"),
+            repo_name: "maw-rs".to_owned(),
+            parent_dir: temp.join("acme"),
+        };
         let options = workon_test_options("maw-rs", None);
         let mut runner = WorkonMockTmux {
             sessions: "188-maw-rs\n".to_owned(),
@@ -1162,21 +1643,50 @@ mod workon_tests {
         let _restore = EnvVarRestore::capture("TMUX");
         std::env::remove_var("TMUX");
 
-        let (stdout, attach) = workon_cmd_with_runner(&options, &repo, &mut runner).expect("reuse numbered fleet");
+        let (stdout, attach) =
+            workon_cmd_with_runner(&options, &repo, &mut runner).expect("reuse numbered fleet");
 
         assert_eq!(attach.as_deref(), Some("188-maw-rs"));
-        assert!(stdout.contains("reusing existing window 'maw-rs' in 188-maw-rs"), "{stdout}");
-        assert_eq!(runner.calls[0], ("has-session".to_owned(), workon_strings(&["-t", "=maw-rs"])));
-        assert_eq!(runner.calls[1], ("list-sessions".to_owned(), workon_strings(&["-F", "#{session_name}"])));
-        assert_eq!(runner.calls[2], ("list-windows".to_owned(), workon_strings(&["-t", "188-maw-rs", "-F", "#{window_name}"])));
-        assert_eq!(runner.calls[3], ("select-window".to_owned(), workon_strings(&["-t", "188-maw-rs:maw-rs"])));
+        assert!(
+            stdout.contains("reusing existing window 'maw-rs' in 188-maw-rs"),
+            "{stdout}"
+        );
+        assert_eq!(
+            runner.calls[0],
+            ("has-session".to_owned(), workon_strings(&["-t", "=maw-rs"]))
+        );
+        assert_eq!(
+            runner.calls[1],
+            (
+                "list-sessions".to_owned(),
+                workon_strings(&["-F", "#{session_name}"])
+            )
+        );
+        assert_eq!(
+            runner.calls[2],
+            (
+                "list-windows".to_owned(),
+                workon_strings(&["-t", "188-maw-rs", "-F", "#{window_name}"])
+            )
+        );
+        assert_eq!(
+            runner.calls[3],
+            (
+                "select-window".to_owned(),
+                workon_strings(&["-t", "188-maw-rs:maw-rs"])
+            )
+        );
         assert_eq!(runner.calls.len(), 4);
     }
 
     #[test]
     fn workon_outside_tmux_ambiguous_numbered_fleet_sessions_error_without_create() {
         let temp = std::env::temp_dir().join("maw-rs-workon-unit");
-        let repo = WorkonRepo { repo_path: temp.join("acme/maw-rs"), repo_name: "maw-rs".to_owned(), parent_dir: temp.join("acme") };
+        let repo = WorkonRepo {
+            repo_path: temp.join("acme/maw-rs"),
+            repo_name: "maw-rs".to_owned(),
+            parent_dir: temp.join("acme"),
+        };
         let options = workon_test_options("maw-rs", None);
         let mut runner = WorkonMockTmux {
             sessions: "188-maw-rs\n187-maw-rs\n".to_owned(),
@@ -1186,13 +1696,26 @@ mod workon_tests {
         let _restore = EnvVarRestore::capture("TMUX");
         std::env::remove_var("TMUX");
 
-        let err = workon_cmd_with_runner(&options, &repo, &mut runner).expect_err("ambiguous fleet");
+        let err =
+            workon_cmd_with_runner(&options, &repo, &mut runner).expect_err("ambiguous fleet");
 
-        assert!(err.contains("matches multiple numbered fleet sessions"), "{err}");
+        assert!(
+            err.contains("matches multiple numbered fleet sessions"),
+            "{err}"
+        );
         assert!(err.contains("187-maw-rs"), "{err}");
         assert!(err.contains("188-maw-rs"), "{err}");
-        assert_eq!(runner.calls[0], ("has-session".to_owned(), workon_strings(&["-t", "=maw-rs"])));
-        assert_eq!(runner.calls[1], ("list-sessions".to_owned(), workon_strings(&["-F", "#{session_name}"])));
+        assert_eq!(
+            runner.calls[0],
+            ("has-session".to_owned(), workon_strings(&["-t", "=maw-rs"]))
+        );
+        assert_eq!(
+            runner.calls[1],
+            (
+                "list-sessions".to_owned(),
+                workon_strings(&["-F", "#{session_name}"])
+            )
+        );
         assert_eq!(runner.calls.len(), 2);
     }
 
@@ -1203,11 +1726,16 @@ mod workon_tests {
         let base = std::env::temp_dir().join(format!("maw-rs-workon-dot-{}", std::process::id()));
         let repo_dir = base.join("acme").join("demo");
         std::fs::create_dir_all(repo_dir.join("sub")).expect("mkdirs");
-        assert!(
-            std::process::Command::new("git").arg("-C").arg(&repo_dir).args(["init", "-q"]).status().expect("git init").success()
-        );
+        assert!(std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo_dir)
+            .args(["init", "-q"])
+            .status()
+            .expect("git init")
+            .success());
 
-        let resolved = workon_resolve_repo(repo_dir.join("sub").to_str().expect("utf8")).expect("resolve");
+        let resolved =
+            workon_resolve_repo(repo_dir.join("sub").to_str().expect("utf8")).expect("resolve");
 
         assert_eq!(resolved.repo_name, "demo");
         assert_eq!(
@@ -1220,9 +1748,17 @@ mod workon_tests {
     #[test]
     fn workon_tmux_target_guard_blocks_bad_session() {
         let temp = std::env::temp_dir().join("maw-rs-workon-unit");
-        let repo = WorkonRepo { repo_path: temp.join("acme/demo"), repo_name: "demo".to_owned(), parent_dir: temp.join("acme") };
+        let repo = WorkonRepo {
+            repo_path: temp.join("acme/demo"),
+            repo_name: "demo".to_owned(),
+            parent_dir: temp.join("acme"),
+        };
         let options = workon_test_options("demo", None);
-        let mut runner = WorkonMockTmux { session: "-Sbad\n".to_owned(), windows: String::new(), ..Default::default() };
+        let mut runner = WorkonMockTmux {
+            session: "-Sbad\n".to_owned(),
+            windows: String::new(),
+            ..Default::default()
+        };
         let _guard = env_test_lock();
         let _restore = EnvVarRestore::capture("TMUX");
         std::env::set_var("TMUX", "/tmp/tmux,1,0");
@@ -1244,15 +1780,36 @@ mod workon_tests {
         std::fs::create_dir_all(root.join("config")).expect("config dir");
         std::fs::write(
             root.join("config/maw.config.50.json"),
-            r#"{"commands":{"omx":"CODEX_HOME=$PWD/.codex omx --direct","default":"claude --continue"}}"#,
+            r#"{"commands":{"agent*":"glob-agent","omx":"CODEX_HOME=$PWD/.codex omx --direct","default":"claude --continue"}}"#,
         )
         .expect("config");
 
         assert!(!root.join("config/maw.config.json").exists());
-        assert_eq!(workon_build_command_in_dir("omx", &root, None), "CODEX_HOME=$PWD/.codex omx --direct");
-        assert_eq!(workon_build_command_in_dir("unknown", &root, None), "claude --continue");
-        assert_eq!(workon_build_command_in_dir("unknown", &root, Some("omx")), "CODEX_HOME=$PWD/.codex omx --direct");
-        assert_eq!(workon_build_command_in_dir("unknown", &root, Some("codex")), "codex");
+        assert_eq!(
+            workon_build_command_in_dir("omx", &root, None),
+            "CODEX_HOME=$PWD/.codex omx --direct"
+        );
+        assert_eq!(
+            workon_build_command_in_dir("unknown", &root, None),
+            "claude --continue"
+        );
+        assert_eq!(
+            workon_build_command_in_dir("unknown", &root, Some("omx")),
+            "CODEX_HOME=$PWD/.codex omx --direct"
+        );
+        // #761: workon now shares wake's resolver, so a glob entry reaches the
+        // agent name it was written for even when `-e` names an engine with no
+        // `commands` entry of its own...
+        assert_eq!(
+            workon_build_command_in_dir("agent-1", &root, Some("codex")),
+            "glob-agent"
+        );
+        // ...but with nothing per-agent to match, an explicit engine is still
+        // taken literally rather than replaced by `commands.default`.
+        assert_eq!(
+            workon_build_command_in_dir("unknown", &root, Some("codex")),
+            "codex"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 }

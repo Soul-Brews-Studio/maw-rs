@@ -21,6 +21,7 @@ fn peer(
 ) -> PeerRecord {
     PeerRecord {
         url: url.to_owned(),
+        addresses: Vec::new(),
         node: node.map(str::to_owned),
         added_at: "2026-05-17T00:00:00.000Z".to_owned(),
         last_seen: last_seen.map(str::to_owned),
@@ -31,7 +32,8 @@ fn peer(
         identity: None,
         one_way: None,
         last_symmetric_check: None,
-    }
+            auth_ok: None,
+        }
 }
 
 fn ok(node: &str) -> ProbePeerResult {
@@ -41,7 +43,8 @@ fn ok(node: &str) -> ProbePeerResult {
         pubkey: None,
         identity: None,
         error: None,
-    }
+            ..Default::default()
+        }
 }
 
 fn failed(err: ProbeLastError) -> ProbePeerResult {
@@ -51,7 +54,8 @@ fn failed(err: ProbeLastError) -> ProbePeerResult {
         pubkey: None,
         identity: None,
         error: Some(err),
-    }
+            ..Default::default()
+        }
 }
 
 #[test]

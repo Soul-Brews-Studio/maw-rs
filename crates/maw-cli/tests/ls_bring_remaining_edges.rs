@@ -55,7 +55,9 @@ fn ls_active_equals_recent_and_peer_text_branches_are_stable() {
         "--session-created",
         "50-mawjs=300",
         "--pane",
-        "%1|node|50-mawjs:1.0|mawjs|100|/repo|1699999995",
+        // #813: `node` is a bare interpreter, not an agent -- use the engine
+        // this session actually runs so the fixture keeps testing agent counting
+        "%1|claude|50-mawjs:1.0|mawjs|100|/repo|1699999995",
     ]);
     assert_eq!(active.code, 0, "{}", active.stderr);
     assert_eq!(
@@ -105,7 +107,7 @@ fn ls_text_rendering_remaining_status_and_duration_branches_are_stable() {
         "--now",
         "1700000000",
         "--pane",
-        "%1|node|50-mawjs:1.0|agent|100|/repo|1699999999",
+        "%1|claude|50-mawjs:1.0|agent|100|/repo|1699999999",
         "--pane",
         "%2|zsh|50-mawjs:1.1|shell|101|/repo|1699999700",
     ]);

@@ -56,7 +56,9 @@ fn run_about_command(argv: &[String]) -> CliOutput {
 fn render_about(oracle: &str) -> Result<String, String> {
     let name = oracle.to_lowercase();
     let mut tmux = TmuxClient::local();
-    let sessions = tmux.list_all();
+    let sessions = tmux
+        .list_all()
+        .map_err(|error| format!("tmux unreachable: {error}"))?;
     let repo = resolve_about_oracle_safe(&name)?;
     let session_name = detect_about_session(&name, &sessions);
     let fleet = about_fleet_entry(&name);
@@ -78,7 +80,11 @@ fn render_about(oracle: &str) -> Result<String, String> {
             .iter()
             .find(|session| session.name == *session_name)
             .map_or(&[][..], |session| session.windows.as_slice());
-        let _ = writeln!(out, "  Session:   {session_name} ({} windows)", windows.len());
+        let _ = writeln!(
+            out,
+            "  Session:   {session_name} ({} windows)",
+            windows.len()
+        );
         for window in windows {
             let status = match tmux.capture(&format!("{session_name}:{}", window.index), Some(3)) {
                 Ok(content) if content.trim().is_empty() => "\x1b[33m●\x1b[0m",
@@ -102,7 +108,11 @@ fn render_about(oracle: &str) -> Result<String, String> {
     if let Some(fleet) = &fleet {
         let actual_windows = session_name
             .as_ref()
-            .and_then(|session_name| sessions.iter().find(|session| session.name == *session_name))
+            .and_then(|session_name| {
+                sessions
+                    .iter()
+                    .find(|session| session.name == *session_name)
+            })
             .map_or(0, |session| session.windows.len());
         let registered_windows = fleet.session.windows.len();
         let _ = writeln!(
@@ -119,7 +129,11 @@ fn render_about(oracle: &str) -> Result<String, String> {
                 .collect::<BTreeSet<_>>();
             let running = session_name
                 .as_ref()
-                .and_then(|session_name| sessions.iter().find(|session| session.name == *session_name))
+                .and_then(|session_name| {
+                    sessions
+                        .iter()
+                        .find(|session| session.name == *session_name)
+                })
                 .map_or(&[][..], |session| session.windows.as_slice());
             let unregistered = running
                 .iter()
@@ -151,14 +165,19 @@ fn render_about(oracle: &str) -> Result<String, String> {
 fn resolve_about_oracle_safe(oracle: &str) -> Result<Option<AboutRepo>, String> {
     let repos = about_ghq_list();
     let candidates = if oracle.contains('/') {
-        repos.into_iter()
+        repos
+            .into_iter()
             .filter(|repo| repo.ends_with(format!("/{oracle}")))
             .collect::<Vec<_>>()
     } else {
         let wanted_oracle = format!("{oracle}-oracle");
         let oracle_candidates = repos
             .iter()
-            .filter(|repo| repo.file_name().and_then(std::ffi::OsStr::to_str).is_some_and(|name| name.eq_ignore_ascii_case(&wanted_oracle)))
+            .filter(|repo| {
+                repo.file_name()
+                    .and_then(std::ffi::OsStr::to_str)
+                    .is_some_and(|name| name.eq_ignore_ascii_case(&wanted_oracle))
+            })
             .cloned()
             .collect::<Vec<_>>();
         if oracle_candidates.len() > 1 {
@@ -171,7 +190,11 @@ fn resolve_about_oracle_safe(oracle: &str) -> Result<Option<AboutRepo>, String> 
         if oracle_candidates.is_empty() {
             let direct_candidates = repos
                 .into_iter()
-                .filter(|repo| repo.file_name().and_then(std::ffi::OsStr::to_str).is_some_and(|name| name.eq_ignore_ascii_case(oracle)))
+                .filter(|repo| {
+                    repo.file_name()
+                        .and_then(std::ffi::OsStr::to_str)
+                        .is_some_and(|name| name.eq_ignore_ascii_case(oracle))
+                })
                 .collect::<Vec<_>>();
             if direct_candidates.len() > 1 {
                 return Err(format!(
@@ -192,9 +215,7 @@ fn resolve_about_oracle_safe(oracle: &str) -> Result<Option<AboutRepo>, String> 
             .and_then(std::ffi::OsStr::to_str)
             .unwrap_or_default()
             .to_owned();
-        let parent_dir = path
-            .parent()
-            .map_or_else(String::new, path_string);
+        let parent_dir = path.parent().map_or_else(String::new, path_string);
         AboutRepo {
             repo_path: path_string(path),
             repo_name,
@@ -214,7 +235,12 @@ fn about_ghq_list() -> Vec<std::path::PathBuf> {
         let Ok(entries) = std::fs::read_dir(org.path()) else {
             continue;
         };
-        repos.extend(entries.flatten().map(|entry| entry.path()).filter(|path| path.is_dir()));
+        repos.extend(
+            entries
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| path.is_dir()),
+        );
     }
     repos.sort();
     repos
@@ -237,7 +263,10 @@ fn detect_about_session(oracle: &str, sessions: &[TmuxSession]) -> Option<String
         }
     }
     if let Some(fleet) = about_fleet_entry(oracle) {
-        if sessions.iter().any(|session| session.name == fleet.session.name) {
+        if sessions
+            .iter()
+            .any(|session| session.name == fleet.session.name)
+        {
             return Some(fleet.session.name);
         }
     }
@@ -279,7 +308,10 @@ fn about_config_session(oracle: &str) -> Option<String> {
 
 #[cfg(not(test))]
 fn about_fleet_entry(oracle: &str) -> Option<AboutFleetEntry> {
-    for entry in fleet_load_entries().into_iter().filter(fleet_entry_is_session) {
+    for entry in fleet_load_entries()
+        .into_iter()
+        .filter(fleet_entry_is_session)
+    {
         let has_oracle = entry.session.windows.iter().any(|window| {
             let window_name = window.name.to_lowercase();
             window_name == format!("{oracle}-oracle") || window_name == oracle
@@ -305,7 +337,11 @@ fn find_about_worktrees(parent_dir: &str, repo_name: &str) -> Vec<(String, Strin
                 .flatten()
                 .map(|entry| entry.path())
                 .filter(|path| path.is_dir())
-                .filter(|path| path.file_name().and_then(std::ffi::OsStr::to_str).is_some_and(|name| name.starts_with(&prefix)))
+                .filter(|path| {
+                    path.file_name()
+                        .and_then(std::ffi::OsStr::to_str)
+                        .is_some_and(|name| name.starts_with(&prefix))
+                })
                 .filter(|path| path.join(".git").exists()),
         );
     }

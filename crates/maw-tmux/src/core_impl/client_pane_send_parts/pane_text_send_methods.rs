@@ -101,16 +101,48 @@ where
             .map(|_| ())
     }
 
+    /// Deliver arbitrary text as data through a short-lived tmux buffer.
+    ///
+    /// The text is written to `load-buffer` over stdin, pasted verbatim, and the
+    /// buffer is deleted by `paste-buffer -d`. When `submit` is true, exactly one
+    /// Enter key is sent after the paste; trailing newlines have no special meaning.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first runner error from loading, pasting, or submitting.
+    pub fn paste_text(
+        &mut self,
+        target: &str,
+        text: &str,
+        submit: bool,
+    ) -> Result<(), TmuxError> {
+        self.load_buffer(text)?;
+        self.runner.run(
+            "paste-buffer",
+            &["-d".to_owned(), "-t".to_owned(), target.to_owned()],
+        )?;
+        if submit {
+            self.send_enter(target)?;
+        }
+        Ok(())
+    }
+
     /// Smart text sending: buffer for multiline/long payloads, literal send otherwise, then submit-confirm.
     ///
     /// # Errors
     ///
-    /// Returns the first tmux error from mode exit, text placement, paste, or Enter send.
+    /// Returns a tmux error or refuses preexisting/unconfirmed pending input.
     pub fn send_text(&mut self, target: &str, text: &str) -> Result<SendTextReport, TmuxError> {
         self.send_text_with_sleeper(target, text, std::thread::sleep)
     }
 
-    fn send_text_with_sleeper<F>(
+    /// Run [`Self::send_text`] with an injected sleep function for deterministic
+    /// callers. Production callbacks must honor every requested delay.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same fail-closed errors as [`Self::send_text`].
+    pub fn send_text_with_sleeper<F>(
         &mut self,
         target: &str,
         text: &str,
@@ -119,7 +151,7 @@ where
     where
         F: FnMut(std::time::Duration),
     {
-        self.exit_mode_if_needed(target)?;
+        self.preflight_send_text(target)?;
         let used_buffer = text.contains('\n') || text.len() > 500;
         if used_buffer {
             self.load_buffer(text)?;
@@ -128,60 +160,140 @@ where
             self.send_keys_literal(target, text)?;
         }
         sleep(std::time::Duration::from_millis(SEND_SETTLE_MS));
-        let (enter_attempts, warned_pending) =
-            self.submit_with_confirm(target, text, &mut sleep)?;
+        // Snapshot an opaque TUI rendering before Enter; capture failure leaves
+        // no baseline, preserving the fail-stop behavior for different input.
+        let buffered_pending = if used_buffer {
+            self.capture_pending_input(target).ok().flatten()
+        } else {
+            None
+        };
+        let enter_attempts = self.submit_with_confirm(
+            target,
+            text,
+            buffered_pending.as_deref(),
+            &mut sleep,
+        )?;
         Ok(SendTextReport {
             used_buffer,
             enter_attempts,
-            warned_pending,
         })
+    }
+
+    /// Exit pane mode and refuse a text send when capture fails or a recognized composer is nonempty.
+    ///
+    /// This preflight is advisory for batch callers; [`Self::send_text`] repeats it immediately
+    /// before placing text so intervening input still fails closed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a runner error or refuses an existing pending composer.
+    pub fn preflight_send_text(&mut self, target: &str) -> Result<(), TmuxError> {
+        self.exit_mode_if_needed(target)?;
+        self.ensure_composer_empty(target)
+    }
+
+    fn ensure_composer_empty(&mut self, target: &str) -> Result<(), TmuxError> {
+        if self.capture_pending_input(target)?.is_some() {
+            return Err(TmuxError::new(format!(
+                "refusing to append text: pane '{target}' already has pending input; submit or clear it first"
+            )));
+        }
+        Ok(())
     }
 
     fn submit_with_confirm<F>(
         &mut self,
         target: &str,
         text: &str,
+        buffered_pending: Option<&str>,
         sleep: &mut F,
-    ) -> Result<(u32, bool), TmuxError>
+    ) -> Result<u32, TmuxError>
     where
         F: FnMut(std::time::Duration),
     {
         for attempt in 1..=MAX_SUBMIT_ATTEMPTS {
             self.send_enter(target)?;
             sleep(std::time::Duration::from_millis(SUBMIT_CONFIRM_MS));
-            match self.submit_pending_state_after_grace(target, text, sleep) {
-                PendingInputState::Cleared => return Ok((attempt, false)),
-                PendingInputState::DifferentInput => return Ok((attempt, true)),
+            let state = self
+                .submit_pending_state_after_grace(target, text, buffered_pending, sleep)
+                .map_err(|error| Self::pending_confirm_error(target, &error))?;
+            match state {
+                PendingInputState::Cleared => return Ok(attempt),
+                PendingInputState::DifferentInput => return Err(Self::pending_submit_error(target)),
                 PendingInputState::MatchesSent => {}
             }
         }
-        Ok((MAX_SUBMIT_ATTEMPTS, true))
+        Err(Self::pending_submit_error(target))
     }
 
     fn submit_pending_state_after_grace<F>(
         &mut self,
         target: &str,
         text: &str,
+        buffered_pending: Option<&str>,
         sleep: &mut F,
-    ) -> PendingInputState
+    ) -> Result<PendingInputState, TmuxError>
     where
         F: FnMut(std::time::Duration),
     {
-        let _confirm_state = self.pending_input_state(target, text);
+        let confirm_state = self.pending_input_state(target, text, buffered_pending)?;
         sleep(std::time::Duration::from_millis(SUBMIT_GRACE_MS));
-        self.pending_input_state(target, text)
+        let grace_state = self.pending_input_state(target, text, buffered_pending)?;
+        if confirm_state == PendingInputState::DifferentInput {
+            Ok(confirm_state)
+        } else {
+            Ok(grace_state)
+        }
     }
 
-    fn pending_input_state(&mut self, target: &str, text: &str) -> PendingInputState {
-        self.pane_pending_input(target).map_or(
+    fn pending_input_state(
+        &mut self,
+        target: &str,
+        text: &str,
+        buffered_pending: Option<&str>,
+    ) -> Result<PendingInputState, TmuxError> {
+        Ok(self.capture_pending_input(target)?.map_or(
             PendingInputState::Cleared,
             |pending| {
-                if pending_input_matches_sent(&pending, text) {
+                if pending_input_matches_sent(&pending, text)
+                    || buffered_pending
+                        .is_some_and(|baseline| pending_input_matches_sent(&pending, baseline))
+                {
                     PendingInputState::MatchesSent
                 } else {
                     PendingInputState::DifferentInput
                 }
             },
-        )
+        ))
+    }
+
+    fn capture_pending_input(&mut self, target: &str) -> Result<Option<String>, TmuxError> {
+        self.runner
+            .run(
+                "capture-pane",
+                &[
+                    "-t".to_owned(),
+                    target.to_owned(),
+                    "-e".to_owned(),
+                    "-p".to_owned(),
+                    "-J".to_owned(),
+                    "-S".to_owned(),
+                    "-80".to_owned(),
+                ],
+            )
+            .map(|content| pane_pending_input_from_capture(&content))
+    }
+
+    fn pending_submit_error(target: &str) -> TmuxError {
+        TmuxError::new(format!(
+            "pane '{target}' still has pending input after Enter retries; delivery could not be confirmed; inspect the pane before retrying"
+        ))
+    }
+
+    fn pending_confirm_error(target: &str, error: &TmuxError) -> TmuxError {
+        TmuxError::new(format!(
+            "pane '{target}' delivery could not be confirmed after Enter: {}; inspect the pane before retrying",
+            error.message
+        ))
     }
 }

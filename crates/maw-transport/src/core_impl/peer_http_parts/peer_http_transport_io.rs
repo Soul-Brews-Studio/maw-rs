@@ -50,6 +50,10 @@ struct PeerSendWireResponse {
     last_line: Option<String>,
     #[serde(default)]
     error: Option<String>,
+    #[serde(default)]
+    decision: Option<String>,
+    #[serde(default)]
+    warning: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

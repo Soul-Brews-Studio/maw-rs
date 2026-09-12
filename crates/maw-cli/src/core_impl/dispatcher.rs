@@ -3,6 +3,11 @@
 // This crate intentionally starts with plan-only output so command parity can
 // be tested against maw-js parser contracts before host IO is wired.
 
+use maw_activity::{
+    classify_snapshots as classify_activity_snapshots,
+    normalize_snapshot as normalize_activity_snapshot, ActivityResult, ActivitySample,
+    ActivityState,
+};
 use maw_auth::{
     apply_consent_expiry, approve_consent_plan, build_from_sign_payload,
     build_legacy_from_sign_payload, consent_request_id_from_bytes, generate_pair_code_from_bytes,
@@ -10,23 +15,21 @@ use maw_auth::{
     pair_api_accept_plan, pair_api_auto_plan, pair_api_generate_plan, pair_api_probe_plan,
     pair_api_status_plan, pretty_pair_code, redact_pair_code, reject_consent_plan,
     request_consent_plan, resolve_from_address, resolve_sender_oracle, sign, sign_auto_pair_proof,
-    sign_headers_at,
-    sign_headers_v3_at, sign_hmac_sig, sign_request_v3, trust_key, verify, verify_auto_pair_proof,
-    verify_consent_pin, verify_hmac_sig, verify_request, ApprovedBy, AutoPairAddOutcome,
-    AutoPairIdentity, AutoPairInput, ConsentAction, ConsentApprovalResult, ConsentRequestArgs,
-    ConsentRequestResult, ConsentStatus, ConsentStore, Ed25519TofuStore, FromAddressConfig, FromVerifyDecision,
-    Headers, LookupResult, PairAcceptInput, PairApiAcceptResult, PairApiAutoResult, PairApiConfig,
-    PairApiGenerateResult, PairApiProbeResult, PairApiStatusResult, PairCodeStore, PairEntry,
-    PeerPendingRequest, PeerPostResult, PendingRequest, RecentHelloStore, RequestAuthDecision,
-    RequestAuthParts, TrustEntry, VerifyRequestArgs, DEFAULT_ORACLE, PAIR_CODE_ALPHABET,
-    WINDOW_SEC,
+    sign_headers_at, sign_headers_v3_at, sign_hmac_sig, sign_request_v3, trust_key, verify,
+    verify_auto_pair_proof, verify_consent_pin, verify_hmac_sig, verify_request, ApprovedBy,
+    AutoPairAddOutcome, AutoPairIdentity, AutoPairInput, ConsentAction, ConsentApprovalResult,
+    ConsentRequestArgs, ConsentRequestResult, ConsentStatus, ConsentStore, Ed25519TofuStore,
+    FromAddressConfig, FromVerifyDecision, Headers, LookupResult, PairAcceptInput,
+    PairApiAcceptResult, PairApiAutoResult, PairApiConfig, PairApiGenerateResult,
+    PairApiProbeResult, PairApiStatusResult, PairCodeStore, PairEntry, PeerPendingRequest,
+    PeerPostResult, PendingRequest, RecentHelloStore, RequestAuthDecision, RequestAuthParts,
+    TrustEntry, VerifyRequestArgs, DEFAULT_ORACLE, PAIR_CODE_ALPHABET, WINDOW_SEC,
 };
 use maw_auto_wake::{should_auto_wake, AutoWakeManifest, AutoWakeOptions, AutoWakeSite};
 use maw_bind::{resolve_bind_host, BindConfig, BindHostResult};
 use maw_bring::{parse_bring_args, ParsedBringArgs};
 use maw_calver::{compute_version, Channel, ComputeArgs, DateParts};
 use maw_feed::{active_oracles_at, describe_activity, parse_line, FeedEvent};
-use maw_discord::run_discord_command;
 use maw_fuzzy::{distance as fuzzy_distance, fuzzy_match};
 use maw_identity::{canonical_node_identity, canonical_session_name, CanonicalSessionNameInput};
 use maw_matcher::{
@@ -44,11 +47,11 @@ use maw_plugin_manifest::ExtismWasmInvokeRuntime;
 #[cfg(not(feature = "wasm-host"))]
 use maw_plugin_manifest::WasmHostUnavailableRuntime;
 use maw_plugin_manifest::{
-    build_js_plugin_dir, discover_packages, hash_file, import_plugin_symbol, infer_plugin_capabilities,
-    init_js_plugin_dir, install_built_plugin_dir, invoke_plugin, load_manifest_from_dir,
-    parse_manifest, DiscoverPackagesOptions, DiscoverPackagesReport, HOST_FN_NAMES, InvokeContext,
-    InvokeResult, InvokeSource, LoadedPlugin, LoadedPluginKind,
-    PluginManifest, PluginTier,
+    build_js_plugin_dir, discover_packages, hash_file, import_plugin_symbol,
+    infer_plugin_capabilities, init_js_plugin_dir, install_built_plugin_dir, invoke_plugin,
+    load_manifest_from_dir, parse_manifest, DiscoverPackagesOptions, DiscoverPackagesReport,
+    InvokeContext, InvokeResult, InvokeSource, LoadedPlugin, LoadedPluginKind, PluginManifest,
+    PluginTier, HOST_FN_NAMES,
 };
 use maw_plugin_scaffold::{
     build_manifest_json, cmd_plugin_create, validate_plugin_name, PluginCreateRequest,
@@ -65,17 +68,17 @@ use maw_routing::{
 };
 use maw_split::{decide_split_policy, SplitPolicyDecision, SplitPolicyInput};
 use maw_tmux::{
-    decide_tmux_attach_action, mark_peer_targets_live, resolve_tmux_live_state,
-    resolve_tmux_attach_session, tmux_attach_spawn_command, DiscoverLivePane, PeerTargetWithLive,
-    CommandTmuxRunner, TmuxAttachAction, TmuxAttachSessionResolution, TmuxClient,
+    decide_tmux_attach_action, mark_peer_targets_live, resolve_tmux_attach_session,
+    resolve_tmux_live_state, tmux_attach_spawn_command, CommandTmuxRunner, DiscoverLivePane,
+    LivePeerTarget, PeerTargetWithLive, TmuxAttachAction, TmuxAttachSessionResolution, TmuxClient,
     TmuxLiveStateResult, TmuxPane, TmuxSession,
 };
 use maw_transport::{
     classify_error, classify_symmetric_federation_status, FederationPeerStatus, FederationPeerView,
-    FederationStatus, PairStatus, PeerFederationStatus, PeerFederationStatusResult,
-    SymmetricFederationStatus, Transport, TransportFailureReason, TransportResult, TransportRouter,
-    HttpRequest as TransportHttpRequest, PeerSendRequest, PeerWakeRequest, ReqwestHttpTransportIo,
-    TransportTarget,
+    FederationStatus, HttpRequest as TransportHttpRequest, PairStatus, PeerFederationStatus,
+    PeerFederationStatusResult, PeerProbeAuthResult, PeerSendRequest, PeerWakeRequest,
+    ReqwestHttpTransportIo, SymmetricFederationStatus, Transport, TransportFailureReason,
+    TransportResult, TransportRouter, TransportTarget,
 };
 use maw_worktree::{
     resolve_worktree_window, Session as WorktreeSession, Window as WorktreeWindow,
@@ -120,16 +123,11 @@ fn merged_config_value_for_env(env: &MawXdgEnv) -> serde_json::Value {
 
 /// Serializes process-env mutation (HOME/XDG/PATH/…) across tests.
 ///
-/// Returns the guard directly and recovers from poison: the lock only
-/// serializes env access, and each test restores the env via RAII guards
-/// (`EnvVarRestore`), so a panicking test leaves no state worth propagating.
-/// Without recovery, one panic while holding the guard poisons the mutex and
-/// every later acquisition panics too — a `PoisonError` cascade that fails
-/// dozens of unrelated tests under default (parallel) test threads.
+/// Delegates to the crate-wide lock so `core_impl` and `serve_core` cannot
+/// race while changing the same process environment.
 #[cfg(test)]
-fn env_test_lock() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+fn env_test_lock() -> crate::test_env::EnvLockGuard {
+    crate::test_env::env_test_lock()
 }
 
 /// Redirects HOME/XDG/MAW_* at process-env scope to a throwaway per-test root
@@ -247,16 +245,43 @@ enum DispatchTarget {
 }
 
 const DISPATCH_01: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "--help", handler: Handler::Sync(usage_handler) },
-    DispatcherEntry { command: "-h", handler: Handler::Sync(usage_handler) },
-    DispatcherEntry { command: "help", handler: Handler::Sync(usage_handler) },
-    DispatcherEntry { command: "--version", handler: Handler::Sync(version_handler) },
-    DispatcherEntry { command: "-v", handler: Handler::Sync(version_handler) },
-    DispatcherEntry { command: "version", handler: Handler::Sync(version_handler) },
-    DispatcherEntry { command: "auto-wake", handler: Handler::Sync(run_auto_wake_plan) },
-    DispatcherEntry { command: "discord", handler: Handler::Async(run_discord_async) },
+    DispatcherEntry {
+        command: "--help",
+        handler: Handler::Sync(usage_handler),
+    },
+    DispatcherEntry {
+        command: "-h",
+        handler: Handler::Sync(usage_handler),
+    },
+    DispatcherEntry {
+        command: "help",
+        handler: Handler::Sync(usage_handler),
+    },
+    DispatcherEntry {
+        command: "commands",
+        handler: Handler::Sync(commands_handler),
+    },
+    DispatcherEntry {
+        command: "--version",
+        handler: Handler::Sync(version_handler),
+    },
+    DispatcherEntry {
+        command: "-v",
+        handler: Handler::Sync(version_handler),
+    },
+    DispatcherEntry {
+        command: "version",
+        handler: Handler::Sync(version_handler),
+    },
+    DispatcherEntry {
+        command: "auto-wake",
+        handler: Handler::Sync(run_auto_wake_plan),
+    },
     #[cfg(test)]
-    DispatcherEntry { command: "__async-dispatch-test", handler: Handler::Async(run_async_dispatch_test) },
+    DispatcherEntry {
+        command: "__async-dispatch-test",
+        handler: Handler::Async(run_async_dispatch_test),
+    },
 ];
 
 #[must_use]
@@ -269,7 +294,7 @@ pub fn dispatcher_status(command: &str) -> DispatchKind {
 
 #[cfg(test)]
 mod async_dispatch_tests {
-    use super::{run_cli_async, CliOutput, DispatchKind, dispatcher_status};
+    use super::{dispatcher_status, run_cli_async, CliOutput, DispatchKind};
 
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_owned()).collect()
@@ -294,7 +319,6 @@ mod async_dispatch_tests {
     }
 }
 
-
 #[cfg(test)]
 mod dispatcher_fragment_tests {
     use super::{
@@ -308,9 +332,15 @@ mod dispatcher_fragment_tests {
     use std::fs;
 
     const CORE_COMMANDS: &[&str] = &[
-        "hey", "send", "serve", "health", "ls", "wake", "tmux", "init", "reply", "run",
-        "attach", "bud", "buddy",
+        "hey", "send", "serve", "health", "ls", "wake", "tmux", "init", "reply", "run", "attach",
+        "bud", "buddy",
     ];
+
+    #[test]
+    fn core_impl_uses_the_crate_wide_env_lock() {
+        let _guard = env_test_lock();
+        assert!(crate::test_env::env_test_lock_is_held_by_current_thread());
+    }
 
     #[test]
     fn generated_dispatcher_fragments_are_unique_reachable_and_keep_core_commands() {
@@ -323,13 +353,27 @@ mod dispatcher_fragment_tests {
 
         let mut seen = BTreeSet::new();
         for command in &commands {
-            assert!(seen.insert(*command), "duplicate dispatcher command: {command}");
-            assert_eq!(dispatcher_status(command), DispatchKind::Native, "{command}");
+            assert!(
+                seen.insert(*command),
+                "duplicate dispatcher command: {command}"
+            );
+            assert_eq!(
+                dispatcher_status(command),
+                DispatchKind::Native,
+                "{command}"
+            );
         }
-        assert_eq!(commands.len(), seen.len(), "dispatcher command count drifted from unique set");
+        assert_eq!(
+            commands.len(),
+            seen.len(),
+            "dispatcher command count drifted from unique set"
+        );
 
         for command in CORE_COMMANDS {
-            assert!(seen.contains(*command), "missing core dispatcher command: {command}");
+            assert!(
+                seen.contains(*command),
+                "missing core dispatcher command: {command}"
+            );
         }
     }
 
@@ -343,10 +387,18 @@ mod dispatcher_fragment_tests {
         let _guard = env_test_lock();
         let (_state_root, _restores) = cli_dispatch_test_env();
         for command in ["--version", "-v", "version"] {
-            assert_eq!(dispatcher_status(command), DispatchKind::Native, "{command}");
+            assert_eq!(
+                dispatcher_status(command),
+                DispatchKind::Native,
+                "{command}"
+            );
             let output = run_cli(&[command.to_owned()]);
             assert_eq!(output.code, 0, "{command}");
-            assert_eq!(output.stdout, format!("{MAW_RS_VERSION_STRING}\n"), "{command}");
+            assert_eq!(
+                output.stdout,
+                format!("{MAW_RS_VERSION_STRING}\n"),
+                "{command}"
+            );
             assert!(output.stderr.is_empty(), "{command}: {}", output.stderr);
         }
         assert!(MAW_RS_VERSION_STRING.starts_with("maw-rs v"));
@@ -369,18 +421,29 @@ mod dispatcher_fragment_tests {
             .collect();
         assert!(!rows.is_empty(), "{text}");
         let row: serde_json::Value = serde_json::from_str(rows.last().expect("row")).expect("json");
-        assert_eq!(row.get("cmd").and_then(serde_json::Value::as_str), Some("version"));
         assert_eq!(
-            row.get("args").and_then(serde_json::Value::as_array).map(Vec::len),
+            row.get("cmd").and_then(serde_json::Value::as_str),
+            Some("version")
+        );
+        assert_eq!(
+            row.get("args")
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len),
             Some(0)
         );
-        assert_eq!(row.get("binary").and_then(serde_json::Value::as_str), Some("maw-rs"));
+        assert_eq!(
+            row.get("binary").and_then(serde_json::Value::as_str),
+            Some("maw-rs")
+        );
         assert_eq!(
             row.get("version").and_then(serde_json::Value::as_str),
             Some(super::MAW_RS_BUILD_VERSION)
         );
         let config_path = super::maw_config_path(&current_xdg_env(), &["audit.jsonl"]);
-        assert!(!config_path.exists(), "audit must use state, not config: {config_path:?}");
+        assert!(
+            !config_path.exists(),
+            "audit must use state, not config: {config_path:?}"
+        );
     }
 
     #[test]
@@ -440,7 +503,6 @@ mod dispatcher_fragment_tests {
         assert_eq!(cli_dispatch_now_iso(), "1970-01-01T00:00:00.000Z");
         std::env::remove_var("MAW_AUDIT_TEST_NOW_MS");
     }
-
 }
 
 #[must_use]
@@ -455,14 +517,23 @@ fn dispatcher_entries() -> impl Iterator<Item = &'static DispatcherEntry> {
 fn dispatcher_target(command: &str) -> DispatchTarget {
     dispatcher_entries()
         .find(|entry| entry.command == command)
-        .map_or(DispatchTarget::UnknownCommand, |entry| match entry.handler {
-            Handler::Sync(handler) => DispatchTarget::Native(handler),
-            Handler::Async(handler) => DispatchTarget::AsyncNative(handler),
+        .map_or(DispatchTarget::UnknownCommand, |entry| {
+            match entry.handler {
+                Handler::Sync(handler) => DispatchTarget::Native(handler),
+                Handler::Async(handler) => DispatchTarget::AsyncNative(handler),
+            }
         })
 }
 
-fn usage_handler(_: &[String]) -> CliOutput {
+fn usage_handler(args: &[String]) -> CliOutput {
+    if args.iter().any(|arg| arg == "--all" || arg == "all") {
+        return usage_all_ok();
+    }
     usage_ok()
+}
+
+fn commands_handler(_: &[String]) -> CliOutput {
+    usage_all_ok()
 }
 
 fn version_handler(_: &[String]) -> CliOutput {
@@ -485,9 +556,9 @@ pub fn run_cli(argv: &[String]) -> CliOutput {
             cli_dispatch_log_command(command, &argv[1..]);
             native_or_plugin_fallback(argv, || handler(&argv[1..]))
         }
-        DispatchTarget::AsyncNative(handler) => native_or_plugin_fallback(argv, || {
-            run_async_handler_blocking(handler, &argv[1..])
-        }),
+        DispatchTarget::AsyncNative(handler) => {
+            native_or_plugin_fallback(argv, || run_async_handler_blocking(handler, &argv[1..]))
+        }
         DispatchTarget::UnknownCommand => dispatch_cli_plugin_or_unknown(argv, command),
     }
 }
@@ -597,15 +668,15 @@ fn cli_dispatch_now_iso() -> String {
     let minute = (day_seconds % 3600) / 60;
     let second = day_seconds % 60;
     let (year, month, day) = cli_dispatch_civil_from_days(days);
-    format!(
-        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z"
-    )
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z")
 }
 
 fn cli_dispatch_now_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
+        .map_or(0, |duration| {
+            u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+        })
 }
 
 fn cli_dispatch_civil_from_days(days: i64) -> (i32, u32, u32) {
@@ -630,7 +701,8 @@ fn run_async_handler_blocking(handler: AsyncHandler, args: &[String]) -> CliOutp
         return CliOutput {
             code: 1,
             stdout: String::new(),
-            stderr: "cannot block_on inside runtime; call run_cli_async for async commands\n".to_owned(),
+            stderr: "cannot block_on inside runtime; call run_cli_async for async commands\n"
+                .to_owned(),
         };
     }
 
@@ -650,17 +722,6 @@ fn run_async_handler_blocking(handler: AsyncHandler, args: &[String]) -> CliOutp
     runtime.block_on(handler(args.to_vec()))
 }
 
-fn run_discord_async(args: Vec<String>) -> Pin<Box<dyn Future<Output = CliOutput> + Send>> {
-    Box::pin(async move {
-        let output = run_discord_command(args).await;
-        CliOutput {
-            code: output.code,
-            stdout: output.stdout,
-            stderr: output.stderr,
-        }
-    })
-}
-
 #[cfg(test)]
 fn run_async_dispatch_test(args: Vec<String>) -> Pin<Box<dyn Future<Output = CliOutput> + Send>> {
     Box::pin(async move {
@@ -671,7 +732,6 @@ fn run_async_dispatch_test(args: Vec<String>) -> Pin<Box<dyn Future<Output = Cli
         }
     })
 }
-
 
 fn dispatch_cli_plugin_or_unknown(argv: &[String], command: &str) -> CliOutput {
     // SDK-floor gate: default options carry the ABI-derived runtime version
@@ -840,7 +900,6 @@ fn plugin_manifest_opts_into_bun_dev(plugin: &LoadedPlugin) -> bool {
         .is_some_and(|runtime| runtime == "bun-dev")
 }
 
-
 #[cfg(test)]
 mod ts_plugin_dispatch_decision_tests {
     use super::*;
@@ -862,8 +921,11 @@ mod ts_plugin_dispatch_decision_tests {
 
     fn load_ts_plugin(label: &str, runtime: Option<&str>) -> (std::path::PathBuf, LoadedPlugin) {
         let dir = temp_plugin_dir(label);
-        std::fs::write(dir.join("index.ts"), "export default async function main() {}\n")
-            .expect("entry");
+        std::fs::write(
+            dir.join("index.ts"),
+            "export default async function main() {}\n",
+        )
+        .expect("entry");
         let mut manifest = json!({
             "name": label,
             "version": "1.0.0",
@@ -920,33 +982,340 @@ mod ts_plugin_dispatch_decision_tests {
         assert!(!called.get(), "runtime=bun-dev should bypass the probe");
         std::fs::remove_dir_all(dir).expect("cleanup");
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn dispatch_bun_dev_plugin_prefers_ctx_cwd_and_falls_back_to_plugin_dir() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let _env_guard = env_test_lock();
+        let _path_restore = EnvVarRestore::capture("PATH");
+        let (plugin_dir, plugin) = load_ts_plugin("bun-dev-cwd", Some("bun-dev"));
+        let caller_dir = temp_plugin_dir("caller-cwd");
+        let shim_dir = temp_plugin_dir("fake-bun-bin");
+        let fake_bun = shim_dir.join("bun");
+        std::fs::write(&fake_bun, "#!/bin/sh\npwd -P\n").expect("fake bun");
+        let mut permissions = std::fs::metadata(&fake_bun)
+            .expect("metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&fake_bun, permissions).expect("chmod");
+        let mut path_entries = vec![shim_dir.clone()];
+        if let Some(path) = std::env::var_os("PATH") {
+            path_entries.extend(std::env::split_paths(&path));
+        }
+        std::env::set_var("PATH", std::env::join_paths(path_entries).expect("PATH"));
+
+        let caller_ctx = InvokeContext {
+            source: InvokeSource::Cli,
+            args: Vec::new(),
+            cwd: Some(caller_dir.to_string_lossy().into_owned()),
+            home: None,
+        };
+        let caller_output = dispatch_bun_dev_plugin(&plugin, &caller_ctx);
+        assert_eq!(caller_output.code, 0);
+        assert_eq!(
+            caller_output.stdout,
+            format!("{}\n", caller_dir.canonicalize().expect("caller").display())
+        );
+
+        let fallback_ctx = InvokeContext {
+            cwd: None,
+            ..caller_ctx
+        };
+        let fallback_output = dispatch_bun_dev_plugin(&plugin, &fallback_ctx);
+        assert_eq!(fallback_output.code, 0);
+        assert_eq!(
+            fallback_output.stdout,
+            format!("{}\n", plugin_dir.canonicalize().expect("plugin").display())
+        );
+
+        std::fs::remove_dir_all(plugin_dir).expect("cleanup plugin");
+        std::fs::remove_dir_all(caller_dir).expect("cleanup caller");
+        std::fs::remove_dir_all(shim_dir).expect("cleanup bun");
+    }
+
+    #[test]
+    fn bun_dev_banner_decision_matrix() {
+        // OFF by default — an unset var is quiet, regardless of tty-ness (#780).
+        assert!(!bun_dev_banner_decision(None));
+        // Explicit opt-in, every truthy spelling, case- and space-tolerant.
+        assert!(bun_dev_banner_decision(Some("1")));
+        assert!(bun_dev_banner_decision(Some("true")));
+        assert!(bun_dev_banner_decision(Some("yes")));
+        assert!(bun_dev_banner_decision(Some("ON")));
+        assert!(bun_dev_banner_decision(Some("  on  ")));
+        // Explicit off, and anything unrecognized, stay off.
+        assert!(!bun_dev_banner_decision(Some("0")));
+        assert!(!bun_dev_banner_decision(Some("false")));
+        assert!(!bun_dev_banner_decision(Some("off")));
+        assert!(!bun_dev_banner_decision(Some("bogus")));
+        assert!(!bun_dev_banner_decision(Some("")));
+    }
+
+    #[test]
+    fn bun_dev_io_mode_decision_matrix() {
+        // #803: stderr is an interactive terminal -> stream (inherit stdio).
+        assert_eq!(bun_dev_io_mode(true), BunDevIoMode::Streamed);
+        // Not a terminal (tests, CI, HTTP/API dispatch, piped output) -> the
+        // original piped+capture behavior, unchanged.
+        assert_eq!(bun_dev_io_mode(false), BunDevIoMode::Captured);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dispatch_bun_dev_plugin_streams_when_stderr_is_tty_and_returns_empty_capture() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let _env_guard = env_test_lock();
+        let _path_restore = EnvVarRestore::capture("PATH");
+        let (plugin_dir, plugin) = load_ts_plugin("bun-dev-streamed", Some("bun-dev"));
+        let shim_dir = temp_plugin_dir("fake-bun-bin-streamed");
+        let fake_bun = shim_dir.join("bun");
+        std::fs::write(
+            &fake_bun,
+            "#!/bin/sh\necho streamed-stdout\necho streamed-stderr 1>&2\nexit 7\n",
+        )
+        .expect("fake bun");
+        let mut permissions = std::fs::metadata(&fake_bun)
+            .expect("metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&fake_bun, permissions).expect("chmod");
+        let mut path_entries = vec![shim_dir.clone()];
+        if let Some(path) = std::env::var_os("PATH") {
+            path_entries.extend(std::env::split_paths(&path));
+        }
+        std::env::set_var("PATH", std::env::join_paths(path_entries).expect("PATH"));
+
+        let ctx = InvokeContext {
+            source: InvokeSource::Cli,
+            args: Vec::new(),
+            cwd: Some(plugin_dir.to_string_lossy().into_owned()),
+            home: None,
+        };
+
+        // Force the streamed/inherited path via the injected bool — cargo
+        // test's real stderr is not a tty, so this is the only way to reach
+        // this branch deterministically (mirrors x.rs's heartbeat_tty
+        // injection pattern rather than a literal stderr().is_terminal()
+        // call baked into the function).
+        let output = dispatch_bun_dev_plugin_with_tty(&plugin, &ctx, true);
+
+        assert_eq!(output.code, 7);
+        assert!(
+            output.stdout.is_empty(),
+            "inherited stdout never passes through maw to be captured, got {:?}",
+            output.stdout
+        );
+        assert!(
+            output.stderr.is_empty(),
+            "inherited stderr never passes through maw to be captured, got {:?}",
+            output.stderr
+        );
+
+        std::fs::remove_dir_all(plugin_dir).expect("cleanup plugin");
+        std::fs::remove_dir_all(shim_dir).expect("cleanup bun");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dispatch_bun_dev_plugin_piped_path_unaffected_when_stderr_is_not_tty() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let _env_guard = env_test_lock();
+        let _path_restore = EnvVarRestore::capture("PATH");
+        let (plugin_dir, plugin) = load_ts_plugin("bun-dev-piped-explicit", Some("bun-dev"));
+        let shim_dir = temp_plugin_dir("fake-bun-bin-piped-explicit");
+        let fake_bun = shim_dir.join("bun");
+        std::fs::write(&fake_bun, "#!/bin/sh\necho piped-stdout\nexit 0\n").expect("fake bun");
+        let mut permissions = std::fs::metadata(&fake_bun)
+            .expect("metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&fake_bun, permissions).expect("chmod");
+        let mut path_entries = vec![shim_dir.clone()];
+        if let Some(path) = std::env::var_os("PATH") {
+            path_entries.extend(std::env::split_paths(&path));
+        }
+        std::env::set_var("PATH", std::env::join_paths(path_entries).expect("PATH"));
+
+        let ctx = InvokeContext {
+            source: InvokeSource::Cli,
+            args: Vec::new(),
+            cwd: Some(plugin_dir.to_string_lossy().into_owned()),
+            home: None,
+        };
+
+        // Explicit false — same piped+capture behavior the existing
+        // dispatch_bun_dev_plugin_prefers_ctx_cwd_and_falls_back_to_plugin_dir
+        // test already exercises via the real (non-tty-under-cargo-test)
+        // wrapper; asserted directly here against the injectable seam.
+        let output = dispatch_bun_dev_plugin_with_tty(&plugin, &ctx, false);
+
+        assert_eq!(output.code, 0);
+        assert_eq!(output.stdout, "piped-stdout\n");
+
+        std::fs::remove_dir_all(plugin_dir).expect("cleanup plugin");
+        std::fs::remove_dir_all(shim_dir).expect("cleanup bun");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dispatch_bun_dev_plugin_wraps_cannot_find_module_error_with_plugin_context() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let _env_guard = env_test_lock();
+        let _path_restore = EnvVarRestore::capture("PATH");
+        let (plugin_dir, plugin) = load_ts_plugin("bun-dev-missing-module", Some("bun-dev"));
+        let shim_dir = temp_plugin_dir("fake-bun-bin-missing-module");
+        let fake_bun = shim_dir.join("bun");
+        std::fs::write(
+            &fake_bun,
+            "#!/bin/sh\necho \"error: Cannot find module 'foo' from '/some/path'\" 1>&2\nexit 1\n",
+        )
+        .expect("fake bun");
+        let mut permissions = std::fs::metadata(&fake_bun)
+            .expect("metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&fake_bun, permissions).expect("chmod");
+        let mut path_entries = vec![shim_dir.clone()];
+        if let Some(path) = std::env::var_os("PATH") {
+            path_entries.extend(std::env::split_paths(&path));
+        }
+        std::env::set_var("PATH", std::env::join_paths(path_entries).expect("PATH"));
+
+        let ctx = InvokeContext {
+            source: InvokeSource::Cli,
+            args: Vec::new(),
+            cwd: Some(plugin_dir.to_string_lossy().into_owned()),
+            home: None,
+        };
+
+        // stderr_is_tty = false — this diagnostic wrapping is a piped/capture
+        // concern (#804); the streamed path (#803) has nothing captured to
+        // pattern-match against.
+        let output = dispatch_bun_dev_plugin_with_tty(&plugin, &ctx, false);
+
+        assert_eq!(output.code, 1);
+        assert!(
+            output.stderr.contains("bun-dev-missing-module"),
+            "wrapped stderr should name the plugin: {}",
+            output.stderr
+        );
+        assert!(
+            output.stderr.contains("bun install"),
+            "wrapped stderr should suggest `bun install`: {}",
+            output.stderr
+        );
+        assert!(
+            output
+                .stderr
+                .contains("Cannot find module 'foo' from '/some/path'"),
+            "wrapped stderr should keep the raw bun error visible below the wrapper: {}",
+            output.stderr
+        );
+
+        std::fs::remove_dir_all(plugin_dir).expect("cleanup plugin");
+        std::fs::remove_dir_all(shim_dir).expect("cleanup bun");
+    }
 }
 
 fn dispatch_bun_dev_plugin(plugin: &LoadedPlugin, ctx: &InvokeContext) -> CliOutput {
-    let banner = bun_dev_banner(&plugin.manifest.name);
+    dispatch_bun_dev_plugin_with_tty(
+        plugin,
+        ctx,
+        std::io::IsTerminal::is_terminal(&std::io::stderr()),
+    )
+}
+
+/// #803: bun-dev plugins used to always spawn with piped+captured
+/// stdout/stderr so the full output could be parsed into a `CliOutput`
+/// (banner-prepended, #804-wrapped, checked for the "exited 0 silently"
+/// heuristic below). That capture is also exactly what made a long-running
+/// plugin's live `--verbose` progress look frozen: nothing reached the
+/// terminal until the child exited and the whole buffer was available.
+///
+/// `stderr_is_tty` gates the fix, mirroring `x_heartbeat_wanted`'s tty-gating
+/// pattern in `x.rs` (a plain bool, computed once at the real call boundary
+/// via `IsTerminal`, injected directly by tests) rather than calling
+/// `stderr().is_terminal()` inline where it can't be overridden. When stderr
+/// is an interactive terminal a human is actually watching, so the child
+/// inherits stdout/stderr instead of piping through maw — real-time
+/// streaming, at the cost of the returned `CliOutput`'s stdout/stderr coming
+/// back empty (inherited bytes go straight to the terminal and never pass
+/// through a pipe maw could read). The banner-prepend and silence-note
+/// heuristics stay in the piped branch only — both need captured text to
+/// work with, and captured text is exactly what streaming forgoes. Non-tty
+/// callers (tests, CI, HTTP/API dispatch, audit logging, piped output) are
+/// unaffected: identical piped+capture behavior as before.
+fn dispatch_bun_dev_plugin_with_tty(
+    plugin: &LoadedPlugin,
+    ctx: &InvokeContext,
+    stderr_is_tty: bool,
+) -> CliOutput {
+    let banner = if bun_dev_banner_wanted() {
+        bun_dev_banner(&plugin.manifest.name)
+    } else {
+        String::new()
+    };
     let Some(entry_path) = &plugin.entry_path else {
         return CliOutput {
             code: 2,
             stdout: String::new(),
-            stderr: format!("{banner}dev-tier plugin {} has no TS/JS entry\n", plugin.manifest.name),
+            stderr: format!(
+                "{banner}dev-tier plugin {} has no TS/JS entry\n",
+                plugin.manifest.name
+            ),
         };
     };
+
+    let cwd = ctx.cwd.as_deref().map_or(plugin.dir.as_path(), Path::new);
+
+    if bun_dev_io_mode(stderr_is_tty) == BunDevIoMode::Streamed {
+        return dispatch_bun_dev_plugin_streamed(plugin, entry_path, &ctx.args, cwd);
+    }
 
     let output = std::process::Command::new("bun")
         .arg(entry_path)
         .args(&ctx.args)
-        .current_dir(&plugin.dir)
+        .current_dir(cwd)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .output();
 
     match output {
-        Ok(output) => CliOutput {
-            code: output.status.code().unwrap_or(1),
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: format!("{banner}{}", String::from_utf8_lossy(&output.stderr)),
-        },
+        Ok(output) => {
+            let code = output.status.code().unwrap_or(1);
+            let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+            let raw_plugin_stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+            // #804: a bun-dev plugin has no controlled module-resolution root, so a
+            // broken transitive import (e.g. a `bun link`ed dev package missing its
+            // own `node_modules`) surfaces as bun's raw stack trace — naming a
+            // package the user has likely never heard of and never saying which
+            // *plugin* failed. Wrap it with a maw-authored pointer; the raw trace
+            // stays appended below so a determined reader can still see it.
+            let plugin_stderr = if code != 0 && raw_plugin_stderr.contains("Cannot find module") {
+                wrap_bun_module_resolution_error(plugin, entry_path, &raw_plugin_stderr)
+            } else {
+                raw_plugin_stderr
+            };
+            let silence_note = if code == 0 && stdout.is_empty() && plugin_stderr.is_empty() {
+                format!(
+                    "plugin {} exited 0 with no output — maw executes the entry file, it does not import it; if your entry only exports a default function add an `import.meta.main` block\n",
+                    plugin.manifest.name
+                )
+            } else {
+                String::new()
+            };
+            CliOutput {
+                code,
+                stdout,
+                stderr: format!("{banner}{plugin_stderr}{silence_note}"),
+            }
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => CliOutput {
             code: 2,
             stdout: String::new(),
@@ -966,9 +1335,124 @@ fn dispatch_bun_dev_plugin(plugin: &LoadedPlugin, ctx: &InvokeContext) -> CliOut
     }
 }
 
+/// #803 streaming path: inherit stdout/stderr so a long-running plugin's
+/// progress reaches the terminal as it happens instead of buffering until
+/// exit. `Command::output()` cannot be reused for this branch — it
+/// unconditionally forces `Stdio::piped()` on stdout/stderr internally before
+/// spawning, silently discarding any `.stdout()`/`.stderr()` configuration
+/// set beforehand — so this path uses `spawn()` + `wait()` instead. There is
+/// nothing to capture, so the banner-prepend and "exited 0 with no output"
+/// silence-note heuristics from the piped branch don't apply here.
+fn dispatch_bun_dev_plugin_streamed(
+    plugin: &LoadedPlugin,
+    entry_path: &Path,
+    args: &[String],
+    cwd: &Path,
+) -> CliOutput {
+    let spawned = std::process::Command::new("bun")
+        .arg(entry_path)
+        .args(args)
+        .current_dir(cwd)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .spawn();
+
+    match spawned.and_then(|mut child| child.wait()) {
+        Ok(status) => CliOutput {
+            code: status.code().unwrap_or(1),
+            stdout: String::new(),
+            stderr: String::new(),
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => CliOutput {
+            code: 2,
+            stdout: String::new(),
+            stderr: format!(
+                "dev-tier plugin {} needs bun; install bun or build wasm\n",
+                plugin.manifest.name
+            ),
+        },
+        Err(error) => CliOutput {
+            code: 1,
+            stdout: String::new(),
+            stderr: format!(
+                "dev-tier plugin {} failed to run bun: {error}\n",
+                plugin.manifest.name
+            ),
+        },
+    }
+}
+
+/// #804 wrapper: name the plugin, name the entry path, and suggest `bun
+/// install` in the resolved package root (the directory containing the entry
+/// file, falling back to the plugin's own dir). Scope: diagnosis only — the
+/// issue's cheapest suggested fix (#1). Pinning the resolution root (#3),
+/// preflighting a dry-invoke (#2), and alias parity (#4) are separate, larger
+/// changes left out of this pass.
+fn wrap_bun_module_resolution_error(
+    plugin: &LoadedPlugin,
+    entry_path: &Path,
+    raw_stderr: &str,
+) -> String {
+    let package_root = entry_path.parent().unwrap_or(plugin.dir.as_path());
+    format!(
+        "maw: plugin '{name}' failed to load ('{entry}') — could not resolve a module.\n\
+maw: try running `bun install` in {root} (the plugin's package root).\n\
+--- raw bun error below ---\n{raw_stderr}",
+        name = plugin.manifest.name,
+        entry = entry_path.display(),
+        root = package_root.display(),
+    )
+}
+
+/// Which stdio strategy `dispatch_bun_dev_plugin_with_tty` uses for the bun
+/// child. Pure decision behind the #803 tty gate — mirrors
+/// `x_heartbeat_wanted`'s pattern in `x.rs`: real callers pass
+/// `stderr.is_terminal()`, tests inject the bool directly, so the branch is
+/// unit-testable without a real fd.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BunDevIoMode {
+    /// Pipe + capture stdout/stderr fully so the result can be parsed into a
+    /// `CliOutput`. Used whenever stderr is not an interactive terminal.
+    Captured,
+    /// Inherit stdout/stderr for real-time streaming (#803) — stderr is an
+    /// interactive terminal, so a human is actually watching.
+    Streamed,
+}
+
+fn bun_dev_io_mode(stderr_is_tty: bool) -> BunDevIoMode {
+    if stderr_is_tty {
+        BunDevIoMode::Streamed
+    } else {
+        BunDevIoMode::Captured
+    }
+}
+
 fn bun_dev_banner(plugin_name: &str) -> String {
     format!(
         "⚠ [dev-tier: bun] {plugin_name} — TS runs unsandboxed; ship tier = WASM (maw plugin build)\n"
+    )
+}
+
+/// The dev-tier banner is OFF by default (Nat, 2026-08-06). The tier is already
+/// discoverable on demand — `maw plugin info <name>` reports `kind`/`wasmPath`
+/// and `maw plugin ls -v` carries a runtime column — so announcing it on every
+/// invocation is noise rather than signal, and printing it unconditionally to
+/// stderr corrupted piped JSON for every bun-dev plugin (#778).
+/// `MAW_DEV_TIER_BANNER=1` (also `true`/`yes`/`on`, case- and space-insensitive)
+/// opts back in; anything else, including an unset var, stays quiet.
+fn bun_dev_banner_wanted() -> bool {
+    bun_dev_banner_decision(std::env::var("MAW_DEV_TIER_BANNER").ok().as_deref())
+}
+
+/// Pure decision behind [`bun_dev_banner_wanted`] — env in, bool out, so the
+/// opt-in matrix is unit-testable without touching a real fd or process env.
+fn bun_dev_banner_decision(override_env: Option<&str>) -> bool {
+    matches!(
+        override_env
+            .map(|raw| raw.trim().to_ascii_lowercase())
+            .as_deref(),
+        Some("1" | "true" | "yes" | "on")
     )
 }
 
@@ -995,7 +1479,9 @@ fn render_cli_plugin_result(result: InvokeResult) -> CliOutput {
     if result.ok {
         return CliOutput {
             code: 0,
-            stdout: result.output.map_or_else(String::new, with_trailing_newline),
+            stdout: result
+                .output
+                .map_or_else(String::new, with_trailing_newline),
             stderr: String::new(),
         };
     }
@@ -1017,7 +1503,6 @@ fn with_trailing_newline(mut value: String) -> String {
     }
     value
 }
-
 
 #[allow(clippy::too_many_lines)]
 fn run_auto_wake_plan(argv: &[String]) -> CliOutput {

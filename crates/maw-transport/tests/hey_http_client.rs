@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
 use std::collections::BTreeMap;
 
 use maw_auth::{build_from_sign_payload, hash_body, sign, verify_hmac_sig};
@@ -106,6 +107,91 @@ async fn reqwest_http_transport_posts_api_send_with_verifiable_v3_signature() {
     assert!(verify_hmac_sig(peer_key, &payload, signature));
 }
 
+/// #685: `verify_protected_request_outcome` on the receiving serve already
+/// names the reason for a 401/403 in the response body
+/// (`{"error":"unauthorized","decision":"<reason>"}`) -- `probe_peer_auth`
+/// must carry that reason through, not reduce straight to a bare bool the
+/// way it silently discarded the body before this fix.
+#[tokio::test]
+async fn reqwest_http_transport_probe_peer_auth_carries_the_named_401_reason() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let (tx, rx) = tokio::sync::oneshot::channel();
+
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accept");
+        let captured = read_one_http_request(&mut socket).await;
+        let body = br#"{"error":"unauthorized","decision":"pubkey-mismatch"}"#;
+        socket
+            .write_all(
+                format!(
+                    "HTTP/1.1 401 Unauthorized\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .expect("status line");
+        socket.write_all(body).await.expect("body");
+        tx.send(captured).expect("send capture");
+    });
+
+    let client = ReqwestHttpTransportIo::new(2_000).expect("client");
+    let result = client
+        .probe_peer_auth(&PeerWakeRequest {
+            peer_url: format!("http://{addr}"),
+            target: String::new(),
+            task: None,
+            from: "sender-oracle:sender-node".to_owned(),
+            federation_token: "known-federation-token".to_owned(),
+            peer_key: "known-peer-key".to_owned(),
+            timestamp: 1_700_000_123_i64,
+        })
+        .await
+        .expect("probe peer auth");
+
+    assert_eq!(result.ok, Some(false));
+    assert_eq!(result.reason.as_deref(), Some("pubkey-mismatch"));
+
+    let captured = rx.await.expect("capture");
+    assert_eq!(captured.method, "POST");
+    assert_eq!(captured.path, "/api/probe");
+}
+
+#[tokio::test]
+async fn reqwest_http_transport_probe_peer_auth_ok_carries_no_reason() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("addr");
+
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accept");
+        let _captured = read_one_http_request(&mut socket).await;
+        socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 11\r\n\r\n{\"ok\":true}",
+            )
+            .await
+            .expect("response");
+    });
+
+    let client = ReqwestHttpTransportIo::new(2_000).expect("client");
+    let result = client
+        .probe_peer_auth(&PeerWakeRequest {
+            peer_url: format!("http://{addr}"),
+            target: String::new(),
+            task: None,
+            from: "sender-oracle:sender-node".to_owned(),
+            federation_token: "known-federation-token".to_owned(),
+            peer_key: "known-peer-key".to_owned(),
+            timestamp: 1_700_000_123_i64,
+        })
+        .await
+        .expect("probe peer auth");
+
+    assert_eq!(result.ok, Some(true));
+    assert!(result.reason.is_none());
+}
+
 #[tokio::test]
 async fn reqwest_http_transport_posts_api_wake_with_verifiable_v3_signature() {
     let peer_key = "known-peer-key";
@@ -198,6 +284,91 @@ async fn reqwest_http_transport_posts_api_wake_with_verifiable_v3_signature() {
     assert!(verify_hmac_sig(peer_key, &payload, signature));
 }
 
+fn failover_request(peer_url: String) -> PeerSendRequest {
+    PeerSendRequest {
+        peer_url,
+        target: "oracle".to_owned(),
+        text: "hello".to_owned(),
+        inbox: None,
+        from: "sender:node".to_owned(),
+        federation_token: "token".to_owned(),
+        peer_key: "key".to_owned(),
+        timestamp: 1_700_000_123,
+    }
+}
+const SEND_OK: &str = "HTTP/1.1 200 OK\r\ncontent-length: 11\r\n\r\n{\"ok\":true}";
+const SEND_401: &str = "HTTP/1.1 401 Unauthorized\r\ncontent-length: 55\r\n\r\n{\"error\":\"connect failed posting timeout ECONNREFUSED\"}";
+const SEND_307: &str = "HTTP/1.1 307 X\r\nlocation:LOCATION\r\n\r\n{\"ok\":false}";
+async fn failover_server(response: Option<String>) -> (String, tokio::sync::oneshot::Receiver<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let address = listener.local_addr().expect("address");
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accept");
+        let _ = tx.send(());
+        let _ = read_one_http_request(&mut socket).await;
+        if let Some(response) = response {
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("respond");
+        } else {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+    });
+    (format!("http://{address}"), rx)
+}
+async fn failover_send(
+    addresses: &[String],
+    timeout_ms: u64,
+) -> Result<maw_transport::PeerSendResponse, String> {
+    ReqwestHttpTransportIo::new(timeout_ms)
+        .expect("client")
+        .send_peer_addresses(&failover_request(addresses[0].clone()), addresses)
+        .await
+}
+async fn closed_url() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    format!("http://{}/timeout", listener.local_addr().expect("address"))
+}
+async fn assert_untouched(receiver: tokio::sync::oneshot::Receiver<()>) {
+    let wait = std::time::Duration::from_millis(50);
+    assert!(tokio::time::timeout(wait, receiver).await.is_err());
+}
+#[tokio::test]
+async fn send_peer_failover_contract() {
+    let (first, attempted) = failover_server(None).await;
+    let (second, _) = failover_server(Some(SEND_OK.to_owned())).await;
+    let error = failover_send(&[first, second.clone()], 500)
+        .await
+        .expect_err("post-request timeout stops");
+    attempted.await.expect("first attempted");
+    assert!(error.starts_with("timed out posting "), "{error}");
+    let response = SEND_307.replace("LOCATION", &closed_url().await);
+    let (first, _) = failover_server(Some(response)).await;
+    let attempts = [first, second.clone()];
+    let error = failover_send(&attempts, 500).await.expect_err("307 stops");
+    assert!(error.contains("HTTP 307"), "{error}");
+    let response = failover_send(&[closed_url().await, second], 500)
+        .await
+        .expect("connect fallback succeeds");
+    assert!(response.delivered_or_queued() && response.warning.is_none());
+    let (first, _) = failover_server(Some(SEND_401.to_owned())).await;
+    let (second, untouched) = failover_server(Some(SEND_OK.to_owned())).await;
+    let error = failover_send(&[first, second], 1_000)
+        .await
+        .expect_err("401 stops");
+    assert!(error.contains("HTTP 401"), "{error}");
+    assert_untouched(untouched).await;
+    let attempts = vec![closed_url().await, closed_url().await];
+    let error = failover_send(&attempts, 1_000)
+        .await
+        .expect_err("exhausted");
+    for address in &attempts {
+        assert!(error.contains(address), "{error}");
+    }
+    assert_eq!(error.matches("REFUSED").count(), 2, "{error}");
+}
 async fn read_one_http_request(socket: &mut tokio::net::TcpStream) -> CapturedRequest {
     let mut buffer = Vec::new();
     let mut temp = [0_u8; 1024];

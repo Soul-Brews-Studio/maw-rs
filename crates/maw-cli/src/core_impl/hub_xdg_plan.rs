@@ -1,6 +1,7 @@
-const DISPATCH_300: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "xdg", handler: Handler::Sync(run_xdg_plan) },
-];
+const DISPATCH_300: &[DispatcherEntry] = &[DispatcherEntry {
+    command: "xdg",
+    handler: Handler::Sync(run_xdg_plan),
+}];
 
 struct AuthFromSignPayloadRender<'a> {
     legacy: bool,

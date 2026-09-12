@@ -39,16 +39,27 @@ fn assert_ok_text(args: &[&str], expected: &str) {
     );
 }
 
+fn help_all_names(text: &str) -> std::collections::BTreeSet<&str> {
+    text.lines()
+        .filter_map(|line| line.strip_prefix("  maw "))
+        .filter_map(|line| line.split_whitespace().next())
+        .collect()
+}
+
 #[test]
-fn top_level_help_shows_only_live_ported_surfaces() {
+fn top_level_help_shows_curated_core_menu() {
     for args in [Vec::<&str>::new(), vec!["help"], vec!["--help"], vec!["-h"]] {
-        assert_ok_text(&args, "ported commands:");
+        assert_ok_text(&args, "core commands:");
         assert_ok_text(&args, "a|attach <target>");
         assert_ok_text(&args, "ls [--compact|-c]");
-        assert_ok_text(&args, "portable parity commands are intentionally hidden");
+        assert_ok_text(&args, "wake <target|all>");
+        assert_ok_text(&args, "work <repo|.|path|url>");
+        assert_ok_text(&args, "maw help --all");
+        assert_ok_text(&args, "installed plugins:");
     }
 
     let output = run(&[]);
+    assert!(!output.stdout.contains("intentionally hidden"));
     assert!(!output.stdout.contains("auth verify-request"));
     assert!(!output.stdout.contains("consent-request --from <from>"));
     assert!(!output
@@ -59,6 +70,25 @@ fn top_level_help_shows_only_live_ported_surfaces() {
         dispatcher_status("not-a-real-command"),
         DispatchKind::NativeError
     );
+}
+
+#[test]
+fn help_all_and_commands_alias_list_registry_verbs() {
+    for args in [vec!["help", "--all"], vec!["commands"]] {
+        let output = run(&args);
+        assert_eq!(output.code, 0, "stderr for {args:?}: {}", output.stderr);
+        assert!(output.stderr.is_empty());
+        let names = help_all_names(&output.stdout);
+        assert!(
+            names.len() > 100,
+            "expected >100 verbs, got {}",
+            names.len()
+        );
+        for verb in ["wake", "work", "bg", "x"] {
+            assert!(names.contains(verb), "missing {verb} for {args:?}");
+        }
+        assert!(output.stdout.contains("run maw <verb> --help for details"));
+    }
 }
 
 #[test]

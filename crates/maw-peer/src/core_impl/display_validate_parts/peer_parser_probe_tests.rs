@@ -74,6 +74,7 @@
                 pubkey: Some("observed-key".to_owned()),
                 identity: None,
                 error: None,
+                ..Default::default()
             },
             remove_before_mutate: false,
         };

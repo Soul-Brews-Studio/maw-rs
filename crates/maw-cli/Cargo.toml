@@ -15,30 +15,30 @@ default = []
 wasm-host = ["maw-plugin-manifest/wasm-host"]
 
 [dependencies]
-maw-auto-wake = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "062afc6ccb2aa536d3ea404a80d2da5361843610" }
+maw-activity = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "e46932081dfd1a20bb962506086f1befe5525fa4" }
+maw-auto-wake = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "e46932081dfd1a20bb962506086f1befe5525fa4" }
 maw-auth = { path = "../maw-auth" }
-maw-bring = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "062afc6ccb2aa536d3ea404a80d2da5361843610" }
-maw-bind = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "062afc6ccb2aa536d3ea404a80d2da5361843610" }
-maw-calver = { git = "https://github.com/Soul-Brews-Studio/maw-calver", rev = "c74522b2b7cb5b831c456b2a2fa333849aa85eef" }
-maw-discord = { path = "../maw-discord" }
-maw-feed = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "062afc6ccb2aa536d3ea404a80d2da5361843610" }
-maw-fuzzy = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "062afc6ccb2aa536d3ea404a80d2da5361843610" }
-maw-identity = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "062afc6ccb2aa536d3ea404a80d2da5361843610" }
-maw-hub = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "062afc6ccb2aa536d3ea404a80d2da5361843610" }
-maw-matcher = { path = "../maw-matcher" }
+maw-bring = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "e46932081dfd1a20bb962506086f1befe5525fa4" }
+maw-bind = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "e46932081dfd1a20bb962506086f1befe5525fa4" }
+maw-calver = { git = "https://github.com/Soul-Brews-Studio/maw-calver", rev = "8e97ae8814990bbd3b3766cb5e0bc4064c57e859" }
+maw-feed = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "e46932081dfd1a20bb962506086f1befe5525fa4" }
+maw-fuzzy = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "e46932081dfd1a20bb962506086f1befe5525fa4" }
+maw-identity = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "e46932081dfd1a20bb962506086f1befe5525fa4" }
+maw-hub = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "e46932081dfd1a20bb962506086f1befe5525fa4" }
+maw-matcher = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "e46932081dfd1a20bb962506086f1befe5525fa4" }
 maw-peer = { path = "../maw-peer" }
 maw-plugin-manifest = { path = "../maw-plugin-manifest" }
-maw-plugin-scaffold = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "062afc6ccb2aa536d3ea404a80d2da5361843610" }
-maw-policy = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "062afc6ccb2aa536d3ea404a80d2da5361843610" }
-maw-routing = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "062afc6ccb2aa536d3ea404a80d2da5361843610" }
-maw-schedule = { path = "../maw-schedule" }
-maw-schedule-launchd = { path = "../maw-schedule-launchd" }
-maw-schedule-runner = { path = "../maw-schedule-runner" }
-maw-split = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "062afc6ccb2aa536d3ea404a80d2da5361843610" }
+maw-plugin-scaffold = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "e46932081dfd1a20bb962506086f1befe5525fa4" }
+maw-policy = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "e46932081dfd1a20bb962506086f1befe5525fa4" }
+maw-routing = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "e46932081dfd1a20bb962506086f1befe5525fa4" }
+maw-schedule = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "e46932081dfd1a20bb962506086f1befe5525fa4" }
+maw-schedule-launchd = { git = "https://github.com/Soul-Brews-Studio/maw-schedule-runtime", rev = "ba95c3f7c0b987509b4fe906e8375d6b4e6bc402" }
+maw-schedule-runner = { git = "https://github.com/Soul-Brews-Studio/maw-schedule-runtime", rev = "ba95c3f7c0b987509b4fe906e8375d6b4e6bc402" }
+maw-split = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "e46932081dfd1a20bb962506086f1befe5525fa4" }
 maw-tmux = { path = "../maw-tmux" }
 maw-transport = { path = "../maw-transport" }
-maw-worktree = { path = "../maw-worktree" }
-maw-xdg = { path = "../maw-xdg" }
+maw-worktree = { git = "https://github.com/Soul-Brews-Studio/maw-worktree", rev = "1449cff00fbbc03eef82de4daa710c194a1e14de" }
+maw-xdg = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "e46932081dfd1a20bb962506086f1befe5525fa4" }
 axum = { version = "0.7", default-features = false, features = ["http1", "json", "tokio", "query", "ws"] }
 futures-util = "0.3"
 rand = "0.8"
@@ -52,6 +52,9 @@ tower-http = { version = "0.6", features = ["fs"] }
 tokio.workspace = true
 
 [dev-dependencies]
+maw-activity = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "e46932081dfd1a20bb962506086f1befe5525fa4", features = ["fixtures"] }
+maw-matcher = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "e46932081dfd1a20bb962506086f1befe5525fa4", features = ["fixtures"] }
+maw-worktree = { git = "https://github.com/Soul-Brews-Studio/maw-worktree", rev = "1449cff00fbbc03eef82de4daa710c194a1e14de", features = ["fixtures"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

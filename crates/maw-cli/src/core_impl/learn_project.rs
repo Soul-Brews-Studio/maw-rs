@@ -122,9 +122,7 @@ fn run_project_command(argv: &[String]) -> CliOutput {
                     code: 0,
                     stdout: project_stub_line(
                         sub,
-                        &format!(
-                            "would clone \"{url}\" and symlink into {dir}/<owner>/<repo>"
-                        ),
+                        &format!("would clone \"{url}\" and symlink into {dir}/<owner>/<repo>"),
                     ),
                     stderr: String::new(),
                 }
@@ -181,9 +179,7 @@ fn missing_cmd_fail_closed(command: &str) -> CliOutput {
     CliOutput {
         code: 1,
         stdout: String::new(),
-        stderr: format!(
-            "{command} not yet native in maw-rs — port pending; use maw-js for now\n"
-        ),
+        stderr: format!("{command} not yet native in maw-rs — port pending; use maw-js for now\n"),
     }
 }
 
@@ -259,7 +255,11 @@ mod missing_cmds_tests291 {
         let commands: Vec<&str> = DISPATCH_291.iter().map(|entry| entry.command).collect();
         assert_eq!(commands, ["learn", "project", "park", "cleanup"]);
         for command in commands {
-            assert_eq!(dispatcher_status(command), DispatchKind::Native, "{command}");
+            assert_eq!(
+                dispatcher_status(command),
+                DispatchKind::Native,
+                "{command}"
+            );
         }
     }
 
@@ -323,7 +323,11 @@ mod missing_cmds_tests291 {
         let (_state_root, _restores) = cli_dispatch_test_env();
         let output = run_cli(&args(&["cleanup", "--anything"]));
         assert_eq!(output.code, 1, "cleanup");
-        assert!(output.stdout.is_empty(), "cleanup: stdout={}", output.stdout);
+        assert!(
+            output.stdout.is_empty(),
+            "cleanup: stdout={}",
+            output.stdout
+        );
         assert_eq!(
             output.stderr,
             "cleanup not yet native in maw-rs — port pending; use maw-js for now\n",
@@ -346,7 +350,10 @@ mod missing_cmds_tests291 {
         assert!(out.stdout.contains("list"));
         assert!(out.stdout.contains(PROJECT_TRACK_URL));
         // No trailing newline (goldens authoritative).
-        assert!(!out.stdout.ends_with('\n'), "stdout must not end with newline");
+        assert!(
+            !out.stdout.ends_with('\n'),
+            "stdout must not end with newline"
+        );
     }
 
     #[test]
@@ -354,7 +361,9 @@ mod missing_cmds_tests291 {
         let out = run_project_command(&args(&["list"]));
         assert_eq!(out.code, 0);
         assert!(out.stderr.is_empty());
-        assert!(out.stdout.contains("project list: would list all tracked repos"));
+        assert!(out
+            .stdout
+            .contains("project list: would list all tracked repos"));
         assert!(out.stdout.contains(PROJECT_TRACK_URL));
         assert!(!out.stdout.ends_with('\n'));
     }
@@ -394,9 +403,9 @@ mod missing_cmds_tests291 {
         let out = run_project_command(&args(&["find", "oracle"]));
         assert_eq!(out.code, 0);
         assert!(out.stderr.is_empty());
-        assert!(out.stdout.contains(
-            "project find: would search tracked repos for \"oracle\""
-        ));
+        assert!(out
+            .stdout
+            .contains("project find: would search tracked repos for \"oracle\""));
         assert!(!out.stdout.ends_with('\n'));
     }
 

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
 use maw_cli::{dispatcher_status, run_cli, DispatchKind};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -47,15 +48,40 @@ exit 42
 
 fn write_fake_curl(bin_dir: &Path) {
     let curl = bin_dir.join("curl");
+    // GET /api/sessions returns a TOP-LEVEL array (measured against a real serve), not a
+    // {"sessions":[…]} envelope. The stub mirrors that measured shape so both federation
+    // tests exercise the `as_array` branch of ls_sessions_from_payload — deleting that
+    // branch then turns these RED instead of silently returning empty for every real peer
+    // (#676; the old stub encoded the imagined shape of the never-existent /api/ls).
     fs::write(
         &curl,
         r#"#!/bin/sh
 printf '%s\n' "$*" >> "$MAW_LS_CURL_LOG"
-printf '{"sessions":[{"name":"blue-oracle","windows":[{"name":"main","index":0,"active":true}]}]}'
+printf '[{"name":"blue-oracle","windows":[{"name":"main","index":0,"active":true}]}]'
 "#,
     )
     .expect("write fake curl");
     chmod_exec(&curl);
+}
+
+// #860: `render_ls_plan` now surfaces a real tmux connect failure as a
+// distinct "tmux unreachable" error instead of silently treating it as an
+// empty pane list. These hermetic tests run with `env_clear()` and no real
+// `tmux` on PATH, so without this fake they'd hit that new, correct error
+// path -- previously they were (accidentally) relying on the old bug to
+// silently swallow "tmux binary not found" as "no local panes" so the rest
+// of the test (federation peer curl fetch, `--fix` git-prune) could run.
+// This fake simulates a reachable, empty local tmux server instead.
+fn write_fake_tmux(bin_dir: &Path) {
+    let tmux = bin_dir.join("tmux");
+    fs::write(
+        &tmux,
+        r"#!/bin/sh
+exit 0
+",
+    )
+    .expect("write fake tmux");
+    chmod_exec(&tmux);
 }
 
 fn write_fake_git(bin_dir: &Path, log: &Path) {
@@ -138,7 +164,7 @@ fn ls_flags_parse_and_render_federation_golden() {
     assert_eq!(String::from_utf8(output.stderr).expect("stderr"), "");
     assert_eq!(
         fs::read_to_string(root.join("curl.log")).expect("curl log"),
-        "-fsS --max-time 2 -- http://127.0.0.1:9999/api/ls\n"
+        "-fsS --max-time 2 -- http://127.0.0.1:9999/api/sessions\n"
     );
     fs::remove_dir_all(root).expect("cleanup");
 }
@@ -157,6 +183,7 @@ fn ls_federation_peer_drilldown_fetches_peer_sessions() {
     let bin_dir = root.join("bin");
     fs::create_dir_all(&bin_dir).expect("bin");
     write_fake_curl(&bin_dir);
+    write_fake_tmux(&bin_dir);
 
     let output = run_binary(&root, &["ls", "--federation", "blue", "--json"]);
 
@@ -172,7 +199,7 @@ fn ls_federation_peer_drilldown_fetches_peer_sessions() {
     assert_eq!(String::from_utf8(output.stderr).expect("stderr"), "");
     assert_eq!(
         fs::read_to_string(root.join("curl.log")).expect("curl log"),
-        "-fsS --max-time 2 -- http://127.0.0.1:9999/api/ls\n"
+        "-fsS --max-time 2 -- http://127.0.0.1:9999/api/sessions\n"
     );
     fs::remove_dir_all(root).expect("cleanup");
 }
@@ -209,6 +236,7 @@ fn ls_verify_and_fix_validate_before_git_prune_and_use_argv_only() {
     let git_log = root.join("git.log");
     write_fake_git(&bin_dir, &git_log);
     write_fake_maw(&bin_dir);
+    write_fake_tmux(&bin_dir);
 
     let output = run_binary(&root, &["ls", "--fix"]);
 

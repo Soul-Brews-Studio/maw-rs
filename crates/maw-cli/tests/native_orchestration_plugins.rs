@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -19,13 +20,47 @@ fn temp_dir(name: &str) -> PathBuf {
     path
 }
 
+fn install_empty_tmux(root: &Path) -> PathBuf {
+    let bin = root.join("fakebin");
+    fs::create_dir_all(&bin).expect("fake bin");
+    let tmux = bin.join("tmux");
+    fs::write(
+        &tmux,
+        include_str!("fixtures/hermetic-tmux/empty-server.sh"),
+    )
+    .expect("fake tmux");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&tmux, fs::Permissions::from_mode(0o755)).expect("chmod fake tmux");
+    }
+    bin
+}
+
+fn path_with(bin: PathBuf) -> std::ffi::OsString {
+    let mut entries = vec![bin];
+    entries.extend(
+        std::env::var_os("PATH")
+            .into_iter()
+            .flat_map(|value| std::env::split_paths(&value).collect::<Vec<_>>()),
+    );
+    std::env::join_paths(entries).expect("fake PATH")
+}
+
 fn run(args: &[&str], cwd: &Path, maw_home: &Path, ghq_root: &Path) -> std::process::Output {
+    let fake_bin = install_empty_tmux(maw_home);
     Command::new(bin())
         .args(args)
         .current_dir(cwd)
+        .env("HOME", maw_home.join("home"))
         .env("MAW_HOME", maw_home)
+        .env("MAW_CONFIG_DIR", maw_home.join("config"))
+        .env("XDG_CONFIG_HOME", maw_home.join("xdg-config"))
+        .env("XDG_STATE_HOME", maw_home.join("xdg-state"))
+        .env("XDG_DATA_HOME", maw_home.join("xdg-data"))
         .env("GHQ_ROOT", ghq_root)
         .env("MAW_JS_REF_DIR", "/nonexistent")
+        .env("PATH", path_with(fake_bin))
         .output()
         .expect("run maw-rs")
 }
@@ -112,12 +147,19 @@ fn native_about_matches_committed_maw_js_golden_without_ref_checkout() {
     )
     .expect("worktree git marker");
 
+    let fake_bin = install_empty_tmux(&root);
     let output = Command::new(bin())
         .args(["about", "beta"])
         .current_dir(&cwd)
-        .env("MAW_HOME", "maw-home")
+        .env("HOME", root.join("home"))
+        .env("MAW_HOME", root.join("maw-home"))
+        .env("MAW_CONFIG_DIR", root.join("config"))
+        .env("XDG_CONFIG_HOME", root.join("xdg-config"))
+        .env("XDG_STATE_HOME", root.join("xdg-state"))
+        .env("XDG_DATA_HOME", root.join("xdg-data"))
         .env("GHQ_ROOT", "ghq")
         .env("MAW_JS_REF_DIR", "/nonexistent")
+        .env("PATH", path_with(fake_bin))
         .output()
         .expect("run maw-rs about");
 

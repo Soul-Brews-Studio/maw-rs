@@ -11,7 +11,29 @@ use std::{
 type HmacSha256 = Hmac<Sha256>;
 
 pub const WINDOW_SEC: i64 = 300;
+
+/// Sender-identity fallback for `pair_consent::resolve_sender_oracle`,
+/// used only when its three real sources (session-window name, tmux
+/// window name, configured oracle) all come back empty.
+///
+/// This is a *sender-identity* default, not a *node-identity* one — #687
+/// removed the equivalent node-identity defaults (`GET /api/identity`,
+/// peer-store probe parsing) because a node silently claiming "mawjs" when
+/// its oracle was never configured is a masquerade a receiver cannot see
+/// through. Sender-identity signing is decided differently on purpose
+/// (#693): every federation send must produce a well-formed, signed
+/// `from:` address to be valid at all, so by the time this constant is
+/// reached the call is choosing between "sign as mawjs" and "the send
+/// cannot happen." Failing loud here would turn a genuinely headless or
+/// unconfigured sender (a common, legitimate shape — see
+/// `send_headless_sender_marker`) into a hard error on every outbound
+/// message, not just a display gap. Keep the concrete default; if a
+/// receiver needs to tell "really mawjs" from "unresolved, defaulted,"
+/// that has to be solved by making unresolved identity visible in the
+/// *value* (e.g. the `pane/unknown`-style markers this crate's callers
+/// already use elsewhere), not by refusing to sign.
 pub const DEFAULT_ORACLE: &str = "mawjs";
+
 pub const PAIR_CODE_ALPHABET: &str = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,6 +1,12 @@
 const DISPATCH_313: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "federation-identity", handler: Handler::Sync(run_federation_identity_plan) },
-    DispatcherEntry { command: "federation-health", handler: Handler::Sync(run_federation_health_plan) },
+    DispatcherEntry {
+        command: "federation-identity",
+        handler: Handler::Sync(run_federation_identity_plan),
+    },
+    DispatcherEntry {
+        command: "federation-health",
+        handler: Handler::Sync(run_federation_health_plan),
+    },
 ];
 
 fn parse_sync_identity(value: &str) -> Result<SyncPeerIdentity, String> {
@@ -277,8 +283,11 @@ fn run_federation_identity_plan(argv: &[String]) -> CliOutput {
                 };
                 match parse_key_value(value, "federation-identity: --agent must use <oracle=node>")
                 {
+                    // #605: invalid names are skipped, never inserted.
                     Ok((oracle, route_node)) => {
-                        agents.insert(oracle, route_node);
+                        if agent_name_is_valid(&oracle) {
+                            agents.insert(oracle, route_node);
+                        }
                     }
                     Err(message) => return federation_identity_usage_error(&message),
                 }
@@ -469,4 +478,3 @@ fn run_federation_health_plan(argv: &[String]) -> CliOutput {
         stderr: String::new(),
     }
 }
-

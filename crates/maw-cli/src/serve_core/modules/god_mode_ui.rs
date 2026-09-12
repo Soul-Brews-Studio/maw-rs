@@ -1,13 +1,21 @@
+use super::agent_status::{
+    agentstatus_drain_feed, agentstatus_feed_history_and_cursor, agentstatus_poll_global,
+    agentstatus_sessions_from_tmux, AgentStatusSnapshot,
+};
 use super::ServecoreModuleRegistration;
 use crate::serve_core::{
-    process_engine::serveengine_tmux_capture, servecore_ws_connection_guard,
-    servecore_ws_connection_limit_reached, servecore_ws_handle_frame, servecore_ws_send,
-    servecore_ws_send_text_frames, servecore_ws_target, ServecoreAgentPane,
-    ServecoreLifecycleModule, ServecoreSharedState, ServecoreWsKind,
+    process_engine::{serveengine_tmux_capture, serveengine_tmux_capture_lines},
+    servecore_ws_connection_guard, servecore_ws_connection_limit_reached,
+    servecore_ws_handle_frame, servecore_ws_send, servecore_ws_send_text_frames,
+    servecore_ws_target, ServecoreAgentPane, ServecoreLifecycleModule, ServecoreSharedState,
+    ServecoreWsKind,
 };
 use axum::{
     body::{to_bytes, Body},
-    extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
+    extract::{
+        ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
+        RawQuery,
+    },
     http::{Request, StatusCode, Uri},
     response::{IntoResponse, Response},
     routing::get,
@@ -17,7 +25,7 @@ use maw_tmux::{TmuxSession, TmuxWindow};
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
     sync::Arc,
@@ -26,6 +34,7 @@ use std::{
 
 const GODUI_TEAM_RECENT_MS: u64 = 2 * 60 * 60 * 1_000;
 const GODUI_POST_BODY_LIMIT: usize = 64 * 1024;
+const GODUI_PREVIEW_LINES: u32 = 15;
 
 #[must_use]
 pub fn godui_lifecycle_module() -> ServecoreLifecycleModule {
@@ -51,6 +60,7 @@ where
     S: Clone + Send + Sync + 'static,
 {
     router
+        .route("/api/config", get(godui_config_get))
         .route("/api/costs", get(godui_costs_get))
         .route("/api/teams", get(godui_teams_get))
         .route(
@@ -67,6 +77,20 @@ where
         )
 }
 
+async fn godui_config_get(
+    RawQuery(query): RawQuery,
+    Extension(state): Extension<Arc<ServecoreSharedState>>,
+) -> Response {
+    if query.is_some() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "config_query_not_supported"})),
+        )
+            .into_response();
+    }
+    Json(state.god_config.clone()).into_response()
+}
+
 async fn godui_costs_get() -> impl IntoResponse {
     Json(godui_costs_payload()).into_response()
 }
@@ -74,7 +98,20 @@ async fn godui_costs_get() -> impl IntoResponse {
 async fn godui_teams_get(
     Extension(state): Extension<Arc<ServecoreSharedState>>,
 ) -> impl IntoResponse {
-    Json(godui_teams_payload(&state)).into_response()
+    // #880: PROPAGATE. The team configs come off disk, but each team's
+    // `alive` flag is decided by matching member pane ids against the live
+    // tmux pane set. An unreachable tmux made that set empty, so every team
+    // shipped `alive: false` -- "your whole team is dead", asserted from a
+    // read that never happened. There is no honest partial answer here (the
+    // flag is not optional in the payload), so the whole response is 503.
+    match godui_teams_payload(&state) {
+        Ok(payload) => Json(payload).into_response(),
+        Err(error) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error": error})),
+        )
+            .into_response(),
+    }
 }
 
 async fn godui_ui_state_get() -> impl IntoResponse {
@@ -128,10 +165,15 @@ async fn godui_ws_upgrade(
         )
             .into_response();
     }
-    ws.on_upgrade(move |socket| godui_ws_stream(socket, state, target, config))
+    // Mirrors `servecore_ws_upgrade`: negotiate the stable subprotocol so a
+    // credentialed browser's offer is echoed and the 101 is not rejected (#962
+    // regression). axum echoes only from this list, never the ticket value.
+    ws.protocols([crate::core_impl::SERVE_WS_PROTOCOL])
+        .on_upgrade(move |socket| godui_ws_stream(socket, state, target, config))
         .into_response()
 }
 
+#[allow(clippy::too_many_lines)]
 async fn godui_ws_stream(
     mut socket: WebSocket,
     state: Arc<ServecoreSharedState>,
@@ -147,12 +189,12 @@ async fn godui_ws_stream(
             .await;
         return;
     };
-    if !godui_ws_send_initial(&mut socket, &state, &config).await {
+    let Some(mut feed_cursor) = godui_ws_send_initial(&mut socket, &state, &config).await else {
         state
             .engine
             .servecore_ws_close(ServecoreWsKind::Engine, target.as_deref());
         return;
-    }
+    };
     let mut heartbeat = tokio::time::interval_at(
         tokio::time::Instant::now() + config.heartbeat_interval,
         config.heartbeat_interval,
@@ -165,19 +207,33 @@ async fn godui_ws_stream(
         tokio::time::Instant::now() + config.capture_interval,
         config.capture_interval,
     );
+    let mut previews_tick = tokio::time::interval_at(
+        tokio::time::Instant::now() + config.previews_interval,
+        config.previews_interval,
+    );
     let mut subscribed_target = target.clone();
+    let mut preview_targets = BTreeSet::new();
+    let mut last_previews = BTreeMap::new();
     let idle_timer = tokio::time::sleep(config.idle_timeout);
     tokio::pin!(idle_timer);
     loop {
         tokio::select! {
             _ = refresh.tick() => {
-                if !godui_ws_send_session_recent(&mut socket, &state, &config).await {
+                if !godui_ws_send_session_recent(&mut socket, &state, &config, &mut feed_cursor).await {
                     break;
                 }
                 idle_timer.as_mut().reset(tokio::time::Instant::now() + config.idle_timeout);
             }
             _ = capture_tick.tick() => {
                 if let Some(frame) = subscribed_target.as_deref().and_then(godui_ws_capture_frame) {
+                    if servecore_ws_send(&mut socket, Message::Text(frame), config.send_timeout).await.is_err() {
+                        break;
+                    }
+                    idle_timer.as_mut().reset(tokio::time::Instant::now() + config.idle_timeout);
+                }
+            }
+            _ = previews_tick.tick() => {
+                if let Some(frame) = godui_ws_previews_frame(&preview_targets, &mut last_previews, godui_ws_preview_capture) {
                     if servecore_ws_send(&mut socket, Message::Text(frame), config.send_timeout).await.is_err() {
                         break;
                     }
@@ -203,6 +259,14 @@ async fn godui_ws_stream(
                         let frame_target = if let Message::Text(text) = &frame {
                             if let Some(selected) = godui_ws_selected_target(text) {
                                 subscribed_target = Some(selected);
+                            }
+                            if let Some(targets) = godui_ws_preview_targets(text) {
+                                godui_ws_replace_preview_targets(
+                                    &mut preview_targets,
+                                    &mut last_previews,
+                                    targets,
+                                );
+                                continue;
                             }
                             godui_ws_message_target(text).or_else(|| subscribed_target.clone()).or_else(|| target.clone())
                         } else {
@@ -231,30 +295,69 @@ async fn godui_ws_stream(
         .servecore_ws_close(ServecoreWsKind::Engine, target.as_deref());
 }
 
+// #880: PROPAGATE, websocket-style. A websocket cannot answer 503 -- by the
+// time this runs the HTTP handshake is already complete and the status line
+// is spent. Probing tmux back in `godui_ws_upgrade` so it *could* 503 would
+// cost a second tmux round trip per connection and still race (tmux can die
+// in the gap), so the wire analog is used instead: the typed `{"type":
+// "error"}` frame the engine socket already speaks, followed by a close.
+// A connect-time failure means there is no truthful first snapshot to paint,
+// and nothing to recover from within this stream -- the browser's reconnect
+// is the retry -- so the socket does not stay open pretending.
 async fn godui_ws_send_initial(
     socket: &mut WebSocket,
     state: &ServecoreSharedState,
     config: &super::websocket_routes::WsConfig,
-) -> bool {
-    servecore_ws_send_text_frames(
-        socket,
-        godui_ws_initial_frames(state.servecore_tmux_sessions()),
-        config,
-    )
-    .await
+) -> Option<u64> {
+    let sessions = match state.servecore_tmux_sessions() {
+        Ok(sessions) => sessions,
+        Err(error) => {
+            let _ =
+                servecore_ws_send_text_frames(socket, vec![godui_ws_error_frame(&error)], config)
+                    .await;
+            let _ = servecore_ws_send(socket, Message::Close(None), config.send_timeout).await;
+            return None;
+        }
+    };
+    let (frames, cursor) = godui_ws_initial_frames(sessions);
+    servecore_ws_send_text_frames(socket, frames, config)
+        .await
+        .then_some(cursor)
 }
 
+// #880: DEGRADE, deliberately -- but without lying. This is the two-second
+// refresh tick on an already-established dashboard socket, so tearing the
+// connection down over a transient tmux hiccup would be worse than useless:
+// the browser would reconnect into the same hiccup. What it must not do is
+// keep pushing `sessions: []`, which is the #860 falsehood arriving on a
+// timer. So a failed read emits the same typed error frame and *skips* the
+// sessions/recent frames for this tick; the socket stays open and the next
+// tick recovers on its own. Feed events do not come from tmux and still flow.
 async fn godui_ws_send_session_recent(
     socket: &mut WebSocket,
     state: &ServecoreSharedState,
     config: &super::websocket_routes::WsConfig,
+    feed_cursor: &mut u64,
 ) -> bool {
-    servecore_ws_send_text_frames(
-        socket,
-        godui_ws_session_recent_frames(state.servecore_tmux_sessions()),
-        config,
-    )
-    .await
+    let mut frames = match state.servecore_tmux_sessions() {
+        Ok(sessions) => godui_ws_session_recent_frames(sessions),
+        Err(error) => vec![godui_ws_error_frame(&error)],
+    };
+    let (events, next_cursor) = agentstatus_drain_feed(*feed_cursor);
+    *feed_cursor = next_cursor;
+    frames.extend(
+        events
+            .into_iter()
+            .map(|event| godui_ws_json_text(&json!({"type": "feed", "event": event}))),
+    );
+    servecore_ws_send_text_frames(socket, frames, config).await
+}
+
+/// #880: same `{"type":"error","error":"tmux unreachable: …"}` shape the
+/// engine `/ws/pty` socket already uses, so a dashboard has one error frame
+/// to handle rather than one per stream.
+fn godui_ws_error_frame(error: &str) -> String {
+    godui_ws_json_text(&json!({"type": "error", "error": error}))
 }
 
 fn godui_costs_payload() -> Value {
@@ -269,19 +372,20 @@ fn godui_costs_payload() -> Value {
     })
 }
 
-fn godui_teams_payload(state: &ServecoreSharedState) -> GoduiTeamsResponse {
+fn godui_teams_payload(state: &ServecoreSharedState) -> Result<GoduiTeamsResponse, String> {
     let home = godui_home_dir();
+    let panes = state.servecore_agents_panes()?;
     let teams = godui_scan_teams(
         &home.join(".claude").join("teams"),
         &home.join(".claude").join("tasks"),
         &home,
-        &state.servecore_agents_panes(),
+        &panes,
         godui_now_millis(),
     );
-    GoduiTeamsResponse {
+    Ok(GoduiTeamsResponse {
         total: teams.len(),
         teams,
-    }
+    })
 }
 
 fn godui_ui_state_payload() -> Value {
@@ -304,20 +408,36 @@ fn godui_pin_info_payload() -> GoduiPinInfoResponse {
     }
 }
 
-pub(crate) fn godui_ws_initial_frames(sessions: Vec<TmuxSession>) -> Vec<String> {
+pub(crate) fn godui_ws_initial_frames(sessions: Vec<TmuxSession>) -> (Vec<String>, u64) {
+    let agent_sessions = agentstatus_sessions_from_tmux(&sessions);
+    let snapshot = agentstatus_poll_global(&agent_sessions);
+    let (events, cursor) = agentstatus_feed_history_and_cursor();
     let mut frames = Vec::with_capacity(3);
     frames.push(godui_ws_json_text(
-        &json!({"type": "feed-history", "events": []}),
+        &json!({"type": "feed-history", "events": events}),
     ));
-    frames.extend(godui_ws_session_recent_frames(sessions));
-    frames
+    frames.extend(godui_ws_session_recent_frames_with_snapshot(
+        sessions, &snapshot,
+    ));
+    (frames, cursor)
 }
 
 pub(crate) fn godui_ws_session_recent_frames(sessions: Vec<TmuxSession>) -> Vec<String> {
-    let sessions = godui_ws_sessions(sessions);
+    let agent_sessions = agentstatus_sessions_from_tmux(&sessions);
+    let snapshot = agentstatus_poll_global(&agent_sessions);
+    godui_ws_session_recent_frames_with_snapshot(sessions, &snapshot)
+}
+
+fn godui_ws_session_recent_frames_with_snapshot(
+    sessions: Vec<TmuxSession>,
+    snapshot: &AgentStatusSnapshot,
+) -> Vec<String> {
+    let sessions = godui_ws_sessions(sessions, snapshot);
     vec![
         godui_ws_json_text(&json!({"type": "sessions", "sessions": sessions})),
-        godui_ws_json_text(&json!({"type": "recent", "agents": godui_ws_recent_agents(&sessions)})),
+        godui_ws_json_text(
+            &json!({"type": "recent", "agents": godui_ws_recent_agents(&sessions, snapshot)}),
+        ),
     ]
 }
 
@@ -347,11 +467,64 @@ fn godui_ws_value_target(value: &Value) -> Option<String> {
         .flatten()
 }
 
+fn godui_ws_preview_targets(text: &str) -> Option<BTreeSet<String>> {
+    let value = serde_json::from_str::<Value>(text).ok()?;
+    (value.get("type").and_then(Value::as_str) == Some("subscribe-previews")).then(|| {
+        value
+            .get("targets")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .filter_map(|target| {
+                super::websocket_routes::ws_validate_target(Some(target))
+                    .ok()
+                    .flatten()
+            })
+            .collect()
+    })
+}
+
+fn godui_ws_replace_preview_targets(
+    current: &mut BTreeSet<String>,
+    last_previews: &mut BTreeMap<String, String>,
+    next: BTreeSet<String>,
+) {
+    *current = next;
+    last_previews.retain(|target, _| current.contains(target));
+}
+
 fn godui_ws_capture_frame(target: &str) -> Option<String> {
     let content = serveengine_tmux_capture(target).ok()?;
     Some(godui_ws_json_text(
         &json!({"type":"capture","target":target,"content":content}),
     ))
+}
+
+fn godui_ws_preview_capture(target: &str) -> Option<String> {
+    serveengine_tmux_capture_lines(target, Some(GODUI_PREVIEW_LINES)).ok()
+}
+
+fn godui_ws_previews_frame<F>(
+    targets: &BTreeSet<String>,
+    last_previews: &mut BTreeMap<String, String>,
+    mut capture: F,
+) -> Option<String>
+where
+    F: FnMut(&str) -> Option<String>,
+{
+    let mut data = Map::new();
+    for target in targets {
+        let Some(content) = capture(target) else {
+            continue;
+        };
+        if last_previews.get(target) == Some(&content) {
+            continue;
+        }
+        last_previews.insert(target.clone(), content.clone());
+        data.insert(target.clone(), Value::String(content));
+    }
+    (!data.is_empty()).then(|| godui_ws_json_text(&json!({"type":"previews","data":data})))
 }
 
 async fn godui_store_json_body(req: Request<Body>, path: &Path) -> Response {
@@ -410,6 +583,8 @@ struct GoduiWsWindow {
     active: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -650,33 +825,56 @@ fn godui_write_json(path: &Path, payload: &Value) -> std::io::Result<()> {
     fs::write(path, format!("{text}\n"))
 }
 
-fn godui_ws_sessions(sessions: Vec<TmuxSession>) -> Vec<GoduiWsSession> {
+fn godui_ws_sessions(
+    sessions: Vec<TmuxSession>,
+    snapshot: &AgentStatusSnapshot,
+) -> Vec<GoduiWsSession> {
     sessions
         .into_iter()
         .map(|session| GoduiWsSession {
+            windows: session
+                .windows
+                .into_iter()
+                .map(|window| godui_ws_window(&session.name, window, snapshot))
+                .collect(),
             name: session.name,
-            windows: session.windows.into_iter().map(godui_ws_window).collect(),
         })
         .collect()
 }
 
-fn godui_ws_window(window: TmuxWindow) -> GoduiWsWindow {
+fn godui_ws_window(
+    session_name: &str,
+    window: TmuxWindow,
+    snapshot: &AgentStatusSnapshot,
+) -> GoduiWsWindow {
+    let target = format!("{}:{}", session_name, window.index);
     GoduiWsWindow {
         index: window.index,
         name: window.name,
         active: window.active,
         cwd: window.cwd,
+        status: snapshot
+            .agentstatus_status(&target)
+            .map(std::borrow::ToOwned::to_owned),
     }
 }
 
-fn godui_ws_recent_agents(sessions: &[GoduiWsSession]) -> Vec<GoduiWsRecentAgent> {
+fn godui_ws_recent_agents(
+    sessions: &[GoduiWsSession],
+    snapshot: &AgentStatusSnapshot,
+) -> Vec<GoduiWsRecentAgent> {
     sessions
         .iter()
         .flat_map(|session| {
-            session.windows.iter().map(|window| GoduiWsRecentAgent {
-                target: format!("{}:{}", session.name, window.index),
-                name: window.name.clone(),
-                session: session.name.clone(),
+            session.windows.iter().filter_map(|window| {
+                let target = format!("{}:{}", session.name, window.index);
+                snapshot
+                    .agentstatus_is_agent_target(&target)
+                    .then(|| GoduiWsRecentAgent {
+                        target,
+                        name: window.name.clone(),
+                        session: session.name.clone(),
+                    })
             })
         })
         .collect()
@@ -725,7 +923,7 @@ mod tests {
     use super::*;
     use crate::serve_core::{
         modules::servecore_mount_modules, servecore_apply_pipeline, servecore_mount_core_routes,
-        servecore_with_shared_state,
+        servecore_with_shared_state, ServecoreGodConfig,
     };
     use axum::{
         body::Body,
@@ -740,24 +938,9 @@ mod tests {
     use tokio::sync::oneshot;
     use tower::ServiceExt;
 
-    struct EnvGuard(&'static str, Option<std::ffi::OsString>);
-
-    impl EnvGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let old = std::env::var_os(key);
-            std::env::set_var(key, value);
-            Self(key, old)
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            match &self.1 {
-                Some(value) => std::env::set_var(self.0, value),
-                None => std::env::remove_var(self.0),
-            }
-        }
-    }
+    // #757: was a private copy that serialized against nothing. Uses the
+    // crate-wide guard, which holds the env lock for its lifetime.
+    use crate::test_env::EnvVarGuard as EnvGuard;
 
     #[test]
     fn godui_empty_payloads_match_maw_js_shapes() {
@@ -771,23 +954,27 @@ mod tests {
 
     #[test]
     fn godui_ws_frames_match_maw_js_sessions_and_recent_shapes() {
-        let sessions = godui_ws_sessions(vec![TmuxSession {
-            name: "142-athena".to_owned(),
-            windows: vec![
-                TmuxWindow {
-                    index: 1,
-                    name: "athena-oracle".to_owned(),
-                    active: true,
-                    cwd: Some("/opt/athena".to_owned()),
-                },
-                TmuxWindow {
-                    index: 2,
-                    name: "athena-codex-1".to_owned(),
-                    active: false,
-                    cwd: None,
-                },
-            ],
-        }]);
+        let snapshot = AgentStatusSnapshot::default();
+        let sessions = godui_ws_sessions(
+            vec![TmuxSession {
+                name: "142-athena".to_owned(),
+                windows: vec![
+                    TmuxWindow {
+                        index: 1,
+                        name: "athena-oracle".to_owned(),
+                        active: true,
+                        cwd: Some("/opt/athena".to_owned()),
+                    },
+                    TmuxWindow {
+                        index: 2,
+                        name: "athena-codex-1".to_owned(),
+                        active: false,
+                        cwd: None,
+                    },
+                ],
+            }],
+            &snapshot,
+        );
 
         assert_eq!(
             serde_json::to_value(&sessions).expect("sessions json"),
@@ -800,11 +987,9 @@ mod tests {
             }])
         );
         assert_eq!(
-            serde_json::to_value(godui_ws_recent_agents(&sessions)).expect("recent json"),
-            json!([
-                {"target": "142-athena:1", "name": "athena-oracle", "session": "142-athena"},
-                {"target": "142-athena:2", "name": "athena-codex-1", "session": "142-athena"}
-            ])
+            serde_json::to_value(godui_ws_recent_agents(&sessions, &snapshot))
+                .expect("recent json"),
+            json!([])
         );
     }
 
@@ -820,8 +1005,84 @@ mod tests {
         assert_eq!(value["content"], "pane ansi");
     }
 
+    #[test]
+    fn godui_ws_previews_frame_sends_only_changed_targets() {
+        let targets = BTreeSet::from(["demo:1".to_owned(), "demo:2".to_owned()]);
+        let mut last_previews = BTreeMap::new();
+        let frame = godui_ws_previews_frame(&targets, &mut last_previews, |target| {
+            Some(format!("{target} pane \u{1b}[31mansi\u{1b}[0m"))
+        })
+        .expect("initial preview frame");
+        let value = serde_json::from_str::<Value>(&frame).expect("json");
+        assert_eq!(value["type"], "previews");
+        assert_eq!(
+            value["data"]["demo:1"],
+            "demo:1 pane \u{1b}[31mansi\u{1b}[0m"
+        );
+        assert_eq!(
+            value["data"]["demo:2"],
+            "demo:2 pane \u{1b}[31mansi\u{1b}[0m"
+        );
+
+        assert!(
+            godui_ws_previews_frame(&targets, &mut last_previews, |target| {
+                Some(format!("{target} pane \u{1b}[31mansi\u{1b}[0m"))
+            })
+            .is_none()
+        );
+
+        let changed = godui_ws_previews_frame(&targets, &mut last_previews, |target| {
+            Some(if target == "demo:2" {
+                "demo:2 updated".to_owned()
+            } else {
+                format!("{target} pane \u{1b}[31mansi\u{1b}[0m")
+            })
+        })
+        .expect("changed preview frame");
+        let changed = serde_json::from_str::<Value>(&changed).expect("json");
+        assert!(changed["data"].get("demo:1").is_none());
+        assert_eq!(changed["data"]["demo:2"], "demo:2 updated");
+    }
+
+    #[test]
+    fn godui_ws_subscribe_previews_replaces_targets_and_prunes_last_sent() {
+        let mut targets = godui_ws_preview_targets(
+            r#"{"type":"subscribe-previews","targets":["demo:1","demo:2"]}"#,
+        )
+        .expect("preview targets");
+        let mut last_previews = BTreeMap::from([
+            ("demo:1".to_owned(), "old 1".to_owned()),
+            ("demo:2".to_owned(), "old 2".to_owned()),
+        ]);
+
+        let next =
+            godui_ws_preview_targets(r#"{"type":"subscribe-previews","targets":["demo:2"]}"#)
+                .expect("replacement targets");
+        godui_ws_replace_preview_targets(&mut targets, &mut last_previews, next);
+
+        assert_eq!(targets, BTreeSet::from(["demo:2".to_owned()]));
+        assert_eq!(
+            last_previews,
+            BTreeMap::from([("demo:2".to_owned(), "old 2".to_owned())])
+        );
+    }
+
     #[tokio::test]
     async fn godui_ws_route_streams_sessions_and_recent_from_module() {
+        super::super::agent_status::agentstatus_reset_global();
+        // #889: make the former cross-test race deterministic by priming the
+        // throttled global with a snapshot for a different session shape.
+        let stale_sessions =
+            super::super::agent_status::agentstatus_sessions_from_tmux(&[TmuxSession {
+                name: "99-stale".to_owned(),
+                windows: vec![maw_tmux::TmuxWindow {
+                    index: 1,
+                    name: "stale-oracle".to_owned(),
+                    active: true,
+                    cwd: None,
+                }],
+            }]);
+        let _stale_snapshot = super::super::agent_status::agentstatus_poll_global(&stale_sessions);
         let state = ServecoreSharedState::default().servecore_with_tmux_sessions_snapshot(vec![
             TmuxSession {
                 name: "142-athena".to_owned(),
@@ -858,13 +1119,195 @@ mod tests {
         assert_eq!(frames[1]["type"], "sessions");
         assert_eq!(frames[1]["sessions"][0]["name"], "142-athena");
         assert_eq!(frames[1]["sessions"][0]["windows"][0]["cwd"], "/opt/athena");
+        assert_eq!(frames[1]["sessions"][0]["windows"][0]["status"], "idle");
         assert_eq!(frames[2]["type"], "recent");
+        assert_eq!(frames[2]["agents"], json!([]));
+    }
+
+    /// #880: `/api/teams` reads team configs off disk but decides each team's
+    /// `alive` flag from the live tmux pane ids. With tmux unreachable the
+    /// pane set was empty, so every team was reported `alive: false` -- a
+    /// confident "your whole team is dead" built on a read that never
+    /// happened. It now answers 503 with the typed body instead.
+    #[tokio::test]
+    async fn godui880_teams_unreachable_tmux_is_503_not_a_dead_team_roster() {
+        let state = ServecoreSharedState::default().servecore_with_tmux_unreachable(
+            "error connecting to /tmp/tmux-1028/default (No such file or directory)",
+        );
+        let router = servecore_mount_core_routes(Router::new());
+        let router = servecore_mount_modules(router, &["god-ui".to_owned()]);
+        let router = servecore_with_shared_state(router, state);
+        let app = servecore_apply_pipeline(router);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/api/teams")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
         assert_eq!(
-            frames[2]["agents"],
-            json!([
-                {"target": "142-athena:1", "name": "athena-oracle", "session": "142-athena"},
-                {"target": "142-athena:2", "name": "athena-codex-1", "session": "142-athena"}
-            ])
+            response.status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "liveness that cannot be read must not be reported as 'not alive'"
+        );
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("body bytes");
+        let payload = serde_json::from_slice::<Value>(&body).expect("json body");
+        assert!(
+            payload["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("tmux unreachable"),
+            "503 body must carry the typed tmux-unreachable error: {payload}"
+        );
+        assert!(
+            payload.get("teams").is_none(),
+            "a failed liveness read must not also ship a team roster: {payload}"
+        );
+    }
+
+    /// #880, websocket half. A websocket cannot answer 503 -- by the time the
+    /// stream runs, the HTTP handshake is already done. The wire analog is a
+    /// typed `{"type":"error"}` frame followed by a close: the dashboard
+    /// learns tmux is unreachable instead of painting a confidently empty
+    /// fleet, which is exactly what the old `sessions: []` frame did.
+    #[tokio::test]
+    async fn godui880_ws_initial_unreachable_tmux_sends_error_frame_and_never_empty_sessions() {
+        let state = ServecoreSharedState::default().servecore_with_tmux_unreachable(
+            "error connecting to /tmp/tmux-1028/default (No such file or directory)",
+        );
+        let addr = godui_spawn_test_server(state).await;
+        let (mut ws, _response) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws"))
+            .await
+            .expect("connect websocket");
+
+        // Bounded by frame count, not wall clock, so the failure output is the
+        // same on every run: the broken path emits exactly the initial three
+        // frames plus one refresh tick's two before this stops reading.
+        let mut texts = Vec::new();
+        let mut closed = false;
+        let _ = tokio::time::timeout(Duration::from_secs(10), async {
+            while let Some(Ok(received)) = ws.next().await {
+                match received {
+                    tokio_tungstenite::tungstenite::Message::Text(text) => {
+                        texts.push(serde_json::from_str::<Value>(&text).expect("json frame"));
+                        if texts.len() >= 5 {
+                            return;
+                        }
+                    }
+                    tokio_tungstenite::tungstenite::Message::Close(_) => {
+                        closed = true;
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .await;
+
+        assert!(
+            texts.iter().any(|frame| frame["type"] == "error"
+                && frame["error"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("tmux unreachable")),
+            "the dashboard must be told tmux is unreachable: {texts:?}"
+        );
+        assert!(
+            !texts.iter().any(|frame| frame["type"] == "sessions"),
+            "an unreachable tmux must never be streamed as a session list: {texts:?}"
+        );
+        assert!(
+            closed,
+            "a connect-time tmux failure has no recoverable stream to serve; close it"
+        );
+    }
+
+    /// #880, the harder websocket half: tmux was alive at connect and dies
+    /// while the dashboard socket is open. This tick is a best-effort poll on
+    /// an already-established connection, so it deliberately does NOT tear the
+    /// socket down -- but it must not push `sessions: []` either, because that
+    /// is the #860 lie arriving every two seconds. It emits the typed error
+    /// frame, skips the sessions frames for that tick, and stays open to
+    /// recover.
+    #[tokio::test]
+    async fn godui880_ws_refresh_tmux_dying_mid_stream_errors_without_closing_or_lying() {
+        let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = Arc::clone(&reads);
+        let state = ServecoreSharedState::default().servecore_with_tmux_sessions_source(Arc::new(
+            move || {
+                if counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    Ok(Vec::new())
+                } else {
+                    Err("tmux unreachable: server exited unexpectedly".to_owned())
+                }
+            },
+        ));
+        let addr = godui_spawn_test_server(state).await;
+        let (mut ws, _response) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws"))
+            .await
+            .expect("connect websocket");
+
+        // Stops after two refresh ticks rather than after a wall-clock window,
+        // so both the broken and the fixed path produce the same counts on
+        // every run.
+        let mut initial_sessions_frame = false;
+        let mut refreshed_session_frames = 0_usize;
+        let mut error_frames = 0_usize;
+        let mut ticks = 0_usize;
+        let mut closed = false;
+        let _ = tokio::time::timeout(Duration::from_secs(20), async {
+            while let Some(Ok(received)) = ws.next().await {
+                match received {
+                    tokio_tungstenite::tungstenite::Message::Text(text) => {
+                        let frame = serde_json::from_str::<Value>(&text).expect("json frame");
+                        if frame["type"] == "sessions" {
+                            if initial_sessions_frame {
+                                refreshed_session_frames += 1;
+                                ticks += 1;
+                            } else {
+                                initial_sessions_frame = true;
+                            }
+                        }
+                        if frame["type"] == "error" {
+                            error_frames += 1;
+                            ticks += 1;
+                        }
+                        if ticks >= 2 {
+                            return;
+                        }
+                    }
+                    tokio_tungstenite::tungstenite::Message::Close(_) => {
+                        closed = true;
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .await;
+
+        assert!(
+            initial_sessions_frame,
+            "the first, reachable read must still stream its (empty but true) session list"
+        );
+        assert_eq!(
+            refreshed_session_frames, 0,
+            "a refresh whose tmux read failed must never be streamed as an empty session list"
+        );
+        assert_eq!(
+            error_frames, 2,
+            "each failed refresh tick must say so, and keep saying so"
+        );
+        assert!(
+            !closed,
+            "a transient tmux failure must not tear down a working dashboard socket"
         );
     }
 
@@ -965,6 +1408,98 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn godui_config_fails_closed_without_mutating_origin_or_auth_policy() {
+        let config =
+            ServecoreGodConfig::servecore_from_parts(Some("  "), BTreeMap::new(), Vec::new());
+        let app = godui_test_app(ServecoreSharedState::default().servecore_with_god_config(config));
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/config")
+                    .header("origin", "https://god.buildwithoracle.com")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value = serde_json::from_slice(
+            &to_bytes(response.into_body(), GODUI_POST_BODY_LIMIT)
+                .await
+                .expect("body"),
+        )
+        .expect("json");
+        assert!(body["node"].as_str().is_some_and(|node| !node.is_empty()));
+        assert_eq!(body["agents"], json!({}));
+        assert_eq!(body["namedPeers"], json!([]));
+
+        for (method, uri, origin, expected) in [
+            (
+                Method::GET,
+                "/api/config?raw=1",
+                Some("https://god.buildwithoracle.com"),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                Method::POST,
+                "/api/config",
+                None,
+                StatusCode::METHOD_NOT_ALLOWED,
+            ),
+            (
+                Method::PUT,
+                "/api/config",
+                None,
+                StatusCode::METHOD_NOT_ALLOWED,
+            ),
+            (
+                Method::PATCH,
+                "/api/config",
+                None,
+                StatusCode::METHOD_NOT_ALLOWED,
+            ),
+            (
+                Method::DELETE,
+                "/api/config",
+                None,
+                StatusCode::METHOD_NOT_ALLOWED,
+            ),
+            (Method::GET, "/api/config", None, StatusCode::OK),
+            (
+                Method::GET,
+                "/api/config",
+                Some("https://evil.example"),
+                StatusCode::FORBIDDEN,
+            ),
+        ] {
+            let mut request = Request::builder().method(method).uri(uri);
+            if let Some(origin) = origin {
+                request = request.header("origin", origin);
+            }
+            let response = app
+                .clone()
+                .oneshot(request.body(Body::empty()).expect("request"))
+                .await
+                .expect("response");
+            assert_eq!(response.status(), expected, "{uri}");
+            if origin == Some("https://evil.example") {
+                assert!(response
+                    .headers()
+                    .get("access-control-allow-origin")
+                    .is_none());
+            }
+        }
+    }
+
+    fn godui_test_app(state: ServecoreSharedState) -> Router {
+        let router = servecore_mount_core_routes(Router::new());
+        let router = servecore_mount_modules(router, &["god-ui".to_owned()]);
+        let router = servecore_with_shared_state(router, state);
+        servecore_apply_pipeline(router)
+    }
+
+    #[tokio::test]
     async fn godui_routes_return_200_json_and_cors_headers() {
         let state = ServecoreSharedState::default().servecore_with_agents_snapshot(Vec::new());
         let router = servecore_mount_core_routes(Router::new());
@@ -1010,8 +1545,7 @@ mod tests {
     async fn godui_post_routes_persist_json_and_return_ok() {
         let root = godui_test_root("post");
         fs::create_dir_all(&root).expect("root");
-        let original_state_dir = std::env::var_os("MAW_GODUI_STATE_DIR");
-        std::env::set_var("MAW_GODUI_STATE_DIR", &root);
+        let _env = EnvGuard::set("MAW_GODUI_STATE_DIR", &root);
         let router = servecore_mount_core_routes(Router::new());
         let router = servecore_mount_modules(router, &["god-ui".to_owned()]);
         let router = servecore_with_shared_state(router, ServecoreSharedState::default());
@@ -1046,11 +1580,6 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(godui_asks_payload(), json!([{"id": 1}]));
 
-        if let Some(original_state_dir) = original_state_dir {
-            std::env::set_var("MAW_GODUI_STATE_DIR", original_state_dir);
-        } else {
-            std::env::remove_var("MAW_GODUI_STATE_DIR");
-        }
         fs::remove_dir_all(root).ok();
     }
 

@@ -7,7 +7,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-maw-xdg = { path = "../maw-xdg" }
+maw-xdg = { git = "https://github.com/Soul-Brews-Studio/maw-crates", rev = "e46932081dfd1a20bb962506086f1befe5525fa4" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

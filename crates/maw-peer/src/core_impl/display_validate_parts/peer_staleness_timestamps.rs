@@ -36,8 +36,22 @@ pub fn parse_stale_ttl_ms(raw: Option<&str>) -> u64 {
 #[must_use]
 pub fn stale_age_ms(peer: &PeerRecord, now_ms: u64) -> Option<u64> {
     let reference = peer.last_seen.as_deref().unwrap_or(&peer.added_at);
-    let timestamp = parse_iso_timestamp_ms(reference)?;
+    let timestamp = parse_timestamp_ms(reference)?;
     Some(now_ms.saturating_sub(timestamp))
+}
+
+/// Parse either an ISO-8601 `…Z` timestamp or a raw epoch-milliseconds integer
+/// string. `peers.json` stores BOTH forms — ISO (`"2026-06-02T13:54:44.148Z"`)
+/// from probes and epoch-ms (`"1784953978566"`) from other writers — so an
+/// epoch-ms peer must not be read as `None` ("permanently stale").
+fn parse_timestamp_ms(value: &str) -> Option<u64> {
+    let value = value.trim();
+    // ISO timestamps always carry non-digit separators (`-`/`T`/`:`/`Z`);
+    // an all-digit string is epoch-ms.
+    if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return value.parse::<u64>().ok();
+    }
+    parse_iso_timestamp_ms(value)
 }
 
 /// Is a peer stale for a given TTL and wall-clock timestamp?

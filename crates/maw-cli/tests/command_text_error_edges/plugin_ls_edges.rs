@@ -96,7 +96,7 @@ fn plugin_ls_compact_table_filters_and_dedupe_match_maw_js_shape() {
     assert_eq!(output.code, 0, "{}", output.stderr);
     assert_eq!(
         output.stdout,
-        "3 plugins (3 active, 0 disabled)\n  core: 1 · standard: 1 · extra: 1\n  cli: 3 · api: 1 · health: ok\n"
+        "3 plugins (3 active, 0 disabled)\n  core: 1 · standard: 1 · extra: 1\n  cli: 3 · api: 1 · health: ok\n  alpha · bravo · charlie\n"
     );
 
     let api = run_cli(&[
@@ -109,7 +109,7 @@ fn plugin_ls_compact_table_filters_and_dedupe_match_maw_js_shape() {
     assert_eq!(api.code, 0, "{}", api.stderr);
     assert_eq!(
         api.stdout,
-        "1 plugin (1 active, 0 disabled) matching api\n  core: 1 · standard: 0 · extra: 0\n  cli: 1 · api: 1 · health: ok\n"
+        "1 plugin (1 active, 0 disabled) matching api\n  core: 1 · standard: 0 · extra: 0\n  cli: 1 · api: 1 · health: ok\n  alpha\n"
     );
 
     let verbose = run_cli(&[
@@ -151,6 +151,6 @@ fn plugin_ls_help_matches_current_maw_js_summary() {
     assert_eq!(output.code, 0, "{}", output.stderr);
     assert_eq!(
         output.stdout,
-        "usage: maw plugin <init|build|install|create|ls|info|remove|enable <name...>|disable> [args]\n  ls: compact by default; use -v for full table; filters: --core --standard --extra --api\n"
+        "usage: maw plugin <init|build|install|create|ls|info|remove|enable <name...>|disable> [args]\n  ls: compact by default; use -v for full table, --json for machine output; filters: --core --standard --extra --api\n"
     );
 }

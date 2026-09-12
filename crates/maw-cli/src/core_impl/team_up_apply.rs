@@ -4,7 +4,9 @@ fn team_t5b_up(argv: &[String]) -> Result<String, String> {
     let opts = team_t3_parse_flags(argv, "usage: maw team up <team> [--session <name>] [--members <roles>] [--only <a,b>] [--dry-run] [--status] [-e <engine>]")?;
     let charter = team_t3_load_or_quick_charter(&opts)?;
     team_t5b_validate_charter_members(&charter)?;
-    if team_t3_has(&opts, TEAM_T3_STATUS) || team_t3_has(&opts, TEAM_T3_DRY_RUN) { return Ok(team_t3_render_up(&charter, &opts)); }
+    if team_t3_has(&opts, TEAM_T3_STATUS) || team_t3_has(&opts, TEAM_T3_DRY_RUN) {
+        return Ok(team_t3_render_up(&charter, &opts));
+    }
     team_t5b_exec_up(&charter, &opts)
 }
 
@@ -12,15 +14,22 @@ fn team_t5b_bring(argv: &[String]) -> Result<String, String> {
     let opts = team_t3_parse_flags(argv, "usage: maw team bring <team> [--session <session>] [--split] [--gather] [--dry-run] [-e <engine>]")?;
     let team = opts.team.as_ref().ok_or_else(|| "usage: maw team bring <team> [--session <session>] [--split] [--gather] [--dry-run] [-e <engine>]".to_owned())?;
     team_validate_name(team)?;
-    if team_t3_has(&opts, TEAM_T3_DRY_RUN) { return Ok(team_t3_render_bring(team, &opts)); }
+    if team_t3_has(&opts, TEAM_T3_DRY_RUN) {
+        return Ok(team_t3_render_bring(team, &opts));
+    }
     team_t5b_exec_bring(team, &opts)
 }
 
 fn team_t5b_apply(argv: &[String]) -> Result<String, String> {
-    let opts = team_t3_parse_flags(argv, "usage: maw team apply <team|team.yaml> [--charter <path>] [--session <name>] [--apply]")?;
+    let opts = team_t3_parse_flags(
+        argv,
+        "usage: maw team apply <team|team.yaml> [--charter <path>] [--session <name>] [--apply]",
+    )?;
     let charter = team_t3_load_apply_charter(&opts)?;
     team_t5b_validate_charter_members(&charter)?;
-    if !team_t3_has(&opts, TEAM_T3_APPLY) { return Ok(team_t3_render_apply(&charter, &opts)); }
+    if !team_t3_has(&opts, TEAM_T3_APPLY) {
+        return Ok(team_t3_render_apply(&charter, &opts));
+    }
     team_t5b_exec_apply(&charter, &opts)
 }
 
@@ -31,13 +40,36 @@ fn team_t5b_exec_up(charter: &TeamCharter122, opts: &TeamT3Options124) -> Result
     let mut runner = TeamT5bTmuxRunner128::new();
     let mut actions = Vec::new();
     for item in &roster {
-        if item.state == "skipped" || item.state == "live" { actions.push(team_t5b_action(item, "skip")); continue; }
-        if team_t3_has(opts, TEAM_T3_FORCE) { team_t5b_kill_window(&mut runner, item, &session)?; }
-        if item.state == "dead" && !team_t3_has(opts, TEAM_T3_FORCE) { team_t5b_resume_pane(&mut runner, item, opts, &session)?; actions.push(team_t5b_action(item, "resume in place")); }
-        else { team_t5b_wake_window(&mut runner, item, opts, &session)?; actions.push(team_t5b_action(item, "fresh wake")); }
+        if item.state == "skipped" || item.state == "live" {
+            actions.push(team_t5b_action(item, "skip"));
+            continue;
+        }
+        // Must come before the --force branch: force may not resurrect a pane we never owned.
+        if item.state == TEAM_ADOPTED_GONE {
+            actions.push(team_t5b_action(item, TEAM_ADOPTED_GONE_ACTION));
+            continue;
+        }
+        if team_t3_has(opts, TEAM_T3_FORCE) {
+            team_t5b_kill_window(&mut runner, item, &session)?;
+        }
+        if item.state == "dead" && !team_t3_has(opts, TEAM_T3_FORCE) {
+            team_t5b_resume_pane(&mut runner, item, opts, &session)?;
+            actions.push(team_t5b_action(item, "resume in place"));
+        } else {
+            team_t5b_wake_window(&mut runner, item, opts, &session)?;
+            actions.push(team_t5b_action(item, "fresh wake"));
+        }
     }
-    if team_t3_has(opts, TEAM_T3_GATHER) { team_t5b_gather(&mut runner, &roster, &session)?; actions.push("*\tlive\tgather main-vertical".to_owned()); }
-    Ok(team_t5b_render_exec("team up", &charter.name, &session, &actions))
+    if team_t3_has(opts, TEAM_T3_GATHER) {
+        team_t5b_gather(&mut runner, &roster, &session)?;
+        actions.push("*\tlive\tgather main-vertical".to_owned());
+    }
+    Ok(team_t5b_render_exec(
+        "team up",
+        &charter.name,
+        &session,
+        &actions,
+    ))
 }
 
 fn team_t5b_exec_bring(team: &str, opts: &TeamT3Options124) -> Result<String, String> {
@@ -47,83 +79,229 @@ fn team_t5b_exec_bring(team: &str, opts: &TeamT3Options124) -> Result<String, St
     let mut actions = Vec::new();
     for oracle in team_message_targets(team) {
         team_t5b_validate_member(&oracle)?;
-        let item = TeamRosterItem124 { role: oracle.clone(), identity: oracle.clone(), engine: opts.engine.clone().unwrap_or_else(|| "claude".to_owned()), worktree: oracle.clone(), worktree_opt_out: false, state: "missing".to_owned(), action: String::new(), pane: None };
+        let item = TeamRosterItem124 {
+            role: oracle.clone(),
+            identity: oracle.clone(),
+            engine: opts.engine.clone().unwrap_or_else(|| "claude".to_owned()),
+            engine_command: None,
+            worktree: oracle.clone(),
+            worktree_opt_out: false,
+            state: "missing".to_owned(),
+            action: String::new(),
+            pane: None,
+        };
         team_t5b_wake_window(&mut runner, &item, opts, &session)?;
         actions.push(format!("{oracle}\tmissing\twake"));
     }
     Ok(team_t5b_render_exec("team bring", team, &session, &actions))
 }
 
-fn team_t5b_exec_apply(charter: &TeamCharter122, opts: &TeamT3Options124) -> Result<String, String> {
+fn team_t5b_exec_apply(
+    charter: &TeamCharter122,
+    opts: &TeamT3Options124,
+) -> Result<String, String> {
     let session = team_t3_session(charter, opts);
     team_t5b_validate_session(&session)?;
-    let roster = team_t3_roster(charter, opts, &session, |item, _| match item.state.as_str() { "missing" => "spawn member".to_owned(), "live" => "skip live".to_owned(), "dead" => "skip dead member (team up can resume)".to_owned(), _ => "skip".to_owned() });
+    let roster = team_t3_roster(charter, opts, &session, |item, _| {
+        match item.state.as_str() {
+            "missing" => "spawn member".to_owned(),
+            "live" => "skip live".to_owned(),
+            "dead" => "skip dead member (team up can resume)".to_owned(),
+            TEAM_ADOPTED_GONE => TEAM_ADOPTED_GONE_ACTION.to_owned(),
+            _ => "skip".to_owned(),
+        }
+    });
     let mut runner = TeamT5bTmuxRunner128::new();
     let mut actions = Vec::new();
     for item in &roster {
-        if item.state == "missing" { team_t5b_wake_window(&mut runner, item, opts, &session)?; actions.push(team_t5b_action(item, "spawn member")); }
-        else { actions.push(team_t5b_action(item, &item.action)); }
+        if item.state == "missing" {
+            team_t5b_wake_window(&mut runner, item, opts, &session)?;
+            actions.push(team_t5b_action(item, "spawn member"));
+        } else {
+            actions.push(team_t5b_action(item, &item.action));
+        }
     }
-    Ok(team_t5b_render_exec("team apply", &charter.name, &session, &actions))
+    Ok(team_t5b_render_exec(
+        "team apply",
+        &charter.name,
+        &session,
+        &actions,
+    ))
 }
 
 #[derive(Debug, Clone)]
-struct TeamT5bTmuxRunner128 { log: Option<std::path::PathBuf> }
+struct TeamT5bTmuxRunner128 {
+    log: Option<std::path::PathBuf>,
+}
 
 impl TeamT5bTmuxRunner128 {
-    fn new() -> Self { Self { log: std::env::var_os("MAW_RS_TEAM_FAKE_TMUX_LOG").map(std::path::PathBuf::from) } }
+    fn new() -> Self {
+        Self {
+            log: std::env::var_os("MAW_RS_TEAM_FAKE_TMUX_LOG").map(std::path::PathBuf::from),
+        }
+    }
     fn run(&mut self, args: &[String]) -> Result<String, String> {
         if let Some(path) = &self.log {
             let mut body = std::fs::read_to_string(path).unwrap_or_default();
             body.push_str(&(serde_json::json!({"program":"tmux","args":args}).to_string() + "\n"));
             return team_atomic_write_0600(path, &body).map(|()| String::new());
         }
-        let out = std::process::Command::new("tmux").args(args).output().map_err(|error| format!("team tmux failed: {error}"))?;
-        if out.status.success() { Ok(String::from_utf8_lossy(&out.stdout).to_string()) } else { Err(String::from_utf8_lossy(&out.stderr).trim().to_owned()) }
+        let out = std::process::Command::new("tmux")
+            .args(args)
+            .output()
+            .map_err(|error| format!("team tmux failed: {error}"))?;
+        if out.status.success() {
+            Ok(String::from_utf8_lossy(&out.stdout).to_string())
+        } else {
+            Err(String::from_utf8_lossy(&out.stderr).trim().to_owned())
+        }
     }
 }
 
-fn team_t5b_wake_window(runner: &mut TeamT5bTmuxRunner128, item: &TeamRosterItem124, opts: &TeamT3Options124, session: &str) -> Result<(), String> {
+fn team_t5b_wake_window(
+    _runner: &mut TeamT5bTmuxRunner128,
+    item: &TeamRosterItem124,
+    opts: &TeamT3Options124,
+    session: &str,
+) -> Result<(), String> {
     team_t5b_validate_item(item)?;
-    let target = format!("{session}:{}", item.identity);
-    let session_target = format!("{session}:");
-    runner.run(&team_t5b_strings(&["new-window", "-t", &session_target, "-n", &item.identity]))?;
-    team_t5b_send_fixed_maw(runner, &target, &team_t5b_maw_wake_args(item, opts, session)?)
+    team_t5b_run_maw_wake(&team_t5b_maw_wake_args(item, opts, session)?)
 }
 
-fn team_t5b_resume_pane(runner: &mut TeamT5bTmuxRunner128, item: &TeamRosterItem124, opts: &TeamT3Options124, session: &str) -> Result<(), String> {
+fn team_t5b_resume_pane(
+    runner: &mut TeamT5bTmuxRunner128,
+    item: &TeamRosterItem124,
+    opts: &TeamT3Options124,
+    session: &str,
+) -> Result<(), String> {
     team_t5b_validate_item(item)?;
-    let pane = item.pane.as_ref().ok_or_else(|| "team resume: missing pane".to_owned())?;
+    let pane = item
+        .pane
+        .as_ref()
+        .ok_or_else(|| "team resume: missing pane".to_owned())?;
     team_t5b_validate_pane_id(&pane.pane_id)?;
-    runner.run(&team_t5b_strings(&["send-keys", "-t", &pane.pane_id, "C-u"]))?;
-    team_t5b_send_fixed_maw(runner, &pane.pane_id, &team_t5b_maw_resume_args(item, opts, session)?)
+    runner.run(&team_t5b_strings(&[
+        "send-keys",
+        "-t",
+        &pane.pane_id,
+        "C-u",
+    ]))?;
+    team_t5b_send_fixed_maw(
+        runner,
+        &pane.pane_id,
+        &team_t5b_maw_resume_args(item, opts, session)?,
+    )
 }
 
-fn team_t5b_send_fixed_maw(runner: &mut TeamT5bTmuxRunner128, target: &str, args: &[String]) -> Result<(), String> {
+fn team_t5b_send_fixed_maw(
+    runner: &mut TeamT5bTmuxRunner128,
+    target: &str,
+    args: &[String],
+) -> Result<(), String> {
     let command = team_t5b_shell_command(args)?;
-    runner.run(&team_t5b_strings(&["send-keys", "-t", target, "-l", "--", &command]))?;
+    runner.run(&team_t5b_strings(&[
+        "send-keys",
+        "-t",
+        target,
+        "-l",
+        "--",
+        &command,
+    ]))?;
     runner.run(&team_t5b_strings(&["send-keys", "-t", target, "Enter"]))?;
     Ok(())
 }
 
-fn team_t5b_kill_window(runner: &mut TeamT5bTmuxRunner128, item: &TeamRosterItem124, session: &str) -> Result<(), String> {
-    if let Some(pane) = &item.pane { team_t5b_validate_window(&pane.window)?; runner.run(&team_t5b_strings(&["kill-window", "-t", &format!("{}:{}", pane.session, pane.window)]))?; }
-    else { let _ = session; }
+fn team_t5b_run_maw_wake(args: &[String]) -> Result<(), String> {
+    team_t5b_run_maw_wake_for("team up", args)
+}
+
+fn team_t5b_run_maw_wake_for(context: &str, args: &[String]) -> Result<(), String> {
+    if let Ok(log) = std::env::var("MAW_RS_TEAM_FAKE_SPAWN_LOG") {
+        let record =
+            serde_json::json!({"program":team_t5b_self_bin()?.display().to_string(),"args":args});
+        let path = std::path::Path::new(&log);
+        let mut body = std::fs::read_to_string(path).unwrap_or_default();
+        body.push_str(&record.to_string());
+        body.push('\n');
+        return team_atomic_write_0600(path, &body);
+    }
+    let output = std::process::Command::new(team_t5b_self_bin()?)
+        .args(args)
+        .output()
+        .map_err(|error| format!("{context}: maw wake failed: {error}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = stderr.trim();
+        if stderr.is_empty() {
+            Err(format!("{context}: maw wake exited with {}", output.status))
+        } else {
+            Err(format!("{context}: maw wake failed: {stderr}"))
+        }
+    }
+}
+
+fn team_t5b_kill_window(
+    runner: &mut TeamT5bTmuxRunner128,
+    item: &TeamRosterItem124,
+    session: &str,
+) -> Result<(), String> {
+    if let Some(pane) = &item.pane {
+        team_t5b_validate_window(&pane.window)?;
+        runner.run(&team_t5b_strings(&[
+            "kill-window",
+            "-t",
+            &format!("{}:{}", pane.session, pane.window),
+        ]))?;
+    } else {
+        let _ = session;
+    }
     Ok(())
 }
 
-fn team_t5b_gather(runner: &mut TeamT5bTmuxRunner128, roster: &[TeamRosterItem124], session: &str) -> Result<(), String> {
+fn team_t5b_gather(
+    runner: &mut TeamT5bTmuxRunner128,
+    roster: &[TeamRosterItem124],
+    session: &str,
+) -> Result<(), String> {
     for item in roster.iter().filter(|item| item.state == "live") {
-        if let Some(pane) = &item.pane { team_t5b_validate_pane_id(&pane.pane_id)?; runner.run(&team_t5b_strings(&["join-pane", "-s", &pane.pane_id, "-t", session]))?; }
+        if let Some(pane) = &item.pane {
+            team_t5b_validate_pane_id(&pane.pane_id)?;
+            runner.run(&team_t5b_strings(&[
+                "join-pane",
+                "-s",
+                &pane.pane_id,
+                "-t",
+                session,
+            ]))?;
+        }
     }
     runner.run(&team_t5b_strings(&["select-layout", "main-vertical"]))?;
     Ok(())
 }
 
-fn team_t5b_maw_wake_args(item: &TeamRosterItem124, opts: &TeamT3Options124, session: &str) -> Result<Vec<String>, String> {
+fn team_t5b_maw_wake_args(
+    item: &TeamRosterItem124,
+    opts: &TeamT3Options124,
+    session: &str,
+) -> Result<Vec<String>, String> {
     let engine = opts.engine.clone().unwrap_or_else(|| item.engine.clone());
     team_t5b_validate_member(&engine)?;
-    let mut args = vec!["wake".to_owned(), item.identity.clone(), "--no-attach".to_owned(), "--session".to_owned(), session.to_owned(), "-e".to_owned(), engine];
+    let mut args = vec![
+        "wake".to_owned(),
+        item.identity.clone(),
+        "--no-attach".to_owned(),
+        "--session".to_owned(),
+        session.to_owned(),
+        "-e".to_owned(),
+        engine,
+    ];
+    // #738: a charter-declared engine line beats the repo/user `commands` map.
+    if let Some(command) = &item.engine_command {
+        team_t5b_validate_engine_command(command)?;
+        args.extend(["--engine-cmd".to_owned(), command.clone()]);
+    }
     if !item.worktree_opt_out {
         let repo = team_t5b_bound_worktree(&item.worktree)?;
         args.extend(["--repo-path".to_owned(), repo.display().to_string()]);
@@ -131,25 +309,43 @@ fn team_t5b_maw_wake_args(item: &TeamRosterItem124, opts: &TeamT3Options124, ses
     Ok(args)
 }
 
-fn team_t5b_maw_resume_args(item: &TeamRosterItem124, opts: &TeamT3Options124, session: &str) -> Result<Vec<String>, String> {
+fn team_t5b_maw_resume_args(
+    item: &TeamRosterItem124,
+    opts: &TeamT3Options124,
+    session: &str,
+) -> Result<Vec<String>, String> {
     let mut args = team_t5b_maw_wake_args(item, opts, session)?;
     args.push("--resume".to_owned());
     Ok(args)
 }
 
 fn team_t5b_shell_command(args: &[String]) -> Result<String, String> {
-    let mut parts = vec![team_t5b_shell_quote(&team_t5b_self_bin()?.display().to_string())];
+    let mut parts = vec![team_t5b_shell_quote(
+        &team_t5b_self_bin()?.display().to_string(),
+    )];
     parts.extend(args.iter().map(|arg| team_t5b_shell_quote(arg)));
     Ok(parts.join(" "))
 }
 
-fn team_t5b_shell_quote(value: &str) -> String { format!("'{}'", value.replace('\'', "'\\''")) }
-
-fn team_t5b_self_bin() -> Result<std::path::PathBuf, String> {
-    std::env::var_os("MAW_RS_SELF_BIN").map(std::path::PathBuf::from).map_or_else(|| std::env::current_exe().map_err(|error| format!("team: current_exe failed: {error}")), Ok)
+fn team_t5b_shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-fn team_t5b_bound_worktree(path: &str) -> Result<std::path::PathBuf, String> { team_t5_canonical_work_path(path) }
+fn team_t5b_self_bin() -> Result<std::path::PathBuf, String> {
+    std::env::var_os("MAW_RS_SELF_BIN")
+        .map(std::path::PathBuf::from)
+        .map_or_else(
+            || {
+                std::env::current_exe()
+                    .map_err(|error| format!("team: current_exe failed: {error}"))
+            },
+            Ok,
+        )
+}
+
+fn team_t5b_bound_worktree(path: &str) -> Result<std::path::PathBuf, String> {
+    team_t5_canonical_work_path(path)
+}
 
 fn team_t5b_validate_charter_members(charter: &TeamCharter122) -> Result<(), String> {
     for member in &charter.members {
@@ -185,31 +381,77 @@ fn team_t5b_validate_item(item: &TeamRosterItem124) -> Result<(), String> {
     Ok(())
 }
 
-fn team_t5b_validate_member(value: &str) -> Result<(), String> {
-    if value.is_empty() { return Err("team member is empty".to_owned()); }
-    if value.starts_with('-') { return Err(format!("invalid team member '{value}': leading dash rejected")); }
-    if !value.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-')) { return Err(format!("invalid team member '{value}': metacharacter rejected")); }
+fn team_t5b_validate_engine_command(value: &str) -> Result<(), String> {
+    if value.trim().is_empty() {
+        return Err("team: charter engine command is empty".to_owned());
+    }
+    if value.starts_with('-') {
+        return Err(format!(
+            "invalid charter engine command '{value}': leading dash rejected"
+        ));
+    }
+    if value.contains('\0') || value.contains('\n') || value.contains('\r') {
+        return Err(format!(
+            "invalid charter engine command '{value}': control character rejected"
+        ));
+    }
     Ok(())
 }
 
-fn team_t5b_validate_session(value: &str) -> Result<(), String> { team_t3_validate_session(value) }
+fn team_t5b_validate_member(value: &str) -> Result<(), String> {
+    if value.is_empty() {
+        return Err("team member is empty".to_owned());
+    }
+    if value.starts_with('-') {
+        return Err(format!(
+            "invalid team member '{value}': leading dash rejected"
+        ));
+    }
+    if !value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+    {
+        return Err(format!(
+            "invalid team member '{value}': metacharacter rejected"
+        ));
+    }
+    Ok(())
+}
 
-fn team_t5b_validate_window(value: &str) -> Result<(), String> { team_t5b_validate_member(value) }
+fn team_t5b_validate_session(value: &str) -> Result<(), String> {
+    team_t3_validate_session(value)
+}
+
+fn team_t5b_validate_window(value: &str) -> Result<(), String> {
+    team_t5b_validate_member(value)
+}
 
 fn team_t5b_validate_pane_id(value: &str) -> Result<(), String> {
-    if value.is_empty() || !value.starts_with('%') || !value[1..].chars().all(|ch| ch.is_ascii_digit()) { return Err(format!("invalid tmux pane id '{value}'")); }
+    if value.is_empty()
+        || !value.starts_with('%')
+        || !value[1..].chars().all(|ch| ch.is_ascii_digit())
+    {
+        return Err(format!("invalid tmux pane id '{value}'"));
+    }
     Ok(())
 }
 
-fn team_t5b_action(item: &TeamRosterItem124, action: &str) -> String { format!("{}\t{}\t{}", item.role, item.state, action) }
+fn team_t5b_action(item: &TeamRosterItem124, action: &str) -> String {
+    format!("{}\t{}\t{}", item.role, item.state, action)
+}
 
 fn team_t5b_render_exec(kind: &str, team: &str, session: &str, actions: &[String]) -> String {
     let mut out = format!("{kind}: {team} ({session}) execute\nrole\tstate\taction\n");
-    for action in actions { out.push_str(action); out.push('\n'); }
+    for action in actions {
+        out.push_str(action);
+        out.push('\n');
+    }
     out
 }
 
-fn team_t5b_strings(values: &[&str]) -> Vec<String> { values.iter().map(|value| (*value).to_owned()).collect() }
+fn team_t5b_strings(values: &[&str]) -> Vec<String> {
+    values.iter().map(|value| (*value).to_owned()).collect()
+}
 
 #[cfg(test)]
 mod team_t5b_tests {
@@ -223,9 +465,73 @@ mod team_t5b_tests {
 
     #[test]
     fn team_t5b_worktree_opt_out_omits_repo_path_and_validation() {
-        let item = TeamRosterItem124 { role: "lead".to_owned(), identity: "lead-window".to_owned(), engine: "claude".to_owned(), worktree: "false".to_owned(), worktree_opt_out: true, state: "missing".to_owned(), action: String::new(), pane: None };
-        let args = team_t5b_maw_wake_args(&item, &TeamT3Options124::default(), "alpha").expect("wake args");
-        assert_eq!(args, team_t5b_strings(&["wake", "lead-window", "--no-attach", "--session", "alpha", "-e", "claude"]));
+        let item = TeamRosterItem124 {
+            role: "lead".to_owned(),
+            identity: "lead-window".to_owned(),
+            engine: "claude".to_owned(),
+            engine_command: None,
+            worktree: "false".to_owned(),
+            worktree_opt_out: true,
+            state: "missing".to_owned(),
+            action: String::new(),
+            pane: None,
+        };
+        let args = team_t5b_maw_wake_args(&item, &TeamT3Options124::default(), "alpha")
+            .expect("wake args");
+        assert_eq!(
+            args,
+            team_t5b_strings(&[
+                "wake",
+                "lead-window",
+                "--no-attach",
+                "--session",
+                "alpha",
+                "-e",
+                "claude"
+            ])
+        );
         assert!(team_t5b_validate_item(&item).is_ok());
+    }
+
+    /// #738: a charter `engines:` entry has to reach the spawned `maw wake`, or the
+    /// block is documentation only and the worktree's own `commands` map wins instead.
+    #[test]
+    fn team_t5b_charter_engine_command_is_forwarded_to_wake() {
+        let item = TeamRosterItem124 {
+            role: "lead".to_owned(),
+            identity: "lead-window".to_owned(),
+            engine: "omx-1".to_owned(),
+            engine_command: Some("CODEX_HOME=$PWD/.codex omx --direct".to_owned()),
+            worktree: "false".to_owned(),
+            worktree_opt_out: true,
+            state: "missing".to_owned(),
+            action: String::new(),
+            pane: None,
+        };
+        let args = team_t5b_maw_wake_args(&item, &TeamT3Options124::default(), "alpha")
+            .expect("wake args");
+        assert_eq!(
+            args,
+            team_t5b_strings(&[
+                "wake",
+                "lead-window",
+                "--no-attach",
+                "--session",
+                "alpha",
+                "-e",
+                "omx-1",
+                "--engine-cmd",
+                "CODEX_HOME=$PWD/.codex omx --direct",
+            ])
+        );
+    }
+
+    #[test]
+    fn team_t5b_charter_engine_command_rejects_hostile_values() {
+        assert!(team_t5b_validate_engine_command("claude --continue").is_ok());
+        assert!(team_t5b_validate_engine_command("   ").is_err());
+        assert!(team_t5b_validate_engine_command("--sneaky").is_err());
+        assert!(team_t5b_validate_engine_command("claude\nrm -rf /").is_err());
+        assert!(team_t5b_validate_engine_command("claude\0").is_err());
     }
 }

@@ -1,6 +1,7 @@
-const DISPATCH_151: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "ls", handler: Handler::Async(run_ls_plan_async) },
-];
+const DISPATCH_151: &[DispatcherEntry] = &[DispatcherEntry {
+    command: "ls",
+    handler: Handler::Async(run_ls_plan_async),
+}];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LsPeerRow151 {
@@ -33,6 +34,7 @@ fn ls_validate_value(value: &str, label: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 fn ls_render_federation(options: &LsPlanOptions, panes: &[LsPanePlan]) -> CliOutput {
     if let Some(peer) = &options.peer {
         return ls_render_peer_drilldown(peer, options);
@@ -44,10 +46,14 @@ fn ls_render_federation(options: &LsPlanOptions, panes: &[LsPanePlan]) -> CliOut
     if ls_node_matches("local", Some("local"), None, node_filter) || !panes.is_empty() {
         nodes.push(ls_local_node(panes));
     }
-    for peer in peers
-        .iter()
-        .filter(|peer| ls_node_matches(&peer.alias, peer.node.as_deref(), Some(&peer.url), node_filter))
-    {
+    for peer in peers.iter().filter(|peer| {
+        ls_node_matches(
+            &peer.alias,
+            peer.node.as_deref(),
+            Some(&peer.url),
+            node_filter,
+        )
+    }) {
         nodes.push(ls_fetch_peer_node(peer));
     }
 
@@ -97,7 +103,11 @@ fn ls_render_federation(options: &LsPlanOptions, panes: &[LsPanePlan]) -> CliOut
     out.push('\n');
     for node in &nodes {
         let label = &node.alias;
-        let location = if node.local { "local".to_owned() } else { node.url.clone().unwrap_or_else(|| "peer".to_owned()) };
+        let location = if node.local {
+            "local".to_owned()
+        } else {
+            node.url.clone().unwrap_or_else(|| "peer".to_owned())
+        };
         if let Some(error) = &node.error {
             let _ = writeln!(
                 out,
@@ -128,13 +138,24 @@ fn ls_render_federation(options: &LsPlanOptions, panes: &[LsPanePlan]) -> CliOut
             }
         }
     }
-    let _ = writeln!(out, "\n{}", ls_color("90", "  → maw ls   list only local sessions (fast default)"));
-    CliOutput { code: 0, stdout: out, stderr: String::new() }
+    let _ = writeln!(
+        out,
+        "\n{}",
+        ls_color("90", "  → maw ls   list only local sessions (fast default)")
+    );
+    CliOutput {
+        code: 0,
+        stdout: out,
+        stderr: String::new(),
+    }
 }
 
 fn ls_render_peer_drilldown(peer: &str, options: &LsPlanOptions) -> CliOutput {
     let rows = ls_load_peers().unwrap_or_default();
-    let Some(row) = rows.iter().find(|row| row.alias == peer || row.node.as_deref() == Some(peer)) else {
+    let Some(row) = rows
+        .iter()
+        .find(|row| row.alias == peer || row.node.as_deref() == Some(peer))
+    else {
         return CliOutput {
             code: 1,
             stdout: String::new(),
@@ -186,14 +207,22 @@ fn ls_render_peer_drilldown(peer: &str, options: &LsPlanOptions) -> CliOutput {
                 .get("name")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("unknown");
-            lines.push(format!("  {} {}", ls_color("34", "●"), ls_color("36", name)));
+            lines.push(format!(
+                "  {} {}",
+                ls_color("34", "●"),
+                ls_color("36", name)
+            ));
             if let Some(windows) = session.get("windows").and_then(serde_json::Value::as_array) {
                 for window in windows {
                     let active = window
                         .get("active")
                         .and_then(serde_json::Value::as_bool)
                         .unwrap_or(false);
-                    let dot = if active { ls_color("32", "●") } else { ls_color("90", "●") };
+                    let dot = if active {
+                        ls_color("32", "●")
+                    } else {
+                        ls_color("90", "●")
+                    };
                     let name = window
                         .get("name")
                         .and_then(serde_json::Value::as_str)
@@ -210,9 +239,16 @@ fn ls_render_peer_drilldown(peer: &str, options: &LsPlanOptions) -> CliOutput {
     lines.push(String::new());
     lines.push(ls_color(
         "90",
-        &format!("  → maw hey {}:<session>:<window>   send a message", row.alias),
+        &format!(
+            "  → maw hey {}:<session>:<window>   send a message",
+            row.alias
+        ),
     ));
-    CliOutput { code: 0, stdout: lines.join("\n") + "\n", stderr: String::new() }
+    CliOutput {
+        code: 0,
+        stdout: lines.join("\n") + "\n",
+        stderr: String::new(),
+    }
 }
 
 fn ls_local_node(panes: &[LsPanePlan]) -> LsFetchedNode151 {
@@ -292,9 +328,28 @@ fn ls_node_json(node: &LsFetchedNode151) -> String {
 
 fn ls_fetch_peer_sessions(peer_url: &str) -> Result<Vec<serde_json::Value>, String> {
     ls_validate_peer_url(peer_url)?;
-    let url = format!("{}/api/ls", peer_url.trim_end_matches('/'));
-    let output = std::process::Command::new("curl")
-        .args(["-fsS", "--max-time", "2", "--"])
+    // GET /api/sessions — the endpoint every serve actually mounts and the one the
+    // federation map already fetches. The old `/api/ls` path is implemented by NO
+    // serve (not even localhost), so it returned 404 and made `ls --federation` blame
+    // healthy peers (#676). /api/sessions returns a bare session array whose
+    // {name, windows:[…]} shape this renderer already reads.
+    let url = format!("{}/api/sessions", peer_url.trim_end_matches('/'));
+    // #866 put GET /sessions behind the signed-peer gate, so this call — which
+    // had always gone out bare — now has to carry credentials or every patched
+    // peer answers 403. Signed over `/api/sessions` (no query), which is what
+    // the receiver verifies against. Unsignable (no identity/key/token) still
+    // sends bare rather than failing locally: an old peer serves it, and a
+    // patched peer refuses it with a message, which is strictly better than
+    // this command refusing to run at all.
+    let mut command = std::process::Command::new("curl");
+    command.args(["-fsS", "--max-time", "2"]);
+    if let Some(headers) = federation_signed_get_headers("/api/sessions") {
+        for (name, value) in headers.to_btree_map() {
+            command.arg("-H").arg(format!("{name}: {value}"));
+        }
+    }
+    let output = command
+        .arg("--")
         .arg(&url)
         .output()
         .map_err(|error| format!("peer ls failed: {error}"))?;
@@ -343,7 +398,12 @@ fn ls_validate_peer_url(peer_url: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn ls_node_matches(alias: &str, node: Option<&str>, url: Option<&str>, filter: Option<&str>) -> bool {
+fn ls_node_matches(
+    alias: &str,
+    node: Option<&str>,
+    url: Option<&str>,
+    filter: Option<&str>,
+) -> bool {
     let Some(filter) = filter.map(str::trim).filter(|value| !value.is_empty()) else {
         return true;
     };
@@ -362,7 +422,8 @@ fn ls_load_peers() -> Result<Vec<LsPeerRow151>, String> {
     let Ok(raw) = std::fs::read_to_string(path) else {
         return Ok(Vec::new());
     };
-    let value: serde_json::Value = serde_json::from_str(&raw).map_err(|error| format!("ls: peers.json parse failed: {error}"))?;
+    let value: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|error| format!("ls: peers.json parse failed: {error}"))?;
     let Some(peers) = value.get("peers").and_then(serde_json::Value::as_object) else {
         return Ok(Vec::new());
     };
@@ -370,8 +431,15 @@ fn ls_load_peers() -> Result<Vec<LsPeerRow151>, String> {
         .iter()
         .filter_map(|(alias, peer)| {
             let url = peer.get("url")?.as_str()?.to_owned();
-            let node = peer.get("node").and_then(serde_json::Value::as_str).map(str::to_owned);
-            Some(LsPeerRow151 { alias: alias.clone(), node, url })
+            let node = peer
+                .get("node")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned);
+            Some(LsPeerRow151 {
+                alias: alias.clone(),
+                node,
+                url,
+            })
         })
         .collect::<Vec<_>>();
     rows.sort_by(|left, right| left.alias.cmp(&right.alias));
@@ -382,15 +450,23 @@ fn ls_render_verify_fix(options: &LsPlanOptions) -> (String, String) {
     if !options.verify && !options.fix {
         return (String::new(), String::new());
     }
-    match ls_validate_prune_root(std::env::current_dir().as_deref().unwrap_or_else(|_| std::path::Path::new("."))) {
+    match ls_validate_prune_root(
+        std::env::current_dir()
+            .as_deref()
+            .unwrap_or_else(|_| std::path::Path::new(".")),
+    ) {
         Ok(root) => ls_render_prune_for_root(&root, options.fix),
-        Err(error) => (format!("\n  {} {error}\n", ls_color("33", "⚠ maw ls:")), String::new()),
+        Err(error) => (
+            format!("\n  {} {error}\n", ls_color("33", "⚠ maw ls:")),
+            String::new(),
+        ),
     }
 }
 
 fn ls_validate_prune_root(path: &std::path::Path) -> Result<std::path::PathBuf, String> {
     let raw = path.display().to_string();
-    if raw.is_empty() || raw.starts_with('-') || raw.chars().any(|ch| ch == '\0' || ch.is_control()) {
+    if raw.is_empty() || raw.starts_with('-') || raw.chars().any(|ch| ch == '\0' || ch.is_control())
+    {
         return Err("unsafe worktree root rejected before prune".to_owned());
     }
     let canonical = path
@@ -412,7 +488,11 @@ fn ls_render_prune_for_root(root: &std::path::Path, fix: bool) -> (String, Strin
         root.display()
     );
     if !fix {
-        let _ = writeln!(verify, "{}", ls_color("90", "  → maw ls --fix       to prune orphans"));
+        let _ = writeln!(
+            verify,
+            "{}",
+            ls_color("90", "  → maw ls --fix       to prune orphans")
+        );
         return (verify, String::new());
     }
 
@@ -424,14 +504,39 @@ fn ls_render_prune_for_root(root: &std::path::Path, fix: bool) -> (String, Strin
     match output {
         Ok(output) if output.status.success() => {
             let mut fix_out = String::new();
-            let _ = writeln!(fix_out, "\n{}", ls_color("36", "→ pruning orphaned worktrees…"));
-            let _ = writeln!(fix_out, "{}", ls_color("90", "  pruned via git worktree prune"));
+            let _ = writeln!(
+                fix_out,
+                "\n{}",
+                ls_color("36", "→ pruning orphaned worktrees…")
+            );
+            let _ = writeln!(
+                fix_out,
+                "{}",
+                ls_color("90", "  pruned via git worktree prune")
+            );
             (verify, fix_out)
         }
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-            (verify, format!("\n  {} {}\n", ls_color("31", "✗"), if stderr.is_empty() { "git worktree prune failed".to_owned() } else { stderr }))
+            (
+                verify,
+                format!(
+                    "\n  {} {}\n",
+                    ls_color("31", "✗"),
+                    if stderr.is_empty() {
+                        "git worktree prune failed".to_owned()
+                    } else {
+                        stderr
+                    }
+                ),
+            )
         }
-        Err(error) => (verify, format!("\n  {} git worktree prune failed: {error}\n", ls_color("31", "✗"))),
+        Err(error) => (
+            verify,
+            format!(
+                "\n  {} git worktree prune failed: {error}\n",
+                ls_color("31", "✗")
+            ),
+        ),
     }
 }

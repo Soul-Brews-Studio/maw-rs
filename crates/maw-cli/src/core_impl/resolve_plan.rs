@@ -1,6 +1,12 @@
 const DISPATCH_308: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "resolve", handler: Handler::Sync(run_resolve_plan) },
-    DispatcherEntry { command: "normalize", handler: Handler::Sync(run_normalize_plan) },
+    DispatcherEntry {
+        command: "resolve",
+        handler: Handler::Sync(run_resolve_plan),
+    },
+    DispatcherEntry {
+        command: "normalize",
+        handler: Handler::Sync(run_normalize_plan),
+    },
 ];
 
 fn parse_date_parts(value: &str) -> Result<DateParts, String> {
@@ -337,25 +343,294 @@ fn usage_ok() -> CliOutput {
     }
 }
 
+fn usage_all_ok() -> CliOutput {
+    CliOutput {
+        code: 0,
+        stdout: usage_all_text(),
+        stderr: String::new(),
+    }
+}
+
 fn usage_text() -> String {
-    concat!(
+    let mut text = concat!(
         "usage: maw-rs <command> [args]\n",
-        "ported commands:\n",
+        "core commands:\n",
         "  a|attach <target> [--print] [--readonly|-r]   attach to a tmux session\n",
+        "  ls [--compact|-c] [--verbose|-v] [--json] [--watch[=secs]]  list live local sessions\n",
+        "  wake <target|all> [--task <slug>]             wake an oracle: launch its engine pane\n",
+        "  work <repo|.|path|url> [task]                 open a work window for a repo or issue URL\n",
         "  run <target> <cmd...>                         type text and press Enter\n",
         "  send-enter <target> [--N <count>]             send Enter to a tmux target\n",
         "  send-key <target> <key>                       send an allowlisted key to a tmux target\n",
         "  send-escape <target>                          send Escape to a tmux target\n",
-        "  ls [--compact|-c] [--verbose|-v] [--json] [--watch[=secs]]  list live local sessions\n",
-        "  plugin ls [-v|--verbose]                      list installed plugins\n",
+        "  bg \"<cmd>\" [--name X]                         run a long command in a detached tmux session\n",
+        "  hey <target> <message>                        message another oracle over federation\n",
+        "  kill <target>[:window] [--pane N]             kill a session, window, or pane\n",
+        "  bud <name>                                    bud a new oracle workspace from this one\n",
+        "  token <list|use|current|...>                  list and switch engine auth tokens\n",
         "  bring|b <oracle> [--to <session[:window]>]    plan a wake split target\n",
         "  feed active|parse-line|describe                inspect local activity feed data\n",
+        "  x <spec> [--sha256 <hex>]                     run a plugin from a source spec (pin-verified)\n",
+        "  plugin ls [-v|--verbose]                      list installed plugins\n",
+        "  update [--check] [--channel stable|alpha]     update the maw binary\n",
+        "  calver --now <time> [--stable|--alpha]        compute the next CalVer release version\n",
+        "  version                                       show build version\n",
         "\n",
-        "portable parity commands are intentionally hidden from the default menu until their live UX ships.\n",
+        "maw help --all lists every registered verb.\n",
     )
-    .to_owned()
+    .to_owned();
+    text.push_str(&usage_plugins_line());
+    text
 }
 
+/// Most plugin names shown inline in the `-h` footer before eliding to a count.
+const USAGE_PLUGINS_INLINE_MAX: usize = 12;
+
+/// One-line installed-plugins footer for the default menu.
+///
+/// Names-only: scans the same roots `plugin ls` uses and parses each dir's
+/// `plugin.json`, but skips artifact hash verification — the integrity gate
+/// belongs to plugin load/dispatch, not to printing a name in `-h` (full
+/// discovery sha256-hashes every pinned artifact, a per-invocation tax on the
+/// hottest CLI path). Unreadable roots and malformed manifests are skipped,
+/// so `-h` cannot fail here. Fleet machines carry 100+ plugins, so the list
+/// elides past a dozen names, alphabetically.
+fn usage_plugins_line() -> String {
+    let mut names = std::collections::BTreeSet::new();
+    for base_dir in DiscoverPackagesOptions::default().scan_dirs {
+        let Ok(entries) = std::fs::read_dir(&base_dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if let Ok(Some(loaded)) = load_manifest_from_dir(&entry.path()) {
+                names.insert(loaded.manifest.name);
+            }
+        }
+    }
+    if names.is_empty() {
+        return "installed plugins: none (maw plugin ls -v for detail)\n".to_owned();
+    }
+    let shown = names
+        .iter()
+        .take(USAGE_PLUGINS_INLINE_MAX)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let elided = names.len().saturating_sub(USAGE_PLUGINS_INLINE_MAX);
+    if elided == 0 {
+        format!("installed plugins: {shown} (maw plugin ls -v for detail)\n")
+    } else {
+        format!("installed plugins: {shown} +{elided} more (maw plugin ls -v for detail)\n")
+    }
+}
+
+/// Full verb listing for `maw help --all` / `maw commands`.
+///
+/// Generated from the dispatcher registry at runtime — the same table
+/// `run_cli` dispatches against — so it cannot go stale by construction.
+/// Flag aliases (`--help`, `-v`, …) and test-only hooks are skipped.
+fn usage_all_text() -> String {
+    let rows = dispatcher_entries()
+        .map(|entry| entry.command)
+        .filter(|name| !name.starts_with('-') && !name.starts_with("__"))
+        .map(|command| {
+            let meta = help_meta_for(command);
+            HelpRow {
+                command,
+                tier: meta.tier,
+                description: meta.description,
+                order: meta.order,
+            }
+        })
+        .collect::<Vec<_>>();
+    render_help_rows(rows)
+}
+
+const HELP_COMMAND_COLUMN_WIDTH: usize = 28;
+
+#[derive(Clone, Copy)]
+struct HelpRow {
+    command: &'static str,
+    tier: HelpTier,
+    description: &'static str,
+    order: usize,
+}
+
+fn render_help_rows(mut rows: Vec<HelpRow>) -> String {
+    rows.sort_by(|left, right| {
+        left.tier
+            .cmp(&right.tier)
+            .then_with(|| left.order.cmp(&right.order))
+            .then_with(|| left.command.cmp(right.command))
+    });
+
+    let mut text = format!("registered commands ({}):\n", rows.len());
+    for tier in HELP_TIER_ORDER {
+        let tier_rows = rows
+            .iter()
+            .filter(|row| row.tier == *tier)
+            .collect::<Vec<_>>();
+        if tier_rows.is_empty() {
+            continue;
+        }
+        let _ = writeln!(text, "\n{} ({}):", help_tier_label(*tier), tier_rows.len());
+        for row in tier_rows {
+            let command = format!("maw {}", row.command);
+            if row.description.is_empty() {
+                let _ = writeln!(text, "  {command}");
+            } else {
+                let _ = writeln!(
+                    text,
+                    "  {command:<HELP_COMMAND_COLUMN_WIDTH$}  {}",
+                    row.description
+                );
+            }
+        }
+    }
+    text.push_str("\nrun maw <verb> --help for details\n");
+    text
+}
+
+#[cfg(test)]
+mod usage_menu_tests {
+    use super::{
+        dispatcher_entries, env_test_lock, help_meta_for, usage_all_ok, usage_all_text, usage_text,
+        HelpTier, HELP_META,
+    };
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn default_menu_lists_curated_core_commands_and_never_errors() {
+        // Plugin discovery reads HOME/XDG env; hold the env lock so sibling
+        // env-mutating tests cannot race the read.
+        let _guard = env_test_lock();
+        let text = usage_text();
+        for fragment in [
+            "usage: maw-rs <command> [args]",
+            "core commands:",
+            "a|attach <target>",
+            "ls [--compact|-c]",
+            "wake <target|all>",
+            "work <repo|.|path|url>",
+            "bg \"<cmd>\"",
+            "hey <target> <message>",
+            "kill <target>[:window]",
+            "bud <name>",
+            "token <list|use|current|...>",
+            "x <spec>",
+            "update [--check]",
+            "calver --now <time>",
+            "version",
+            "maw help --all",
+            "installed plugins:",
+        ] {
+            assert!(text.contains(fragment), "missing {fragment:?} in:\n{text}");
+        }
+        assert!(!text.contains("ported commands:"));
+        assert!(!text.contains("intentionally hidden"));
+    }
+
+    #[test]
+    fn help_all_is_generated_from_dispatcher_registry() {
+        let output = usage_all_ok();
+        assert_eq!(output.code, 0);
+        assert!(output.stderr.is_empty());
+
+        let text = usage_all_text();
+        assert_eq!(output.stdout, text);
+        let dispatcher_count = dispatcher_entries()
+            .map(|entry| entry.command)
+            .filter(|name| !name.starts_with('-') && !name.starts_with("__"))
+            .count();
+        let dispatcher_names = dispatcher_entries()
+            .map(|entry| entry.command)
+            .collect::<BTreeSet<_>>();
+        assert!(
+            text.starts_with(&format!("registered commands ({dispatcher_count}):")),
+            "{text}"
+        );
+        let tagged_count = HELP_META
+            .iter()
+            .filter(|(name, tier, _)| *tier != HelpTier::Other && dispatcher_names.contains(name))
+            .count();
+        assert!(text.contains("\ncore (40):\n"), "{text}");
+        assert!(
+            text.contains(&format!("\nother ({}):\n", dispatcher_count - tagged_count)),
+            "{text}"
+        );
+
+        let names = help_all_names(&text);
+        assert!(
+            names.len() > 100,
+            "expected >100 verbs, got {}",
+            names.len()
+        );
+        for verb in ["wake", "work", "bg", "x", "hey", "ls", "plugin"] {
+            assert!(
+                names.contains(verb),
+                "missing {verb} in help --all:\n{text}"
+            );
+        }
+        for entry in dispatcher_entries() {
+            let command = entry.command;
+            if command.starts_with('-') || command.starts_with("__") {
+                continue;
+            }
+            assert!(
+                names.contains(command),
+                "registry verb {command} missing from help --all"
+            );
+        }
+        assert!(
+            text.contains("  maw footer\n"),
+            "untagged internal verb should render name-only under other:\n{text}"
+        );
+        assert!(
+            text.ends_with("run maw <verb> --help for details\n"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn core_help_metadata_has_descriptions_and_known_dispatch_commands() {
+        let dispatcher_names = dispatcher_entries()
+            .map(|entry| entry.command)
+            .collect::<BTreeSet<_>>();
+        let mut seen = BTreeSet::new();
+        let mut core_count = 0;
+        for (name, tier, description) in HELP_META {
+            assert!(seen.insert(*name), "duplicate help metadata for {name}");
+            assert!(
+                dispatcher_names.contains(name) || *name == "about",
+                "help metadata names non-dispatcher verb {name}"
+            );
+            assert_ne!(
+                *tier,
+                HelpTier::Other,
+                "omit Other rows and use fallback for {name}"
+            );
+            assert!(
+                !description.trim().is_empty(),
+                "help metadata for {name} needs a teaching description"
+            );
+            if *tier == HelpTier::Core {
+                core_count += 1;
+                assert_eq!(help_meta_for(name).tier, HelpTier::Core);
+            }
+        }
+        assert_eq!(
+            core_count, 40,
+            "fanout must not change the proof core tier count"
+        );
+    }
+
+    fn help_all_names(text: &str) -> BTreeSet<&str> {
+        text.lines()
+            .filter_map(|line| line.strip_prefix("  maw "))
+            .filter_map(|line| line.split_whitespace().next())
+            .collect()
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LsPanePlan {
@@ -585,7 +860,9 @@ fn parse_ls_plan_options(argv: &[String]) -> Result<LsPlanOptions, CliOutput> {
     }
 
     if options.watch_interval_sec.is_some() && options.json {
-        return Err(ls_usage_error("maw ls: --watch cannot be combined with --json"));
+        return Err(ls_usage_error(
+            "maw ls: --watch cannot be combined with --json",
+        ));
     }
 
     Ok(options)

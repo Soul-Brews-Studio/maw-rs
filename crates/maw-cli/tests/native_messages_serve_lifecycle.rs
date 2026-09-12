@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -36,9 +37,15 @@ fn seed_fake_maw(root: &Path) -> PathBuf {
 
 fn run(args: &[&str], fake_path: &Path) -> Output {
     let old_path = std::env::var("PATH").unwrap_or_default();
+    let root = fake_path.parent().expect("fake path root");
     Command::new(bin())
         .args(args)
+        .env("HOME", root.join("home"))
         .env("MAW_HOME", "/tmp/maw-rs-native-ms-fixed")
+        .env("MAW_CONFIG_DIR", root.join("maw-config"))
+        .env("XDG_CONFIG_HOME", root.join("xdg-config"))
+        .env("XDG_STATE_HOME", root.join("xdg-state"))
+        .env("XDG_DATA_HOME", root.join("xdg-data"))
         .env("MAW_JS_REF_DIR", "/nonexistent")
         .env("MAW_ENGINE_URL", "http://127.0.0.1:3456")
         // Force a deterministic port probe so `serve status` doesn't report

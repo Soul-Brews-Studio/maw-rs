@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
 //! mawx WI-3 — install-root == discovery-root by construction.
 //!
 //! Before this fix the installer resolved its default root via

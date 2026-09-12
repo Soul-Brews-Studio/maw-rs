@@ -599,12 +599,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "deranged"
-version = "0.5.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c"
-
-[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1528,34 +1522,41 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e7465ac9959cc2b1404e8e2367b43684a6d13790fe23056cc8c6c5a6b7bcb94"
 
 [[package]]
+name = "maw-activity"
+version = "0.1.0-alpha.1"
+source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=e46932081dfd1a20bb962506086f1befe5525fa4#e46932081dfd1a20bb962506086f1befe5525fa4"
+
+[[package]]
 name = "maw-auth"
 version = "0.1.0-alpha.1"
 dependencies = [
  "ed25519-dalek",
  "hmac",
+ "rand_core 0.6.4",
  "serde_json",
  "sha2",
+ "subtle",
 ]
 
 [[package]]
 name = "maw-auto-wake"
 version = "0.1.0-alpha.1"
-source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=062afc6ccb2aa536d3ea404a80d2da5361843610#062afc6ccb2aa536d3ea404a80d2da5361843610"
+source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=e46932081dfd1a20bb962506086f1befe5525fa4#e46932081dfd1a20bb962506086f1befe5525fa4"
 
 [[package]]
 name = "maw-bind"
 version = "0.1.0-alpha.1"
-source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=062afc6ccb2aa536d3ea404a80d2da5361843610#062afc6ccb2aa536d3ea404a80d2da5361843610"
+source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=e46932081dfd1a20bb962506086f1befe5525fa4#e46932081dfd1a20bb962506086f1befe5525fa4"
 
 [[package]]
 name = "maw-bring"
 version = "0.1.0-alpha.1"
-source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=062afc6ccb2aa536d3ea404a80d2da5361843610#062afc6ccb2aa536d3ea404a80d2da5361843610"
+source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=e46932081dfd1a20bb962506086f1befe5525fa4#e46932081dfd1a20bb962506086f1befe5525fa4"
 
 [[package]]
 name = "maw-calver"
-version = "0.1.0-alpha.1"
-source = "git+https://github.com/Soul-Brews-Studio/maw-calver?rev=c74522b2b7cb5b831c456b2a2fa333849aa85eef#c74522b2b7cb5b831c456b2a2fa333849aa85eef"
+version = "26.8.18-alpha.1329"
+source = "git+https://github.com/Soul-Brews-Studio/maw-calver?rev=8e97ae8814990bbd3b3766cb5e0bc4064c57e859#8e97ae8814990bbd3b3766cb5e0bc4064c57e859"
 
 [[package]]
 name = "maw-cli"
@@ -1563,12 +1564,12 @@ version = "0.1.0-alpha.1"
 dependencies = [
  "axum",
  "futures-util",
+ "maw-activity",
  "maw-auth",
  "maw-auto-wake",
  "maw-bind",
  "maw-bring",
  "maw-calver",
- "maw-discord",
  "maw-feed",
  "maw-fuzzy",
  "maw-hub",
@@ -1599,31 +1600,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "maw-discord"
-version = "0.1.0-alpha.1"
-dependencies = [
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "twilight-gateway",
- "twilight-model",
-]
-
-[[package]]
 name = "maw-feed"
 version = "0.1.0-alpha.1"
-source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=062afc6ccb2aa536d3ea404a80d2da5361843610#062afc6ccb2aa536d3ea404a80d2da5361843610"
+source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=e46932081dfd1a20bb962506086f1befe5525fa4#e46932081dfd1a20bb962506086f1befe5525fa4"
 
 [[package]]
 name = "maw-fuzzy"
 version = "0.1.0-alpha.1"
-source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=062afc6ccb2aa536d3ea404a80d2da5361843610#062afc6ccb2aa536d3ea404a80d2da5361843610"
+source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=e46932081dfd1a20bb962506086f1befe5525fa4#e46932081dfd1a20bb962506086f1befe5525fa4"
 
 [[package]]
 name = "maw-hub"
 version = "0.1.0-alpha.1"
-source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=062afc6ccb2aa536d3ea404a80d2da5361843610#062afc6ccb2aa536d3ea404a80d2da5361843610"
+source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=e46932081dfd1a20bb962506086f1befe5525fa4#e46932081dfd1a20bb962506086f1befe5525fa4"
 dependencies = [
  "serde",
  "serde_json",
@@ -1632,15 +1621,12 @@ dependencies = [
 [[package]]
 name = "maw-identity"
 version = "0.1.0-alpha.1"
-source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=062afc6ccb2aa536d3ea404a80d2da5361843610#062afc6ccb2aa536d3ea404a80d2da5361843610"
+source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=e46932081dfd1a20bb962506086f1befe5525fa4#e46932081dfd1a20bb962506086f1befe5525fa4"
 
 [[package]]
 name = "maw-matcher"
 version = "0.1.0-alpha.1"
-dependencies = [
- "serde",
- "serde_json",
-]
+source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=e46932081dfd1a20bb962506086f1befe5525fa4#e46932081dfd1a20bb962506086f1befe5525fa4"
 
 [[package]]
 name = "maw-peer"
@@ -1658,6 +1644,7 @@ dependencies = [
  "base64",
  "extism",
  "libc",
+ "maw-policy",
  "maw-tmux",
  "maw-transport",
  "maw-xdg",
@@ -1672,7 +1659,7 @@ dependencies = [
 [[package]]
 name = "maw-plugin-scaffold"
 version = "0.1.0-alpha.1"
-source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=062afc6ccb2aa536d3ea404a80d2da5361843610#062afc6ccb2aa536d3ea404a80d2da5361843610"
+source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=e46932081dfd1a20bb962506086f1befe5525fa4#e46932081dfd1a20bb962506086f1befe5525fa4"
 dependencies = [
  "serde_json",
 ]
@@ -1680,25 +1667,26 @@ dependencies = [
 [[package]]
 name = "maw-policy"
 version = "0.1.0-alpha.1"
-source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=062afc6ccb2aa536d3ea404a80d2da5361843610#062afc6ccb2aa536d3ea404a80d2da5361843610"
+source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=e46932081dfd1a20bb962506086f1befe5525fa4#e46932081dfd1a20bb962506086f1befe5525fa4"
 
 [[package]]
 name = "maw-routing"
 version = "0.1.0-alpha.1"
-source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=062afc6ccb2aa536d3ea404a80d2da5361843610#062afc6ccb2aa536d3ea404a80d2da5361843610"
+source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=e46932081dfd1a20bb962506086f1befe5525fa4#e46932081dfd1a20bb962506086f1befe5525fa4"
 
 [[package]]
 name = "maw-schedule"
 version = "0.1.0-alpha.1"
+source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=e46932081dfd1a20bb962506086f1befe5525fa4#e46932081dfd1a20bb962506086f1befe5525fa4"
 dependencies = [
  "serde",
- "serde_json",
  "toml",
 ]
 
 [[package]]
 name = "maw-schedule-launchd"
 version = "0.1.0-alpha.1"
+source = "git+https://github.com/Soul-Brews-Studio/maw-schedule-runtime?rev=ba95c3f7c0b987509b4fe906e8375d6b4e6bc402#ba95c3f7c0b987509b4fe906e8375d6b4e6bc402"
 dependencies = [
  "maw-schedule",
 ]
@@ -1706,6 +1694,7 @@ dependencies = [
 [[package]]
 name = "maw-schedule-runner"
 version = "0.1.0-alpha.1"
+source = "git+https://github.com/Soul-Brews-Studio/maw-schedule-runtime?rev=ba95c3f7c0b987509b4fe906e8375d6b4e6bc402#ba95c3f7c0b987509b4fe906e8375d6b4e6bc402"
 dependencies = [
  "fd-lock",
  "maw-schedule",
@@ -1716,14 +1705,13 @@ dependencies = [
 [[package]]
 name = "maw-split"
 version = "0.1.0-alpha.1"
-source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=062afc6ccb2aa536d3ea404a80d2da5361843610#062afc6ccb2aa536d3ea404a80d2da5361843610"
+source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=e46932081dfd1a20bb962506086f1befe5525fa4#e46932081dfd1a20bb962506086f1befe5525fa4"
 
 [[package]]
 name = "maw-tmux"
 version = "0.1.0-alpha.1"
 dependencies = [
  "maw-matcher",
- "maw-peer",
  "serde",
  "serde_json",
 ]
@@ -1742,15 +1730,15 @@ dependencies = [
 [[package]]
 name = "maw-worktree"
 version = "0.1.0-alpha.1"
+source = "git+https://github.com/Soul-Brews-Studio/maw-worktree?rev=1449cff00fbbc03eef82de4daa710c194a1e14de#1449cff00fbbc03eef82de4daa710c194a1e14de"
 dependencies = [
  "maw-matcher",
- "serde",
- "serde_json",
 ]
 
 [[package]]
 name = "maw-xdg"
 version = "0.1.0-alpha.1"
+source = "git+https://github.com/Soul-Brews-Studio/maw-crates?rev=e46932081dfd1a20bb962506086f1befe5525fa4#e46932081dfd1a20bb962506086f1befe5525fa4"
 dependencies = [
  "serde_json",
 ]
@@ -1835,12 +1823,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "num-conv"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "521739c6d2bac4aa25192232afe6841231376b2b26d4d9fae5ecf8ca5772e441"
-
-[[package]]
 name = "num-traits"
 version = "0.2.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1866,15 +1848,6 @@ name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
-
-[[package]]
-name = "ordered-float"
-version = "2.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68f19d67e5a2795c94e73e0bb1cc1a7edeb2e28efd39e2e1c9b7a40c1108b11c"
-dependencies = [
- "num-traits",
-]
 
 [[package]]
 name = "percent-encoding"
@@ -1955,12 +1928,6 @@ checksum = "0103b1cef7ec0cf76490e969665504990193874ea05c85ff9bab8b911d0a0564"
 dependencies = [
  "zerovec",
 ]
-
-[[package]]
-name = "powerfmt"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 
 [[package]]
 name = "ppv-lite86"
@@ -2449,16 +2416,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde-value"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3a1a3341211875ef120e117ea7fd5228530ae7e7036a779fdc9117be6b3282c"
-dependencies = [
- "ordered-float",
- "serde",
-]
-
-[[package]]
 name = "serde_core"
 version = "1.0.228"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2500,17 +2457,6 @@ dependencies = [
  "itoa",
  "serde",
  "serde_core",
-]
-
-[[package]]
-name = "serde_repr"
-version = "0.1.20"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "175ee3e80ae9982737ca543e96133087cbd9a485eecc3bc4de9c1a37b47ea59c"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]
@@ -2568,12 +2514,6 @@ dependencies = [
  "cpufeatures",
  "digest",
 ]
-
-[[package]]
-name = "sha1_smol"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
 
 [[package]]
 name = "sha2"
@@ -2641,12 +2581,6 @@ name = "simd-adler32"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "703d5c7ef118737c72f1af64ad2f6f8c5e1921f818cdcb97b8fe6fc69bf66214"
-
-[[package]]
-name = "simdutf8"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
 
 [[package]]
 name = "sized-chunks"
@@ -2830,36 +2764,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "time"
-version = "0.3.51"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85c17d80feb7334b40c484e45ed1a5273dfd8bfda537c3be2e74a06a6686f327"
-dependencies = [
- "deranged",
- "num-conv",
- "powerfmt",
- "serde_core",
- "time-core",
- "time-macros",
-]
-
-[[package]]
-name = "time-core"
-version = "0.1.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e1c906769ad99c88eaa54e728060edef082f8e358ff32030cb7c7d315e81109"
-
-[[package]]
-name = "time-macros"
-version = "0.2.30"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dcef1a61bdb119096e153208ec5cbec23944ce8bca13be5c7f60c634f7403935"
-dependencies = [
- "num-conv",
- "time-core",
-]
-
-[[package]]
 name = "tinystr"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2948,28 +2852,6 @@ dependencies = [
  "futures-sink",
  "pin-project-lite",
  "tokio",
-]
-
-[[package]]
-name = "tokio-websockets"
-version = "0.13.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dad543404f98bfc969aeb71994105c592acfc6c43323fddcd016bb208d1c65cb"
-dependencies = [
- "base64",
- "bytes",
- "fastrand",
- "futures-core",
- "futures-sink",
- "http",
- "httparse",
- "rustls-pki-types",
- "sha1_smol",
- "simdutf8",
- "tokio",
- "tokio-rustls",
- "tokio-util",
- "webpki-roots 1.0.8",
 ]
 
 [[package]]
@@ -3172,48 +3054,6 @@ dependencies = [
  "sha1",
  "thiserror 1.0.69",
  "utf-8",
-]
-
-[[package]]
-name = "twilight-gateway"
-version = "0.17.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59267541c31f888c1587da5e7cbab182ae6efd98faedd9ea2e35a4eef43ff204"
-dependencies = [
- "bitflags 2.13.0",
- "fastrand",
- "futures-core",
- "futures-sink",
- "serde",
- "serde_json",
- "tokio",
- "tokio-websockets",
- "tracing",
- "twilight-gateway-queue",
- "twilight-model",
-]
-
-[[package]]
-name = "twilight-gateway-queue"
-version = "0.17.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "366a73fe47f61a3d522c3aaf70475e60634b0ae59e7b94272ed7496fffa7ceb7"
-dependencies = [
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "twilight-model"
-version = "0.17.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2bf6bb7b93a7f765d89b3388cc710c0ae16104579e06bb30ea1ee6bd41420a8b"
-dependencies = [
- "bitflags 2.13.0",
- "serde",
- "serde-value",
- "serde_repr",
- "time",
 ]
 
 [[package]]

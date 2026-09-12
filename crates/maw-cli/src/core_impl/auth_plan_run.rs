@@ -12,11 +12,16 @@ fn run_auth_loopback(plan_json: bool, address: &str) -> CliOutput {
 }
 
 fn run_auth_from_address(plan_json: bool, oracle: Option<&str>, node: &str) -> CliOutput {
-    let from = resolve_from_address(&FromAddressConfig {
+    let Some(from) = resolve_from_address(&FromAddressConfig {
         oracle: oracle.map(str::to_owned),
         node: Some(node.to_owned()),
-    })
-    .expect("parser requires node for auth from-address");
+    }) else {
+        return CliOutput {
+            code: 2,
+            stdout: String::new(),
+            stderr: "auth from-address: node is required\n".to_owned(),
+        };
+    };
     CliOutput {
         code: 0,
         stdout: if plan_json {
@@ -114,10 +119,14 @@ fn auth_ed25519_cli_pins(
     cached_pubkey: Option<&str>,
 ) -> std::sync::Arc<std::sync::Mutex<Ed25519TofuStore>> {
     let mut store = Ed25519TofuStore::default();
-    if headers.get("x-maw-ed25519-signature").is_some() {
-        if let (Some(from), Some(pubkey)) = (headers.get("x-maw-from"), cached_pubkey) {
-            let _ = store.pin_first_contact(from, pubkey);
-        }
+    if let (Some(from), Some(pubkey)) = (
+        headers
+            .get("x-maw-from")
+            .map(str::trim)
+            .filter(|from| !from.is_empty()),
+        cached_pubkey,
+    ) {
+        let _ = store.pin_first_contact(from, pubkey);
     }
     std::sync::Arc::new(std::sync::Mutex::new(store))
 }
@@ -216,21 +225,25 @@ fn run_auth_from_sign_payload(
 ) -> CliOutput {
     let method = method.to_uppercase();
     let payload = if legacy {
-        build_legacy_from_sign_payload(
-            from,
-            signed_at.expect("parser requires --signed-at with --legacy"),
-            &method,
-            path,
-            body_hash,
-        )
+        let Some(signed_at) = signed_at else {
+            return CliOutput {
+                code: 2,
+                stdout: String::new(),
+                stderr: "auth from-sign-payload: --signed-at is required with --legacy\n"
+                    .to_owned(),
+            };
+        };
+        build_legacy_from_sign_payload(from, signed_at, &method, path, body_hash)
     } else {
-        build_from_sign_payload(
-            from,
-            timestamp.expect("parser requires --timestamp without --legacy"),
-            &method,
-            path,
-            body_hash,
-        )
+        let Some(timestamp) = timestamp else {
+            return CliOutput {
+                code: 2,
+                stdout: String::new(),
+                stderr: "auth from-sign-payload: --timestamp is required without --legacy\n"
+                    .to_owned(),
+            };
+        };
+        build_from_sign_payload(from, timestamp, &method, path, body_hash)
     };
     CliOutput {
         code: 0,
@@ -416,8 +429,15 @@ fn run_auth_sign_v3(
                 path,
                 body.map(str::as_bytes),
                 timestamp,
-            )
-            .expect("sign_request_v3 succeeded with the same inputs");
+            );
+            let Ok(headers) = headers else {
+                return CliOutput {
+                    code: 2,
+                    stdout: String::new(),
+                    stderr: "auth sign-v3: signing headers failed after signature succeeded\n"
+                        .to_owned(),
+                };
+            };
             CliOutput {
                 code: 0,
                 stdout: if plan_json {

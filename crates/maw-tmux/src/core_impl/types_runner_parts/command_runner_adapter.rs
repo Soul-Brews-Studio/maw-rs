@@ -4,6 +4,8 @@
 pub struct CommandTmuxRunner {
     program: OsString,
     socket: Option<OsString>,
+    server_observed: bool,
+    initial_cold_start_allowed: bool,
 }
 
 impl Default for CommandTmuxRunner {
@@ -11,6 +13,8 @@ impl Default for CommandTmuxRunner {
         Self {
             program: OsString::from("tmux"),
             socket: None,
+            server_observed: false,
+            initial_cold_start_allowed: std::env::var_os("TMUX").is_none(),
         }
     }
 }
@@ -28,6 +32,8 @@ impl CommandTmuxRunner {
         Self {
             program: program.into(),
             socket: None,
+            server_observed: false,
+            initial_cold_start_allowed: std::env::var_os("TMUX").is_none(),
         }
     }
 
@@ -35,6 +41,7 @@ impl CommandTmuxRunner {
     #[must_use]
     pub fn with_socket(mut self, socket: impl Into<OsString>) -> Self {
         self.socket = Some(socket.into());
+        self.initial_cold_start_allowed = false;
         self
     }
 
@@ -67,19 +74,111 @@ impl TmuxRunner for CommandTmuxRunner {
     ) -> Result<String, TmuxError> {
         self.run_command(subcommand, args, Some(stdin))
     }
+
+    fn is_initial_cold_start(&self, error: &TmuxError) -> bool {
+        self.initial_cold_start_allowed
+            && !self.server_observed
+            && error
+                .cold_start_socket()
+                .is_some_and(tmux_socket_is_proven_cold)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn tmux_socket_is_proven_cold(socket: &str) -> bool {
+    use std::os::unix::fs::FileTypeExt as _;
+    let can_bootstrap = match std::fs::symlink_metadata(socket) {
+        Ok(metadata) => metadata.file_type().is_socket(),
+        Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+    };
+    can_bootstrap && std::fs::read_to_string("/proc/net/unix").is_ok_and(|table| {
+        table
+            .lines()
+            .all(|line| !line.strip_suffix(socket).is_some_and(|prefix| prefix.ends_with(' ')))
+    })
+}
+
+// macOS netstat reads the kernel net.local.{stream,dgram}.pcblist_n tables,
+// including live sockets whose filesystem pathname has been unlinked (#941).
+#[cfg(target_os = "macos")]
+fn tmux_socket_is_proven_cold(socket: &str) -> bool {
+    use std::os::unix::fs::FileTypeExt as _;
+    let metadata_ok = match std::fs::symlink_metadata(socket) {
+        Ok(metadata) => metadata.file_type().is_socket(),
+        Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+    };
+    if !metadata_ok { return false; }
+    let Ok(output) = Command::new("/usr/sbin/netstat").args(["-an", "-f", "unix"]).output() else { return false; };
+    output.status.success() && output.stderr.is_empty()
+        && std::str::from_utf8(&output.stdout).is_ok_and(|table| macos_socket_table_is_cold(socket, table))
+}
+
+#[cfg(target_os = "macos")]
+fn macos_socket_path(path: &str) -> Option<std::path::PathBuf> {
+    let path = std::path::Path::new(path);
+    if !path.is_absolute() { return None; }
+    Some(path.parent()?.canonicalize().ok()?.join(path.file_name()?))
+}
+
+#[cfg(target_os = "macos")]
+fn macos_socket_table_is_cold(socket: &str, table: &str) -> bool {
+    use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _};
+    let target_identity = match std::fs::symlink_metadata(socket) {
+        Ok(meta) if meta.file_type().is_socket() => Some((meta.dev(), meta.ino())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        _ => return false,
+    };
+    let Some(socket) = macos_socket_path(socket) else { return false; };
+    let mut lines = table.lines();
+    if lines.next() != Some("Active LOCAL (UNIX) domain sockets") { return false; }
+    let Some(header) = lines.next() else { return false; };
+    if header.split_whitespace().collect::<Vec<_>>() != ["Address", "Type", "Recv-Q", "Send-Q", "Inode", "Conn", "Refs", "Nextref", "Addr"] { return false; }
+    for line in lines {
+        let mut rest = line.trim_start();
+        for column in 0..8 {
+            let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+            let word = &rest[..end];
+            let valid = match column {
+                1 => matches!(word, "stream" | "dgram"),
+                2 | 3 => word.parse::<u64>().is_ok(),
+                _ => !word.is_empty() && word.chars().all(|c| c.is_ascii_hexdigit()),
+            };
+            if !valid { return false; }
+            rest = rest[end..].trim_start();
+        }
+        if !rest.is_empty() {
+            // Unknown/deleted parent paths cannot establish absence. Never
+            // mistake an incomplete or warning-bearing table for a cold socket.
+            let Some(bound) = macos_socket_path(rest) else { return false; };
+            if bound == socket { return false; }
+            // Names are not identities on case-insensitive volumes or with hard
+            // links. A vanished bind name may still have a live alias: unknown.
+            let Ok(meta) = std::fs::metadata(&bound) else { return false; };
+            if !meta.file_type().is_socket()
+                || target_identity == Some((meta.dev(), meta.ino())) { return false; }
+        }
+    }
+    true
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn tmux_socket_is_proven_cold(_socket: &str) -> bool {
+    false
 }
 
 impl CommandTmuxRunner {
     fn run_command(
-        &self,
+        &mut self,
         subcommand: &str,
         args: &[String],
         stdin: Option<&[u8]>,
     ) -> Result<String, TmuxError> {
         let command_line = self.argv(subcommand, args);
+        // `argv` constructs the vector by inserting the configured tmux program first.
+        #[allow(clippy::expect_used)]
         let (program, rest) = command_line
             .split_first()
-            .expect("tmux command line always includes a program");
+            .expect("tmux command line must include a program because argv inserts it first");
         validate_tmux_program(program)?;
         validate_tmux_option_values(rest)?;
         let mut command = Command::new(program);
@@ -107,6 +206,7 @@ impl CommandTmuxRunner {
             .wait_with_output()
             .map_err(|error| tmux_program_io_error("collect output from", program, &error))?;
         if output.status.success() {
+            self.server_observed = true;
             return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
         }
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();

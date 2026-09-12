@@ -112,21 +112,30 @@ T0=$SECONDS
 # worst case) IS included: full gates are the slow pre-merge bar and must
 # warm-start it too. Disk story: dedicated root, keep 2 newest, see header.
 export CARGO_INCREMENTAL=0
-CARGO_TARGET_DIR="$PARTIAL/target" \
-    cargo build --manifest-path "$BUILD_WT/Cargo.toml" --workspace --tests --locked
-# no `-D warnings` here: this is a cache builder, not a gate — a lint on the
-# alpha tip must not block dep-artifact caching (gate.sh full still gates).
-CARGO_TARGET_DIR="$PARTIAL/target" \
-    cargo clippy --manifest-path "$BUILD_WT/Cargo.toml" --workspace --all-targets
-CARGO_TARGET_DIR="$PARTIAL/target" \
-    cargo build --manifest-path "$BUILD_WT/Cargo.toml" -p maw-cli -p maw-plugin-manifest --tests --features wasm-host --locked
-# 1.97.0 (CI's current stable clippy) artifacts are keyed per compiler and coexist in
-# the same target dir; pre-building them here (idle/scheduled time) saves
-# every consumer full gate a cold whole-workspace 1.97 check.
-if rustup toolchain list 2>/dev/null | grep -q '^1\.97\.0'; then
+# Run the cargo steps with CWD INSIDE $BUILD_WT (#823). --manifest-path picks
+# the workspace, but rustup picks the TOOLCHAIN by walking up from the current
+# directory — so from a cron job's $HOME this warmed whatever the machine's
+# default rustc was, not the pinned one, and every consumer gate then
+# recompiled the whole workspace anyway. A subshell keeps the cd from leaking
+# into the worktree-removal trap.
+(
+    cd "$BUILD_WT" || exit 1
     CARGO_TARGET_DIR="$PARTIAL/target" \
-        cargo +1.97.0 clippy --manifest-path "$BUILD_WT/Cargo.toml" --workspace --all-targets
-fi
+        cargo build --manifest-path "$BUILD_WT/Cargo.toml" --workspace --tests --locked
+    # no `-D warnings` here: this is a cache builder, not a gate — a lint on the
+    # alpha tip must not block dep-artifact caching (gate.sh full still gates).
+    CARGO_TARGET_DIR="$PARTIAL/target" \
+        cargo clippy --manifest-path "$BUILD_WT/Cargo.toml" --workspace --all-targets
+    CARGO_TARGET_DIR="$PARTIAL/target" \
+        cargo build --manifest-path "$BUILD_WT/Cargo.toml" -p maw-cli -p maw-plugin-manifest --tests --features wasm-host --locked
+)
+# The second, `+1.97.0` clippy pre-build that used to sit here is gone (#823):
+# it warmed a HARDCODED guess at CI's stable, and by 2026-08-16 the guess was
+# wrong (CI installs `stable`, which resolves to 1.97.1). rust-toolchain.toml
+# now pins the one toolchain both CI and gate.sh use, and the clippy above now
+# runs under that pin, so it already warms exactly the artifacts a full gate
+# consumes. Warming a second compiler would only bloat the cache with artifacts
+# nobody reads.
 mv "$PARTIAL" "$CACHE_ROOT/$SHA"
 echo "gate-cache: built in $((SECONDS - T0))s -> $CACHE_ROOT/$SHA ($(du -sh "$CACHE_ROOT/$SHA" | cut -f1))"
 

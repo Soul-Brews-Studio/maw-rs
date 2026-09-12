@@ -1,5 +1,6 @@
-// Ported from maw-js test/spec/matcher-resolve-target.fixtures.json into the
-// maw-rs side-by-side dry-run CLI resolve surface.
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
+                                                    // Ported from maw-js test/spec/matcher-resolve-target.fixtures.json into the
+                                                    // maw-rs side-by-side dry-run CLI resolve surface.
 
 use maw_cli::{run_cli, CliOutput};
 use serde::Deserialize;
@@ -58,10 +59,9 @@ fn args(values: &[String]) -> Vec<String> {
 
 #[test]
 fn resolve_plan_json_matches_maw_js_matcher_fixtures() {
-    let fixtures: Vec<ResolveFixture> = serde_json::from_str(include_str!(
-        "../../maw-matcher/tests/fixtures/matcher-resolve-target.fixtures.json"
-    ))
-    .expect("valid matcher fixtures");
+    let fixtures: Vec<ResolveFixture> =
+        serde_json::from_str(maw_matcher::MATCHER_RESOLVE_TARGET_FIXTURES_JSON)
+            .expect("valid matcher fixtures");
 
     assert_eq!(fixtures.len(), 16, "maw-js matcher fixture count changed");
     for fixture in fixtures {

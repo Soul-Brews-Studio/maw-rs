@@ -137,18 +137,27 @@
     }
 
     #[test]
-    fn client_fail_soft_lists_and_records_runner_args() {
+    fn client_lists_and_records_runner_args() {
         let runner =
             FakeRunner::with_responses(vec![Ok("s1\ns2\n"), Err(TmuxError::new("no server"))]);
         let mut client = TmuxClient::new(runner);
-        assert_eq!(client.list_session_names(), vec!["s1", "s2"]);
-        assert!(client.list_all().is_empty());
+        assert_eq!(
+            client.list_session_names().expect("session names"),
+            vec!["s1", "s2"]
+        );
+        // #860: a runner error is a distinct `Err`, never silently folded
+        // into an empty `Vec` -- that collapse is the false negative #860
+        // fixed (a tmux connect failure must not look like "no sessions").
+        assert_eq!(
+            client.list_all().expect_err("runner error propagates").message,
+            "no server"
+        );
         assert_eq!(client.runner.calls[0].0, "list-sessions");
         assert_eq!(client.runner.calls[1].0, "list-windows");
     }
 
     #[test]
-    fn client_listing_helpers_parse_outputs_and_fail_soft_where_expected() {
+    fn client_listing_helpers_parse_outputs_and_propagate_errors() {
         let runner = FakeRunner::with_responses(vec![
             Ok("0:agent:1\n1:logs:0\n"),
             Ok("%1\n\n%2\n"),
@@ -177,12 +186,15 @@
             ]
         );
         assert_eq!(
-            client.list_pane_ids(),
+            client.list_pane_ids().expect("pane ids parse"),
             BTreeSet::from(["%1".to_owned(), "%2".to_owned()])
         );
-        assert!(client.list_pane_ids().is_empty());
         assert_eq!(
-            client.list_panes(),
+            client.list_pane_ids().expect_err("runner error propagates").message,
+            "no panes"
+        );
+        assert_eq!(
+            client.list_panes().expect("panes parse"),
             vec![TmuxPane {
                 id: "%1".to_owned(),
                 command: "zsh".to_owned(),

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
 use maw_cli::{dispatcher_status, DispatchKind};
 use std::{
     fs,
@@ -175,7 +176,7 @@ fn peek_help_flags_print_usage_to_stdout() {
         );
         assert_eq!(
             String::from_utf8(output.stdout).expect("stdout"),
-            "usage: maw peek <tmux-target> [--lines N] [--history]\n       maw peek [--lines N]\n",
+            "usage: maw peek <tmux-target> [--lines N] [--history]\n       maw peek <peer>:<target> [--lines N]   read a pane on another node (#820)\n       maw peek ./<target>                    force a local reading of a name that is also a peer\n       maw peek [--lines N]\n",
             "{flag}"
         );
     }

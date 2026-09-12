@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -33,6 +34,12 @@ async fn native_send_posts_signed_api_send_to_configured_peer() {
     let addr = listener.local_addr().expect("addr");
     env.write_config(&format!("http://{addr}"));
     std::env::set_var("MAW_HOME", &env.root);
+    // #869: the isolated fixture above must win over any real config
+    // inherited from the host's `~/.config/maw/` (a deliberate feature --
+    // see `inherit_singleton_configs_for_maw_home` in maw-xdg's config.rs --
+    // that otherwise activates whenever MAW_HOME is set but MAW_CONFIG_DIR
+    // is not). MAW_TEST_MODE=1 is the loader's own documented opt-out.
+    std::env::set_var("MAW_TEST_MODE", "1");
     std::env::set_var("MAW_PEER_KEY", peer_key);
 
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -59,7 +66,12 @@ async fn native_send_posts_signed_api_send_to_configured_peer() {
     .await;
 
     assert_eq!(output.code, 0, "{}", output.stderr);
-    assert_eq!(output.stdout, "queued agent\n");
+    // #686 (landed via #802): a cross-node confirmation that echoes only the
+    // bare target is indistinguishable from a local delivery when session
+    // names collide across nodes, so the success line is prefixed with the
+    // node it actually resolved to. This test predates that and asserted the
+    // bare form -- the prefix is the intended behaviour, not a regression.
+    assert_eq!(output.stdout, "queued remote:agent\n");
 
     let captured = rx.await.expect("capture");
     assert_eq!(captured.method, "POST");
@@ -86,6 +98,7 @@ async fn native_wake_posts_signed_api_wake_to_configured_peer() {
     let addr = listener.local_addr().expect("addr");
     env.write_config(&format!("http://{addr}"));
     std::env::set_var("MAW_HOME", &env.root);
+    std::env::set_var("MAW_TEST_MODE", "1"); // #869: see comment above
     std::env::set_var("MAW_PEER_KEY", peer_key);
 
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -131,6 +144,7 @@ async fn native_wake_surfaces_receiver_failure_instead_of_false_woke() {
     let addr = listener.local_addr().expect("addr");
     env.write_config(&format!("http://{addr}"));
     std::env::set_var("MAW_HOME", &env.root);
+    std::env::set_var("MAW_TEST_MODE", "1"); // #869: see comment above
     std::env::set_var("MAW_PEER_KEY", peer_key);
 
     tokio::spawn(async move {
@@ -271,6 +285,7 @@ fn args(values: &[&str]) -> Vec<String> {
 
 struct TestEnv {
     root: PathBuf,
+    old_path: Option<std::ffi::OsString>,
 }
 
 impl TestEnv {
@@ -281,7 +296,29 @@ impl TestEnv {
             .as_nanos();
         let root = std::env::temp_dir().join(format!("maw-rs-{name}-{nonce}"));
         std::fs::create_dir_all(root.join("config")).expect("config dir");
-        Self { root }
+        let bin = root.join("bin");
+        std::fs::create_dir_all(&bin).expect("bin dir");
+        let tmux = bin.join("tmux");
+        std::fs::write(
+            &tmux,
+            include_str!("fixtures/hermetic-tmux/empty-server.sh"),
+        )
+        .expect("fake tmux");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&tmux, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod fake tmux");
+        }
+        let old_path = std::env::var_os("PATH");
+        let mut path = vec![bin];
+        path.extend(
+            old_path
+                .iter()
+                .flat_map(|value| std::env::split_paths(value).collect::<Vec<_>>()),
+        );
+        std::env::set_var("PATH", std::env::join_paths(path).expect("fake PATH"));
+        Self { root, old_path }
     }
 
     fn write_config(&self, peer_url: &str) {
@@ -299,6 +336,11 @@ impl Drop for TestEnv {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.root);
         std::env::remove_var("MAW_HOME");
+        std::env::remove_var("MAW_TEST_MODE");
         std::env::remove_var("MAW_PEER_KEY");
+        match self.old_path.take() {
+            Some(path) => std::env::set_var("PATH", path),
+            None => std::env::remove_var("PATH"),
+        }
     }
 }

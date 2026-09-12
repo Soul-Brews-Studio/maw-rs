@@ -1,6 +1,12 @@
 const DISPATCH_304: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "bring", handler: Handler::Sync(run_bring_plan) },
-    DispatcherEntry { command: "b", handler: Handler::Sync(run_bring_plan) },
+    DispatcherEntry {
+        command: "bring",
+        handler: Handler::Sync(run_bring_plan),
+    },
+    DispatcherEntry {
+        command: "b",
+        handler: Handler::Sync(run_bring_plan),
+    },
 ];
 
 const LS_WATCH_DEFAULT_SECS: u64 = 2;
@@ -131,7 +137,9 @@ fn ls_watch_current_hms() -> String {
 fn ls_watch_current_hms_with_date(mut run_date: impl FnMut(&str) -> Option<Vec<u8>>) -> String {
     ["/bin/date", "date"]
         .into_iter()
-        .find_map(|program| run_date(program).and_then(|output| ls_watch_hms_from_date_output(&output)))
+        .find_map(|program| {
+            run_date(program).and_then(|output| ls_watch_hms_from_date_output(&output))
+        })
         .unwrap_or_else(ls_watch_current_utc_hms)
 }
 
@@ -218,11 +226,40 @@ fn ls_watch_error(message: &str) -> CliOutput {
     }
 }
 
+/// #860: distinct, non-zero-exit error for a genuine tmux connect failure --
+/// deliberately worded differently from "No active sessions." so a stale
+/// socket can never be mistaken for an empty server.
+fn ls_tmux_unreachable_output(error: &maw_tmux::TmuxError) -> CliOutput {
+    CliOutput {
+        code: 1,
+        stdout: String::new(),
+        stderr: format!("tmux unreachable: {error}\n"),
+    }
+}
+
 fn render_ls_plan(options: &LsPlanOptions) -> CliOutput {
+    render_ls_plan_with(options, || TmuxClient::local().list_panes())
+}
+
+/// #860: `fetch_live_panes` is the tmux-connect seam, injected so tests can
+/// simulate a connect failure (`Err`) versus a reachable-but-empty server
+/// (`Ok(vec![])`) without needing a real tmux server -- see the
+/// `ls860_*` tests below.
+fn render_ls_plan_with(
+    options: &LsPlanOptions,
+    fetch_live_panes: impl FnOnce() -> Result<Vec<TmuxPane>, maw_tmux::TmuxError>,
+) -> CliOutput {
     let mut live_options;
     let effective_options = if options.panes.is_empty() {
-        let mut client = TmuxClient::local();
-        let live_panes = client.list_panes();
+        // #860: a tmux connect failure (e.g. a stale/orphaned socket) must
+        // never fall through to the "no active sessions" empty-panes path --
+        // that collapses "tmux is unreachable" and "tmux is reachable and
+        // genuinely empty" into the same false-negative message. Bail out
+        // here with a distinct error instead.
+        let live_panes = match fetch_live_panes() {
+            Ok(panes) => panes,
+            Err(error) => return ls_tmux_unreachable_output(&error),
+        };
         live_options = options.clone();
         live_options.panes = live_panes;
         if live_options.now.is_none() {
@@ -302,9 +339,9 @@ fn project_ls_panes(options: &LsPlanOptions) -> Vec<LsPanePlan> {
             }
             let age_sec = pane.last_activity.map(|last| now.saturating_sub(last));
             if options.active
-                && pane
-                    .last_activity
-                    .is_none_or(|_| age_sec.is_none_or(|age| age > options.active_threshold_sec.unwrap_or(30 * 60)))
+                && pane.last_activity.is_none_or(|_| {
+                    age_sec.is_none_or(|age| age > options.active_threshold_sec.unwrap_or(30 * 60))
+                })
             {
                 return None;
             }
@@ -359,11 +396,11 @@ fn is_ls_team_session(session: &str) -> bool {
     session.starts_with("team-") || session.contains(":team-") || session.contains("-team-")
 }
 
+// #813: already had the version arm (via the external `maw_split` copy of
+// `is_claude_like_pane`) but hand-rolled the rest. Now the in-workspace
+// shared predicate, so `maw ls`'s agent column matches every other site.
 fn is_ls_agent_command(command: &str) -> bool {
-    let command = command.to_lowercase();
-    maw_split::is_claude_like_pane(Some(&command))
-        || command.contains("codex")
-        || command.contains("node")
+    maw_tmux::is_agent_pane_command(Some(command))
 }
 
 fn ls_pane_status(age_sec: Option<u64>) -> &'static str {
@@ -491,10 +528,7 @@ fn render_ls_sessions_json(panes: &[LsPanePlan], include_recent: bool) -> String
             if let Some(created) = panes.first().and_then(|pane| pane.session_created) {
                 fields.push(format!("\"created\":{created}"));
             }
-            let youngest_active_age = panes
-                .iter()
-                .filter_map(|pane| pane.age_sec)
-                .min();
+            let youngest_active_age = panes.iter().filter_map(|pane| pane.age_sec).min();
             if let (Some(age), Some(_created)) = (
                 youngest_active_age,
                 panes.first().and_then(|pane| pane.session_created),
@@ -557,7 +591,14 @@ fn render_ls_verbose_text(panes: &[LsPanePlan]) -> String {
     let groups = group_ls_sessions(panes);
     let session_width = ls_group_session_width(&groups);
     for (session, panes) in groups {
-        render_ls_verbose_group(&mut out, &session, &panes, session_width, target_width, &annotations);
+        render_ls_verbose_group(
+            &mut out,
+            &session,
+            &panes,
+            session_width,
+            target_width,
+            &annotations,
+        );
     }
     out
 }
@@ -678,7 +719,10 @@ fn ls_annotation_context() -> LsAnnotationContext {
 
 fn ls_fleet_sessions_for_annotation() -> BTreeSet<String> {
     let mut sessions = BTreeSet::new();
-    for entry in fleet_load_entries().into_iter().filter(fleet_entry_is_session) {
+    for entry in fleet_load_entries()
+        .into_iter()
+        .filter(fleet_entry_is_session)
+    {
         let stem = entry.file.strip_suffix(".json").unwrap_or(&entry.file);
         if !stem.is_empty() {
             sessions.insert(stem.to_owned());
@@ -718,7 +762,8 @@ fn ls_pane_annotation(pane: &LsPanePlan, annotations: &LsAnnotationContext) -> S
         &annotations.fleet_sessions,
         &annotations.team_by_pane,
     );
-    if annotation.is_empty() && ls_is_orphan_list_session(&pane.session, &annotations.fleet_sessions)
+    if annotation.is_empty()
+        && ls_is_orphan_list_session(&pane.session, &annotations.fleet_sessions)
     {
         "orphan".to_owned()
     } else {
@@ -931,6 +976,9 @@ fn ls_usage_error(message: &str) -> CliOutput {
 }
 
 fn run_bring_plan(argv: &[String]) -> CliOutput {
+    if wants_help(argv, &["--engine", "-e", "--to"]) {
+        return help_output(maw_bring::bring_usage_lines().join("\n"));
+    }
     let plan_json = argv.iter().any(|arg| arg == "--plan-json");
     let filtered: Vec<String> = argv
         .iter()
@@ -1020,8 +1068,6 @@ fn json_string(value: &str) -> String {
     out
 }
 
-
-
 #[cfg(test)]
 mod remaining_cli_private_coverage_tests {
     use super::*;
@@ -1073,6 +1119,98 @@ mod remaining_cli_private_coverage_tests {
         }
     }
 
+    // #860: `maw ls` (and the whole tmux listing surface) collapsed a genuine
+    // "tmux server unreachable" error into "No active sessions." -- a false
+    // negative indistinguishable from a truly empty, reachable server. These
+    // three tests are the red-then-green proof for the fix in
+    // `render_ls_plan_with` / `ls_tmux_unreachable_output`, using the
+    // `fetch_live_panes` seam to simulate a tmux connect failure (mirroring
+    // the issue's real repro: a stale/orphaned tmux socket) without needing
+    // a real tmux server.
+
+    #[test]
+    fn ls860_connect_failure_is_reported_distinctly_not_as_no_sessions() {
+        // GREEN (post-fix): a tmux connect failure must produce a distinct,
+        // non-zero-exit "tmux unreachable" message -- never the empty-server
+        // "No active sessions." text, which would be a silent false negative
+        // exactly like the one reported against maw-rs@black's stale socket.
+        let options = ls_test_options();
+        let connect_error = maw_tmux::TmuxError::new(
+            "tmux exited with status 1: error connecting to /tmp/tmux-1028/default (No such file or directory)",
+        );
+        let output = render_ls_plan_with(&options, || Err(connect_error));
+
+        assert_ne!(output.code, 0, "a connect failure must not exit 0");
+        assert!(
+            !output.stderr.contains("No active sessions")
+                && !output.stdout.contains("No active sessions"),
+            "connect failure must not be reported as the empty-sessions message: stdout={:?} stderr={:?}",
+            output.stdout,
+            output.stderr
+        );
+        assert!(
+            output.stderr.contains("tmux unreachable"),
+            "connect failure must be reported distinctly: stderr={:?}",
+            output.stderr
+        );
+        assert!(
+            output
+                .stderr
+                .contains("error connecting to /tmp/tmux-1028/default"),
+            "the underlying tmux error should be visible for debugging: stderr={:?}",
+            output.stderr
+        );
+    }
+
+    #[test]
+    fn ls860_reachable_and_genuinely_empty_still_reports_no_active_sessions() {
+        // True-negative case: a reachable tmux server with zero panes must
+        // keep reporting "No active sessions." -- the fix must not regress
+        // this by making every empty result look like an error.
+        let options = ls_test_options();
+        let output = render_ls_plan_with(&options, || Ok(Vec::new()));
+
+        assert_eq!(output.code, 0, "a genuinely empty server is not an error");
+        assert!(
+            output.stdout.contains("No active sessions"),
+            "genuinely empty reachable server must still say so: stdout={:?}",
+            output.stdout
+        );
+        assert!(
+            !output.stdout.contains("tmux unreachable")
+                && !output.stderr.contains("tmux unreachable"),
+            "must not be confused with a connect failure: stdout={:?} stderr={:?}",
+            output.stdout,
+            output.stderr
+        );
+    }
+
+    #[test]
+    fn ls860_reachable_and_nonempty_lists_the_session() {
+        // Sanity check alongside the empty/error cases: a reachable server
+        // with real panes renders them normally through the same seam.
+        let options = ls_test_options();
+        let pane = maw_tmux::TmuxPane {
+            id: "%1".to_owned(),
+            command: "zsh".to_owned(),
+            target: "12-neo:main.0".to_owned(),
+            title: String::new(),
+            pid: None,
+            cwd: None,
+            last_activity: None,
+        };
+        let output = render_ls_plan_with(&options, || Ok(vec![pane]));
+
+        assert_eq!(output.code, 0, "{}", output.stderr);
+        assert!(
+            output.stdout.contains("12-neo"),
+            "should list the live session: stdout={:?}",
+            output.stdout
+        );
+        assert!(!output.stdout.contains("No active sessions"));
+        assert!(!output.stdout.contains("tmux unreachable"));
+    }
+
     #[test]
     fn private_pair_code_store_consumed_state_is_renderable() {
         let result = PairCodeStorePlanResult::Lookup(LookupResult::Consumed);
@@ -1117,8 +1255,8 @@ mod remaining_cli_private_coverage_tests {
             parse_ls_plan_options(&["--watch=5".to_owned()]).expect("explicit watch");
         assert_eq!(explicit_watch.watch_interval_sec, Some(5));
 
-        let json_watch =
-            parse_ls_plan_options(&["--watch".to_owned(), "--json".to_owned()]).expect_err("json watch");
+        let json_watch = parse_ls_plan_options(&["--watch".to_owned(), "--json".to_owned()])
+            .expect_err("json watch");
         assert_eq!(json_watch.code, 2);
         assert!(json_watch
             .stderr
@@ -1453,7 +1591,10 @@ mod remaining_cli_private_coverage_tests {
             .find(|line| line.contains("58-world-guardian"))
             .expect("world header");
 
-        assert_eq!(char_find(crew_header, " · "), char_find(hermes_header, " · "));
+        assert_eq!(
+            char_find(crew_header, " · "),
+            char_find(hermes_header, " · ")
+        );
         assert!(world_header.ends_with("58-world-guardian"));
     }
 
@@ -1486,7 +1627,10 @@ mod remaining_cli_private_coverage_tests {
             .find(|line| line.contains("unknown.0"))
             .expect("unknown row");
         let command_start = unknown_row.find("zsh").expect("command");
-        assert_eq!(&unknown_row[command_start + 10..command_start + 18], "        ");
+        assert_eq!(
+            &unknown_row[command_start + 10..command_start + 18],
+            "        "
+        );
         assert!(unknown_row.starts_with("  · "), "{unknown_row:?}");
 
         let old_row = text
@@ -1525,5 +1669,4 @@ mod remaining_cli_private_coverage_tests {
         assert!(ls_render_annotation("orphan").contains("[orphan]"));
     }
     include!("attach_private_tests.rs");
-
 }

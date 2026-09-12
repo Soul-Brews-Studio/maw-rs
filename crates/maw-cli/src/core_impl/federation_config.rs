@@ -1,0 +1,299 @@
+// This node's federation identity: who it is, who it knows, what it signs with.
+//
+// Node name, named peers, the Ed25519 signing key and the shared federation
+// token, each env-or-config so a node can be provisioned without a secret store.
+// The signing key is generated on first use and written with tight permissions;
+// a peer's auth state is probed rather than assumed.
+
+fn load_hey_config() -> HeyConfig {
+    let env = real_xdg_env();
+    let value = merged_config_value_for_env(&env);
+    let node = value
+        .get("node")
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned);
+    let oracle = value
+        .get("oracle")
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned);
+    let peers = value
+        .get("peers")
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let named_peers = parse_named_peers(value.get("namedPeers"));
+    let agents = value
+        .get("agents")
+        .and_then(serde_json::Value::as_object)
+        .map(|map| {
+            map.iter()
+                .filter_map(|(key, value)| {
+                    value.as_str().map(|node| (key.clone(), node.to_owned()))
+                })
+                .collect::<HashMap<_, _>>()
+        })
+        .unwrap_or_default();
+    HeyConfig {
+        node: node.clone(),
+        oracle,
+        route: RouteConfig {
+            node,
+            named_peers,
+            peers,
+            agents,
+        },
+    }
+}
+
+/// Minimal cross-tree accessor for `load_hey_config()`'s node/oracle fields.
+///
+/// `HeyConfig` itself stays private to `core_impl` (its `route` field pulls in
+/// `RouteConfig`/`RouteNamedPeer` internals that have no business leaking
+/// out); `serve_core::modules::pairing` only ever needs these two strings
+/// (#734), so this tuple accessor is the minimal `pub(crate)` surface rather
+/// than widening the whole struct.
+pub(crate) fn hey_config_node_oracle() -> (Option<String>, Option<String>) {
+    let config = load_hey_config();
+    (config.node, config.oracle)
+}
+
+fn parse_named_peers(value: Option<&serde_json::Value>) -> Vec<RouteNamedPeer> {
+    match value {
+        Some(serde_json::Value::Array(items)) => items
+            .iter()
+            .filter_map(|item| {
+                Some(RouteNamedPeer {
+                    name: item.get("name")?.as_str()?.to_owned(),
+                    url: item.get("url")?.as_str()?.to_owned(),
+                })
+            })
+            .collect(),
+        Some(serde_json::Value::Object(map)) => map
+            .iter()
+            .filter_map(|(name, value)| {
+                value.as_str().map(|url| RouteNamedPeer {
+                    name: name.clone(),
+                    url: url.to_owned(),
+                })
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn load_peer_key() -> Result<String, String> {
+    if let Ok(value) = std::env::var("MAW_PEER_KEY") {
+        if !value.is_empty() {
+            return Ok(value);
+        }
+    }
+    let env = real_xdg_env();
+    let path = maw_state_path(&env, &["peer-key"]);
+    if let Ok(raw) = std::fs::read_to_string(&path) {
+        let key = raw.trim().to_owned();
+        if !key.is_empty() {
+            return Ok(key);
+        }
+    }
+    let key = generate_peer_key()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("failed to create peer-key directory: {error}"))?;
+    }
+    write_peer_key_file(&path, &key)?;
+    Ok(key)
+}
+
+fn load_federation_token() -> Result<String, String> {
+    load_serve_workspace_key()
+        .ok_or_else(|| "federationToken is required for peer federation auth".to_owned())
+}
+
+/// Sign a read-only federated GET the way every other federated call is signed,
+/// returning the headers to attach (or `None` when this node has no identity,
+/// peer key or federation token — the caller then sends unsigned and lets the
+/// peer decide, exactly as it did before signing existed).
+///
+/// `auth_path` MUST be the path the *receiver* verifies against, which is
+/// `servecore_api_auth_path(uri.path())`: no query string, and either with or
+/// without the `/api` prefix (`from_verify_candidate_paths` accepts both). This
+/// is the sharp edge — `sign_headers_v3_at` signs both the v3 from-signature and
+/// the fleet-token `X-Maw-Signature` over whatever path it is handed, so passing
+/// a query string here produces two signatures that can never verify. That was a
+/// latent no-op while these routes were unprotected (#866); it is a hard 403 now.
+///
+/// Every cross-node GET goes through here — `maw ls --federation`
+/// (`ls_fetch_peer_sessions`), the serve-side fleet sweep
+/// (`federation_signed_sessions_headers`) and `maw peek <peer>:<target>`
+/// (`peek_signed_capture_argv`). peek used to carry its own copy of this
+/// canonicalization; #820 shipped that copy signing the QUERY-BEARING path, and
+/// nothing caught it because `/capture` was unprotected at the time. Two
+/// implementations of one rule is how that happens, so there is now one (#878).
+pub(crate) fn federation_signed_get_headers(auth_path: &str) -> Option<Headers> {
+    federation_signed_get_headers_at(auth_path, federation_signing_timestamp())
+}
+
+/// `federation_signed_get_headers` with the clock supplied rather than read.
+///
+/// The signature covers the timestamp, so two callers signing "the same inputs"
+/// a second apart produce different bytes. Pinning time is what lets a test
+/// assert that peek's wire bytes are byte-identical to this helper's instead of
+/// merely asserting that some request came back non-403 — a status-only check
+/// passes even with the `X-Maw-From` halves swapped, because `validate_wire_from`
+/// accepts any two non-empty colon-separated parts in either order (#878).
+fn federation_signed_get_headers_at(auth_path: &str, timestamp: i64) -> Option<Headers> {
+    let config = load_hey_config();
+    let sender_oracle = resolve_hey_sender_oracle_for_from(&config, None);
+    let from = resolve_hey_wire_from(None, &config, &sender_oracle).ok()?;
+    let peer_key = load_peer_key().ok()?;
+    let federation_token = load_federation_token().ok()?;
+    sign_headers_v3_at(
+        &federation_token,
+        &peer_key,
+        &from,
+        "GET",
+        auth_path,
+        Some(b""),
+        timestamp,
+    )
+    .ok()
+}
+
+/// The wall clock every federated signature is stamped with.
+///
+/// One expression, shared by every caller, so nothing can drift on how epoch
+/// seconds are derived or clamped. `maw peek` used to compute its own with a
+/// separate `SystemTime` chain that failed the whole command on a
+/// before-epoch clock where this one saturates; the value is identical for
+/// every reachable time, but "identical by coincidence" is what #878 is about.
+fn federation_signing_timestamp() -> i64 {
+    i64::try_from(current_epoch_seconds()).unwrap_or(i64::MAX)
+}
+
+/// Read-only auth probe used by `maw peers` to learn whether OUR signed
+/// requests are trusted by a peer, without delivering anything: sign a
+/// `POST /api/probe` (the peer verifies the v3 from-signature and returns
+/// `{ok:true, sessions:[]}` — no side effect). Reuses the exact send-path
+/// credential assembly (`from`, peer key, federation token, signing), so a
+/// green result here means a real `maw hey` to this peer would also
+/// authenticate. `Some(true)` trusted, `Some(false)` refused (401/403),
+/// `None` when we cannot even sign (no key/token/identity) or on error.
+pub(crate) fn federation_probe_auth(peer_url: &str, timeout_ms: u64) -> PeerProbeAuthResult {
+    let config = load_hey_config();
+    let sender_oracle = resolve_hey_sender_oracle_for_from(&config, None);
+    let Ok(from) = resolve_hey_wire_from(None, &config, &sender_oracle) else {
+        return PeerProbeAuthResult::default();
+    };
+    let Ok(peer_key) = load_peer_key() else {
+        return PeerProbeAuthResult::default();
+    };
+    let Ok(federation_token) = load_federation_token() else {
+        return PeerProbeAuthResult::default();
+    };
+    let request = PeerWakeRequest {
+        peer_url: peer_url.to_owned(),
+        target: String::new(),
+        task: None,
+        from,
+        federation_token,
+        peer_key,
+        timestamp: i64::try_from(current_epoch_seconds()).unwrap_or(i64::MAX),
+    };
+    // Own tokio runtime on a scratch thread so this stays callable from the
+    // synchronous probe path (mirrors peers_fetch_info).
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .ok()?;
+        let client = ReqwestHttpTransportIo::new(timeout_ms).ok()?;
+        runtime.block_on(client.probe_peer_auth(&request)).ok()
+    })
+    .join()
+    .ok()
+    .flatten()
+    .unwrap_or_default()
+}
+
+fn generate_peer_key() -> Result<String, String> {
+    let mut file = std::fs::File::open("/dev/urandom")
+        .map_err(|error| format!("failed to open random peer key source: {error}"))?;
+    let mut bytes = [0_u8; 32];
+    std::io::Read::read_exact(&mut file, &mut bytes)
+        .map_err(|error| format!("failed to read random peer key bytes: {error}"))?;
+    Ok(hex_bytes(&bytes))
+}
+
+fn write_peer_key_file(path: &std::path::Path, key: &str) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .mode(0o600)
+            .open(path)
+            .map_err(|error| format!("failed to write peer-key: {error}"))?;
+        std::io::Write::write_all(&mut file, key.as_bytes())
+            .map_err(|error| format!("failed to write peer-key: {error}"))?;
+        std::io::Write::write_all(&mut file, b"\n")
+            .map_err(|error| format!("failed to write peer-key: {error}"))?;
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, format!("{key}\n"))
+            .map_err(|error| format!("failed to write peer-key: {error}"))
+    }
+}
+
+fn hex_bytes(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(char::from(HEX[usize::from(byte >> 4)]));
+        out.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    out
+}
+
+fn real_xdg_env() -> MawXdgEnv {
+    let home = std::env::var_os("HOME")
+        .map_or_else(|| std::path::PathBuf::from("."), std::path::PathBuf::from);
+    let vars = [
+        "MAW_HOME",
+        "MAW_CONFIG_DIR",
+        "MAW_DATA_DIR",
+        "MAW_STATE_DIR",
+        "MAW_CACHE_DIR",
+        "MAW_XDG",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME",
+        "XDG_CACHE_HOME",
+        "MAW_TEST_MODE",
+    ]
+    .into_iter()
+    .filter_map(|name| {
+        std::env::var(name)
+            .ok()
+            .map(|value| (name.to_owned(), value))
+    });
+    MawXdgEnv::with_vars(home, vars)
+}
+
+fn route_sessions_from_tmux(
+    tmux: &mut TmuxClient<maw_tmux::CommandTmuxRunner>,
+) -> Result<Vec<RouteSession>, String> {
+    Ok(tmux_sessions_to_route_sessions(
+        tmux.list_all()
+            .map_err(|error| format!("tmux unreachable: {error}"))?,
+    ))
+}

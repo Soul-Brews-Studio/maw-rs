@@ -34,7 +34,7 @@ struct OverviewTarget {
 
 trait OverviewTmux {
     fn kill_session(&mut self, name: &str) -> Result<(), String>;
-    fn list_all(&mut self) -> Vec<TmuxSession>;
+    fn list_all(&mut self) -> Result<Vec<TmuxSession>, String>;
     fn new_session(&mut self, name: &str, window: &str, command: &str) -> Result<(), String>;
     fn new_window(&mut self, session: &str, name: &str, command: &str) -> Result<(), String>;
     fn set(&mut self, target: &str, option: &str, value: &str) -> Result<(), String>;
@@ -63,8 +63,10 @@ impl OverviewTmux for NativeOverviewTmux {
         Ok(())
     }
 
-    fn list_all(&mut self) -> Vec<TmuxSession> {
-        self.client.list_all()
+    fn list_all(&mut self) -> Result<Vec<TmuxSession>, String> {
+        self.client
+            .list_all()
+            .map_err(|error| format!("tmux unreachable: {error}"))
     }
 
     fn new_session(&mut self, name: &str, window: &str, command: &str) -> Result<(), String> {
@@ -157,7 +159,9 @@ fn run_overview_command(argv: &[String]) -> CliOutput {
 
 fn parse_overview_args(argv: &[String]) -> OverviewArgs {
     OverviewArgs {
-        kill: argv.iter().any(|arg| matches!(arg.as_str(), "--kill" | "-k")),
+        kill: argv
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "--kill" | "-k")),
         filters: argv
             .iter()
             .filter(|arg| !arg.starts_with('-'))
@@ -176,7 +180,7 @@ fn run_overview_with_tmux(
         return Ok("overview killed\n".to_owned());
     }
 
-    let targets = build_overview_targets(&tmux.list_all(), &args.filters);
+    let targets = build_overview_targets(&tmux.list_all()?, &args.filters);
     if targets.is_empty() {
         return Ok("no oracle sessions found\n".to_owned());
     }
@@ -241,18 +245,18 @@ fn build_overview_targets(sessions: &[TmuxSession], filters: &[String]) -> Vec<O
         })
         .filter(|target| {
             filters.is_empty()
-                || filters.iter().any(|filter| {
-                    target.oracle.contains(filter) || target.session.contains(filter)
-                })
+                || filters
+                    .iter()
+                    .any(|filter| target.oracle.contains(filter) || target.session.contains(filter))
         })
         .collect()
 }
 
 fn is_overview_oracle_session(name: &str) -> bool {
     name != OVERVIEW_SESSION
-        && name
-            .split_once('-')
-            .is_some_and(|(slot, rest)| !rest.is_empty() && slot.chars().all(|ch| ch.is_ascii_digit()))
+        && name.split_once('-').is_some_and(|(slot, rest)| {
+            !rest.is_empty() && slot.chars().all(|ch| ch.is_ascii_digit())
+        })
 }
 
 fn chunk_overview_targets(targets: &[OverviewTarget]) -> Vec<Vec<OverviewTarget>> {
@@ -359,11 +363,14 @@ fn overview_port() -> u16 {
 
 fn validate_overview_tmux_target(target: &str) -> Result<(), String> {
     if target.is_empty() || target.trim() != target || target.starts_with('-') {
-        return Err("tmux target/session must be non-empty, unpadded, and not start with '-'".to_owned());
+        return Err(
+            "tmux target/session must be non-empty, unpadded, and not start with '-'".to_owned(),
+        );
     }
-    if !target.chars().all(|ch| {
-        ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | ':' | '.' | '%' )
-    }) {
+    if !target
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | ':' | '.' | '%'))
+    {
         return Err("tmux target/session contains unsupported characters".to_owned());
     }
     Ok(())
@@ -386,7 +393,10 @@ fn overview_encode_uri_component(value: &str) -> String {
     let mut encoded = String::new();
     for byte in value.bytes() {
         let keep = byte.is_ascii_alphanumeric()
-            || matches!(byte, b'-' | b'_' | b'.' | b'!' | b'~' | b'*' | b'\'' | b'(' | b')');
+            || matches!(
+                byte,
+                b'-' | b'_' | b'.' | b'!' | b'~' | b'*' | b'\'' | b'(' | b')'
+            );
         if keep {
             encoded.push(char::from(byte));
         } else {
@@ -413,18 +423,20 @@ mod overview_tests {
             Ok(())
         }
 
-        fn list_all(&mut self) -> Vec<TmuxSession> {
+        fn list_all(&mut self) -> Result<Vec<TmuxSession>, String> {
             self.calls.push("list-all".to_owned());
-            self.sessions.clone()
+            Ok(self.sessions.clone())
         }
 
         fn new_session(&mut self, name: &str, window: &str, command: &str) -> Result<(), String> {
-            self.calls.push(format!("new-session {name} {window} {command}"));
+            self.calls
+                .push(format!("new-session {name} {window} {command}"));
             Ok(())
         }
 
         fn new_window(&mut self, session: &str, name: &str, command: &str) -> Result<(), String> {
-            self.calls.push(format!("new-window {session} {name} {command}"));
+            self.calls
+                .push(format!("new-window {session} {name} {command}"));
             Ok(())
         }
 
@@ -529,10 +541,22 @@ mod overview_tests {
             out,
             include_str!("../../tests/fixtures/native-orchestration/overview.stdout")
         );
-        assert!(tmux.calls.iter().any(|call| call.starts_with("new-session 0-overview page-1 watch ")));
-        assert!(tmux.calls.iter().any(|call| call == "select-layout 0-overview:page-1 even-horizontal"));
-        assert!(tmux.calls.iter().any(|call| call.contains("target=01-wish%3A2")));
-        assert!(tmux.calls.iter().any(|call| call.contains("target=02-bigboy%3A1")));
+        assert!(tmux
+            .calls
+            .iter()
+            .any(|call| call.starts_with("new-session 0-overview page-1 watch ")));
+        assert!(tmux
+            .calls
+            .iter()
+            .any(|call| call == "select-layout 0-overview:page-1 even-horizontal"));
+        assert!(tmux
+            .calls
+            .iter()
+            .any(|call| call.contains("target=01-wish%3A2")));
+        assert!(tmux
+            .calls
+            .iter()
+            .any(|call| call.contains("target=02-bigboy%3A1")));
     }
 
     #[test]

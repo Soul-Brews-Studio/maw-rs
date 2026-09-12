@@ -1,7 +1,15 @@
 const DISPATCH_310: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "calver", handler: Handler::Sync(run_calver_plan) },
-    DispatcherEntry { command: "worktree-window", handler: Handler::Sync(run_worktree_window_plan) },
+    DispatcherEntry {
+        command: "calver",
+        handler: Handler::Sync(run_calver_plan),
+    },
+    DispatcherEntry {
+        command: "worktree-window",
+        handler: Handler::Sync(run_worktree_window_plan),
+    },
 ];
+
+const CALVER_USAGE: &str = "usage: maw-rs calver --now <YYYY-M-DTHH:MM> [--stable|--alpha|--beta] [--package-version <version>] [--tag <tag>]... [--plan-json]\nusage: maw-rs calver constants [--plan-json]";
 
 fn render_route_plan_json(query: &str, result: &RouteResult) -> String {
     let mut fields = vec![
@@ -277,6 +285,9 @@ fn render_worktree_window_plan_text(
 }
 
 fn run_calver_plan(argv: &[String]) -> CliOutput {
+    if wants_help(argv, &["--now", "--package-version", "--tag"]) {
+        return help_output(CALVER_USAGE);
+    }
     if matches!(argv.first().map(String::as_str), Some("constants")) {
         return run_calver_constants_plan(&argv[1..]);
     }
@@ -355,9 +366,7 @@ fn calver_usage_error(message: &str) -> CliOutput {
     CliOutput {
         code: 2,
         stdout: String::new(),
-        stderr: format!(
-            "{message}\nusage: maw-rs calver --now <YYYY-M-DTHH:MM> [--stable|--alpha|--beta] [--package-version <version>] [--tag <tag>]... [--plan-json]\nusage: maw-rs calver constants [--plan-json]\n"
-        ),
+        stderr: format!("{message}\n{CALVER_USAGE}\n"),
     }
 }
 
@@ -406,4 +415,3 @@ fn calver_constants_usage_error(message: &str) -> CliOutput {
         stderr: format!("{message}\nusage: maw-rs calver constants [--plan-json]\n"),
     }
 }
-

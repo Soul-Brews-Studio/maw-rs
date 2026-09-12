@@ -39,6 +39,7 @@
 //! non-zero and writes nothing), proving nothing about the plugin — gate, don't
 //! fake green.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
 #![cfg(feature = "wasm-host")]
 
 use maw_cli::run_cli;

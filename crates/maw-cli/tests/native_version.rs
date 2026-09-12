@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;

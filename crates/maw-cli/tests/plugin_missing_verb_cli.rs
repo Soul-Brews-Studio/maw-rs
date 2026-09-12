@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
 //! #522 defense 4 — loud missing-plugin dispatch fallthrough.
 //!
 //! A verb that resolves to no native handler and no installed plugin, but is a

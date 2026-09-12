@@ -167,7 +167,8 @@ Each stage is independently reviewable and keeps production behavior explicit.
 
 ## Current implementation touchpoints
 
-- `crates/maw-matcher/src/typed_resolver.rs`: pure kinds, normalization, and ranking.
+- [`maw-crates/crates/maw-matcher/src/typed_resolver.rs`](https://github.com/Soul-Brews-Studio/maw-crates/blob/main/crates/maw-matcher/src/typed_resolver.rs):
+  pure kinds, normalization, and ranking.
 - `crates/maw-cli/src/core_impl/attach.rs` and `wake.rs`: partial typed adapters.
 - `crates/maw-cli/src/core_impl/locate.rs`: duplicate normalization to retire.
 - `crates/maw-cli/src/core_impl/fleet_roster.rs`: private squad matching to retire.

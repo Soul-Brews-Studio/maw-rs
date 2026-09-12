@@ -42,8 +42,11 @@ const SERVECORE_PIPELINE_ORDER: &[&str] = &[
     "registry",
     "fallback-views",
 ];
+
 static SERVECORE_WS_CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
 const SERVECORE_ORCHESTRATION_BODY_LIMIT: usize = 64 * 1024;
+const SERVECORE_MAX_ALLOWED_ORIGINS: usize = 16;
+const SERVECORE_MAX_REQUEST_HEADERS_BYTES: usize = 512;
 
 pub trait ServecoreEngine: Send + Sync {
     fn servecore_engine_name(&self) -> &'static str;
@@ -91,6 +94,64 @@ impl ServecoreEngine for ServecoreStubEngine {
     }
 }
 
+/// Injectable read of the local tmux pane list, used by `maw serve` handlers.
+///
+/// Production wires this to `TmuxClient::local()`; tests inject a fixed
+/// snapshot -- or a deliberate failure (#880) -- without needing a tmux binary.
+pub type ServecoreAgentPanesSource =
+    Arc<dyn Fn() -> Result<Vec<ServecoreAgentPane>, String> + Send + Sync>;
+
+/// Injectable read of the local tmux session list. See [`ServecoreAgentPanesSource`].
+pub type ServecoreTmuxSessionsSource =
+    Arc<dyn Fn() -> Result<Vec<TmuxSession>, String> + Send + Sync>;
+
+/// Secret-incapable startup snapshot used by the hosted God UI connector.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ServecoreGodConfig {
+    pub node: String,
+    pub agents: BTreeMap<String, String>,
+    #[serde(rename = "namedPeers")]
+    pub named_peers: Vec<ServecoreGodNamedPeer>,
+}
+
+impl ServecoreGodConfig {
+    #[must_use]
+    pub fn servecore_from_parts(
+        node: Option<&str>,
+        agents: BTreeMap<String, String>,
+        named_peers: Vec<ServecoreGodNamedPeer>,
+    ) -> Self {
+        Self {
+            node: modules::info_routes::info_resolved_node(node),
+            agents,
+            named_peers,
+        }
+    }
+}
+
+impl Default for ServecoreGodConfig {
+    fn default() -> Self {
+        Self {
+            node: "local".to_owned(),
+            agents: BTreeMap::new(),
+            named_peers: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ServecoreGodNamedPeer {
+    pub name: String,
+    pub url: String,
+}
+
+/// The one place the `maw serve` surface spells the tmux-unreachable message,
+/// so every handler in this daemon reports a dead tmux exactly the way
+/// `/api/sessions` does (#860, #880).
+fn servecore_tmux_unreachable(error: &impl std::fmt::Display) -> String {
+    format!("tmux unreachable: {error}")
+}
+
 #[derive(Clone)]
 pub struct ServecoreSharedState {
     pub engine: Arc<dyn ServecoreEngine>,
@@ -100,8 +161,10 @@ pub struct ServecoreSharedState {
     pub lifecycle: ServecoreLifecycle,
     pub hub_workspaces: Arc<Vec<WorkspaceConfig>>,
     pub agents_node: Option<String>,
-    pub agents_snapshot: Option<Arc<Vec<ServecoreAgentPane>>>,
-    pub tmux_sessions_snapshot: Option<Arc<Vec<TmuxSession>>>,
+    pub agents_oracle: Option<String>,
+    pub god_config: ServecoreGodConfig,
+    pub agents_source: Option<ServecoreAgentPanesSource>,
+    pub tmux_sessions_source: Option<ServecoreTmuxSessionsSource>,
     pub auth_workspace_key: Option<String>,
     pub auth_cached_pubkey: Option<String>,
     pub auth_ed25519_pins: maw_auth::Ed25519TofuPins,
@@ -118,8 +181,10 @@ impl Default for ServecoreSharedState {
             lifecycle: ServecoreLifecycle::default(),
             hub_workspaces: Arc::new(Vec::new()),
             agents_node: None,
-            agents_snapshot: None,
-            tmux_sessions_snapshot: None,
+            agents_oracle: None,
+            god_config: ServecoreGodConfig::default(),
+            agents_source: None,
+            tmux_sessions_source: None,
             auth_workspace_key: None,
             auth_cached_pubkey: None,
             auth_ed25519_pins: Arc::new(Mutex::new(maw_auth::Ed25519TofuStore::default())),
@@ -142,36 +207,100 @@ impl ServecoreSharedState {
     }
 
     #[must_use]
+    pub fn servecore_with_agents_oracle(mut self, oracle: Option<String>) -> Self {
+        self.agents_oracle = oracle;
+        self
+    }
+
+    #[must_use]
+    pub fn servecore_with_god_config(mut self, config: ServecoreGodConfig) -> Self {
+        self.god_config = config;
+        self
+    }
+
+    #[must_use]
     pub fn servecore_with_agents_snapshot(mut self, panes: Vec<ServecoreAgentPane>) -> Self {
-        self.agents_snapshot = Some(Arc::new(panes));
+        let panes = Arc::new(panes);
+        self.agents_source = Some(Arc::new(move || Ok(panes.as_ref().clone())));
         self
     }
 
     #[must_use]
     pub fn servecore_with_tmux_sessions_snapshot(mut self, sessions: Vec<TmuxSession>) -> Self {
-        self.tmux_sessions_snapshot = Some(Arc::new(sessions));
+        let sessions = Arc::new(sessions);
+        self.tmux_sessions_source = Some(Arc::new(move || Ok(sessions.as_ref().clone())));
         self
     }
 
+    /// #880 seam: makes both tmux reads fail as if the local tmux server were
+    /// unreachable, so handler behaviour under a dead tmux can be asserted
+    /// without a real -- or stubbed -- tmux binary on `PATH`.
     #[must_use]
-    pub fn servecore_agents_panes(&self) -> Vec<ServecoreAgentPane> {
-        if let Some(snapshot) = &self.agents_snapshot {
-            return snapshot.as_ref().clone();
-        }
-        let mut tmux = TmuxClient::local();
-        tmux.list_panes()
-            .into_iter()
-            .map(ServecoreAgentPane::from)
-            .collect()
+    pub fn servecore_with_tmux_unreachable(mut self, error: &str) -> Self {
+        let message = servecore_tmux_unreachable(&error);
+        let panes_message = message.clone();
+        self.agents_source = Some(Arc::new(move || Err(panes_message.clone())));
+        self.tmux_sessions_source = Some(Arc::new(move || Err(message.clone())));
+        self
     }
 
+    /// #880 seam: a tmux session read that can change its answer between
+    /// calls, so "tmux was alive at connect and died while the dashboard
+    /// websocket was open" is reproducible.
     #[must_use]
-    pub fn servecore_tmux_sessions(&self) -> Vec<TmuxSession> {
-        if let Some(snapshot) = &self.tmux_sessions_snapshot {
-            return snapshot.as_ref().clone();
+    pub fn servecore_with_tmux_sessions_source(
+        mut self,
+        source: ServecoreTmuxSessionsSource,
+    ) -> Self {
+        self.tmux_sessions_source = Some(source);
+        self
+    }
+
+    // #880 (follow-up to #860): these two accessors back six HTTP/websocket
+    // handlers in the long-running `maw serve` daemon -- `/api/agents`,
+    // `/api/people/analyze`, `/api/teams`, the god-mode `/ws` initial
+    // snapshot, its refresh tick, and the engine `/ws/pty` attach. They used
+    // to `.unwrap_or_default()` a tmux connect failure into an empty
+    // snapshot, which is precisely the #860 defect: an unreachable tmux read
+    // back as a confidently empty fleet. They now hand the error up, and each
+    // of the six handlers makes its own explicit, commented decision about
+    // what to do with it -- five surface it, one (the refresh tick) degrades
+    // on purpose without lying. See each call site.
+
+    /// Reads the local tmux pane list.
+    ///
+    /// # Errors
+    ///
+    /// Returns `tmux unreachable: <error>` when the local tmux server cannot
+    /// be reached, so callers can tell that apart from a reachable server
+    /// that genuinely has no panes (#860).
+    pub fn servecore_agents_panes(&self) -> Result<Vec<ServecoreAgentPane>, String> {
+        if let Some(source) = &self.agents_source {
+            return source();
+        }
+        let mut tmux = TmuxClient::local();
+        Ok(tmux
+            .list_panes()
+            .map_err(|error| servecore_tmux_unreachable(&error))?
+            .into_iter()
+            .map(ServecoreAgentPane::from)
+            .collect())
+    }
+
+    /// Reads the local tmux session list.
+    ///
+    /// # Errors
+    ///
+    /// Returns `tmux unreachable: <error>` when the local tmux server cannot
+    /// be reached, so callers can tell that apart from a reachable server
+    /// that genuinely has no sessions (#860).
+    pub fn servecore_tmux_sessions(&self) -> Result<Vec<TmuxSession>, String> {
+        if let Some(source) = &self.tmux_sessions_source {
+            return source();
         }
         let mut tmux = TmuxClient::local();
         tmux.list_all()
+            .map_err(|error| servecore_tmux_unreachable(&error))
     }
 
     #[must_use]
@@ -461,6 +590,7 @@ impl ServecorePaneRunner for ServecoreTmuxPaneRunner {
         let mut tmux = TmuxClient::local();
         Ok(tmux
             .list_panes()
+            .map_err(|error| format!("tmux unreachable: {error}"))?
             .into_iter()
             .map(|pane| ServecorePaneCandidate {
                 id: pane.id,
@@ -1426,11 +1556,28 @@ pub fn servecore_apply_pipeline_with_views_config<S>(
 where
     S: Clone + Send + Sync + 'static,
 {
+    let origin_policy = ServecoreOriginPolicy::from_process_env();
+    servecore_apply_pipeline_with_views_config_and_origin_policy(
+        router,
+        views_config,
+        origin_policy,
+    )
+}
+
+pub fn servecore_apply_pipeline_with_views_config_and_origin_policy<S>(
+    router: Router<S>,
+    views_config: modules::static_views::ViewsConfig,
+    origin_policy: ServecoreOriginPolicy,
+) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
     modules::static_views::views_apply_fallback_with_config(router, views_config)
         .layer(middleware::from_fn(servecore_auth_default_deny))
         .layer(middleware::from_fn(servecore_engine_proxy))
         .layer(middleware::from_fn(servecore_ws_upgrade_gate))
         .layer(middleware::from_fn(servecore_cors_preflight))
+        .layer(Extension(origin_policy))
 }
 
 #[must_use]
@@ -1450,44 +1597,267 @@ fn servecore_validate_path(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-async fn servecore_cors_preflight(req: Request<Body>, next: Next) -> Response {
+pub(crate) async fn servecore_cors_preflight(
+    Extension(origin_policy): Extension<ServecoreOriginPolicy>,
+    req: Request<Body>,
+    next: Next,
+) -> Response {
     let origin = req.headers().get("origin").cloned();
-    let allow_headers = req
-        .headers()
-        .get("access-control-request-headers")
-        .cloned()
-        .unwrap_or_else(|| HeaderValue::from_static("Content-Type, Authorization"));
-
+    if !servecore_request_origin_allowed(req.headers(), &origin_policy) {
+        return servecore_forbidden("origin-not-allowed");
+    }
     if req.method() == Method::OPTIONS {
+        let (Some(origin), Some(private_network)) = (
+            origin.as_ref(),
+            servecore_preflight_private_network(req.headers()),
+        ) else {
+            return servecore_forbidden("invalid-cors-preflight");
+        };
         let mut response = StatusCode::NO_CONTENT.into_response();
-        servecore_add_cors_headers(response.headers_mut(), origin.as_ref(), &allow_headers);
+        servecore_add_preflight_headers(response.headers_mut(), origin, private_network);
         return response;
     }
 
     let mut response = next.run(req).await;
-    servecore_add_cors_headers(response.headers_mut(), origin.as_ref(), &allow_headers);
+    servecore_add_actual_cors_headers(response.headers_mut(), origin.as_ref());
     response
 }
 
-fn servecore_add_cors_headers(
-    headers: &mut HeaderMap,
-    origin: Option<&HeaderValue>,
-    allow_headers: &HeaderValue,
-) {
+fn servecore_preflight_private_network(headers: &HeaderMap) -> Option<bool> {
+    let method = servecore_single_header(headers, "access-control-request-method")
+        .ok()??
+        .to_str()
+        .ok()?;
+    if !matches!(method, "GET" | "POST") {
+        return None;
+    }
+    if let Some(value) = servecore_single_header(headers, "access-control-request-headers").ok()? {
+        if value.as_bytes().len() > SERVECORE_MAX_REQUEST_HEADERS_BYTES {
+            return None;
+        }
+        let value = value.to_str().ok()?;
+        let mut names = Vec::new();
+        for name in value.split(',').map(str::trim) {
+            if name.is_empty()
+                || !["authorization", "content-type", "x-maw-token"]
+                    .iter()
+                    .any(|allowed| allowed.eq_ignore_ascii_case(name))
+                || names
+                    .iter()
+                    .any(|seen: &&str| seen.eq_ignore_ascii_case(name))
+            {
+                return None;
+            }
+            names.push(name);
+        }
+    }
+    match servecore_single_header(headers, "access-control-request-private-network").ok()? {
+        None => Some(false),
+        Some(value) if value.as_bytes() == b"true" => Some(true),
+        Some(_) => None,
+    }
+}
+
+fn servecore_single_header<'a>(
+    headers: &'a HeaderMap,
+    name: &str,
+) -> Result<Option<&'a HeaderValue>, ()> {
+    let mut values = headers.get_all(name).iter();
+    let value = values.next();
+    if values.next().is_some() {
+        return Err(());
+    }
+    Ok(value)
+}
+
+pub(crate) fn servecore_request_origin_allowed(
+    headers: &HeaderMap,
+    origin_policy: &ServecoreOriginPolicy,
+) -> bool {
+    let mut origins = headers.get_all("origin").iter();
+    let Some(origin) = origins.next() else {
+        return true;
+    };
+    origins.next().is_none()
+        && origin
+            .to_str()
+            .is_ok_and(|origin| origin_policy.allows(origin))
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ServecoreOriginPolicy {
+    entries: Vec<String>,
+    invalid: Option<String>,
+}
+
+impl ServecoreOriginPolicy {
+    #[must_use]
+    pub fn from_process_env() -> Self {
+        match std::env::var("MAW_SERVE_ALLOWED_ORIGINS") {
+            Ok(origins) => Self::from_comma_separated(Some(origins)),
+            Err(std::env::VarError::NotPresent) => Self::default(),
+            Err(std::env::VarError::NotUnicode(_)) => {
+                Self::invalid("MAW_SERVE_ALLOWED_ORIGINS contains non-Unicode data")
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn from_comma_separated(configured: Option<String>) -> Self {
+        configured.map_or_else(Self::default, |origins| {
+            Self::from_entries(
+                origins
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|entry| !entry.is_empty())
+                    .map(ToOwned::to_owned)
+                    .collect(),
+                origins.len(),
+            )
+        })
+    }
+
+    fn from_entries(entries: Vec<String>, bytes: usize) -> Self {
+        let invalid = if bytes > 4_096 {
+            Some("configured value exceeds the 4096-byte limit".to_owned())
+        } else if entries.len() > SERVECORE_MAX_ALLOWED_ORIGINS {
+            Some(format!(
+                "configured list exceeds the {SERVECORE_MAX_ALLOWED_ORIGINS}-origin limit"
+            ))
+        } else {
+            entries
+                .iter()
+                .find(|entry| !servecore_valid_web_origin(entry))
+                .map(|entry| {
+                    format!(
+                        "rejected entry {}: {}",
+                        servecore_origin_diagnostic_label(entry),
+                        servecore_invalid_web_origin_reason(entry)
+                    )
+                })
+        };
+        Self { entries, invalid }
+    }
+
+    #[must_use]
+    pub fn invalid(reason: &str) -> Self {
+        Self {
+            entries: Vec::new(),
+            invalid: Some(reason.to_owned()),
+        }
+    }
+
+    #[must_use]
+    pub fn invalid_diagnostic(&self) -> Option<String> {
+        self.invalid.as_ref().map(|reason| {
+            format!("maw-rs serve allowed origins: {reason}; custom allowlist fails closed")
+        })
+    }
+
+    pub(crate) fn allows(&self, origin: &str) -> bool {
+        if !servecore_valid_web_origin(origin) {
+            return false;
+        }
+        if origin == "https://god.buildwithoracle.com" || servecore_loopback_origin(origin) {
+            return true;
+        }
+        self.invalid.is_none() && self.entries.iter().any(|entry| entry == origin)
+    }
+}
+
+fn servecore_origin_diagnostic_label(origin: &str) -> String {
+    if origin.contains('@') {
+        "<credential-bearing origin redacted>".to_owned()
+    } else {
+        format!("{origin:?}")
+    }
+}
+
+#[cfg(test)]
+fn servecore_origin_allowed_with(origin: &str, configured: Option<&str>) -> bool {
+    ServecoreOriginPolicy::from_comma_separated(configured.map(ToOwned::to_owned)).allows(origin)
+}
+
+fn servecore_valid_web_origin(origin: &str) -> bool {
+    servecore_invalid_web_origin_reason(origin).is_empty()
+}
+
+fn servecore_invalid_web_origin_reason(origin: &str) -> &'static str {
+    if origin.is_empty() {
+        return "origin is empty";
+    }
+    if origin.len() > 2_048 {
+        return "origin exceeds the 2048-byte limit";
+    }
+    if origin.contains('*') {
+        return "wildcard origins are not allowed";
+    }
+    let Ok(uri) = origin.parse::<Uri>() else {
+        return "origin is not a valid URI";
+    };
+    let Some(scheme) = uri.scheme_str() else {
+        return "origin must include an http or https scheme";
+    };
+    let Some(authority) = uri.authority() else {
+        return "origin must include a host";
+    };
+    let suffix = authority.as_str().strip_prefix(authority.host());
+    let port_valid = matches!(suffix, Some(""))
+        || suffix.is_some_and(|part| part.starts_with(':') && authority.port_u16().is_some());
+    if matches!(scheme, "http" | "https")
+        && !authority.host().is_empty()
+        && port_valid
+        && !origin.contains('@')
+        && origin == format!("{scheme}://{authority}")
+    {
+        ""
+    } else {
+        "origin must be an exact http(s) scheme and authority without credentials or a path"
+    }
+}
+
+fn servecore_loopback_origin(origin: &str) -> bool {
+    origin
+        .parse::<Uri>()
+        .ok()
+        .and_then(|uri| uri.host().map(ToOwned::to_owned))
+        .is_some_and(|host| matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1" | "[::1]"))
+}
+
+fn servecore_add_actual_cors_headers(headers: &mut HeaderMap, origin: Option<&HeaderValue>) {
     let Some(origin) = origin else {
         return;
     };
+    headers.insert("access-control-allow-origin", origin.clone());
+    servecore_add_vary_origin(headers);
+}
+
+fn servecore_add_preflight_headers(
+    headers: &mut HeaderMap,
+    origin: &HeaderValue,
+    private_network: bool,
+) {
     headers.insert("access-control-allow-origin", origin.clone());
     headers.insert(
         "access-control-allow-methods",
         HeaderValue::from_static("GET, POST, OPTIONS"),
     );
-    headers.insert("access-control-allow-headers", allow_headers.clone());
     headers.insert(
-        "access-control-allow-private-network",
-        HeaderValue::from_static("true"),
+        "access-control-allow-headers",
+        HeaderValue::from_static("Authorization, Content-Type, X-Maw-Token"),
     );
-    servecore_add_vary_origin(headers);
+    if private_network {
+        headers.insert(
+            "access-control-allow-private-network",
+            HeaderValue::from_static("true"),
+        );
+    }
+    headers.insert(
+        "vary",
+        HeaderValue::from_static(
+            "Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Access-Control-Request-Private-Network",
+        ),
+    );
 }
 
 fn servecore_add_vary_origin(headers: &mut HeaderMap) {
@@ -1507,7 +1877,14 @@ fn servecore_add_vary_origin(headers: &mut HeaderMap) {
     headers.insert("vary", value);
 }
 
-async fn servecore_ws_upgrade_gate(req: Request<Body>, next: Next) -> Response {
+async fn servecore_ws_upgrade_gate(
+    Extension(origin_policy): Extension<ServecoreOriginPolicy>,
+    req: Request<Body>,
+    next: Next,
+) -> Response {
+    if !servecore_request_origin_allowed(req.headers(), &origin_policy) {
+        return servecore_forbidden("origin-not-allowed");
+    }
     next.run(req).await
 }
 
@@ -1519,6 +1896,9 @@ async fn servecore_auth_default_deny(req: Request<Body>, next: Next) -> Response
     let method = req.method().clone();
     let path = servecore_api_auth_path(req.uri().path());
     if !maw_auth::is_protected(&path, method.as_str()) {
+        return next.run(req).await;
+    }
+    if crate::core_impl::serve_operator_authenticated(&req) {
         return next.run(req).await;
     }
 
@@ -1707,7 +2087,15 @@ async fn servecore_ws_upgrade(
         )
             .into_response();
     }
-    ws.on_upgrade(move |socket| servecore_ws_stream(socket, state, kind, target, config))
+    // RFC 6455 4.1: a client offering subprotocols fails the connection when the
+    // 101 echoes none of them. maw-ui's `openWs` still opens credentialed
+    // sockets as ["maw.ws.v1", "<ticket>"], so #962 dropping this negotiation
+    // alongside the ticket requirement made every credentialed browser reject an
+    // upgrade the server had accepted. axum echoes only from the list below, so
+    // a ticket value can never reach a response header, and a client that offers
+    // nothing still negotiates nothing.
+    ws.protocols([crate::core_impl::SERVE_WS_PROTOCOL])
+        .on_upgrade(move |socket| servecore_ws_stream(socket, state, kind, target, config))
         .into_response()
 }
 
@@ -1964,24 +2352,9 @@ mod tests {
     use tokio::sync::oneshot;
     use tower::ServiceExt;
 
-    struct EnvGuard(&'static str, Option<std::ffi::OsString>);
-
-    impl EnvGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let old = std::env::var_os(key);
-            std::env::set_var(key, value);
-            Self(key, old)
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            match &self.1 {
-                Some(value) => std::env::set_var(self.0, value),
-                None => std::env::remove_var(self.0),
-            }
-        }
-    }
+    // #757: was a private copy that serialized against nothing. Uses the
+    // crate-wide guard, which holds the env lock for its lifetime.
+    use crate::test_env::EnvVarGuard as EnvGuard;
 
     #[derive(Default)]
     struct FakeOrchestrator {
@@ -2712,7 +3085,11 @@ mod tests {
                     .method(Method::OPTIONS)
                     .uri("/api/costs")
                     .header("origin", "https://god.buildwithoracle.com")
-                    .header("access-control-request-headers", "x-maw-from,content-type")
+                    .header("access-control-request-method", "POST")
+                    .header(
+                        "access-control-request-headers",
+                        "Authorization,content-type",
+                    )
                     .body(Body::empty())
                     .expect("preflight"),
             )
@@ -2738,14 +3115,18 @@ mod tests {
                 .headers()
                 .get("access-control-allow-headers")
                 .and_then(|value| value.to_str().ok()),
-            Some("x-maw-from,content-type")
+            Some("Authorization, Content-Type, X-Maw-Token")
         );
+        assert!(preflight
+            .headers()
+            .get("access-control-allow-private-network")
+            .is_none());
         assert_eq!(
             preflight
                 .headers()
                 .get("vary")
                 .and_then(|value| value.to_str().ok()),
-            Some("Origin")
+            Some("Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Access-Control-Request-Private-Network")
         );
 
         let missing = app
@@ -2770,10 +3151,112 @@ mod tests {
         assert_eq!(
             missing
                 .headers()
-                .get("access-control-allow-headers")
+                .get("vary")
                 .and_then(|value| value.to_str().ok()),
-            Some("Content-Type, Authorization")
+            Some("Origin")
         );
+    }
+
+    #[tokio::test]
+    async fn servecore_cors_rejects_untrusted_browser_origin() {
+        let app = servecore_apply_pipeline(servecore_mount_core_routes(Router::new()));
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::OPTIONS)
+                    .uri("/api/serve-core/pipeline")
+                    .header("origin", "https://evil.example")
+                    .header("access-control-request-private-network", "true")
+                    .body(Body::empty())
+                    .expect("untrusted-origin request"),
+            )
+            .await
+            .expect("untrusted-origin response");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(response
+            .headers()
+            .get("access-control-allow-origin")
+            .is_none());
+        assert!(response
+            .headers()
+            .get("access-control-allow-private-network")
+            .is_none());
+        let duplicate = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/api/serve-core/pipeline")
+                    .header("origin", "https://god.buildwithoracle.com")
+                    .header("origin", "https://evil.example")
+                    .body(Body::empty())
+                    .expect("duplicate origin"),
+            )
+            .await
+            .expect("duplicate-origin response");
+        assert_eq!(duplicate.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn servecore_origin_policy_is_exact_and_keeps_local_ui_origins() {
+        for origin in [
+            "https://god.buildwithoracle.com",
+            "http://localhost:3456",
+            "https://localhost",
+            "http://127.0.0.1:3456",
+            "http://[::1]:3456",
+        ] {
+            assert!(servecore_origin_allowed_with(origin, None), "{origin}");
+        }
+        for origin in [
+            "null",
+            "*",
+            "https://evil.example",
+            "https://god.buildwithoracle.com.evil.example",
+            "https://god.buildwithoracle.com/",
+            "file://localhost",
+            "http://localhost:",
+            "http://localhost:abc",
+            "http://localhost:99999",
+        ] {
+            assert!(!servecore_origin_allowed_with(origin, None), "{origin}");
+        }
+        let configured = Some("https://ignored.example, https://office.example");
+        assert!(servecore_origin_allowed_with(
+            "https://office.example",
+            configured
+        ));
+        assert!(!servecore_origin_allowed_with(
+            "https://office.example.evil",
+            Some("https://office.example")
+        ));
+        for configured in ["*", "https://*.example,https://office.example"] {
+            assert!(!servecore_origin_allowed_with(
+                "https://office.example",
+                Some(configured)
+            ));
+        }
+        let invalid = ServecoreOriginPolicy::from_comma_separated(Some(
+            "https://good.example,https://*.bad.example".to_owned(),
+        ));
+        let diagnostic = invalid
+            .invalid_diagnostic()
+            .expect("invalid configured entry must produce a startup diagnostic");
+        assert!(diagnostic.contains("https://*.bad.example"), "{diagnostic}");
+        assert!(diagnostic.contains("wildcard"), "{diagnostic}");
+        assert!(!invalid.allows("https://good.example"));
+        let credential = ServecoreOriginPolicy::from_comma_separated(Some(
+            "https://operator:secret@example.com".to_owned(),
+        ));
+        assert!(!credential.invalid_diagnostic().unwrap().contains("secret"));
+        let too_many = (0..=SERVECORE_MAX_ALLOWED_ORIGINS)
+            .map(|index| format!("https://office-{index}.example"))
+            .collect::<Vec<_>>()
+            .join(",");
+        assert!(!servecore_origin_allowed_with(
+            "https://office-0.example",
+            Some(&too_many)
+        ));
     }
 
     #[tokio::test]
@@ -2897,12 +3380,9 @@ mod tests {
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
-    #[tokio::test]
-    async fn servecore_ed25519_from_sign_allows_nonloopback_and_pins_first_contact() {
-        let peer = SocketAddr::from(([198, 51, 100, 10], 49_152));
+    fn servecore_ed25519_request(pubkey: &str) -> Request<Body> {
         let body = br#"{"event":"agent-idle"}"#;
-        let state = ServecoreSharedState::default().servecore_with_auth_now(1_700_000_000);
-        let request = Request::builder()
+        Request::builder()
             .method(Method::POST)
             .uri("/api/triggers/fire")
             .header("x-maw-from", "mawjs:m5")
@@ -2913,23 +3393,55 @@ mod tests {
                     "f15a856c7d8f4eddf64730cc61d4ccc0c28ca91b9a9df1a5016c628d737b3a0f"
                 ),
             )
-            .header(
-                "x-maw-ed25519-pubkey",
-                "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
-            )
+            .header("x-maw-ed25519-pubkey", pubkey)
             .header("x-maw-timestamp", "1700000000")
             .header("x-maw-auth-version", "ed25519")
             .body(Body::from(body.as_slice().to_vec()))
-            .expect("request");
+            .expect("request")
+    }
+
+    #[tokio::test]
+    async fn servecore_ed25519_from_sign_rejects_unpinned_nonloopback_identity() {
+        let peer = SocketAddr::from(([198, 51, 100, 10], 49_152));
+        let state = ServecoreSharedState::default().servecore_with_auth_now(1_700_000_000);
+        let request = servecore_ed25519_request(
+            "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
+        );
         let response = servecore_auth_request(state.clone(), request, peer).await;
-        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
         let pins = state
             .auth_ed25519_pins
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(pins.pinned("mawjs:m5"), None);
+    }
+
+    #[tokio::test]
+    async fn servecore_ed25519_accepts_only_the_matching_preloaded_pin() {
+        const PUBKEY: &str = "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664";
+        let peer = SocketAddr::from(([198, 51, 100, 10], 49_152));
+        let mut store = maw_auth::Ed25519TofuStore::default();
+        assert!(store.pin_first_contact("mawjs:m5", PUBKEY));
+        let pins = Arc::new(Mutex::new(store));
+        let state = ServecoreSharedState::default()
+            .servecore_with_auth_pins(pins.clone())
+            .servecore_with_auth_now(1_700_000_000);
+
+        let accepted =
+            servecore_auth_request(state.clone(), servecore_ed25519_request(PUBKEY), peer).await;
+        assert_eq!(accepted.status(), StatusCode::OK);
+        let rejected = servecore_auth_request(
+            state,
+            servecore_ed25519_request(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ),
+            peer,
+        )
+        .await;
+        assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
         assert_eq!(
-            pins.pinned("mawjs:m5"),
-            Some("79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664")
+            pins.lock().expect("test pin lock").pinned("mawjs:m5"),
+            Some(PUBKEY)
         );
     }
 
@@ -3017,6 +3529,7 @@ mod tests {
                 idle_timeout: Duration::from_secs(5),
                 heartbeat_interval: Duration::from_secs(5),
                 capture_interval: Duration::from_secs(2),
+                previews_interval: Duration::from_secs(2),
                 send_timeout: Duration::from_secs(2),
                 max_frame_bytes: 1024,
                 max_connections: 8,
@@ -3037,6 +3550,11 @@ mod tests {
                     ws.next().await.expect("ack frame").expect("ack ok")
                 {
                     let value = serde_json::from_str::<serde_json::Value>(&text).expect("json");
+                    assert_ne!(
+                        value["type"], "error",
+                        "PTY attach failed: {}",
+                        value["error"]
+                    );
                     if value["type"] == "attached" {
                         assert_eq!(value["target"], "demo:1");
                         break;
@@ -3071,6 +3589,64 @@ mod tests {
         .expect("detach");
     }
 
+    /// #880: resolving a bare `attach` target (no `session:window`) walks the
+    /// live pane list and then the session list. With tmux unreachable both
+    /// came back empty, resolution silently fell through to the raw string,
+    /// and the client got `{"type":"attached","target":"demo"}` for a pane
+    /// nobody had verified exists. This websocket already has a typed error
+    /// channel, so the tmux failure now travels down it.
+    #[tokio::test]
+    async fn servecore880_ws_pty_attach_reports_unreachable_tmux_instead_of_guessing_a_target() {
+        let _guard = EnvGuard::set("MAW_RS_SERVECORE_PTY_PROGRAM", "/bin/cat");
+        let addr = servecore_spawn_ws_test_server(
+            ServecoreSharedState::default().servecore_with_tmux_unreachable(
+                "error connecting to /tmp/tmux-1028/default (No such file or directory)",
+            ),
+            modules::websocket_routes::WsConfig {
+                idle_timeout: Duration::from_secs(5),
+                heartbeat_interval: Duration::from_secs(5),
+                capture_interval: Duration::from_secs(2),
+                previews_interval: Duration::from_secs(2),
+                send_timeout: Duration::from_secs(2),
+                max_frame_bytes: 1024,
+                max_connections: 8,
+            },
+        )
+        .await;
+        let (mut ws, _response) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws/pty"))
+            .await
+            .expect("connect pty websocket");
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(
+            r#"{"type":"attach","target":"demo","cols":80,"rows":24}"#.to_owned(),
+        ))
+        .await
+        .expect("attach");
+
+        let frame = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if let tokio_tungstenite::tungstenite::Message::Text(text) =
+                    ws.next().await.expect("reply frame").expect("reply ok")
+                {
+                    return serde_json::from_str::<serde_json::Value>(&text).expect("json");
+                }
+            }
+        })
+        .await
+        .expect("reply frame");
+
+        assert_eq!(
+            frame["type"], "error",
+            "attaching through an unreachable tmux must not report success: {frame}"
+        );
+        assert!(
+            frame["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("tmux unreachable"),
+            "the error frame must name the real cause: {frame}"
+        );
+    }
+
     #[tokio::test]
     async fn servecore_ws_rejects_bad_tunnel_target_before_upgrade() {
         let addr = servecore_spawn_ws_test_server(
@@ -3090,6 +3666,7 @@ mod tests {
             idle_timeout: Duration::from_millis(80),
             heartbeat_interval: Duration::from_millis(20),
             capture_interval: Duration::from_secs(2),
+            previews_interval: Duration::from_secs(2),
             send_timeout: Duration::from_millis(50),
             max_frame_bytes: 1024,
             max_connections: 8,

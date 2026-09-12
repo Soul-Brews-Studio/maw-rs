@@ -47,8 +47,8 @@ v26.5.21 `transports/index.ts` imported and registered `HubTransport` (workspace
 
 | Path | Method | Request | Response | Auth |
 |---|---|---|---|---|
-| `/api/sessions` | GET | optional query `local=true` | array of sessions; local rows are `{name, windows, source:"local"}`; aggregate mode includes peer sessions | public/read. Source: `src/api/sessions.ts:261-278`. Captured `GET /api/sessions?local=true` returned HTTP 200 JSON. |
-| `/api/capture` | GET | query `target` | `{content}` or `{content:"", error, target?, validWindows?, hint?}` | public/read. Source: `src/api/sessions.ts:299-339`. |
+| `/api/sessions` | GET | optional query `local=true` | array of sessions; local rows are `{name, windows, source:"local"}`; aggregate mode includes peer sessions | **protected read (maw-rs, #866)** — loopback still exempt; non-loopback needs a signed peer request. maw-js source: `src/api/sessions.ts:261-278`. |
+| `/api/capture` | GET | query `target` | `{content}` or `{content:"", error, target?, validWindows?, hint?}` | **protected read (maw-rs, #866)** — loopback still exempt; non-loopback needs a signed peer request. Sign the query-LESS path (`/api/capture`), which is what the receiver verifies. maw-js source: `src/api/sessions.ts:299-339`. |
 | `/api/feed` | GET | `limit` query | `{events,total,active_oracles}` | public/read. Source: `src/api/feed.ts:43-56`. |
 | `/api/feed` | POST | feed event body | `{ok:true}` | protected for POST. Source: `src/api/feed.ts:59-78`, `src/lib/elysia-auth.ts:37-40`, `src/lib/elysia-auth.ts:46-56`. |
 | `/api/send` | POST | `{target,text,attachments?,inbox?}` | success `{ok:true,target,text,source,lastLine?,state,receipt?,inbox?,warning?,reason?,wokeFor?}`; errors 404/500/502 with `{error,...}` | protected write. Source: `src/api/sessions.ts:356-359`, `src/api/sessions.ts:470-528`, `src/api/sessions.ts:531-577`, `src/api/sessions.ts:580-609`, `src/lib/elysia-auth.ts:22-35`. |

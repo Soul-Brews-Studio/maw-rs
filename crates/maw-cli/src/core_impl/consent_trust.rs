@@ -1,9 +1,24 @@
 const DISPATCH_318: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "consent-cleanup", handler: Handler::Sync(run_consent_cleanup_plan) },
-    DispatcherEntry { command: "consent-trust-revoke", handler: Handler::Sync(run_consent_trust_revoke_plan) },
-    DispatcherEntry { command: "consent-trust-check", handler: Handler::Sync(run_consent_trust_check_plan) },
-    DispatcherEntry { command: "consent-pending-read", handler: Handler::Sync(run_consent_pending_read_plan) },
-    DispatcherEntry { command: "consent-pending-status", handler: Handler::Sync(run_consent_pending_status_plan) },
+    DispatcherEntry {
+        command: "consent-cleanup",
+        handler: Handler::Sync(run_consent_cleanup_plan),
+    },
+    DispatcherEntry {
+        command: "consent-trust-revoke",
+        handler: Handler::Sync(run_consent_trust_revoke_plan),
+    },
+    DispatcherEntry {
+        command: "consent-trust-check",
+        handler: Handler::Sync(run_consent_trust_check_plan),
+    },
+    DispatcherEntry {
+        command: "consent-pending-read",
+        handler: Handler::Sync(run_consent_pending_read_plan),
+    },
+    DispatcherEntry {
+        command: "consent-pending-status",
+        handler: Handler::Sync(run_consent_pending_status_plan),
+    },
 ];
 
 fn render_consent_expiry_plan_json(
@@ -423,4 +438,3 @@ fn run_consent_pending_status_plan(argv: &[String]) -> CliOutput {
         stderr: String::new(),
     }
 }
-

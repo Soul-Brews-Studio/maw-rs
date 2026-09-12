@@ -94,7 +94,12 @@ impl BgTmux for BgSystemTmux {
 }
 
 fn bg_run_command(argv: &[String]) -> CliOutput {
-    bg_run_command_with(argv, &mut BgSystemTmux::bg_new(), bg_now_seconds, bg_inside_tmux_env)
+    bg_run_command_with(
+        argv,
+        &mut BgSystemTmux::bg_new(),
+        bg_now_seconds,
+        bg_inside_tmux_env,
+    )
 }
 
 fn bg_run_command_with(
@@ -143,7 +148,8 @@ fn bg_run_spawn(argv: &[String], tmux: &mut impl BgTmux) -> Result<(i32, String)
     if bg_flags_has(&flags, BG_FLAG_HELP) {
         return Ok((0, BG_HELP.to_owned()));
     }
-    let command = bg_command_from_positionals(&flags.positionals).map_err(|message| (1, message))?;
+    let command =
+        bg_command_from_positionals(&flags.positionals).map_err(|message| (1, message))?;
     bg_validate_command(&command).map_err(|message| (1, message))?;
     let slug = bg_spawn_slug(&command, flags.name.as_deref()).map_err(|message| (1, message))?;
     if bg_session_exists(&slug, tmux).map_err(|message| (1, message))? {
@@ -151,9 +157,14 @@ fn bg_run_spawn(argv: &[String], tmux: &mut impl BgTmux) -> Result<(i32, String)
     }
     let session = bg_session_name(&slug);
     let tmux_args = bg_new_session_args(&session, &command).map_err(|message| (1, message))?;
-    let result = tmux.bg_run("new-session", &tmux_args).map_err(|message| (3, message))?;
+    let result = tmux
+        .bg_run("new-session", &tmux_args)
+        .map_err(|message| (3, message))?;
     if result.status != 0 {
-        return Err((3, bg_tmux_failure("new-session", result.status, &result.stderr)));
+        return Err((
+            3,
+            bg_tmux_failure("new-session", result.status, &result.stderr),
+        ));
     }
     Ok((0, format!("{slug}\t{session}\n")))
 }
@@ -166,7 +177,9 @@ fn bg_run_list(
     let flags = bg_parse_flags(argv).map_err(|message| (1, message))?;
     let sessions = bg_list_sessions(tmux, now).map_err(|message| (1, message))?;
     if bg_flags_has(&flags, BG_FLAG_JSON) {
-        return bg_list_json(&sessions).map(|stdout| (0, stdout)).map_err(|message| (1, message));
+        return bg_list_json(&sessions)
+            .map(|stdout| (0, stdout))
+            .map_err(|message| (1, message));
     }
     Ok((0, bg_format_list(&sessions)))
 }
@@ -177,11 +190,17 @@ fn bg_run_tail(
     now: BgNow,
 ) -> Result<(i32, String), (i32, String)> {
     let flags = bg_parse_flags(argv).map_err(|message| (1, message))?;
-    let slug_ref = flags.positionals.first().ok_or_else(|| (1, "bg tail: missing <slug>".to_owned()))?;
+    let slug_ref = flags
+        .positionals
+        .first()
+        .ok_or_else(|| (1, "bg tail: missing <slug>".to_owned()))?;
     bg_validate_ref(slug_ref).map_err(|message| (1, message))?;
     let lines = flags.lines.unwrap_or(BG_DEFAULT_TAIL_LINES);
-    let resolved = bg_resolve_slug(slug_ref, &bg_list_slugs(tmux, now).map_err(|message| (1, message))?)
-        .map_err(|message| (1, message))?;
+    let resolved = bg_resolve_slug(
+        slug_ref,
+        &bg_list_slugs(tmux, now).map_err(|message| (1, message))?,
+    )
+    .map_err(|message| (1, message))?;
     let out = bg_tail_resolved(&resolved, lines, tmux).map_err(|message| (1, message))?;
     Ok((0, bg_tail_output(out, bg_flags_has(&flags, BG_FLAG_FOLLOW))))
 }
@@ -193,10 +212,16 @@ fn bg_run_attach(
     inside_tmux: BgInsideTmux,
 ) -> Result<(i32, String), (i32, String)> {
     let flags = bg_parse_flags(argv).map_err(|message| (1, message))?;
-    let slug_ref = flags.positionals.first().ok_or_else(|| (1, "bg attach: missing <slug>".to_owned()))?;
+    let slug_ref = flags
+        .positionals
+        .first()
+        .ok_or_else(|| (1, "bg attach: missing <slug>".to_owned()))?;
     bg_validate_ref(slug_ref).map_err(|message| (1, message))?;
-    let resolved = bg_resolve_slug(slug_ref, &bg_list_slugs(tmux, now).map_err(|message| (1, message))?)
-        .map_err(|message| (1, message))?;
+    let resolved = bg_resolve_slug(
+        slug_ref,
+        &bg_list_slugs(tmux, now).map_err(|message| (1, message))?,
+    )
+    .map_err(|message| (1, message))?;
     let tmux_args = bg_attach_args(&resolved, inside_tmux()).map_err(|message| (1, message))?;
     let code = tmux.bg_attach(&tmux_args).map_err(|message| (3, message))?;
     Ok((code, String::new()))
@@ -208,7 +233,13 @@ fn bg_run_kill(
     now: BgNow,
 ) -> Result<(i32, String), (i32, String)> {
     let flags = bg_parse_flags(argv).map_err(|message| (1, message))?;
-    let killed = bg_kill(flags.positionals.first(), bg_flags_has(&flags, BG_FLAG_ALL), tmux, now).map_err(|message| (1, message))?;
+    let killed = bg_kill(
+        flags.positionals.first(),
+        bg_flags_has(&flags, BG_FLAG_ALL),
+        tmux,
+        now,
+    )
+    .map_err(|message| (1, message))?;
     if killed.is_empty() {
         Ok((0, "(no sessions to kill)\n".to_owned()))
     } else {
@@ -239,7 +270,15 @@ fn bg_run_gc(
             kept.push(session.slug);
         }
     }
-    Ok((0, bg_gc_output(bg_flags_has(&flags, BG_FLAG_DRY_RUN), &reaped, &kept, threshold)))
+    Ok((
+        0,
+        bg_gc_output(
+            bg_flags_has(&flags, BG_FLAG_DRY_RUN),
+            &reaped,
+            &kept,
+            threshold,
+        ),
+    ))
 }
 
 fn bg_parse_flags(argv: &[String]) -> Result<BgFlags, String> {
@@ -261,7 +300,11 @@ fn bg_parse_flags(argv: &[String]) -> Result<BgFlags, String> {
     Ok(flags)
 }
 
-fn bg_parse_flag_token(argv: &[String], index: usize, flags: &mut BgFlags) -> Result<usize, String> {
+fn bg_parse_flag_token(
+    argv: &[String],
+    index: usize,
+    flags: &mut BgFlags,
+) -> Result<usize, String> {
     let token = &argv[index];
     let (key, inline) = bg_split_flag(token);
     match key.as_str() {
@@ -390,14 +433,23 @@ fn bg_slug_stem(first: &str) -> String {
 
 fn bg_validate_name(name: &str) -> Result<(), String> {
     if name.is_empty() || name.len() > 32 || name.starts_with('-') || name == "--" {
-        return Err(format!("bg: invalid --name \"{name}\" (must match ^[a-z0-9][a-z0-9-]{{0,31}}$)"));
+        return Err(format!(
+            "bg: invalid --name \"{name}\" (must match ^[a-z0-9][a-z0-9-]{{0,31}}$)"
+        ));
     }
     let mut chars = name.chars();
-    if !chars.next().is_some_and(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit()) {
-        return Err(format!("bg: invalid --name \"{name}\" (must match ^[a-z0-9][a-z0-9-]{{0,31}}$)"));
+    if !chars
+        .next()
+        .is_some_and(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit())
+    {
+        return Err(format!(
+            "bg: invalid --name \"{name}\" (must match ^[a-z0-9][a-z0-9-]{{0,31}}$)"
+        ));
     }
     if !chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-') {
-        return Err(format!("bg: invalid --name \"{name}\" (must match ^[a-z0-9][a-z0-9-]{{0,31}}$)"));
+        return Err(format!(
+            "bg: invalid --name \"{name}\" (must match ^[a-z0-9][a-z0-9-]{{0,31}}$)"
+        ));
     }
     Ok(())
 }
@@ -416,7 +468,10 @@ fn bg_validate_ref(value: &str) -> Result<(), String> {
     if value.is_empty() || value.starts_with('-') || value == "--" || value.trim() != value {
         return Err("bg ref must be non-empty, unpadded, and not start with '-'".to_owned());
     }
-    if value.chars().any(|ch| ch.is_control() || ch.is_whitespace()) {
+    if value
+        .chars()
+        .any(|ch| ch.is_control() || ch.is_whitespace())
+    {
         return Err("bg ref must not contain whitespace or control characters".to_owned());
     }
     Ok(())
@@ -431,16 +486,25 @@ fn bg_validate_session_name(value: &str) -> Result<(), String> {
 
 fn bg_validate_tmux_target(value: &str) -> Result<(), String> {
     if value.is_empty() || value == "--" || value.starts_with('-') || value.trim() != value {
-        return Err("bg tmux target must be non-empty, unpadded, and not start with '-'".to_owned());
+        return Err(
+            "bg tmux target must be non-empty, unpadded, and not start with '-'".to_owned(),
+        );
     }
-    if value.chars().any(|ch| ch.is_control() || ch.is_whitespace()) {
+    if value
+        .chars()
+        .any(|ch| ch.is_control() || ch.is_whitespace())
+    {
         return Err("bg tmux target must not contain whitespace or control characters".to_owned());
     }
     Ok(())
 }
 
 fn bg_validate_tmux_subcommand(value: &str) -> Result<(), String> {
-    if value.is_empty() || value.starts_with('-') || value == "--" || value.contains(char::is_whitespace) {
+    if value.is_empty()
+        || value.starts_with('-')
+        || value == "--"
+        || value.contains(char::is_whitespace)
+    {
         return Err("bg tmux subcommand must be a safe token".to_owned());
     }
     Ok(())
@@ -478,8 +542,10 @@ fn bg_new_session_args(session: &str, command: &str) -> Result<Vec<String>, Stri
     ])
 }
 
+const BG_DONE_SENTINEL_PREFIX: &str = "[done — exit ";
+
 fn bg_holds_open(command: &str) -> String {
-    format!("{command}; rc=$?; printf '\\n[done — exit %d]\\n' \"$rc\"; while :; do read -r _ 2>/dev/null || sleep 3600; done")
+    format!("{command}; rc=$?; printf '\\n{BG_DONE_SENTINEL_PREFIX}%d]\\n' \"$rc\"; while :; do read -r _ 2>/dev/null || sleep 3600; done")
 }
 
 fn bg_session_exists(slug: &str, tmux: &mut impl BgTmux) -> Result<bool, String> {
@@ -516,16 +582,20 @@ fn bg_session_from_line(
         return Ok(None);
     }
     bg_validate_session_name(name)?;
-    let created = fields.next().and_then(|raw| raw.parse::<u64>().ok()).unwrap_or_else(now);
+    let created = fields
+        .next()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .unwrap_or_else(now);
     let command = fields.next().unwrap_or_default();
     let slug = bg_session_slug(name).unwrap_or_default();
     bg_validate_ref(&slug)?;
+    let last_line = bg_last_line_of(&slug, tmux).unwrap_or_default();
     Ok(Some(BgSession {
         slug: slug.clone(),
         session: name.to_owned(),
         age_seconds: now().saturating_sub(created),
-        status: bg_status_from_pane_command(command),
-        last_line: bg_last_line_of(&slug, tmux).unwrap_or_default(),
+        status: bg_status_from_pane(command, &last_line),
+        last_line,
     }))
 }
 
@@ -535,13 +605,44 @@ fn bg_list_error_is_empty(result: &BgTmuxResult) -> bool {
         || result.stderr.contains("no current session")
 }
 
+/// Done detection is sentinel-first: the hold-open wrapper prints
+/// `[done — exit <rc>]` when the payload finishes, so the captured last line
+/// is the authoritative signal. Pane command is only a defensive fallback —
+/// a still-running payload like `sleep 900` or `sh ./job.sh` reports the same
+/// `pane_current_command` (`sleep`/`sh`) as the finished hold-open loop (#579).
+fn bg_status_from_pane(command: &str, last_line: &str) -> BgSessionStatus {
+    if bg_is_done_sentinel(last_line) {
+        return BgSessionStatus::Done;
+    }
+    bg_status_from_pane_command(command)
+}
+
+/// Fallback when the sentinel is absent: only a dead pane (empty command)
+/// counts as done; everything else is presumed still running.
 fn bg_status_from_pane_command(command: &str) -> BgSessionStatus {
-    match command.trim().to_ascii_lowercase().as_str() {
-        "" | "read" | "sleep" | "sh" => BgSessionStatus::Done,
-        _ => BgSessionStatus::Running,
+    if command.trim().is_empty() {
+        BgSessionStatus::Done
+    } else {
+        BgSessionStatus::Running
     }
 }
 
+/// Matches the exact `bg_holds_open` printf format, tolerating surrounding
+/// whitespace: `[done — exit <non-negative integer>]`.
+fn bg_is_done_sentinel(last_line: &str) -> bool {
+    last_line
+        .trim()
+        .strip_prefix(BG_DONE_SENTINEL_PREFIX)
+        .and_then(|rest| rest.strip_suffix(']'))
+        .is_some_and(|code| !code.is_empty() && code.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+/// Last non-empty line of the pane, looking at the visible screen plus a few
+/// history lines. `-E -1` (previous behavior) ends the capture at the last
+/// *history* line — a short-output job has empty history, so the capture came
+/// back blank and the done sentinel was never seen (#579). Omitting `-E`
+/// captures through the bottom of the visible screen, where the sentinel
+/// actually lives until output scrolls.
 fn bg_last_line_of(slug: &str, tmux: &mut impl BgTmux) -> Result<String, String> {
     bg_validate_ref(slug)?;
     let session = bg_session_name(slug);
@@ -552,20 +653,28 @@ fn bg_last_line_of(slug: &str, tmux: &mut impl BgTmux) -> Result<String, String>
         "-t".to_owned(),
         session,
         "-S".to_owned(),
-        "-1".to_owned(),
-        "-E".to_owned(),
-        "-1".to_owned(),
+        "-10".to_owned(),
     ];
     let result = tmux.bg_run("capture-pane", &args)?;
     if result.status == 0 {
-        Ok(result.stdout.trim_end_matches('\n').trim().to_owned())
+        Ok(result
+            .stdout
+            .lines()
+            .rev()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .unwrap_or_default()
+            .to_owned())
     } else {
         Ok(String::new())
     }
 }
 
 fn bg_list_slugs(tmux: &mut impl BgTmux, now: BgNow) -> Result<Vec<String>, String> {
-    Ok(bg_list_sessions(tmux, now)?.into_iter().map(|session| session.slug).collect())
+    Ok(bg_list_sessions(tmux, now)?
+        .into_iter()
+        .map(|session| session.slug)
+        .collect())
 }
 
 fn bg_resolve_slug(reference: &str, live: &[String]) -> Result<String, String> {
@@ -574,10 +683,18 @@ fn bg_resolve_slug(reference: &str, live: &[String]) -> Result<String, String> {
         return Ok(reference.to_owned());
     }
     if bg_is_hash_ref(reference) {
-        let hits = live.iter().filter(|slug| slug.ends_with(&format!("-{reference}"))).cloned().collect::<Vec<_>>();
+        let hits = live
+            .iter()
+            .filter(|slug| slug.ends_with(&format!("-{reference}")))
+            .cloned()
+            .collect::<Vec<_>>();
         return bg_resolve_hits(reference, &hits, "hash");
     }
-    let hits = live.iter().filter(|slug| slug.starts_with(reference)).cloned().collect::<Vec<_>>();
+    let hits = live
+        .iter()
+        .filter(|slug| slug.starts_with(reference))
+        .cloned()
+        .collect::<Vec<_>>();
     bg_resolve_hits(reference, &hits, "ref")
 }
 
@@ -585,23 +702,44 @@ fn bg_resolve_hits(reference: &str, hits: &[String], kind: &str) -> Result<Strin
     match hits {
         [hit] => Ok(hit.clone()),
         [] => Err(format!("bg: no session matching \"{reference}\"")),
-        _ if kind == "hash" => Err(format!("bg: hash \"{reference}\" matches {} sessions: {}", hits.len(), hits.join(", "))),
-        _ => Err(format!("bg: ref \"{reference}\" matches {} sessions: {}", hits.len(), hits.join(", "))),
+        _ if kind == "hash" => Err(format!(
+            "bg: hash \"{reference}\" matches {} sessions: {}",
+            hits.len(),
+            hits.join(", ")
+        )),
+        _ => Err(format!(
+            "bg: ref \"{reference}\" matches {} sessions: {}",
+            hits.len(),
+            hits.join(", ")
+        )),
     }
 }
 
 fn bg_is_hash_ref(value: &str) -> bool {
-    value.len() == 4 && value.chars().all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase())
+    value.len() == 4
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase())
 }
 
 fn bg_tail_resolved(slug: &str, lines: u32, tmux: &mut impl BgTmux) -> Result<String, String> {
     bg_validate_ref(slug)?;
     let session = bg_session_name(slug);
     bg_validate_session_name(&session)?;
-    let args = vec!["-p".to_owned(), "-J".to_owned(), "-t".to_owned(), session, "-S".to_owned(), format!("-{lines}")];
+    let args = vec![
+        "-p".to_owned(),
+        "-J".to_owned(),
+        "-t".to_owned(),
+        session,
+        "-S".to_owned(),
+        format!("-{lines}"),
+    ];
     let result = tmux.bg_run("capture-pane", &args)?;
     if result.status != 0 {
-        return Err(format!("bg: capture-pane failed for {slug}: {}", bg_stderr_or_placeholder(&result.stderr)));
+        return Err(format!(
+            "bg: capture-pane failed for {slug}: {}",
+            bg_stderr_or_placeholder(&result.stderr)
+        ));
     }
     Ok(result.stdout.trim_end_matches('\n').to_owned())
 }
@@ -650,7 +788,10 @@ fn bg_kill_session(slug: &str, tmux: &mut impl BgTmux) -> Result<(), String> {
     bg_validate_session_name(&session)?;
     let result = tmux.bg_run("kill-session", &["-t".to_owned(), session])?;
     if result.status != 0 {
-        return Err(format!("bg: kill-session failed for {slug}: {}", bg_stderr_or_placeholder(&result.stderr)));
+        return Err(format!(
+            "bg: kill-session failed for {slug}: {}",
+            bg_stderr_or_placeholder(&result.stderr)
+        ));
     }
     Ok(())
 }
@@ -676,7 +817,9 @@ fn bg_bad_duration(value: &str) -> String {
 }
 
 fn bg_parse_lines(value: &str) -> Result<u32, String> {
-    let parsed = value.parse::<u32>().map_err(|_| format!("--lines must be a positive number, got {value}"))?;
+    let parsed = value
+        .parse::<u32>()
+        .map_err(|_| format!("--lines must be a positive number, got {value}"))?;
     if parsed == 0 {
         return Err(format!("--lines must be a positive number, got {value}"));
     }
@@ -788,7 +931,10 @@ fn bg_join_or_none(values: &[String]) -> String {
 }
 
 fn bg_tmux_failure(action: &str, status: i32, stderr: &str) -> String {
-    format!("bg: tmux {action} failed (status {status}): {}", bg_stderr_or_placeholder(stderr))
+    format!(
+        "bg: tmux {action} failed (status {status}): {}",
+        bg_stderr_or_placeholder(stderr)
+    )
 }
 
 fn bg_stderr_or_placeholder(stderr: &str) -> String {
@@ -893,10 +1039,75 @@ mod bg_tests {
     }
 
     #[test]
+    fn bg_status_running_payload_is_running_even_with_shell_pane_command() {
+        for pane in ["sleep", "sh", "read", "bash", "cargo", "claude"] {
+            assert_eq!(
+                bg_status_from_pane(pane, "still working"),
+                BgSessionStatus::Running,
+                "pane {pane:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn bg_status_sentinel_marks_done_regardless_of_pane_command() {
+        for pane in ["read", "sleep", "sh"] {
+            assert_eq!(
+                bg_status_from_pane(pane, "[done — exit 0]"),
+                BgSessionStatus::Done,
+                "pane {pane:?}"
+            );
+        }
+        assert_eq!(
+            bg_status_from_pane("sh", "  [done — exit 137]  "),
+            BgSessionStatus::Done
+        );
+    }
+
+    #[test]
+    fn bg_status_empty_pane_command_is_done() {
+        assert_eq!(bg_status_from_pane("", ""), BgSessionStatus::Done);
+        assert_eq!(
+            bg_status_from_pane("  ", "no sentinel here"),
+            BgSessionStatus::Done
+        );
+    }
+
+    #[test]
+    fn bg_status_rejects_near_sentinel_lines() {
+        for line in [
+            "done",
+            "old done",
+            "[done — exit ]",
+            "[done — exit x]",
+            "[done — exit 0",
+            "exit 0]",
+        ] {
+            assert_eq!(
+                bg_status_from_pane("sleep", line),
+                BgSessionStatus::Running,
+                "line {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn bg_holds_open_wrapper_prints_the_matching_done_sentinel() {
+        let wrapper = bg_holds_open("echo hi");
+        assert!(wrapper.contains(BG_DONE_SENTINEL_PREFIX));
+        assert!(bg_is_done_sentinel("[done — exit 0]"));
+    }
+
+    #[test]
     fn bg_spawn_builds_safe_new_session_after_has_session() {
         let mut tmux = BgFakeTmux::bg_with_responses(vec![bg_fail("missing"), bg_ok_empty()]);
-        let output = bg_run(&bg_strings(&["cargo", "test", "--name", "cargo-test"]), &mut tmux, bg_now, bg_not_tmux)
-            .expect("spawn");
+        let output = bg_run(
+            &bg_strings(&["cargo", "test", "--name", "cargo-test"]),
+            &mut tmux,
+            bg_now,
+            bg_not_tmux,
+        )
+        .expect("spawn");
         assert_eq!(output.0, 0);
         assert_eq!(output.1, "cargo-test\tmaw-bg-cargo-test\n");
         assert_eq!(tmux.calls[0].subcommand, "has-session");
@@ -908,7 +1119,8 @@ mod bg_tests {
     #[test]
     fn bg_rejects_leading_dash_command_before_spawn() {
         let mut tmux = BgFakeTmux::default();
-        let error = bg_run(&bg_strings(&["--bad"]), &mut tmux, bg_now, bg_not_tmux).expect_err("bad");
+        let error =
+            bg_run(&bg_strings(&["--bad"]), &mut tmux, bg_now, bg_not_tmux).expect_err("bad");
         assert!(error.1.contains("command must"));
         assert!(tmux.calls.is_empty());
     }
@@ -916,8 +1128,13 @@ mod bg_tests {
     #[test]
     fn bg_rejects_bad_name_before_tmux() {
         let mut tmux = BgFakeTmux::default();
-        let error = bg_run(&bg_strings(&["echo", "hi", "--name=-bad"]), &mut tmux, bg_now, bg_not_tmux)
-            .expect_err("bad name");
+        let error = bg_run(
+            &bg_strings(&["echo", "hi", "--name=-bad"]),
+            &mut tmux,
+            bg_now,
+            bg_not_tmux,
+        )
+        .expect_err("bad name");
         assert!(error.1.contains("invalid --name"));
         assert!(tmux.calls.is_empty());
     }
@@ -936,9 +1153,55 @@ mod bg_tests {
     }
 
     #[test]
+    fn bg_last_line_skips_trailing_blank_screen_lines_to_find_the_sentinel() {
+        // Live repro (#579 reopen): the sentinel sits in the visible screen with
+        // blank lines below it; the last NON-empty line must win.
+        let mut tmux = BgFakeTmux::bg_with_responses(vec![
+            bg_ok("maw-bg-quick-c3d4\t1699999940\tbash\n"),
+            bg_ok("$ true\n\n[done — exit 0]\n\n\n\n"),
+        ]);
+        let output = bg_run(&bg_strings(&["ls"]), &mut tmux, bg_now, bg_not_tmux).expect("ls");
+        assert!(output.1.contains("quick-c3d4"), "{}", output.1);
+        assert!(output.1.contains("done"), "{}", output.1);
+        let capture = tmux.calls.last().expect("capture call");
+        assert_eq!(capture.subcommand, "capture-pane");
+        // Must include the visible screen: no -E bound, history window via -S -10.
+        assert!(
+            !capture.args.contains(&"-E".to_owned()),
+            "{:?}",
+            capture.args
+        );
+        assert!(
+            capture.args.contains(&"-10".to_owned()),
+            "{:?}",
+            capture.args
+        );
+    }
+
+    #[test]
+    fn bg_empty_capture_keeps_running_status_for_live_pane() {
+        // A blank capture (no sentinel anywhere) must not mark a live pane done.
+        let mut tmux = BgFakeTmux::bg_with_responses(vec![
+            bg_ok("maw-bg-build-a1b2\t1699999940\tcargo\n"),
+            bg_ok("\n\n\n"),
+        ]);
+        let output = bg_run(&bg_strings(&["ls"]), &mut tmux, bg_now, bg_not_tmux).expect("ls");
+        assert!(output.1.contains("running"), "{}", output.1);
+    }
+
+    #[test]
     fn bg_json_list_is_camel_case_like_js() {
-        let mut tmux = BgFakeTmux::bg_with_responses(vec![bg_ok("maw-bg-build-a1b2\t1699999990\tread\n"), bg_ok("tail\n")]);
-        let output = bg_run(&bg_strings(&["list", "--json"]), &mut tmux, bg_now, bg_not_tmux).expect("json");
+        let mut tmux = BgFakeTmux::bg_with_responses(vec![
+            bg_ok("maw-bg-build-a1b2\t1699999990\tread\n"),
+            bg_ok("[done — exit 0]\n"),
+        ]);
+        let output = bg_run(
+            &bg_strings(&["list", "--json"]),
+            &mut tmux,
+            bg_now,
+            bg_not_tmux,
+        )
+        .expect("json");
         assert!(output.1.contains("\"ageSeconds\": 10"));
         assert!(output.1.contains("\"status\": \"done\""));
     }
@@ -950,7 +1213,13 @@ mod bg_tests {
             bg_ok("last\n"),
             bg_ok("one\ntwo\n"),
         ]);
-        let output = bg_run(&bg_strings(&["tail", "a1b2", "--lines", "2"]), &mut tmux, bg_now, bg_not_tmux).expect("tail");
+        let output = bg_run(
+            &bg_strings(&["tail", "a1b2", "--lines", "2"]),
+            &mut tmux,
+            bg_now,
+            bg_not_tmux,
+        )
+        .expect("tail");
         assert_eq!(output.1, "one\ntwo");
         let tail = tmux.calls.last().expect("tail call");
         assert_eq!(tail.subcommand, "capture-pane");
@@ -966,29 +1235,58 @@ mod bg_tests {
             bg_ok_empty(),
             bg_ok_empty(),
         ]);
-        let output = bg_run(&bg_strings(&["kill", "--all"]), &mut tmux, bg_now, bg_not_tmux).expect("kill");
+        let output = bg_run(
+            &bg_strings(&["kill", "--all"]),
+            &mut tmux,
+            bg_now,
+            bg_not_tmux,
+        )
+        .expect("kill");
         assert!(output.1.contains("killed: one-a111, two-b222"));
-        assert_eq!(tmux.calls.iter().filter(|call| call.subcommand == "kill-session").count(), 2);
+        assert_eq!(
+            tmux.calls
+                .iter()
+                .filter(|call| call.subcommand == "kill-session")
+                .count(),
+            2
+        );
     }
 
     #[test]
     fn bg_gc_dry_run_does_not_kill() {
         let mut tmux = BgFakeTmux::bg_with_responses(vec![
             bg_ok("maw-bg-old-a111\t1699900000\tsleep\nmaw-bg-new-b222\t1699999990\tcargo\n"),
-            bg_ok("old done\n"),
+            bg_ok("[done — exit 0]\n"),
             bg_ok("new run\n"),
         ]);
-        let output = bg_run(&bg_strings(&["gc", "--dry-run", "--older-than", "1h"]), &mut tmux, bg_now, bg_not_tmux)
-            .expect("gc");
+        let output = bg_run(
+            &bg_strings(&["gc", "--dry-run", "--older-than", "1h"]),
+            &mut tmux,
+            bg_now,
+            bg_not_tmux,
+        )
+        .expect("gc");
         assert!(output.1.contains("would reap: old-a111"));
         assert!(output.1.contains("kept:    new-b222"));
-        assert!(!tmux.calls.iter().any(|call| call.subcommand == "kill-session"));
+        assert!(!tmux
+            .calls
+            .iter()
+            .any(|call| call.subcommand == "kill-session"));
     }
 
     #[test]
     fn bg_attach_switches_inside_tmux_without_real_spawn() {
-        let mut tmux = BgFakeTmux::bg_with_responses(vec![bg_ok("maw-bg-one-a111\t1\tcargo\n"), bg_ok("tail\n")]);
-        let output = bg_run(&bg_strings(&["attach", "one"]), &mut tmux, bg_now, bg_in_tmux).expect("attach");
+        let mut tmux = BgFakeTmux::bg_with_responses(vec![
+            bg_ok("maw-bg-one-a111\t1\tcargo\n"),
+            bg_ok("tail\n"),
+        ]);
+        let output = bg_run(
+            &bg_strings(&["attach", "one"]),
+            &mut tmux,
+            bg_now,
+            bg_in_tmux,
+        )
+        .expect("attach");
         assert_eq!(output.0, 0);
         assert_eq!(tmux.attach_calls[0][0], "switch-client");
         assert_eq!(tmux.attach_calls[0][2], "maw-bg-one-a111");
@@ -1001,8 +1299,17 @@ mod bg_tests {
             bg_ok("a\n"),
             bg_ok("b\n"),
         ]);
-        let error = bg_run(&bg_strings(&["kill", "one"]), &mut tmux, bg_now, bg_not_tmux).expect_err("ambiguous");
+        let error = bg_run(
+            &bg_strings(&["kill", "one"]),
+            &mut tmux,
+            bg_now,
+            bg_not_tmux,
+        )
+        .expect_err("ambiguous");
         assert!(error.1.contains("matches 2 sessions"));
-        assert!(!tmux.calls.iter().any(|call| call.subcommand == "kill-session"));
+        assert!(!tmux
+            .calls
+            .iter()
+            .any(|call| call.subcommand == "kill-session"));
     }
 }

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
 use maw_cli::{dispatcher_status, DispatchKind};
 use std::{
     fs,
@@ -28,7 +29,7 @@ printf '%s\n' "$*" >> "$TMUX_CLOSE_CALLS"
 case "$1" in
   break-pane)
     test "$2" = "-d" || exit 21
-    test "$3" = "-t" || exit 22
+    test "$3" = "-s" || exit 22
     test "$4" = "%42" || exit 23
     exit 0
     ;;
@@ -99,7 +100,7 @@ fn tmux_close_golden_parity_and_fake_maw_no_delegate() {
     assert_eq!(dispatcher_status("tmux"), DispatchKind::Native);
     let tmux_calls = fs::read_to_string(calls).expect("tmux calls");
     assert!(
-        tmux_calls.contains("break-pane -d -t %42\n"),
+        tmux_calls.contains("break-pane -d -s %42\n"),
         "tmux calls: {tmux_calls}"
     );
     assert!(

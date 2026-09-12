@@ -1,6 +1,7 @@
-const DISPATCH_312: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "discover", handler: Handler::Sync(run_discover_plan) },
-];
+const DISPATCH_312: &[DispatcherEntry] = &[DispatcherEntry {
+    command: "discover",
+    handler: Handler::Sync(run_discover_plan),
+}];
 
 #[allow(clippy::too_many_lines)]
 fn run_discover_plan(argv: &[String]) -> CliOutput {
@@ -96,8 +97,12 @@ fn run_discover_plan(argv: &[String]) -> CliOutput {
                     return discover_usage_error("discover: missing --agent value");
                 };
                 match parse_key_value(value, "discover: --agent must use <window=node>") {
+                    // #605: invalid names (argv junk, dot/backup names) are
+                    // skipped instead of becoming manifest entries.
                     Ok((window, node)) => {
-                        inventory_input.agents.insert(window, node);
+                        if agent_name_is_valid(&window) {
+                            inventory_input.agents.insert(window, node);
+                        }
                     }
                     Err(message) => return discover_usage_error(&message),
                 }
@@ -137,10 +142,15 @@ fn run_discover_plan(argv: &[String]) -> CliOutput {
         peers: discovery_rows,
     });
     let result = resolve_peer_sources(&config, mode, discoveries.as_ref());
+    let live_peers = result
+        .peers
+        .iter()
+        .map(project_live_peer_target)
+        .collect::<Vec<_>>();
     let include_live = json || tree || awake;
     let live_probe_calls = usize::from(include_live);
     let live_state = if include_live {
-        resolve_tmux_live_state(&result.peers, &panes)
+        resolve_tmux_live_state(&live_peers, &panes)
     } else {
         TmuxLiveStateResult {
             source: "tmux".to_owned(),
@@ -149,13 +159,9 @@ fn run_discover_plan(argv: &[String]) -> CliOutput {
         }
     };
     let peers_with_live = if include_live {
-        mark_peer_targets_live(&result.peers, &live_state.live)
+        mark_peer_targets_live(&live_peers, &live_state.live)
     } else {
-        result
-            .peers
-            .iter()
-            .map(peer_with_no_live)
-            .collect::<Vec<_>>()
+        live_peers.iter().map(peer_with_no_live).collect::<Vec<_>>()
     };
     let visible_peers = if awake && !tree {
         peers_with_live
@@ -403,4 +409,3 @@ fn parse_discover_fleet(value: &str) -> Result<FleetConfigRecord, String> {
         peer_matched: false,
     })
 }
-

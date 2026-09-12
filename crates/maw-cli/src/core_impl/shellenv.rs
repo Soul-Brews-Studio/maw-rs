@@ -1,30 +1,52 @@
-const DISPATCH_133: &[DispatcherEntry] = &[DispatcherEntry { command: "shellenv", handler: Handler::Sync(shellenv_run_command) }];
+const DISPATCH_133: &[DispatcherEntry] = &[DispatcherEntry {
+    command: "shellenv",
+    handler: Handler::Sync(shellenv_run_command),
+}];
 
 const SHELLENV_SUPPORTED: &[&str] = &["zsh", "bash"];
 const SHELLENV_HELP: &str = "usage: maw shellenv <shell>\n\nEmit shell init code for eval-style installation.\n\n  Install (zsh):\n    eval \"$(maw shellenv zsh)\"     # add to ~/.zshrc\n\n  Install (bash):\n    eval \"$(maw shellenv bash)\"    # add to ~/.bashrc\n\nAvailable shells: zsh, bash\n(fish deferred to v2 — see #812)\n\nThe emitted snippet installs a maw() function that adds:\n  maw warp [<oracle>]    cd into an oracle's repo (default: mawjs)\n  maw <other>            pass-through to the real binary\n\n";
 
 fn shellenv_run_command(argv: &[String]) -> CliOutput {
     match shellenv_render(argv) {
-        Ok(stdout) => CliOutput { code: 0, stdout: shellenv_trailing_newline(stdout), stderr: String::new() },
-        Err(stderr) => CliOutput { code: 1, stdout: String::new(), stderr: shellenv_trailing_newline(stderr) },
+        Ok(stdout) => CliOutput {
+            code: 0,
+            stdout: shellenv_trailing_newline(stdout),
+            stderr: String::new(),
+        },
+        Err(stderr) => CliOutput {
+            code: 1,
+            stdout: String::new(),
+            stderr: shellenv_trailing_newline(stderr),
+        },
     }
 }
 
 fn shellenv_render(argv: &[String]) -> Result<String, String> {
     let parsed = shellenv_parse(argv)?;
-    if parsed.help { return Ok(SHELLENV_HELP.to_owned()); }
+    if parsed.help {
+        return Ok(SHELLENV_HELP.to_owned());
+    }
     let Some(shell) = parsed.shell else {
-        return Err(format!("Error: shell '' not supported. Available: {}", SHELLENV_SUPPORTED.join(", ")));
+        return Err(format!(
+            "Error: shell '' not supported. Available: {}",
+            SHELLENV_SUPPORTED.join(", ")
+        ));
     };
     match shell.as_str() {
         "zsh" => Ok(shellenv_zsh_snippet()),
         "bash" => Ok(shellenv_bash_snippet()),
-        other => Err(format!("Error: shell '{other}' not supported. Available: {}", SHELLENV_SUPPORTED.join(", "))),
+        other => Err(format!(
+            "Error: shell '{other}' not supported. Available: {}",
+            SHELLENV_SUPPORTED.join(", ")
+        )),
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ShellenvArgs { help: bool, shell: Option<String> }
+struct ShellenvArgs {
+    help: bool,
+    shell: Option<String>,
+}
 
 fn shellenv_parse(argv: &[String]) -> Result<ShellenvArgs, String> {
     let mut help = false;
@@ -34,17 +56,24 @@ fn shellenv_parse(argv: &[String]) -> Result<ShellenvArgs, String> {
             "--help" | "-h" => help = true,
             "--" => return Err("shellenv: -- separator is not supported".to_owned()),
             value if value.starts_with('-') => {
-                if shellenv_invalid_arg(value) { return Err("shellenv: invalid flag rejected".to_owned()); }
+                if shellenv_invalid_arg(value) {
+                    return Err("shellenv: invalid flag rejected".to_owned());
+                }
                 // maw-js shellenv's tiny parser treats unknown dash tokens as booleans,
                 // so they are intentionally not positionals.
             }
             value => {
-                if shellenv_invalid_arg(value) { return Err("shellenv: invalid shell argument rejected".to_owned()); }
+                if shellenv_invalid_arg(value) {
+                    return Err("shellenv: invalid shell argument rejected".to_owned());
+                }
                 positionals.push(value.to_owned());
             }
         }
     }
-    Ok(ShellenvArgs { help, shell: positionals.into_iter().next() })
+    Ok(ShellenvArgs {
+        help,
+        shell: positionals.into_iter().next(),
+    })
 }
 
 fn shellenv_invalid_arg(value: &str) -> bool {
@@ -52,7 +81,9 @@ fn shellenv_invalid_arg(value: &str) -> bool {
 }
 
 fn shellenv_trailing_newline(mut value: String) -> String {
-    if !value.ends_with('\n') { value.push('\n'); }
+    if !value.ends_with('\n') {
+        value.push('\n');
+    }
     value
 }
 
@@ -78,7 +109,8 @@ maw() {
   fi
 }
 # TODO(shellenv): tab completion for 'maw warp' via complete -F + 'command maw completions oracles'
-"#.to_owned()
+"#
+    .to_owned()
 }
 
 fn shellenv_zsh_snippet() -> String {
@@ -112,7 +144,7 @@ maw() {
 claude() {
   local channels="${MAW_CLAUDE_CHANNELS-plugin:discord@claude-plugins-official}"
   local opts=(--dangerously-skip-permissions)
-  [[ -n "$channels" ]] && opts+=(--channels "$channels")
+  [[ -n "$channels" ]] && opts+=(--channels="$channels")
   if [[ "$*" == *"--continue"* ]]; then
     command claude "${opts[@]}" "$@" || command claude "${opts[@]}" "${@/--continue/}"
   else
@@ -132,29 +164,45 @@ thclaws-cli() {
   thclaws --cli --accept-all "$@"
 }
 # TODO(shellenv): tab completion for 'maw warp' via compdef + 'command maw completions oracles'
-"#.to_owned()
+"#
+    .to_owned()
 }
 
 #[cfg(test)]
 mod shellenv_tests {
     use super::*;
 
-    fn args(values: &[&str]) -> Vec<String> { values.iter().map(|value| (*value).to_owned()).collect() }
+    fn args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_owned()).collect()
+    }
 
     #[test]
     fn shellenv_parser_matches_help_and_unknown_flag_shape() {
-        assert!(shellenv_render(&args(&["--help"])).expect("help").contains("usage: maw shellenv <shell>"));
-        let missing = shellenv_render(&args(&["--unknown"])).expect_err("unknown flag ignored like maw-js");
+        assert!(shellenv_render(&args(&["--help"]))
+            .expect("help")
+            .contains("usage: maw shellenv <shell>"));
+        let missing =
+            shellenv_render(&args(&["--unknown"])).expect_err("unknown flag ignored like maw-js");
         assert!(missing.contains("shell '' not supported"));
     }
 
     #[test]
     fn shellenv_renders_supported_shells_and_rejects_injection() {
-        assert!(shellenv_render(&args(&["bash"])).expect("bash").contains("# maw shellenv (bash)"));
-        assert!(shellenv_render(&args(&["zsh"])).expect("zsh").contains("claude46()"));
-        assert!(shellenv_render(&args(&["fish"])).expect_err("fish deferred").contains("shell 'fish' not supported"));
-        assert!(shellenv_render(&args(&["ba\nsh"])).expect_err("control rejected").contains("invalid"));
-        assert!(shellenv_render(&args(&["--"])).expect_err("separator rejected").contains("separator"));
+        assert!(shellenv_render(&args(&["bash"]))
+            .expect("bash")
+            .contains("# maw shellenv (bash)"));
+        assert!(shellenv_render(&args(&["zsh"]))
+            .expect("zsh")
+            .contains("claude46()"));
+        assert!(shellenv_render(&args(&["fish"]))
+            .expect_err("fish deferred")
+            .contains("shell 'fish' not supported"));
+        assert!(shellenv_render(&args(&["ba\nsh"]))
+            .expect_err("control rejected")
+            .contains("invalid"));
+        assert!(shellenv_render(&args(&["--"]))
+            .expect_err("separator rejected")
+            .contains("separator"));
     }
 
     #[test]

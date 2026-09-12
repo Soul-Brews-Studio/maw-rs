@@ -233,7 +233,7 @@ fn ls_parser_text_json_and_duration_branches_are_covered() {
             "--pane",
             "%2|node|new:1.0|new|101|/repo|199995",
         ],
-        "{\"command\":\"ls\",\"mode\":\"compact\",\"scope\":\"local\",\"json\":true,\"sessions\":[{\"session\":\"new\",\"status\":\"active\",\"panes\":1,\"agents\":1,\"created\":200,\"lastActivityAgeSec\":5},{\"session\":\"old\",\"status\":\"active\",\"panes\":1,\"agents\":0,\"created\":100,\"lastActivityAgeSec\":10}]}\n",
+        "{\"command\":\"ls\",\"mode\":\"compact\",\"scope\":\"local\",\"json\":true,\"sessions\":[{\"session\":\"new\",\"status\":\"active\",\"panes\":1,\"agents\":0,\"created\":200,\"lastActivityAgeSec\":5},{\"session\":\"old\",\"status\":\"active\",\"panes\":1,\"agents\":0,\"created\":100,\"lastActivityAgeSec\":10}]}\n",
     );
 
     let no_active = run(&[

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
 use maw_cli::{dispatcher_status, DispatchKind};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -49,7 +50,18 @@ case "$1" in
   capture-pane)
     printf '%s\n' '$ '
     ;;
-  load-buffer|paste-buffer)
+  load-buffer)
+    # Real tmux `load-buffer -` consumes stdin, so the parent's write_all always
+    # lands. This fake must too. With an empty arm the shell exits as soon as it
+    # has logged the line; if the parent is descheduled for the ~1ms that takes,
+    # its write hits a closed pipe -> EPIPE -> send_text fails -> talk-to prints
+    # "thread #N updated" with exit 0, so the status assert passes and the
+    # "+ sent -> %42" assert reddens with no code change (#875). Drain with a
+    # shell builtin -- `cat` is not on the test's restricted PATH. Same scar and
+    # same fix as native_assign_plugin.rs (bc8e27fb).
+    while read -r _; do :; done
+    ;;
+  paste-buffer)
     ;;
   send-keys)
     ;;
@@ -147,7 +159,7 @@ fn talkto_native_local_thread_notification_sends_to_guarded_pane() {
     assert!(log.contains("load-buffer -"), "{log}");
     assert!(log.contains("paste-buffer -t %42"), "{log}");
     assert!(log.contains("send-keys -t %42 Enter"), "{log}");
-    assert!(log.contains("capture-pane -t %42 -e -p -S -5"), "{log}");
+    assert!(log.contains("capture-pane -t %42 -e -p -J -S -80"), "{log}");
     let state_log =
         std::fs::read_to_string(root.join("home/.maw/maw-log.jsonl")).expect("state log");
     assert!(state_log.contains(r#""ch":"thread:1""#), "{state_log}");

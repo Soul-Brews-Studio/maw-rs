@@ -118,7 +118,7 @@
 
     #[test]
     fn send_text_uses_literal_path_and_retries_until_capture_clears() {
-        let runner = FakeRunner::with_responses(vec![
+        let runner = send_text_runner(vec![
             Ok("0"),
             Ok(""),
             Ok(""),
@@ -138,7 +138,6 @@
             SendTextReport {
                 used_buffer: false,
                 enter_attempts: 2,
-                warned_pending: false,
             }
         );
         assert_eq!(
@@ -153,17 +152,17 @@
         );
         assert_eq!(client.runner.calls[0].0, "display-message");
         assert_eq!(
-            client.runner.calls[1].1,
+            client.runner.calls[2].1,
             vec!["-t", "sess:oracle.0", "-l", "deploy now"]
         );
         assert_eq!(
-            client.runner.calls[2].1,
+            client.runner.calls[3].1,
             vec!["-t", "sess:oracle.0", "Enter"]
         );
-        assert_eq!(client.runner.calls[3].0, "capture-pane");
         assert_eq!(client.runner.calls[4].0, "capture-pane");
+        assert_eq!(client.runner.calls[5].0, "capture-pane");
         assert_eq!(
-            client.runner.calls[5].1,
+            client.runner.calls[6].1,
             vec!["-t", "sess:oracle.0", "Enter"]
         );
         assert_eq!(client.runner.stdin_calls.len(), 0);
@@ -172,8 +171,15 @@
     #[test]
     fn send_text_uses_buffer_path_for_multiline_or_long_payloads() {
         let long_text = "x".repeat(501);
-        let runner =
-            FakeRunner::with_responses(vec![Ok("0"), Ok(""), Ok(""), Ok(""), Ok("$ \r"), Ok("$ \r")]);
+        let runner = send_text_runner(vec![
+            Ok("0"),
+            Ok(""),
+            Ok(""),
+            Ok(""),
+            Ok("$ \r"),
+            Ok("$ \r"),
+            Ok("$ \r"),
+        ]);
         let mut client = TmuxClient::new(runner);
         let mut sleeps = Vec::new();
         let report = client
@@ -193,5 +199,43 @@
             client.runner.stdin_calls,
             vec![("load-buffer".to_owned(), vec!["-".to_owned()], long_text,)]
         );
-        assert_eq!(client.runner.calls[1].0, "paste-buffer");
+        assert_eq!(client.runner.calls[2].0, "paste-buffer");
+    }
+
+    #[test]
+    fn paste_text_delivers_verbatim_data_without_submit() {
+        let text = "Brief:\n- run `echo \"hi\"`\n- never execute $(cmd) or <tag>";
+        let runner = FakeRunner::with_responses(vec![Ok(""), Ok("")]);
+        let mut client = TmuxClient::new(runner);
+
+        client
+            .paste_text("fleet:1.2", text, false)
+            .expect("paste text ok");
+
+        assert_eq!(
+            client.runner.stdin_calls,
+            vec![("load-buffer".to_owned(), vec!["-".to_owned()], text.to_owned())]
+        );
+        assert_eq!(
+            client.runner.calls[0],
+            (
+                "paste-buffer".to_owned(),
+                vec!["-d".to_owned(), "-t".to_owned(), "fleet:1.2".to_owned()]
+            )
+        );
+        assert_eq!(client.runner.calls.len(), 1);
+    }
+
+    #[test]
+    fn paste_text_submit_sends_exactly_one_enter() {
+        let runner = FakeRunner::with_responses(vec![Ok(""), Ok(""), Ok("")]);
+        let mut client = TmuxClient::new(runner);
+
+        client
+            .paste_text("fleet:1.2", "text ending in newline\n", true)
+            .expect("paste and submit ok");
+
+        assert_eq!(client.runner.calls.len(), 2);
+        assert_eq!(client.runner.calls[1].0, "send-keys");
+        assert_eq!(client.runner.calls[1].1, vec!["-t", "fleet:1.2", "Enter"]);
     }

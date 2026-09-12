@@ -46,12 +46,22 @@ pub struct TmuxLiveStateResult {
 pub struct PeerTargetWithLive {
     pub name: Option<String>,
     pub url: String,
-    pub source: maw_peer::PeerSourceKind,
+    pub source: String,
     pub node: Option<String>,
     pub oracle: Option<String>,
     pub awake: bool,
     pub live_targets: Vec<String>,
     pub live_sessions: Vec<String>,
+}
+
+/// Peer fields needed to project tmux liveness without owning peer discovery.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LivePeerTarget {
+    pub name: Option<String>,
+    pub url: String,
+    pub source: String,
+    pub node: Option<String>,
+    pub oracle: Option<String>,
 }
 
 /// Parse a tmux pane target shaped like `session:window.pane`.
@@ -72,7 +82,7 @@ pub fn parse_tmux_pane_target(target: &str) -> Option<TmuxPaneTargetParts> {
 /// Resolve live tmux state from already-collected panes and peer targets.
 #[must_use]
 pub fn resolve_tmux_live_state(
-    peers: &[maw_peer::PeerTarget],
+    peers: &[LivePeerTarget],
     panes: &[TmuxPane],
 ) -> TmuxLiveStateResult {
     let mut live = panes
@@ -90,7 +100,7 @@ pub fn resolve_tmux_live_state(
 /// Mark peer targets awake when their configured signals match live tmux panes.
 #[must_use]
 pub fn mark_peer_targets_live(
-    peers: &[maw_peer::PeerTarget],
+    peers: &[LivePeerTarget],
     live: &[DiscoverLivePane],
 ) -> Vec<PeerTargetWithLive> {
     peers
@@ -108,7 +118,7 @@ pub fn mark_peer_targets_live(
             PeerTargetWithLive {
                 name: peer.name.clone(),
                 url: peer.url.clone(),
-                source: peer.source,
+                source: peer.source.clone(),
                 node: peer.node.clone(),
                 oracle: peer.oracle.clone(),
                 awake: !matching.is_empty(),
@@ -121,7 +131,7 @@ pub fn mark_peer_targets_live(
         .collect()
 }
 
-fn tmux_pane_to_live_pane(pane: &TmuxPane, peers: &[maw_peer::PeerTarget]) -> DiscoverLivePane {
+fn tmux_pane_to_live_pane(pane: &TmuxPane, peers: &[LivePeerTarget]) -> DiscoverLivePane {
     let parsed =
         parse_tmux_pane_target(&pane.target).unwrap_or_else(|| fallback_target_parts(&pane.target));
     let mut live = DiscoverLivePane {
@@ -180,7 +190,7 @@ fn pane_signals(pane: &DiscoverLivePane) -> Vec<String> {
     signals
 }
 
-fn normalized_peer_signals(peer: &maw_peer::PeerTarget) -> Vec<String> {
+fn normalized_peer_signals(peer: &LivePeerTarget) -> Vec<String> {
     let mut signals = Vec::new();
     signals.extend(normalized_aliases(peer.name.as_deref()));
     signals.extend(normalized_aliases(peer.node.as_deref()));
@@ -210,4 +220,3 @@ fn normalize_signal(value: Option<&str>) -> Option<String> {
     let trimmed = value?.trim().to_lowercase();
     (!trimmed.is_empty()).then_some(trimmed)
 }
-

@@ -30,8 +30,16 @@ impl TmuxSyncState {
 
 fn run_tmux_sync_command(argv: &[String]) -> CliOutput {
     match tmux_sync_with_runner(argv, &mut maw_tmux::CommandTmuxRunner::new()) {
-        Ok(stdout) => CliOutput { code: 0, stdout, stderr: String::new() },
-        Err((code, message)) => CliOutput { code, stdout: String::new(), stderr: format!("{message}\n") },
+        Ok(stdout) => CliOutput {
+            code: 0,
+            stdout,
+            stderr: String::new(),
+        },
+        Err((code, message)) => CliOutput {
+            code,
+            stdout: String::new(),
+            stderr: format!("{message}\n"),
+        },
     }
 }
 
@@ -50,7 +58,12 @@ fn tmux_sync_with_runner<R: maw_tmux::TmuxRunner>(
     ];
     runner
         .run("set-window-option", &tmux_args)
-        .map_err(|error| (1, format!("tmux sync: set-window-option failed: {}", error.message)))?;
+        .map_err(|error| {
+            (
+                1,
+                format!("tmux sync: set-window-option failed: {}", error.message),
+            )
+        })?;
     Ok(format!(
         "✓ synchronize-panes {} for {}\n",
         opts.state.as_tmux_value(),
@@ -83,13 +96,19 @@ fn tmux_sync_parse_state(value: &str) -> Result<TmuxSyncState, (i32, String)> {
     match value {
         "on" | "true" | "1" => Ok(TmuxSyncState::On),
         "off" | "false" | "0" => Ok(TmuxSyncState::Off),
-        _ => Err((2, "tmux sync: state must be one of on/off/true/false/1/0".to_owned())),
+        _ => Err((
+            2,
+            "tmux sync: state must be one of on/off/true/false/1/0".to_owned(),
+        )),
     }
 }
 
 fn tmux_sync_validate_target(value: &str) -> Result<(), String> {
     if value.is_empty() || value.trim() != value || value == "--" || value.starts_with('-') {
-        return Err("tmux sync: target must be non-empty, unpadded, not '--', and not start with '-'".to_owned());
+        return Err(
+            "tmux sync: target must be non-empty, unpadded, not '--', and not start with '-'"
+                .to_owned(),
+        );
     }
     if value.chars().any(char::is_control) {
         return Err("tmux sync: target must not contain control characters".to_owned());
@@ -129,7 +148,11 @@ mod tmux_sync_tests {
     }
 
     impl maw_tmux::TmuxRunner for SyncFakeRunner {
-        fn run(&mut self, subcommand: &str, args: &[String]) -> Result<String, maw_tmux::TmuxError> {
+        fn run(
+            &mut self,
+            subcommand: &str,
+            args: &[String],
+        ) -> Result<String, maw_tmux::TmuxError> {
             self.calls.push((subcommand.to_owned(), args.to_vec()));
             if let Some(message) = &self.fail {
                 return Err(maw_tmux::TmuxError::new(message.clone()));
@@ -153,7 +176,10 @@ mod tmux_sync_tests {
     fn tmux_sync_sets_window_option_with_window_target_and_golden_output() {
         let mut runner = SyncFakeRunner::default();
         let out = tmux_sync_with_runner(&strings(&["nova:2.1", "on"]), &mut runner).expect("sync");
-        assert_eq!(out, include_str!("../../tests/fixtures/native-tmux-sync/sync-on.stdout"));
+        assert_eq!(
+            out,
+            include_str!("../../tests/fixtures/native-tmux-sync/sync-on.stdout")
+        );
         assert_eq!(
             runner.calls,
             vec![(
@@ -165,7 +191,13 @@ mod tmux_sync_tests {
 
     #[test]
     fn tmux_sync_accepts_boolean_aliases_and_percent_targets() {
-        for (raw, expected) in [("true", "on"), ("1", "on"), ("off", "off"), ("false", "off"), ("0", "off")] {
+        for (raw, expected) in [
+            ("true", "on"),
+            ("1", "on"),
+            ("off", "off"),
+            ("false", "off"),
+            ("0", "off"),
+        ] {
             let mut runner = SyncFakeRunner::default();
             let out = tmux_sync_with_runner(&strings(&["%42", raw]), &mut runner).expect("sync");
             assert_eq!(out, format!("✓ synchronize-panes {expected} for %42\n"));
@@ -182,22 +214,34 @@ mod tmux_sync_tests {
     #[test]
     fn tmux_sync_rejects_bad_state_and_targets_before_runner() {
         let mut runner = SyncFakeRunner::default();
-        let bad_state = tmux_sync_with_runner(&strings(&["nova:2", "maybe"]), &mut runner).expect_err("state");
+        let bad_state =
+            tmux_sync_with_runner(&strings(&["nova:2", "maybe"]), &mut runner).expect_err("state");
         assert_eq!(bad_state.0, 2);
         assert!(bad_state.1.contains("state must be"));
-        let bad_target = tmux_sync_with_runner(&strings(&["-oProxyCommand=bad", "on"]), &mut runner).expect_err("target");
+        let bad_target =
+            tmux_sync_with_runner(&strings(&["-oProxyCommand=bad", "on"]), &mut runner)
+                .expect_err("target");
         assert_eq!(bad_target.0, 2);
         assert!(bad_target.1.contains("unknown argument"));
-        let bad_control = tmux_sync_with_runner(&strings(&["bad\ntarget", "on"]), &mut runner).expect_err("control");
+        let bad_control = tmux_sync_with_runner(&strings(&["bad\ntarget", "on"]), &mut runner)
+            .expect_err("control");
         assert_eq!(bad_control.0, 1);
         assert!(bad_control.1.contains("control"));
-        assert!(runner.calls.is_empty(), "guarded input reached tmux: {:?}", runner.calls);
+        assert!(
+            runner.calls.is_empty(),
+            "guarded input reached tmux: {:?}",
+            runner.calls
+        );
     }
 
     #[test]
     fn tmux_sync_surfaces_runner_failure() {
-        let mut runner = SyncFakeRunner { fail: Some("no server".to_owned()), ..SyncFakeRunner::default() };
-        let err = tmux_sync_with_runner(&strings(&["nova:2.1", "off"]), &mut runner).expect_err("failure");
+        let mut runner = SyncFakeRunner {
+            fail: Some("no server".to_owned()),
+            ..SyncFakeRunner::default()
+        };
+        let err = tmux_sync_with_runner(&strings(&["nova:2.1", "off"]), &mut runner)
+            .expect_err("failure");
         assert_eq!(err.0, 1);
         assert_eq!(err.1, "tmux sync: set-window-option failed: no server");
         assert_eq!(

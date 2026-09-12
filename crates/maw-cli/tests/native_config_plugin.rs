@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -50,6 +51,7 @@ fn run_config(root: &Path, args: &[&str]) -> Output {
     let fake_bin = fake_maw_path(root);
     Command::new(bin())
         .args(args)
+        .current_dir(root)
         .env_clear()
         .env("PATH", fake_bin)
         .env("HOME", root.join("home"))
@@ -203,6 +205,53 @@ fn config_sources_and_explain_match_maw_js_shape_and_merge_layers() {
     );
     assert_eq!(shown["plugins"]["foo"]["enabled"], true);
     assert_eq!(shown["plugins"]["foo"]["level"], 2);
+}
+
+#[test]
+fn config_reports_legacy_default_engine_as_a_live_alias() {
+    // #682: the key used to be read by nothing and reported by nothing, so a
+    // config that looked like it selected claude silently launched codex.
+    let root = temp_dir("legacy-alias");
+    let config = root.join("config");
+    fs::create_dir_all(&config).expect("config dir");
+    fs::write(
+        config.join("maw.config.50.json"),
+        "{\n  \"defaultEngine\": \"claude\"\n}\n",
+    )
+    .expect("config");
+
+    let output = run_config(&root, &["config", "sources", "--json"]);
+    assert_no_delegation(&output);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let sources: serde_json::Value = serde_json::from_slice(&output.stdout).expect("sources json");
+    let warnings = sources["warnings"].as_array().expect("warnings");
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    let note = warnings[0].as_str().expect("warning text");
+    assert!(note.contains("defaultEngine"), "{note}");
+    assert!(note.contains("wake.engine"), "{note}");
+    assert!(note.contains("682"), "{note}");
+
+    let output = run_config(&root, &["config", "explain", "defaultEngine", "--json"]);
+    assert_no_delegation(&output);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let explain: serde_json::Value = serde_json::from_slice(&output.stdout).expect("explain json");
+    assert_eq!(explain["finalValue"], "claude");
+    let notes = explain["notes"].as_array().expect("notes");
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(notes[0].as_str().expect("note").contains("wake.engine"));
+
+    // A key with no alias entry stays note-free.
+    let output = run_config(&root, &["config", "explain", "node", "--json"]);
+    let explain: serde_json::Value = serde_json::from_slice(&output.stdout).expect("explain json");
+    assert_eq!(explain["notes"], serde_json::json!([]));
 }
 
 #[test]

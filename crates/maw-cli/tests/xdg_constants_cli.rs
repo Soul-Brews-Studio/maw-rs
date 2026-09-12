@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
 use maw_cli::run_cli;
 use serde_json::Value;
 
@@ -65,6 +66,20 @@ fn xdg_constants_plan_locks_env_precedence_paths_and_instance_contract() {
     assert_eq!(
         value["corePaths"]["configFile"],
         "configDir/maw.config.json"
+    );
+    // #840: samplePaths.config is a join demo, not the load set. The layer contract
+    // has to be stated somewhere the caller can read it.
+    assert_eq!(
+        value["configLayers"]["pattern"],
+        "configDir/maw.config.<NN>[.local].json"
+    );
+    assert_eq!(
+        value["configLayers"]["order"],
+        "ascending weight; last wins"
+    );
+    assert_eq!(
+        value["configLayers"]["fallback"],
+        "configDir/maw.config.json, used only when configDir holds no numbered layer"
     );
     assert_eq!(value["instanceName"]["maxBytes"], 32);
     assert_eq!(value["instanceName"]["first"], "lowercase ascii alnum");

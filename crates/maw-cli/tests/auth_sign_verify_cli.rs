@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code: panicking on unexpected state is idiomatic
 use maw_auth::{sign_headers_v3_at, sign_request_v3};
 use maw_cli::run_cli;
 

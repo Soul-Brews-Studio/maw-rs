@@ -28,9 +28,16 @@ enum ZoomResolveKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ZoomResolveResult<'a> {
-    None { hints: Vec<&'a ZoomSession> },
-    Match { session: &'a ZoomSession, kind: ZoomResolveKind },
-    Ambiguous { candidates: Vec<&'a ZoomSession> },
+    None {
+        hints: Vec<&'a ZoomSession>,
+    },
+    Match {
+        session: &'a ZoomSession,
+        kind: ZoomResolveKind,
+    },
+    Ambiguous {
+        candidates: Vec<&'a ZoomSession>,
+    },
 }
 
 fn zoom_run_command(argv: &[String]) -> CliOutput {
@@ -72,7 +79,9 @@ fn zoom_parse_args(argv: &[String]) -> Result<ZoomOptions, String> {
                 break;
             }
             "--pane" => pane = Some(zoom_parse_pane(rest.next())?),
-            value if value.starts_with("--pane=") => pane = Some(zoom_parse_pane_value(&value[7..])?),
+            value if value.starts_with("--pane=") => {
+                pane = Some(zoom_parse_pane_value(&value[7..])?);
+            }
             value if value.starts_with('-') && positionals.is_empty() => {
                 return Err(zoom_flag_like_target(value));
             }
@@ -80,7 +89,9 @@ fn zoom_parse_args(argv: &[String]) -> Result<ZoomOptions, String> {
             value => positionals.push(value.to_owned()),
         }
     }
-    let Some(target) = positionals.first().cloned() else { return Err(zoom_usage()); };
+    let Some(target) = positionals.first().cloned() else {
+        return Err(zoom_usage());
+    };
     if target.starts_with('-') || target == "--" {
         return Err(zoom_flag_like_target(&target));
     }
@@ -91,12 +102,16 @@ fn zoom_parse_args(argv: &[String]) -> Result<ZoomOptions, String> {
 fn zoom_validate_parse_target(target: &str) -> Result<(), String> {
     let (left, suffix) = zoom_split_target(target)?;
     zoom_validate_query(&left)?;
-    if let Some(suffix) = suffix { zoom_validate_suffix(&suffix)?; }
+    if let Some(suffix) = suffix {
+        zoom_validate_suffix(&suffix)?;
+    }
     Ok(())
 }
 
 fn zoom_parse_pane(value: Option<&String>) -> Result<u32, String> {
-    let Some(value) = value else { return Err("--pane requires a positive number".to_owned()); };
+    let Some(value) = value else {
+        return Err("--pane requires a positive number".to_owned());
+    };
     zoom_parse_pane_value(value)
 }
 
@@ -136,11 +151,17 @@ fn zoom_parse_sessions(raw: &str) -> Vec<ZoomSession> {
     for line in raw.lines().filter(|line| !line.is_empty()) {
         let mut parts = line.splitn(2, '\t');
         let name = parts.next().unwrap_or_default();
-        let index = parts.next().and_then(|value| value.parse::<u32>().ok()).unwrap_or(0);
+        let index = parts
+            .next()
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(0);
         if let Some(session) = sessions.iter_mut().find(|session| session.name == name) {
             session.windows.push(ZoomWindow { index });
         } else {
-            sessions.push(ZoomSession { name: name.to_owned(), windows: vec![ZoomWindow { index }] });
+            sessions.push(ZoomSession {
+                name: name.to_owned(),
+                windows: vec![ZoomWindow { index }],
+            });
         }
     }
     sessions
@@ -159,17 +180,27 @@ fn zoom_resolve_target(options: &ZoomOptions, sessions: &[ZoomSession]) -> Resul
 }
 
 fn zoom_split_target(target: &str) -> Result<(String, Option<String>), String> {
-    let Some((left, right)) = target.split_once(':') else { return Ok((target.to_owned(), None)); };
+    let Some((left, right)) = target.split_once(':') else {
+        return Ok((target.to_owned(), None));
+    };
     zoom_validate_suffix(right)?;
     Ok((left.to_owned(), Some(right.to_owned())))
 }
 
 fn zoom_validate_suffix(value: &str) -> Result<(), String> {
     if value.is_empty() || value.trim() != value || value.starts_with('-') || value == "--" {
-        return Err("zoom tmux window suffix must be non-empty, unpadded, and not start with '-'".to_owned());
+        return Err(
+            "zoom tmux window suffix must be non-empty, unpadded, and not start with '-'"
+                .to_owned(),
+        );
     }
-    if value.chars().any(|ch| ch.is_control() || ch.is_whitespace()) {
-        return Err("zoom tmux window suffix must not contain whitespace or control characters".to_owned());
+    if value
+        .chars()
+        .any(|ch| ch.is_control() || ch.is_whitespace())
+    {
+        return Err(
+            "zoom tmux window suffix must not contain whitespace or control characters".to_owned(),
+        );
     }
     Ok(())
 }
@@ -190,23 +221,49 @@ fn zoom_resolve_session_target<'a>(
     sessions: &'a [ZoomSession],
 ) -> ZoomResolveResult<'a> {
     let lc = target.trim().to_ascii_lowercase();
-    if lc.is_empty() { return ZoomResolveResult::None { hints: Vec::new() }; }
-    if let Some(session) = sessions.iter().find(|session| session.name.eq_ignore_ascii_case(&lc)) {
-        return ZoomResolveResult::Match { session, kind: ZoomResolveKind::Exact };
+    if lc.is_empty() {
+        return ZoomResolveResult::None { hints: Vec::new() };
     }
-    let suffix = sessions.iter().filter(|session| zoom_suffix_match(&session.name, &lc)).collect::<Vec<_>>();
-    if let Some(result) = zoom_pick_fuzzy(&suffix) { return result; }
-    let mid = sessions.iter().filter(|session| zoom_prefix_mid_match(&session.name, &lc)).collect::<Vec<_>>();
-    if let Some(result) = zoom_pick_fuzzy(&mid) { return result; }
-    let hints = sessions.iter().filter(|session| session.name.to_ascii_lowercase().contains(&lc)).collect();
+    if let Some(session) = sessions
+        .iter()
+        .find(|session| session.name.eq_ignore_ascii_case(&lc))
+    {
+        return ZoomResolveResult::Match {
+            session,
+            kind: ZoomResolveKind::Exact,
+        };
+    }
+    let suffix = sessions
+        .iter()
+        .filter(|session| zoom_suffix_match(&session.name, &lc))
+        .collect::<Vec<_>>();
+    if let Some(result) = zoom_pick_fuzzy(&suffix) {
+        return result;
+    }
+    let mid = sessions
+        .iter()
+        .filter(|session| zoom_prefix_mid_match(&session.name, &lc))
+        .collect::<Vec<_>>();
+    if let Some(result) = zoom_pick_fuzzy(&mid) {
+        return result;
+    }
+    let hints = sessions
+        .iter()
+        .filter(|session| session.name.to_ascii_lowercase().contains(&lc))
+        .collect();
     ZoomResolveResult::None { hints }
 }
 
 fn zoom_pick_fuzzy<'a>(matches: &[&'a ZoomSession]) -> Option<ZoomResolveResult<'a>> {
     match matches {
         [] => None,
-        [session] => Some(ZoomResolveResult::Match { session, kind: ZoomResolveKind::Fuzzy }),
-        _ => Some(ZoomResolveResult::Ambiguous { candidates: matches.to_vec() }),
+        [session] => Some(ZoomResolveResult::Match {
+            session,
+            kind: ZoomResolveKind::Fuzzy,
+        }),
+        _ => Some(ZoomResolveResult::Ambiguous {
+            candidates: matches.to_vec(),
+        }),
     }
 }
 
@@ -216,7 +273,8 @@ fn zoom_suffix_match(name: &str, lc: &str) -> bool {
 
 fn zoom_prefix_mid_match(name: &str, lc: &str) -> bool {
     let name = name.to_ascii_lowercase();
-    !zoom_numbered(&name) && (name.starts_with(&format!("{lc}-")) || name.contains(&format!("-{lc}-")))
+    !zoom_numbered(&name)
+        && (name.starts_with(&format!("{lc}-")) || name.contains(&format!("-{lc}-")))
 }
 
 fn zoom_numbered(name: &str) -> bool {
@@ -224,15 +282,25 @@ fn zoom_numbered(name: &str) -> bool {
 }
 
 fn zoom_default_window(session: &ZoomSession) -> String {
-    session.windows.first().map_or_else(|| "0".to_owned(), |window| window.index.to_string())
+    session
+        .windows
+        .first()
+        .map_or_else(|| "0".to_owned(), |window| window.index.to_string())
 }
 
 fn zoom_ambiguous_error(target: &str, candidates: &[&ZoomSession]) -> String {
-    let mut message = format!("  \x1b[31m✗\x1b[0m '{target}' is ambiguous — matches {} sessions:", candidates.len());
+    let mut message = format!(
+        "  \x1b[31m✗\x1b[0m '{target}' is ambiguous — matches {} sessions:",
+        candidates.len()
+    );
     for candidate in candidates {
         let _ = write!(message, "\n  \x1b[90m    • {}\x1b[0m", candidate.name);
     }
-    let _ = write!(message, "\n'{target}' is ambiguous — matches {} sessions", candidates.len());
+    let _ = write!(
+        message,
+        "\n'{target}' is ambiguous — matches {} sessions",
+        candidates.len()
+    );
     message
 }
 
@@ -263,10 +331,17 @@ fn zoom_validate_query(query: &str) -> Result<(), String> {
 
 fn zoom_validate_tmux_target(target: &str) -> Result<(), String> {
     if target.is_empty() || target.trim() != target || target.starts_with('-') || target == "--" {
-        return Err("tmux target/session must be non-empty, unpadded, and not start with '-'".to_owned());
+        return Err(
+            "tmux target/session must be non-empty, unpadded, and not start with '-'".to_owned(),
+        );
     }
-    if target.chars().any(|ch| ch.is_control() || ch.is_whitespace()) {
-        return Err("tmux target/session must not contain whitespace or control characters".to_owned());
+    if target
+        .chars()
+        .any(|ch| ch.is_control() || ch.is_whitespace())
+    {
+        return Err(
+            "tmux target/session must not contain whitespace or control characters".to_owned(),
+        );
     }
     Ok(())
 }
@@ -274,7 +349,10 @@ fn zoom_validate_tmux_target(target: &str) -> Result<(), String> {
 fn zoom_toggle<R: maw_tmux::TmuxRunner>(runner: &mut R, target: &str) -> Result<(), String> {
     zoom_validate_tmux_target(target)?;
     runner
-        .run("resize-pane", &["-Z".to_owned(), "-t".to_owned(), target.to_owned()])
+        .run(
+            "resize-pane",
+            &["-Z".to_owned(), "-t".to_owned(), target.to_owned()],
+        )
         .map(|_| ())
         .map_err(|error| format!("zoom failed: {}", error.message))
 }
@@ -291,7 +369,11 @@ mod zoom_tests {
     }
 
     impl maw_tmux::TmuxRunner for ZoomMockTmux {
-        fn run(&mut self, subcommand: &str, args: &[String]) -> Result<String, maw_tmux::TmuxError> {
+        fn run(
+            &mut self,
+            subcommand: &str,
+            args: &[String],
+        ) -> Result<String, maw_tmux::TmuxError> {
             self.calls.push((subcommand.to_owned(), args.to_vec()));
             match subcommand {
                 "list-windows" => Ok(self.windows.clone()),
@@ -309,7 +391,10 @@ mod zoom_tests {
     impl ZoomEnvGuard {
         fn new() -> Self {
             let keys = ["HOME", "XDG_CONFIG_HOME", "MAW_CONFIG_DIR", "TMUX", "PATH"];
-            let saved = keys.into_iter().map(|key| (key, std::env::var_os(key))).collect::<Vec<_>>();
+            let saved = keys
+                .into_iter()
+                .map(|key| (key, std::env::var_os(key)))
+                .collect::<Vec<_>>();
             let root = std::env::temp_dir().join(format!("maw-zoom-test-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&root);
             std::fs::create_dir_all(root.join("config/fleet")).expect("config");
@@ -325,7 +410,11 @@ mod zoom_tests {
     impl Drop for ZoomEnvGuard {
         fn drop(&mut self) {
             for (key, value) in self.saved.drain(..) {
-                if let Some(value) = value { std::env::set_var(key, value); } else { std::env::remove_var(key); }
+                if let Some(value) = value {
+                    std::env::set_var(key, value);
+                } else {
+                    std::env::remove_var(key);
+                }
             }
         }
     }
@@ -344,32 +433,57 @@ mod zoom_tests {
     fn zoom_default_window_toggles_with_safe_tmux_args() {
         let _lock = super::env_test_lock();
         let _env = ZoomEnvGuard::new();
-        let mut tmux = ZoomMockTmux { windows: "03-neo\t2\n".to_owned(), ..ZoomMockTmux::default() };
+        let mut tmux = ZoomMockTmux {
+            windows: "03-neo\t2\n".to_owned(),
+            ..ZoomMockTmux::default()
+        };
 
         let output = zoom_with_runner(&zoom_strings(&["neo"]), &mut tmux).expect("zoom");
 
-        assert_eq!(output.stdout, "  \x1b[32m✓\x1b[0m toggled zoom on 03-neo:2\n");
-        assert_eq!(tmux.calls[0], ("list-windows".to_owned(), zoom_strings(&["-a", "-F", "#{session_name}\t#{window_index}"])));
-        assert_eq!(tmux.calls[1], ("resize-pane".to_owned(), zoom_strings(&["-Z", "-t", "03-neo:2"])));
+        assert_eq!(
+            output.stdout,
+            "  \x1b[32m✓\x1b[0m toggled zoom on 03-neo:2\n"
+        );
+        assert_eq!(
+            tmux.calls[0],
+            (
+                "list-windows".to_owned(),
+                zoom_strings(&["-a", "-F", "#{session_name}\t#{window_index}"])
+            )
+        );
+        assert_eq!(
+            tmux.calls[1],
+            (
+                "resize-pane".to_owned(),
+                zoom_strings(&["-Z", "-t", "03-neo:2"])
+            )
+        );
     }
 
     #[test]
     fn zoom_explicit_window_and_pane_are_preserved() {
         let _lock = super::env_test_lock();
         let _env = ZoomEnvGuard::new();
-        let mut tmux = ZoomMockTmux { windows: "03-neo\t0\n".to_owned(), ..ZoomMockTmux::default() };
+        let mut tmux = ZoomMockTmux {
+            windows: "03-neo\t0\n".to_owned(),
+            ..ZoomMockTmux::default()
+        };
         let args = zoom_strings(&["neo:1", "--pane", "3"]);
 
         let output = zoom_with_runner(&args, &mut tmux).expect("zoom");
 
-        assert_eq!(output.stdout, "  \x1b[32m✓\x1b[0m toggled zoom on 03-neo:1.3\n");
+        assert_eq!(
+            output.stdout,
+            "  \x1b[32m✓\x1b[0m toggled zoom on 03-neo:1.3\n"
+        );
         assert_eq!(tmux.calls[1].1, zoom_strings(&["-Z", "-t", "03-neo:1.3"]));
     }
 
     #[test]
     fn zoom_rejects_leading_dash_target_before_tmux() {
         let mut tmux = ZoomMockTmux::default();
-        let error = zoom_with_runner(&zoom_strings(&["--", "-Sbad"]), &mut tmux).expect_err("guard");
+        let error =
+            zoom_with_runner(&zoom_strings(&["--", "-Sbad"]), &mut tmux).expect_err("guard");
         assert!(error.contains("looks like a flag"));
         assert!(tmux.calls.is_empty());
     }
@@ -385,7 +499,8 @@ mod zoom_tests {
     #[test]
     fn zoom_rejects_bad_pane_before_tmux() {
         let mut tmux = ZoomMockTmux::default();
-        let error = zoom_with_runner(&zoom_strings(&["neo", "--pane", "--"]), &mut tmux).expect_err("guard");
+        let error = zoom_with_runner(&zoom_strings(&["neo", "--pane", "--"]), &mut tmux)
+            .expect_err("guard");
         assert_eq!(error, "--pane requires a positive number");
         assert!(tmux.calls.is_empty());
     }
@@ -394,7 +509,10 @@ mod zoom_tests {
     fn zoom_reports_ambiguous_suffix_without_resize() {
         let _lock = super::env_test_lock();
         let _env = ZoomEnvGuard::new();
-        let mut tmux = ZoomMockTmux { windows: "01-neo\t0\n02-neo\t1\n".to_owned(), ..ZoomMockTmux::default() };
+        let mut tmux = ZoomMockTmux {
+            windows: "01-neo\t0\n02-neo\t1\n".to_owned(),
+            ..ZoomMockTmux::default()
+        };
 
         let error = zoom_with_runner(&zoom_strings(&["neo"]), &mut tmux).expect_err("ambiguous");
 
@@ -406,7 +524,11 @@ mod zoom_tests {
     fn zoom_reports_failure_after_validated_target() {
         let _lock = super::env_test_lock();
         let _env = ZoomEnvGuard::new();
-        let mut tmux = ZoomMockTmux { windows: "neo\t0\n".to_owned(), fail_zoom: true, ..ZoomMockTmux::default() };
+        let mut tmux = ZoomMockTmux {
+            windows: "neo\t0\n".to_owned(),
+            fail_zoom: true,
+            ..ZoomMockTmux::default()
+        };
 
         let error = zoom_with_runner(&zoom_strings(&["neo"]), &mut tmux).expect_err("fail");
 

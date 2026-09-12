@@ -31,13 +31,56 @@ where
 }
 
 async fn info_get(Extension(state): Extension<Arc<ServecoreSharedState>>) -> Json<Value> {
-    Json(info_payload(state.agents_node.as_deref()))
+    Json(info_payload(
+        state.agents_node.as_deref(),
+        state.agents_oracle.as_deref(),
+    ))
 }
 
-fn info_payload(node: Option<&str>) -> Value {
-    let node = node
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or("local");
+/// Real machine node name for the `/info` fallback — the config-derived
+/// `agents_node` wins, but when it is unset we report the actual hostname
+/// (matches `config_init`'s `$HOSTNAME` default) instead of the constant
+/// `"local"`, so a federation map can tell one node from another.
+fn info_node_fallback() -> String {
+    // `$HOSTNAME` is unset for a detached serve (nohup), and `/etc/hostname`
+    // does not exist on macOS — so a darwin node without a config `node` used to
+    // fall straight to the literal `"local"`, and every peer probing it pinned
+    // it as "local" (collides `node_unique` the moment a second node also
+    // answers "local"; twin-found across the darwin+linux fleet). `hostname -s`
+    // is the cross-platform source. Resolved once per process — `/info` is hot.
+    static NODE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    NODE.get_or_init(|| {
+        std::env::var("HOSTNAME")
+            .ok()
+            .or_else(info_hostname_short)
+            .or_else(|| std::fs::read_to_string("/etc/hostname").ok())
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "local".to_owned())
+    })
+    .clone()
+}
+
+pub(crate) fn info_resolved_node(node: Option<&str>) -> String {
+    node.filter(|value| !value.trim().is_empty())
+        .map_or_else(info_node_fallback, str::to_owned)
+}
+
+/// `hostname -s` — the short hostname, works on macOS and Linux where
+/// `$HOSTNAME`/`/etc/hostname` may be absent. `None` on any failure.
+fn info_hostname_short() -> Option<String> {
+    std::process::Command::new("hostname")
+        .arg("-s")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+fn info_payload(node: Option<&str>, oracle: Option<&str>) -> Value {
+    let node = info_resolved_node(node);
     let mut payload = json!({
         "node": node,
         "version": crate::core_impl::MAW_RS_BUILD_VERSION,
@@ -48,6 +91,9 @@ fn info_payload(node: Option<&str>) -> Value {
             "capabilities": ["plugin.listManifest", "peer.handshake", "info"]
         }
     });
+    if let Some(oracle) = oracle.filter(|value| !value.trim().is_empty()) {
+        payload["oracle"] = json!(oracle);
+    }
     if let Some(user) = info_user() {
         payload["user"] = json!(user);
     }
@@ -139,8 +185,9 @@ mod tests {
 
     #[test]
     fn info_payload_matches_maw_js_probe_shape() {
-        let payload = info_payload(Some("node-a"));
+        let payload = info_payload(Some("node-a"), Some("oracle-a"));
         assert_eq!(payload["node"], "node-a");
+        assert_eq!(payload["oracle"], "oracle-a");
         assert_eq!(payload["version"], crate::core_impl::MAW_RS_BUILD_VERSION);
         assert_eq!(payload["maw"]["schema"], "1");
         assert_eq!(
@@ -149,6 +196,20 @@ mod tests {
         );
         assert_eq!(payload["maw"]["capabilities"][2], "info");
         assert!(payload["ts"].as_str().is_some_and(|ts| ts.ends_with('Z')));
+    }
+
+    #[test]
+    fn info_payload_node_falls_back_and_oracle_is_omitted_when_unset() {
+        // node never empty (real hostname or "local"), never the constant leak;
+        // oracle absent rather than a fake default like "mawjs".
+        let payload = info_payload(None, None);
+        assert!(payload["node"]
+            .as_str()
+            .is_some_and(|node| !node.is_empty()));
+        assert!(payload.get("oracle").is_none());
+        // blank inputs are treated as unset, not echoed back
+        let blank = info_payload(Some("  "), Some(""));
+        assert!(blank.get("oracle").is_none());
     }
 
     #[test]

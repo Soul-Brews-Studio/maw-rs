@@ -63,7 +63,9 @@ fn pluginartifact_parse_plan_args(argv: &[String]) -> Result<PluginArtifactActio
 fn pluginartifact_dispatch(action: PluginArtifactAction) -> Result<CliOutput, String> {
     match action {
         PluginArtifactAction::Contract => Ok(pluginartifact_ok(pluginartifact_contract_text())),
-        PluginArtifactAction::Plan(dir) => pluginartifact_plan_project(&dir).map(|text| pluginartifact_ok(&text)),
+        PluginArtifactAction::Plan(dir) => {
+            pluginartifact_plan_project(&dir).map(|text| pluginartifact_ok(&text))
+        }
     }
 }
 
@@ -117,7 +119,7 @@ fn pluginartifact_plan_project(dir: &std::path::Path) -> Result<String, String> 
 }
 
 fn pluginartifact_contract_text() -> &'static str {
-    "plugin artifact contract v1\n  manifest: plugin.json\n  wasm: target=wasm plus wasm=<relative .wasm> or entry={kind:wasm,path,export}\n  artifact: artifact.path=<relative .wasm> and artifact.sha256=sha256:<hex> before install/load\n  capabilities: plugin.json capabilities array is preserved and consumed by runtime/registry gates\n  runtime ladder: WASM is ship tier via extism-wasm with sha256-verified artifacts\n  runtime ladder: Bun is explicit dev tier only via runtime=\"bun-dev\"; it prints a loud banner and runs unsandboxed\n  runtime ladder: maw-js subprocess fallback is not part of plugin dispatch\n  supported: Rust-WASM first-class via cargo wasm32-unknown-unknown\n  supported: prebuilt WASM artifact with sha256 and declared capabilities/export\n  refused: AssemblyScript/TS unless a pinned compiler/prebuilt WASM artifact is supplied\n  seam: part287 plugin-manifest consumes the same plugin.json + wasm/artifact + sha256 + capabilities + export contract\n"
+    "plugin artifact contract v1\n  manifest: plugin.json\n  wasm: target=wasm plus wasm=<relative .wasm> or entry={kind:wasm,path,export}\n  artifact: artifact.path=<relative .wasm> and artifact.sha256=sha256:<hex> before install/load\n  capabilities: plugin.json capabilities array is preserved and consumed by runtime/registry gates\n  runtime ladder: WASM is ship tier via extism-wasm with sha256-verified artifacts\n  runtime ladder: Bun is explicit dev tier only via runtime=\"bun-dev\"; it runs unsandboxed and prints a banner only when MAW_DEV_TIER_BANNER=1\n  runtime ladder: bun-dev entry contract: the entry file is executed as a script, never imported — a bare `export default` is never called; add an `import.meta.main` (or top-level await/call) to actually run\n  runtime ladder: maw-js subprocess fallback is not part of plugin dispatch\n  supported: Rust-WASM first-class via cargo wasm32-unknown-unknown\n  supported: prebuilt WASM artifact with sha256 and declared capabilities/export\n  refused: AssemblyScript/TS unless a pinned compiler/prebuilt WASM artifact is supplied\n  seam: part287 plugin-manifest consumes the same plugin.json + wasm/artifact + sha256 + capabilities + export contract\n"
 }
 
 fn pluginartifact_validate_dir(value: &str) -> Result<std::path::PathBuf, String> {
@@ -149,7 +151,10 @@ fn pluginartifact_validate_manifest_paths(manifest: &PluginManifest) -> Result<(
         ("entry", manifest.entry.as_deref()),
         (
             "artifact.path",
-            manifest.artifact.as_ref().map(|artifact| artifact.path.as_str()),
+            manifest
+                .artifact
+                .as_ref()
+                .map(|artifact| artifact.path.as_str()),
         ),
     ] {
         if let Some(value) = maybe_path {
@@ -192,10 +197,16 @@ fn pluginartifact_is_prebuilt_wasm(manifest: &PluginManifest) -> bool {
         && pluginartifact_path_has_wasm_extension(&artifact.path)
         && (manifest.target == Some(maw_plugin_manifest::PluginTarget::Wasm)
             || manifest.wasm.is_some()
-            || manifest.entry.as_ref().is_some_and(|entry| pluginartifact_path_has_wasm_extension(entry)))
+            || manifest
+                .entry
+                .as_ref()
+                .is_some_and(|entry| pluginartifact_path_has_wasm_extension(entry)))
 }
 
-fn pluginartifact_is_assemblyscript_like(root: &std::path::Path, _manifest: &PluginManifest) -> bool {
+fn pluginartifact_is_assemblyscript_like(
+    root: &std::path::Path,
+    _manifest: &PluginManifest,
+) -> bool {
     root.join("asconfig.json").is_file() || root.join("assembly").is_dir()
 }
 
@@ -250,8 +261,7 @@ mod pluginartifact_tests {
 
     fn pluginartifact_write_rust(root: &Path) -> PathBuf {
         let dir = root.join("route-probe");
-        std::fs::create_dir_all(dir.join("target/wasm32-unknown-unknown/release"))
-            .expect("target");
+        std::fs::create_dir_all(dir.join("target/wasm32-unknown-unknown/release")).expect("target");
         std::fs::write(
             dir.join("Cargo.toml"),
             "[package]\nname=\"route_probe\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
@@ -273,8 +283,11 @@ mod pluginartifact_tests {
     fn pluginartifact_write_js(root: &Path) -> PathBuf {
         let dir = root.join("legacy-js");
         std::fs::create_dir_all(&dir).expect("plugin");
-        std::fs::write(dir.join("index.ts"), "export default function handle() {}\n")
-            .expect("entry");
+        std::fs::write(
+            dir.join("index.ts"),
+            "export default function handle() {}\n",
+        )
+        .expect("entry");
         std::fs::write(
             dir.join("plugin.json"),
             r#"{"name":"legacy-js","version":"1.0.0","sdk":"*","target":"js","entry":"index.ts","capabilities":["sdk:identity"]}"#,
@@ -297,16 +310,16 @@ mod pluginartifact_tests {
         assert!(out.stdout.contains("part287 plugin-manifest consumes"));
         assert!(out.stdout.contains("runtime=\"bun-dev\""));
         assert!(out.stdout.contains("runs unsandboxed"));
+        assert!(out.stdout.contains("executed as a script, never imported"));
+        assert!(out.stdout.contains("import.meta.main"));
     }
 
     #[test]
     fn pluginartifact_plan_rust_wasm_matches_golden() {
         let root = pluginartifact_temp("rust-golden");
         let dir = pluginartifact_write_rust(&root);
-        let out = pluginartifact_run_command(&pluginartifact_args(&[
-            "plan",
-            dir.to_str().expect("dir"),
-        ]));
+        let out =
+            pluginartifact_run_command(&pluginartifact_args(&["plan", dir.to_str().expect("dir")]));
         assert_eq!(out.code, 0, "{}", out.stderr);
         assert_eq!(
             out.stdout,
@@ -319,10 +332,8 @@ mod pluginartifact_tests {
     fn pluginartifact_plan_js_bun_refusal_matches_golden() {
         let root = pluginartifact_temp("js-golden");
         let dir = pluginartifact_write_js(&root);
-        let out = pluginartifact_run_command(&pluginartifact_args(&[
-            "plan",
-            dir.to_str().expect("dir"),
-        ]));
+        let out =
+            pluginartifact_run_command(&pluginartifact_args(&["plan", dir.to_str().expect("dir")]));
         assert_eq!(out.code, 0, "{}", out.stderr);
         assert_eq!(
             out.stdout,
@@ -350,12 +361,14 @@ mod pluginartifact_tests {
             r#"{"name":"bad","version":"1.0.0","sdk":"*","target":"wasm","entry":{"kind":"wasm","path":"bad.wasm","export":"handle"},"artifact":{"path":"../bad.wasm","sha256":"sha256:abc"}}"#,
         )
         .expect("manifest");
-        let out = pluginartifact_run_command(&pluginartifact_args(&[
-            "plan",
-            dir.to_str().expect("dir"),
-        ]));
+        let out =
+            pluginartifact_run_command(&pluginartifact_args(&["plan", dir.to_str().expect("dir")]));
         assert_eq!(out.code, 2);
-        assert!(out.stderr.contains("artifact.path must be relative"), "{}", out.stderr);
+        assert!(
+            out.stderr.contains("artifact.path must be relative"),
+            "{}",
+            out.stderr
+        );
         std::fs::remove_dir_all(root).expect("cleanup");
     }
 }

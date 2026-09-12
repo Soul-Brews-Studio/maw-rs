@@ -28,7 +28,10 @@ fn oracleworkon_run_command(argv: &[String]) -> CliOutput {
     oracleworkon_run_command_with(argv, load_native_fleet)
 }
 
-fn oracleworkon_run_command_with(argv: &[String], load_fleet: OracleworkonFleetLoader) -> CliOutput {
+fn oracleworkon_run_command_with(
+    argv: &[String],
+    load_fleet: OracleworkonFleetLoader,
+) -> CliOutput {
     match oracleworkon_run(argv, load_fleet) {
         Ok(stdout) => CliOutput {
             code: 0,
@@ -43,7 +46,10 @@ fn oracleworkon_run_command_with(argv: &[String], load_fleet: OracleworkonFleetL
     }
 }
 
-fn oracleworkon_run(argv: &[String], load_fleet: OracleworkonFleetLoader) -> Result<String, String> {
+fn oracleworkon_run(
+    argv: &[String],
+    load_fleet: OracleworkonFleetLoader,
+) -> Result<String, String> {
     let orchestrator = crate::serve_core::ServecoreCommandOrchestrator::servecore_with_root(
         oracleworkon_orchestration_root(),
     );
@@ -60,7 +66,9 @@ fn oracleworkon_run_with_orchestrator(
         options.targets = oracleworkon_all_targets(load_fleet())?;
     }
     oracleworkon_validate_options(&options)?;
-    if oracleworkon_has_flag(&options, ORACLEWORKON_FLAG_DRY_RUN) || oracleworkon_is_planning_only(&options) {
+    if oracleworkon_has_flag(&options, ORACLEWORKON_FLAG_DRY_RUN)
+        || oracleworkon_is_planning_only(&options)
+    {
         return Ok(oracleworkon_render_plan(&options));
     }
     if oracleworkon_needs_orchestration(&options) {
@@ -83,16 +91,34 @@ fn oracleworkon_parse_args(argv: &[String]) -> Result<OracleworkonOptions, Strin
             "--no-attach" => oracleworkon_set_flag(&mut options, ORACLEWORKON_FLAG_NO_ATTACH),
             "--split" => oracleworkon_set_flag(&mut options, ORACLEWORKON_FLAG_SPLIT),
             "--tiled" => oracleworkon_set_flag(&mut options, ORACLEWORKON_FLAG_TILED),
-            "--work" => options.targets.push(oracleworkon_take_value(argv, &mut index, "--work")?),
+            "--work" => options
+                .targets
+                .push(oracleworkon_take_value(argv, &mut index, "--work")?),
             "--task" => options.task = Some(oracleworkon_take_value(argv, &mut index, "--task")?),
-            "--engine" => options.engine = Some(oracleworkon_take_value(argv, &mut index, "--engine")?),
-            "--prompt" => options.prompt = Some(oracleworkon_take_value(argv, &mut index, "--prompt")?),
-            "--with" => options.with.push(oracleworkon_take_value(argv, &mut index, "--with")?),
-            value if value.starts_with("--work=") => options.targets.push(value["--work=".len()..].to_owned()),
-            value if value.starts_with("--task=") => options.task = Some(value["--task=".len()..].to_owned()),
-            value if value.starts_with("--engine=") => options.engine = Some(value["--engine=".len()..].to_owned()),
-            value if value.starts_with("--prompt=") => options.prompt = Some(value["--prompt=".len()..].to_owned()),
-            value if value.starts_with("--with=") => options.with.push(value["--with=".len()..].to_owned()),
+            "--engine" => {
+                options.engine = Some(oracleworkon_take_value(argv, &mut index, "--engine")?);
+            }
+            "--prompt" => {
+                options.prompt = Some(oracleworkon_take_value(argv, &mut index, "--prompt")?);
+            }
+            "--with" => options
+                .with
+                .push(oracleworkon_take_value(argv, &mut index, "--with")?),
+            value if value.starts_with("--work=") => {
+                options.targets.push(value["--work=".len()..].to_owned());
+            }
+            value if value.starts_with("--task=") => {
+                options.task = Some(value["--task=".len()..].to_owned());
+            }
+            value if value.starts_with("--engine=") => {
+                options.engine = Some(value["--engine=".len()..].to_owned());
+            }
+            value if value.starts_with("--prompt=") => {
+                options.prompt = Some(value["--prompt=".len()..].to_owned());
+            }
+            value if value.starts_with("--with=") => {
+                options.with.push(value["--with=".len()..].to_owned());
+            }
             value if value.starts_with('-') => return Err(oracleworkon_flag_like_value(value)),
             value => positionals.push(value.to_owned()),
         }
@@ -121,16 +147,27 @@ fn oracleworkon_has_flag(options: &OracleworkonOptions, flag: u8) -> bool {
     options.flags & flag != 0
 }
 
-fn oracleworkon_take_value(argv: &[String], index: &mut usize, flag: &str) -> Result<String, String> {
-    let Some(value) = argv.get(*index + 1) else { return Err(format!("oracle-workon: {flag} requires a value")); };
+fn oracleworkon_take_value(
+    argv: &[String],
+    index: &mut usize,
+    flag: &str,
+) -> Result<String, String> {
+    let Some(value) = argv.get(*index + 1) else {
+        return Err(format!("oracle-workon: {flag} requires a value"));
+    };
     if value == "--" || value.starts_with('-') {
-        return Err(format!("oracle-workon: {flag} value must not start with '-'"));
+        return Err(format!(
+            "oracle-workon: {flag} value must not start with '-'"
+        ));
     }
     *index += 1;
     Ok(value.to_owned())
 }
 
-fn oracleworkon_apply_positionals(options: &mut OracleworkonOptions, positionals: &[String]) -> Result<(), String> {
+fn oracleworkon_apply_positionals(
+    options: &mut OracleworkonOptions,
+    positionals: &[String],
+) -> Result<(), String> {
     if positionals.len() > 2 {
         return Err(ORACLEWORKON_USAGE.to_owned());
     }
@@ -169,27 +206,50 @@ fn oracleworkon_validate_options(options: &OracleworkonOptions) -> Result<(), St
 }
 
 fn oracleworkon_validate_target(value: &str, label: &str) -> Result<(), String> {
-    if value.is_empty() || value.trim() != value || value == "--" || value.starts_with('-') || value.contains("..") {
-        return Err(format!("oracle-workon {label} must be non-empty, unpadded, and not start with '-'"));
+    if value.is_empty()
+        || value.trim() != value
+        || value == "--"
+        || value.starts_with('-')
+        || value.contains("..")
+    {
+        return Err(format!(
+            "oracle-workon {label} must be non-empty, unpadded, and not start with '-'"
+        ));
     }
-    if value.chars().any(|ch| ch.is_control() || ch.is_whitespace()) {
-        return Err(format!("oracle-workon {label} must not contain whitespace or control characters"));
+    if value
+        .chars()
+        .any(|ch| ch.is_control() || ch.is_whitespace())
+    {
+        return Err(format!(
+            "oracle-workon {label} must not contain whitespace or control characters"
+        ));
     }
     Ok(())
 }
 
 fn oracleworkon_validate_word(value: &str, label: &str) -> Result<(), String> {
     if value.is_empty() || value.trim() != value || value == "--" || value.starts_with('-') {
-        return Err(format!("oracle-workon {label} must be non-empty, unpadded, and not start with '-'"));
+        return Err(format!(
+            "oracle-workon {label} must be non-empty, unpadded, and not start with '-'"
+        ));
     }
-    if value.chars().any(|ch| ch.is_control() || ch.is_whitespace()) {
-        return Err(format!("oracle-workon {label} must not contain whitespace or control characters"));
+    if value
+        .chars()
+        .any(|ch| ch.is_control() || ch.is_whitespace())
+    {
+        return Err(format!(
+            "oracle-workon {label} must not contain whitespace or control characters"
+        ));
     }
     Ok(())
 }
 
 fn oracleworkon_validate_prompt(value: &str) -> Result<(), String> {
-    if value.is_empty() || value == "--" || value.starts_with('-') || value.chars().any(char::is_control) {
+    if value.is_empty()
+        || value == "--"
+        || value.starts_with('-')
+        || value.chars().any(char::is_control)
+    {
         return Err("oracle-workon prompt must be non-empty, not start with '-', and contain no control characters".to_owned());
     }
     Ok(())
@@ -237,7 +297,11 @@ fn oracleworkon_render_plan(options: &OracleworkonOptions) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "oracle-workon plan:");
     for target in &options.targets {
-        let _ = writeln!(out, "  - {}", oracleworkon_workon_command(target, options.task.as_deref()));
+        let _ = writeln!(
+            out,
+            "  - {}",
+            oracleworkon_workon_command(target, options.task.as_deref())
+        );
     }
     if options.engine.is_some()
         || options.prompt.is_some()
@@ -258,17 +322,20 @@ fn oracleworkon_workon_command(target: &str, task: Option<&str>) -> String {
     }
 }
 
-
 fn oracleworkon_spawn_with_orchestrator(
     options: &OracleworkonOptions,
     orchestrator: &dyn crate::serve_core::ServecoreOrchestrator,
 ) -> Result<String, String> {
-    let target = options.targets.first().ok_or_else(|| ORACLEWORKON_USAGE.to_owned())?;
+    let target = options
+        .targets
+        .first()
+        .ok_or_else(|| ORACLEWORKON_USAGE.to_owned())?;
     let request = crate::serve_core::ServecoreWorkonRequest {
         repo: target.clone(),
         task: options.task.clone(),
         engine: options.engine.clone(),
-        target: (!oracleworkon_has_flag(options, ORACLEWORKON_FLAG_NO_ATTACH)).then(|| target.clone()),
+        target: (!oracleworkon_has_flag(options, ORACLEWORKON_FLAG_NO_ATTACH))
+            .then(|| target.clone()),
         prompt: options.prompt.clone(),
         with_oracles: options.with.clone(),
         attach: !oracleworkon_has_flag(options, ORACLEWORKON_FLAG_NO_ATTACH),
@@ -300,7 +367,10 @@ fn oracleworkon_orchestration_root() -> std::path::PathBuf {
 }
 
 fn oracleworkon_run_single_workon(options: &OracleworkonOptions) -> Result<String, String> {
-    let target = options.targets.first().ok_or_else(|| ORACLEWORKON_USAGE.to_owned())?;
+    let target = options
+        .targets
+        .first()
+        .ok_or_else(|| ORACLEWORKON_USAGE.to_owned())?;
     let mut args = vec![target.clone()];
     if let Some(task) = &options.task {
         args.push(task.clone());
@@ -317,7 +387,6 @@ fn oracleworkon_run_single_workon(options: &OracleworkonOptions) -> Result<Strin
 #[cfg(test)]
 mod oracleworkon_tests {
     use super::*;
-
 
     #[derive(Default)]
     struct OracleworkonFakeOrchestrator {
@@ -357,14 +426,31 @@ mod oracleworkon_tests {
 
     impl OracleworkonEnvGuard {
         fn oracleworkon_new() -> Self {
-            let keys = ["HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "TMUX", "PATH", "GHQ_ROOT"];
-            let saved = keys.into_iter().map(|key| (key, std::env::var_os(key))).collect::<Vec<_>>();
-            let root = std::env::temp_dir().join(format!("maw-oracleworkon-test-{}", std::process::id()));
+            let keys = [
+                "HOME",
+                "XDG_CONFIG_HOME",
+                "XDG_STATE_HOME",
+                "XDG_DATA_HOME",
+                "XDG_CACHE_HOME",
+                "TMUX",
+                "PATH",
+                "GHQ_ROOT",
+            ];
+            let saved = keys
+                .into_iter()
+                .map(|key| (key, std::env::var_os(key)))
+                .collect::<Vec<_>>();
+            let root =
+                std::env::temp_dir().join(format!("maw-oracleworkon-test-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&root);
             std::fs::create_dir_all(root.join("bin")).expect("bin");
             std::fs::create_dir_all(root.join("ghq/github.com/acme/demo")).expect("repo");
             std::fs::create_dir_all(root.join("xdg-config/maw")).expect("config");
-            std::fs::write(root.join("xdg-config/maw/maw.config.json"), r#"{"commands":{"default":"echo launch"}}"#).expect("config");
+            std::fs::write(
+                root.join("xdg-config/maw/maw.config.json"),
+                r#"{"commands":{"default":"echo launch"}}"#,
+            )
+            .expect("config");
             oracleworkon_write_fake_tmux(&root);
             std::env::set_var("HOME", root.join("home"));
             std::env::set_var("XDG_CONFIG_HOME", root.join("xdg-config"));
@@ -381,7 +467,11 @@ mod oracleworkon_tests {
     impl Drop for OracleworkonEnvGuard {
         fn drop(&mut self) {
             for (key, value) in self.saved.drain(..) {
-                if let Some(value) = value { std::env::set_var(key, value); } else { std::env::remove_var(key); }
+                if let Some(value) = value {
+                    std::env::set_var(key, value);
+                } else {
+                    std::env::remove_var(key);
+                }
             }
         }
     }
@@ -420,14 +510,21 @@ esac
             project_repos: repos.iter().map(|repo| (*repo).to_owned()).collect(),
             windows: repos
                 .iter()
-                .map(|repo| NativeFleetWindow { name: repo.rsplit('/').next().unwrap_or(repo).to_owned(), repo: (*repo).to_owned(), kind: None })
+                .map(|repo| NativeFleetWindow {
+                    name: repo.rsplit('/').next().unwrap_or(repo).to_owned(),
+                    repo: (*repo).to_owned(),
+                    kind: None,
+                })
                 .collect(),
             ..NativeFleetSession::default()
         }
     }
 
     fn oracleworkon_fleet() -> Vec<NativeFleetSession> {
-        vec![oracleworkon_session("01-wish", &["acme/demo", "acme/other"])]
+        vec![oracleworkon_session(
+            "01-wish",
+            &["acme/demo", "acme/other"],
+        )]
     }
 
     fn oracleworkon_bad_fleet() -> Vec<NativeFleetSession> {
@@ -442,26 +539,50 @@ esac
 
     #[test]
     fn oracleworkon_parse_flags_and_dry_run_plan() {
-        let args = oracleworkon_strings(&["demo", "--task", "feat", "--dry-run", "--engine", "codex", "--prompt", "ship it", "--with", "nova", "--split"]);
+        let args = oracleworkon_strings(&[
+            "demo",
+            "--task",
+            "feat",
+            "--dry-run",
+            "--engine",
+            "codex",
+            "--prompt",
+            "ship it",
+            "--with",
+            "nova",
+            "--split",
+        ]);
         let output = oracleworkon_run(&args, oracleworkon_fleet).expect("plan");
         assert!(output.contains("maw workon demo feat --layout nested"));
-        assert!(output.contains("advanced daemon orchestration is available through the native serve orchestrator"));
+        assert!(output.contains(
+            "advanced daemon orchestration is available through the native serve orchestrator"
+        ));
     }
 
     #[test]
     fn oracleworkon_all_uses_seeded_fleet_without_real_config() {
-        let output = oracleworkon_run(&oracleworkon_strings(&["--all", "--dry-run"]), oracleworkon_fleet).expect("all");
+        let output = oracleworkon_run(
+            &oracleworkon_strings(&["--all", "--dry-run"]),
+            oracleworkon_fleet,
+        )
+        .expect("all");
         assert!(output.contains("maw workon acme/demo --layout nested"));
         assert!(output.contains("maw workon acme/other --layout nested"));
     }
 
     #[test]
     fn oracleworkon_rejects_guards_before_fleet_or_workon() {
-        let err = oracleworkon_run(&oracleworkon_strings(&["--", "demo"]), oracleworkon_bad_fleet).expect_err("sep");
+        let err = oracleworkon_run(
+            &oracleworkon_strings(&["--", "demo"]),
+            oracleworkon_bad_fleet,
+        )
+        .expect_err("sep");
         assert!(err.contains("-- separator"));
-        let err = oracleworkon_run(&oracleworkon_strings(&["-bad"]), oracleworkon_bad_fleet).expect_err("flag");
+        let err = oracleworkon_run(&oracleworkon_strings(&["-bad"]), oracleworkon_bad_fleet)
+            .expect_err("flag");
         assert!(err.contains("looks like a flag"));
-        let err = oracleworkon_run(&oracleworkon_strings(&["--all"]), oracleworkon_bad_fleet).expect_err("bad fleet");
+        let err = oracleworkon_run(&oracleworkon_strings(&["--all"]), oracleworkon_bad_fleet)
+            .expect_err("bad fleet");
         assert!(err.contains("project repo"));
     }
 
@@ -498,7 +619,8 @@ esac
     fn oracleworkon_single_target_delegates_to_native_workon_hermetically() {
         let _lock = super::env_test_lock();
         let _env = OracleworkonEnvGuard::oracleworkon_new();
-        let output = oracleworkon_run(&oracleworkon_strings(&["demo"]), oracleworkon_fleet).expect("run");
+        let output =
+            oracleworkon_run(&oracleworkon_strings(&["demo"]), oracleworkon_fleet).expect("run");
         assert!(output.contains("reusing existing window 'demo'"));
     }
 }

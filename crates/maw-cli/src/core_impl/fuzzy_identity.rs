@@ -1,6 +1,7 @@
-const DISPATCH_309: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "identity", handler: Handler::Sync(run_identity_plan) },
-];
+const DISPATCH_309: &[DispatcherEntry] = &[DispatcherEntry {
+    command: "identity",
+    handler: Handler::Sync(run_identity_plan),
+}];
 
 fn parse_fuzzy_plan_args(argv: &[String]) -> Result<(bool, FuzzyPlanAction), String> {
     let mut plan_json = false;
@@ -405,4 +406,3 @@ fn render_identity_session_plan_json(input: &CanonicalSessionNameInput, canonica
         json_string(canonical)
     )
 }
-

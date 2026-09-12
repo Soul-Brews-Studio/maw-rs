@@ -91,8 +91,13 @@ fn ls_recent_json_uses_session_name_as_tie_breaker_for_equal_created_times() {
 }
 
 #[test]
-fn ls_without_fake_panes_uses_live_tmux_defaults_without_error() {
-    let json = ok_json(&["ls", "--plan-json"]);
+fn ls_with_injected_pane_is_independent_of_live_tmux() {
+    let json = ok_json(&[
+        "ls",
+        "--plan-json",
+        "--pane",
+        "%1|claude|alpha:1.0|alpha|101|/repo|1980",
+    ]);
 
     assert_eq!(json["command"], "ls");
     assert_eq!(json["scope"], "local");

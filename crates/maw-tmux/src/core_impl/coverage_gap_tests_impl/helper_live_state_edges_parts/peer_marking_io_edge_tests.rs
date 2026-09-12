@@ -1,10 +1,10 @@
 
     #[test]
     fn live_state_match_labels_use_oracle_and_empty_cwd_is_ignored() {
-        let peers = vec![maw_peer::PeerTarget {
+        let peers = vec![LivePeerTarget {
             name: None,
             url: "http://scratch".to_owned(),
-            source: maw_peer::PeerSourceKind::Scout,
+            source: "scout".to_owned(),
             node: None,
             oracle: Some("scratch".to_owned()),
         }];
@@ -27,10 +27,10 @@
 
     #[test]
     fn mark_peer_targets_live_reports_targets_sessions_and_cwd_matches() {
-        let peers = vec![maw_peer::PeerTarget {
+        let peers = vec![LivePeerTarget {
             name: Some("scratch".to_owned()),
             url: "http://scratch".to_owned(),
-            source: maw_peer::PeerSourceKind::Config,
+            source: "config".to_owned(),
             node: Some("node-a".to_owned()),
             oracle: Some("oracle-a".to_owned()),
         }];
@@ -72,7 +72,7 @@
         assert_eq!(marked.len(), 1);
         assert_eq!(marked[0].name, Some("scratch".to_owned()));
         assert_eq!(marked[0].url, "http://scratch");
-        assert_eq!(marked[0].source, maw_peer::PeerSourceKind::Config);
+        assert_eq!(marked[0].source, "config");
         assert_eq!(marked[0].node, Some("node-a".to_owned()));
         assert_eq!(marked[0].oracle, Some("oracle-a".to_owned()));
         assert!(marked[0].awake);

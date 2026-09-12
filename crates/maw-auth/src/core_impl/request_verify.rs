@@ -441,15 +441,14 @@ fn verify_ed25519_serve_request(
     if !verified {
         return auth_reject("ed25519-signature-invalid");
     }
-    if let Err(reason) = ed25519_pin_verified_key(parts, &signed.from, &key_hex) {
-        return auth_reject(reason);
-    }
     RequestAuthDecision::Accept {
         who: format!("ed25519:{}", signed.from),
     }
 }
 
 fn ed25519_select_pubkey(parts: &RequestAuthParts, from: &str) -> Result<String, &'static str> {
+    // A request-supplied key may corroborate an existing pin, but it is never
+    // a trust root: unknown identities must be paired out of band first.
     let observed = ed25519_pubkey_header(&parts.headers).map(str::to_owned);
     if let Some(pins) = &parts.ed25519_pins {
         let guard = pins.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -462,39 +461,16 @@ fn ed25519_select_pubkey(parts: &RequestAuthParts, from: &str) -> Result<String,
             }
             return Ok(pinned.to_owned());
         }
-        return observed.ok_or("ed25519-pin-missing");
+        return Err("ed25519-pin-missing");
     }
+    // `cached_pubkey` is a caller-supplied, pre-established trust record. The
+    // request's observed key is deliberately ignored when no pin store exists.
     parts
         .cached_pubkey
         .as_deref()
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
         .ok_or("ed25519-pin-missing")
-}
-
-fn ed25519_pin_verified_key(
-    parts: &RequestAuthParts,
-    from: &str,
-    key_hex: &str,
-) -> Result<(), &'static str> {
-    let Some(pins) = &parts.ed25519_pins else {
-        return Ok(());
-    };
-    let mut guard = pins.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if guard.is_poisoned() {
-        return Err("tofu-store-corrupt");
-    }
-    if let Some(pinned) = guard.pinned(from) {
-        if pinned == key_hex {
-            return Ok(());
-        }
-        return Err("ed25519-pin-mismatch");
-    }
-    if guard.pin_first_contact(from, key_hex) {
-        Ok(())
-    } else {
-        Err("ed25519-pin-mismatch")
-    }
 }
 
 fn verify_ed25519_signature(key_hex: &str, payload: &[u8], signature_hex: &str) -> bool {
@@ -534,13 +510,30 @@ fn auth_reject(reason: &str) -> RequestAuthDecision {
 
 #[must_use]
 pub fn is_protected(path: &str, method: &str) -> bool {
-    let method = method.to_ascii_uppercase();
+    let method = auth_normalize_protected_method(method);
     let normalized = auth_normalize_protected_path(path);
     matches!(
         (method.as_str(), normalized.as_str()),
         ("POST", "/triggers/fire" | "/worktrees/cleanup" | "/orchestration/workon" | "/trust" | "/trust/revoke")
-            | ("GET", "/trust")
+            | ("GET", "/trust" | "/sessions" | "/capture")
     ) || (method == "POST" && normalized.starts_with("/plugins/"))
+}
+
+/// HEAD is GET without a response body (RFC 9110), and axum's `get(handler)`
+/// serves HEAD from the SAME handler — so the authorization answer for the two
+/// has to be identical. Comparing the raw method string meant `HEAD /api/trust`
+/// answered 200 from a non-loopback address while `GET /api/trust` answered
+/// 403, bypassing EVERY entry on the allowlist rather than any single route.
+/// Normalizing here rather than in the middleware keeps `is_protected` — the
+/// function that answers "is this protected?" — correct for every caller,
+/// present and future, instead of leaving the authority wrong and patching one
+/// consumer.
+fn auth_normalize_protected_method(method: &str) -> String {
+    let method = method.to_ascii_uppercase();
+    if method == "HEAD" {
+        return "GET".to_owned();
+    }
+    method
 }
 
 fn auth_normalize_protected_path(path: &str) -> String {
@@ -652,6 +645,8 @@ fn iso_from_unix_millis(ms: i64) -> String {
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z")
 }
 
+// Invariant assertion on validated date math — cannot fail for in-range inputs.
+#[allow(clippy::expect_used)]
 fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let days = days + 719_468;
     let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
@@ -665,8 +660,10 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let year = year + i64::from(month <= 2);
     (
         year,
-        u32::try_from(month).expect("civil month fits u32"),
-        u32::try_from(day).expect("civil day fits u32"),
+        u32::try_from(month)
+            .expect("civil month must fit u32 because civil_from_days yields months 1 through 12"),
+        u32::try_from(day)
+            .expect("civil day must fit u32 because civil_from_days yields positive calendar days"),
     )
 }
 
@@ -696,13 +693,17 @@ fn parse_iso_millis(iso: &str) -> Option<i64> {
     })
 }
 
+// Invariant assertion on validated date math — cannot fail for in-range inputs.
+#[allow(clippy::expect_used)]
 fn parse_second_millis(sec_part: &str) -> Option<(u32, u16)> {
     let (second, fraction) = sec_part.split_once('.').unwrap_or((sec_part, ""));
     let second = second.parse::<u32>().ok()?;
     let mut value = 0_u16;
     let mut count = 0_u8;
     for ch in fraction.chars().take(3) {
-        let digit = u16::try_from(ch.to_digit(10)?).expect("decimal digit fits u16");
+        let digit = u16::try_from(ch.to_digit(10)?).expect(
+            "decimal digit must fit u16 because char::to_digit(10) yields values 0 through 9",
+        );
         value = (value * 10) + digit;
         count += 1;
     }
@@ -715,6 +716,8 @@ fn parse_second_millis(sec_part: &str) -> Option<(u32, u16)> {
     Some((second, millis))
 }
 
+// Invariant assertion on validated date math — cannot fail for in-range inputs.
+#[allow(clippy::expect_used)]
 fn timestamp_seconds(
     year: i32,
     month: u32,
@@ -732,7 +735,9 @@ fn timestamp_seconds(
         28
     };
     let month_lengths = [31, leap_feb, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let max_day = month_lengths[usize::try_from(month - 1).expect("validated month fits usize")];
+    let max_day = month_lengths[usize::try_from(month - 1).expect(
+        "month index must fit usize because month was validated in the inclusive range 1 through 12",
+    )];
     if day == 0 || day > max_day {
         return None;
     }
@@ -750,9 +755,12 @@ fn timestamp_seconds(
     )
 }
 
+// HMAC-SHA256 accepts keys of any length — new_from_slice cannot return Err.
+#[allow(clippy::expect_used)]
 fn hmac_sha256_hex(secret: &str, payload: &str) -> String {
-    let mut mac =
-        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
+    let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).expect(
+        "HMAC construction must succeed because HMAC-SHA256 accepts keys of any length",
+    );
     mac.update(payload.as_bytes());
     hex_lower(&mac.finalize().into_bytes())
 }
@@ -796,6 +804,20 @@ mod tests {
         assert!(!super::is_protected("/api/plugins", "GET"));
         assert!(!super::is_protected("/api/identity", "GET"));
         assert!(!super::is_protected("/api/triggers", "GET"));
+
+        // #866: the read routes, and the HEAD alias. axum's `get(handler)`
+        // serves HEAD from the same handler, so HEAD must answer exactly as
+        // GET does — otherwise every entry on this list is bypassable by
+        // swapping the verb.
+        assert!(super::is_protected("/api/sessions", "GET"));
+        assert!(super::is_protected("/api/capture?target=x", "GET"));
+        assert!(super::is_protected("/api/sessions", "HEAD"));
+        assert!(super::is_protected("/api/capture", "head"));
+        assert!(super::is_protected("/api/trust", "HEAD"));
+        // Normalization is HEAD->GET only; it must not promote other verbs.
+        assert!(!super::is_protected("/api/sessions", "DELETE"));
+        assert!(!super::is_protected("/api/sessions", "OPTIONS"));
+        assert!(!super::is_protected("/api/sessions", "POST"));
     }
 
     #[test]

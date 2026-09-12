@@ -40,11 +40,7 @@ fn run_park_command(argv: &[String]) -> CliOutput {
 /// Resolve (`target_window`, note) from raw args, current window, and known window names.
 /// Exported for unit testing.
 #[must_use]
-pub fn resolve_park(
-    raw: &[String],
-    current: &str,
-    known: &[String],
-) -> (String, Option<String>) {
+pub fn resolve_park(raw: &[String], current: &str, known: &[String]) -> (String, Option<String>) {
     if raw.is_empty() {
         return (current.to_owned(), None);
     }
@@ -205,8 +201,7 @@ fn legacy_parked_dir() -> std::path::PathBuf {
 fn cmd_park(raw: &[String]) -> Result<String, String> {
     let session = park_tmux(&["display-message", "-p", "#S"])?;
     let current_window = park_tmux(&["display-message", "-p", "#W"])?;
-    let list_raw =
-        park_tmux(&["list-windows", "-t", &session, "-F", "#I:#W"])?;
+    let list_raw = park_tmux(&["list-windows", "-t", &session, "-F", "#I:#W"])?;
     let known_names: Vec<String> = list_raw
         .lines()
         .filter_map(|line| line.split_once(':').map(|(_, name)| name.to_owned()))
@@ -239,10 +234,8 @@ fn cmd_park(raw: &[String]) -> Result<String, String> {
         parked_at: park_iso_now(),
     };
     let dir = parked_dir();
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| format!("park: cannot create parked dir: {e}"))?;
-    let json =
-        serde_json::to_string_pretty(&state).map_err(|e| format!("park: serialize: {e}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("park: cannot create parked dir: {e}"))?;
+    let json = serde_json::to_string_pretty(&state).map_err(|e| format!("park: serialize: {e}"))?;
     let file_path = dir.join(format!("{target}.json"));
     std::fs::write(&file_path, format!("{json}\n"))
         .map_err(|e| format!("park: write {}: {e}", file_path.display()))?;
