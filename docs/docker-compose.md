@@ -1,3 +1,7 @@
+> **Deprecated (2026-09-12):** Automated Docker builds and GHCR publishing are retired.
+> Use native release binaries instead (see [release guide](guides/release-and-calver.md)).
+> Existing images and the recipes below are retained as legacy references; they do not receive new releases.
+
 # Docker Compose quick-start
 
 This runs a container-owned maw runtime for evaluation or headless use. It does
