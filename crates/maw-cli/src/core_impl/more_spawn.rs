@@ -131,10 +131,7 @@ fn more_spawn_codex_with_runtime(
         ));
     }
 
-    runtime.more_spawn_write_file(
-        &worktree_path.join(MORE_SPAWN_ENGINE_MARKER),
-        engine,
-    )?;
+    runtime.more_spawn_write_file(&worktree_path.join(MORE_SPAWN_ENGINE_MARKER), engine)?;
 
     Ok(SpawnResult {
         window_name,
@@ -288,8 +285,9 @@ mod more_spawn_tests {
     fn codex_spawn_rejects_unsafe_inputs_before_git() {
         let mut runtime = FakeMoreSpawnRuntime::default();
 
-        let prefix_error = more_spawn_codex_with_runtime("../bad", 1, "alpha", "codex", &mut runtime)
-            .expect_err("bad prefix rejected");
+        let prefix_error =
+            more_spawn_codex_with_runtime("../bad", 1, "alpha", "codex", &mut runtime)
+                .expect_err("bad prefix rejected");
         let index_error = more_spawn_codex_with_runtime("mawjs", 0, "alpha", "codex", &mut runtime)
             .expect_err("bad index rejected");
         let base_error =

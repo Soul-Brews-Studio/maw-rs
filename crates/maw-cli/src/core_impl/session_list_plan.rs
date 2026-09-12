@@ -1,6 +1,12 @@
 const DISPATCH_304: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "bring", handler: Handler::Sync(run_bring_plan) },
-    DispatcherEntry { command: "b", handler: Handler::Sync(run_bring_plan) },
+    DispatcherEntry {
+        command: "bring",
+        handler: Handler::Sync(run_bring_plan),
+    },
+    DispatcherEntry {
+        command: "b",
+        handler: Handler::Sync(run_bring_plan),
+    },
 ];
 
 const LS_WATCH_DEFAULT_SECS: u64 = 2;
@@ -131,7 +137,9 @@ fn ls_watch_current_hms() -> String {
 fn ls_watch_current_hms_with_date(mut run_date: impl FnMut(&str) -> Option<Vec<u8>>) -> String {
     ["/bin/date", "date"]
         .into_iter()
-        .find_map(|program| run_date(program).and_then(|output| ls_watch_hms_from_date_output(&output)))
+        .find_map(|program| {
+            run_date(program).and_then(|output| ls_watch_hms_from_date_output(&output))
+        })
         .unwrap_or_else(ls_watch_current_utc_hms)
 }
 
@@ -331,9 +339,9 @@ fn project_ls_panes(options: &LsPlanOptions) -> Vec<LsPanePlan> {
             }
             let age_sec = pane.last_activity.map(|last| now.saturating_sub(last));
             if options.active
-                && pane
-                    .last_activity
-                    .is_none_or(|_| age_sec.is_none_or(|age| age > options.active_threshold_sec.unwrap_or(30 * 60)))
+                && pane.last_activity.is_none_or(|_| {
+                    age_sec.is_none_or(|age| age > options.active_threshold_sec.unwrap_or(30 * 60))
+                })
             {
                 return None;
             }
@@ -520,10 +528,7 @@ fn render_ls_sessions_json(panes: &[LsPanePlan], include_recent: bool) -> String
             if let Some(created) = panes.first().and_then(|pane| pane.session_created) {
                 fields.push(format!("\"created\":{created}"));
             }
-            let youngest_active_age = panes
-                .iter()
-                .filter_map(|pane| pane.age_sec)
-                .min();
+            let youngest_active_age = panes.iter().filter_map(|pane| pane.age_sec).min();
             if let (Some(age), Some(_created)) = (
                 youngest_active_age,
                 panes.first().and_then(|pane| pane.session_created),
@@ -586,7 +591,14 @@ fn render_ls_verbose_text(panes: &[LsPanePlan]) -> String {
     let groups = group_ls_sessions(panes);
     let session_width = ls_group_session_width(&groups);
     for (session, panes) in groups {
-        render_ls_verbose_group(&mut out, &session, &panes, session_width, target_width, &annotations);
+        render_ls_verbose_group(
+            &mut out,
+            &session,
+            &panes,
+            session_width,
+            target_width,
+            &annotations,
+        );
     }
     out
 }
@@ -707,7 +719,10 @@ fn ls_annotation_context() -> LsAnnotationContext {
 
 fn ls_fleet_sessions_for_annotation() -> BTreeSet<String> {
     let mut sessions = BTreeSet::new();
-    for entry in fleet_load_entries().into_iter().filter(fleet_entry_is_session) {
+    for entry in fleet_load_entries()
+        .into_iter()
+        .filter(fleet_entry_is_session)
+    {
         let stem = entry.file.strip_suffix(".json").unwrap_or(&entry.file);
         if !stem.is_empty() {
             sessions.insert(stem.to_owned());
@@ -747,7 +762,8 @@ fn ls_pane_annotation(pane: &LsPanePlan, annotations: &LsAnnotationContext) -> S
         &annotations.fleet_sessions,
         &annotations.team_by_pane,
     );
-    if annotation.is_empty() && ls_is_orphan_list_session(&pane.session, &annotations.fleet_sessions)
+    if annotation.is_empty()
+        && ls_is_orphan_list_session(&pane.session, &annotations.fleet_sessions)
     {
         "orphan".to_owned()
     } else {
@@ -1052,8 +1068,6 @@ fn json_string(value: &str) -> String {
     out
 }
 
-
-
 #[cfg(test)]
 mod remaining_cli_private_coverage_tests {
     use super::*;
@@ -1241,8 +1255,8 @@ mod remaining_cli_private_coverage_tests {
             parse_ls_plan_options(&["--watch=5".to_owned()]).expect("explicit watch");
         assert_eq!(explicit_watch.watch_interval_sec, Some(5));
 
-        let json_watch =
-            parse_ls_plan_options(&["--watch".to_owned(), "--json".to_owned()]).expect_err("json watch");
+        let json_watch = parse_ls_plan_options(&["--watch".to_owned(), "--json".to_owned()])
+            .expect_err("json watch");
         assert_eq!(json_watch.code, 2);
         assert!(json_watch
             .stderr
@@ -1577,7 +1591,10 @@ mod remaining_cli_private_coverage_tests {
             .find(|line| line.contains("58-world-guardian"))
             .expect("world header");
 
-        assert_eq!(char_find(crew_header, " · "), char_find(hermes_header, " · "));
+        assert_eq!(
+            char_find(crew_header, " · "),
+            char_find(hermes_header, " · ")
+        );
         assert!(world_header.ends_with("58-world-guardian"));
     }
 
@@ -1610,7 +1627,10 @@ mod remaining_cli_private_coverage_tests {
             .find(|line| line.contains("unknown.0"))
             .expect("unknown row");
         let command_start = unknown_row.find("zsh").expect("command");
-        assert_eq!(&unknown_row[command_start + 10..command_start + 18], "        ");
+        assert_eq!(
+            &unknown_row[command_start + 10..command_start + 18],
+            "        "
+        );
         assert!(unknown_row.starts_with("  · "), "{unknown_row:?}");
 
         let old_row = text
@@ -1649,5 +1669,4 @@ mod remaining_cli_private_coverage_tests {
         assert!(ls_render_annotation("orphan").contains("[orphan]"));
     }
     include!("attach_private_tests.rs");
-
 }

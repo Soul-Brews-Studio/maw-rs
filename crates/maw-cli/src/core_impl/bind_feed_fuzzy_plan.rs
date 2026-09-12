@@ -1,6 +1,12 @@
 const DISPATCH_306: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "feed", handler: Handler::Sync(run_feed_plan) },
-    DispatcherEntry { command: "fuzzy", handler: Handler::Sync(run_fuzzy_plan) },
+    DispatcherEntry {
+        command: "feed",
+        handler: Handler::Sync(run_feed_plan),
+    },
+    DispatcherEntry {
+        command: "fuzzy",
+        handler: Handler::Sync(run_fuzzy_plan),
+    },
 ];
 
 const FEED_USAGE: &str = "usage: maw-rs feed parse-line <line> [--plan-json]\n       maw-rs feed describe <event> [--message <message>] [--plan-json]\n       maw-rs feed active --now <ms> --window <ms> [--event <oracle:ts:message>]... [--plan-json]\n       maw-rs feed constants [--plan-json]";
@@ -60,7 +66,16 @@ fn bind_host_usage_error(message: &str) -> CliOutput {
 fn run_feed_plan(argv: &[String]) -> CliOutput {
     if wants_help(
         argv,
-        &["parse-line", "--parse-line", "describe", "--describe", "--message", "--now", "--window", "--event"],
+        &[
+            "parse-line",
+            "--parse-line",
+            "describe",
+            "--describe",
+            "--message",
+            "--now",
+            "--window",
+            "--event",
+        ],
     ) {
         return help_output(FEED_USAGE);
     }
@@ -422,4 +437,3 @@ fn run_fuzzy_plan(argv: &[String]) -> CliOutput {
         } => render_fuzzy_match(plan_json, &input, &candidates, max_results, max_distance),
     }
 }
-

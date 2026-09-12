@@ -89,12 +89,6 @@ struct FleetState {
     disabled_count: usize,
 }
 
-
-
-
-
-
-
 trait FleetRuntime {
     fn fleet_run_command(&mut self, program: &str, args: &[String]) -> Result<String, String>;
     fn fleet_list_all(&mut self) -> Result<Vec<TmuxSession>, String>;
@@ -127,8 +121,16 @@ fn run_fleet_command(argv: &[String]) -> CliOutput {
         return zai_fleet_token(&argv[1..]);
     }
     match fleet_run(argv) {
-        Ok((code, stdout)) => CliOutput { code, stdout, stderr: String::new() },
-        Err(message) => CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") },
+        Ok((code, stdout)) => CliOutput {
+            code,
+            stdout,
+            stderr: String::new(),
+        },
+        Err(message) => CliOutput {
+            code: 1,
+            stdout: String::new(),
+            stderr: format!("{message}\n"),
+        },
     }
 }
 
@@ -140,7 +142,10 @@ fn fleet_run(argv: &[String]) -> Result<(i32, String), String> {
     fleet_run_with(argv, &mut runtime)
 }
 
-fn fleet_run_with(argv: &[String], runtime: &mut impl FleetRuntime) -> Result<(i32, String), String> {
+fn fleet_run_with(
+    argv: &[String],
+    runtime: &mut impl FleetRuntime,
+) -> Result<(i32, String), String> {
     let options = fleet_parse_args(argv)?;
     let state = fleet_load_state_with(runtime)?;
     match options.command {
@@ -179,7 +184,9 @@ fn fleet_parse_args(argv: &[String]) -> Result<FleetOptions, String> {
             "--only-99" => options.only_99 = true,
             "--squads" => {
                 index += 1;
-                let Some(raw) = argv.get(index) else { return Err("fleet: --squads requires a value".to_owned()); };
+                let Some(raw) = argv.get(index) else {
+                    return Err("fleet: --squads requires a value".to_owned());
+                };
                 let values = fleet_parse_squad_filter(raw);
                 if values.is_empty() {
                     return Err("fleet: --squads requires at least one value".to_owned());
@@ -197,7 +204,9 @@ fn fleet_parse_args(argv: &[String]) -> Result<FleetOptions, String> {
                 }
                 options.squads.extend(values);
             }
-            value if value.starts_with('-') => return Err(format!("fleet: unknown argument {value}")),
+            value if value.starts_with('-') => {
+                return Err(format!("fleet: unknown argument {value}"))
+            }
             value => fleet_parse_positional(&mut options, &mut command_seen, value)?,
         }
         index += 1;
@@ -205,8 +214,15 @@ fn fleet_parse_args(argv: &[String]) -> Result<FleetOptions, String> {
     if matches!(options.command, FleetCommand::Add) && options.target.is_none() {
         return Err("fleet add: missing session".to_owned());
     }
-    if matches!(options.command, FleetCommand::Wake | FleetCommand::Sleep) && options.target.is_none() && !options.all {
-        let action = if options.command == FleetCommand::Wake { "wake" } else { "sleep" };
+    if matches!(options.command, FleetCommand::Wake | FleetCommand::Sleep)
+        && options.target.is_none()
+        && !options.all
+    {
+        let action = if options.command == FleetCommand::Wake {
+            "wake"
+        } else {
+            "sleep"
+        };
         return Err(format!("fleet {action}: specify a squad, or --all to {action} every registered session on this node"));
     }
     if matches!(options.command, FleetCommand::Gather) && options.target.is_none() {
@@ -233,11 +249,19 @@ fn fleet_default_options() -> FleetOptions {
     }
 }
 
-fn fleet_parse_positional(options: &mut FleetOptions, seen: &mut bool, value: &str) -> Result<(), String> {
+fn fleet_parse_positional(
+    options: &mut FleetOptions,
+    seen: &mut bool,
+    value: &str,
+) -> Result<(), String> {
     if !*seen {
         return fleet_set_command(options, seen, value);
     }
-    if matches!(options.command, FleetCommand::Add | FleetCommand::Wake | FleetCommand::Sleep | FleetCommand::Gather) && options.target.is_none() {
+    if matches!(
+        options.command,
+        FleetCommand::Add | FleetCommand::Wake | FleetCommand::Sleep | FleetCommand::Gather
+    ) && options.target.is_none()
+    {
         fleet_validate_session_name(value)?;
         options.target = Some(value.to_owned());
         return Ok(());
@@ -245,8 +269,14 @@ fn fleet_parse_positional(options: &mut FleetOptions, seen: &mut bool, value: &s
     Err(fleet_usage())
 }
 
-fn fleet_set_command(options: &mut FleetOptions, seen: &mut bool, value: &str) -> Result<(), String> {
-    if *seen { return Err(fleet_usage()); }
+fn fleet_set_command(
+    options: &mut FleetOptions,
+    seen: &mut bool,
+    value: &str,
+) -> Result<(), String> {
+    if *seen {
+        return Err(fleet_usage());
+    }
     options.command = match value {
         "add" => FleetCommand::Add,
         "ls" | "list" | "census" => FleetCommand::Census,
@@ -291,7 +321,14 @@ fn fleet_load_state_with(runtime: &mut impl FleetRuntime) -> Result<FleetState, 
     let fleet_entries = fleet_load_entries_result_for_env(&env, "fleet")?;
     let sessions = fleet_entries_to_summaries(&fleet_entries);
     let disabled_count = fleet_disabled_count_for_env(&env);
-    Ok(FleetState { config_dir, repos_root, config, fleet_entries, sessions, disabled_count })
+    Ok(FleetState {
+        config_dir,
+        repos_root,
+        config,
+        fleet_entries,
+        sessions,
+        disabled_count,
+    })
 }
 
 fn fleet_repos_root(runtime: &mut impl FleetRuntime) -> std::path::PathBuf {
@@ -319,16 +356,27 @@ fn fleet_normalize_repos_root(root: std::path::PathBuf) -> std::path::PathBuf {
 }
 
 fn fleet_repo_path(repos_root: &std::path::Path, repo: &str) -> std::path::PathBuf {
-    let repo = repo.trim().strip_prefix("github.com/").unwrap_or(repo.trim());
+    let repo = repo
+        .trim()
+        .strip_prefix("github.com/")
+        .unwrap_or(repo.trim());
     repos_root.join(repo)
 }
 
 fn fleet_load_config(env: &MawXdgEnv) -> FleetConfigSummary {
     let value = merged_config_value_for_env(env);
-    let node = value.get("node").and_then(serde_json::Value::as_str).unwrap_or("local").to_owned();
+    let node = value
+        .get("node")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("local")
+        .to_owned();
     let peers = fleet_parse_peers(&value);
     let agents = fleet_parse_agents(&value);
-    FleetConfigSummary { node, peers, agents }
+    FleetConfigSummary {
+        node,
+        peers,
+        agents,
+    }
 }
 
 fn fleet_parse_peers(value: &serde_json::Value) -> Vec<FleetPeerSummary> {
@@ -343,13 +391,19 @@ fn fleet_parse_peers(value: &serde_json::Value) -> Vec<FleetPeerSummary> {
 
 fn fleet_peer_from_value(value: &serde_json::Value) -> Option<FleetPeerSummary> {
     let name = value.get("name")?.as_str()?.to_owned();
-    let url = value.get("url").and_then(serde_json::Value::as_str).unwrap_or_default().to_owned();
+    let url = value
+        .get("url")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
     Some(FleetPeerSummary { name, url })
 }
 
 fn fleet_parse_agents(value: &serde_json::Value) -> BTreeMap<String, String> {
     let mut agents = BTreeMap::new();
-    let Some(map) = value.get("agents").and_then(serde_json::Value::as_object) else { return agents; };
+    let Some(map) = value.get("agents").and_then(serde_json::Value::as_object) else {
+        return agents;
+    };
     for (name, route) in map {
         // #605: never surface invalid manifest names (argv junk, dot/backup
         // names) as fleet agents.
@@ -384,7 +438,11 @@ fn fleet_entries_to_summaries(entries: &[NativeFleetEntry]) -> Vec<FleetSessionS
                 .windows
                 .iter()
                 .map(|window| FleetWindowSummary {
-                    name: if window.name.is_empty() { "main".to_owned() } else { window.name.clone() },
+                    name: if window.name.is_empty() {
+                        "main".to_owned()
+                    } else {
+                        window.name.clone()
+                    },
                     repo: window.repo.clone(),
                     kind: window.kind,
                 })
@@ -394,21 +452,15 @@ fn fleet_entries_to_summaries(entries: &[NativeFleetEntry]) -> Vec<FleetSessionS
         .collect()
 }
 
-
-
-
-
-
-
-
-
-
 fn fleet_run_add(
     state: &FleetState,
     options: &FleetOptions,
     runtime: &mut impl FleetRuntime,
 ) -> Result<(i32, String), String> {
-    let session = options.target.as_deref().ok_or_else(|| "fleet add: missing session".to_owned())?;
+    let session = options
+        .target
+        .as_deref()
+        .ok_or_else(|| "fleet add: missing session".to_owned())?;
     let live = runtime
         .fleet_list_all()?
         .into_iter()
@@ -416,7 +468,9 @@ fn fleet_run_add(
         .ok_or_else(|| format!("fleet add: live session not found: {session}"))?;
     let windows = fleet_registry_windows_from_tmux(&live.windows, Some(&state.repos_root));
     if windows.is_empty() {
-        return Err(format!("fleet add: no repo-backed windows found in session {session}"));
+        return Err(format!(
+            "fleet add: no repo-backed windows found in session {session}"
+        ));
     }
     let result = fleet_registry_upsert_session(session, &windows, "maw fleet add")?;
     if options.json {
@@ -433,7 +487,9 @@ fn fleet_json_add(session: &str, result: &FleetRegistryWrite) -> Result<String, 
         "status": if result.created { "created" } else { "updated" },
         "windowCount": result.window_count,
     });
-    serde_json::to_string_pretty(&value).map(|text| format!("{text}\n")).map_err(|error| error.to_string())
+    serde_json::to_string_pretty(&value)
+        .map(|text| format!("{text}\n"))
+        .map_err(|error| error.to_string())
 }
 
 fn fleet_render_add(session: &str, result: &FleetRegistryWrite) -> String {
@@ -446,82 +502,5 @@ fn fleet_render_add(session: &str, result: &FleetRegistryWrite) -> String {
     )
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 // Registry resolution uses the shared resolver's `NN-` prefix and `-oracle` suffix normalization.
 // Window names count because a member can live as a window of a shared session.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

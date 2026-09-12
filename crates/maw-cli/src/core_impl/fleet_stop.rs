@@ -40,7 +40,11 @@ impl StopSystemTmux {
 
 impl StopTmux for StopSystemTmux {
     fn stop_list_live_sessions(&mut self) -> Result<Vec<String>, String> {
-        match stop_tmux_run(&mut self.runner, "list-sessions", &["-F", "#{session_name}"]) {
+        match stop_tmux_run(
+            &mut self.runner,
+            "list-sessions",
+            &["-F", "#{session_name}"],
+        ) {
             Ok(raw) => Ok(stop_parse_live_sessions(&raw)),
             Err(_) => Ok(Vec::new()),
         }
@@ -157,7 +161,9 @@ fn stop_validate_before_stop(configured: &[String], session: &str) -> Result<(),
     if configured.iter().any(|name| name == session) {
         Ok(())
     } else {
-        Err(format!("stop: refusing to stop non-fleet session {session}"))
+        Err(format!(
+            "stop: refusing to stop non-fleet session {session}"
+        ))
     }
 }
 
@@ -165,7 +171,10 @@ fn stop_validate_user_target(value: &str) -> Result<(), String> {
     if value.is_empty() || value == "--" || value.starts_with('-') || value.trim() != value {
         return Err("stop target must be non-empty, unpadded, and not start with '-'".to_owned());
     }
-    if value.chars().any(|ch| ch.is_control() || ch.is_whitespace()) {
+    if value
+        .chars()
+        .any(|ch| ch.is_control() || ch.is_whitespace())
+    {
         return Err("stop target must not contain whitespace or control characters".to_owned());
     }
     Ok(())
@@ -173,10 +182,17 @@ fn stop_validate_user_target(value: &str) -> Result<(), String> {
 
 fn stop_validate_tmux_target(value: &str) -> Result<(), String> {
     if value.is_empty() || value == "--" || value.starts_with('-') || value.trim() != value {
-        return Err("stop tmux target must be non-empty, unpadded, and not start with '-'".to_owned());
+        return Err(
+            "stop tmux target must be non-empty, unpadded, and not start with '-'".to_owned(),
+        );
     }
-    if value.chars().any(|ch| ch.is_control() || ch.is_whitespace()) {
-        return Err("stop tmux target must not contain whitespace or control characters".to_owned());
+    if value
+        .chars()
+        .any(|ch| ch.is_control() || ch.is_whitespace())
+    {
+        return Err(
+            "stop tmux target must not contain whitespace or control characters".to_owned(),
+        );
     }
     Ok(())
 }
@@ -212,7 +228,8 @@ fn stop_write_tab_order(session: &str, windows: &[StopWindowOrder]) -> Result<()
     let Some(parent) = path.parent() else {
         return Err("stop: invalid tab-order path".to_owned());
     };
-    std::fs::create_dir_all(parent).map_err(|error| format!("stop: tab-order mkdir failed: {error}"))?;
+    std::fs::create_dir_all(parent)
+        .map_err(|error| format!("stop: tab-order mkdir failed: {error}"))?;
     let text = stop_tab_order_json(windows)?;
     std::fs::write(&path, text).map_err(|error| format!("stop: tab-order write failed: {error}"))
 }
@@ -233,7 +250,9 @@ fn stop_tmux_run<R: maw_tmux::TmuxRunner>(
     args: &[&str],
 ) -> Result<String, String> {
     let owned = args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
-    runner.run(subcommand, &owned).map_err(|error| error.message)
+    runner
+        .run(subcommand, &owned)
+        .map_err(|error| error.message)
 }
 
 #[cfg(test)]
@@ -282,11 +301,18 @@ mod stop_tests {
     }
 
     fn stop_session(name: &str) -> NativeFleetSession {
-        NativeFleetSession { name: name.to_owned(), ..NativeFleetSession::default() }
+        NativeFleetSession {
+            name: name.to_owned(),
+            ..NativeFleetSession::default()
+        }
     }
 
     fn stop_fleet() -> Vec<NativeFleetSession> {
-        vec![stop_session("01-wish"), stop_session("08-gm-bo"), stop_session("99-tonk")]
+        vec![
+            stop_session("01-wish"),
+            stop_session("08-gm-bo"),
+            stop_session("99-tonk"),
+        ]
     }
 
     fn stop_bad_fleet() -> Vec<NativeFleetSession> {
@@ -299,7 +325,10 @@ mod stop_tests {
 
     #[test]
     fn stop_dispatch_registers_stop_and_rest() {
-        let commands = DISPATCH_86.iter().map(|entry| entry.command).collect::<Vec<_>>();
+        let commands = DISPATCH_86
+            .iter()
+            .map(|entry| entry.command)
+            .collect::<Vec<_>>();
         assert_eq!(commands, vec!["stop", "rest"]);
     }
 
@@ -329,7 +358,10 @@ mod stop_tests {
 
     #[test]
     fn stop_ignores_missing_sessions_like_maw_js() {
-        let mut tmux = StopFakeTmux { live: Vec::new(), ..StopFakeTmux::default() };
+        let mut tmux = StopFakeTmux {
+            live: Vec::new(),
+            ..StopFakeTmux::default()
+        };
 
         let output = stop_run(&[], &mut tmux, stop_fleet).expect("stop");
 
@@ -374,7 +406,10 @@ mod stop_tests {
 
     #[test]
     fn stop_rejects_bad_live_session_before_kill() {
-        let mut tmux = StopFakeTmux { live: stop_strings(&["-bad"]), ..StopFakeTmux::default() };
+        let mut tmux = StopFakeTmux {
+            live: stop_strings(&["-bad"]),
+            ..StopFakeTmux::default()
+        };
 
         let error = stop_run(&[], &mut tmux, stop_fleet).expect_err("bad live");
 
@@ -384,7 +419,10 @@ mod stop_tests {
 
     #[test]
     fn stop_empty_fleet_does_not_touch_tmux_kills() {
-        let mut tmux = StopFakeTmux { live: stop_strings(&["01-wish"]), ..StopFakeTmux::default() };
+        let mut tmux = StopFakeTmux {
+            live: stop_strings(&["01-wish"]),
+            ..StopFakeTmux::default()
+        };
 
         let output = stop_run(&[], &mut tmux, stop_empty_fleet).expect("empty");
 
@@ -398,8 +436,14 @@ mod stop_tests {
         assert_eq!(
             windows,
             vec![
-                StopWindowOrder { index: 0, name: "oracle".to_owned() },
-                StopWindowOrder { index: 2, name: "work".to_owned() },
+                StopWindowOrder {
+                    index: 0,
+                    name: "oracle".to_owned()
+                },
+                StopWindowOrder {
+                    index: 2,
+                    name: "work".to_owned()
+                },
             ]
         );
         let json = stop_tab_order_json(&windows).expect("json");

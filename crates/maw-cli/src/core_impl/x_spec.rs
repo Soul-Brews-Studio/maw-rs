@@ -115,7 +115,12 @@ impl XSource {
                 Some(reference) => format!("{verb}@{}", reference.as_str()),
                 None => verb.clone(),
             },
-            XSource::GitHub { owner, repo, subpath, reference } => {
+            XSource::GitHub {
+                owner,
+                repo,
+                subpath,
+                reference,
+            } => {
                 let mut out = format!("gh:{owner}/{repo}");
                 if let Some(reference) = reference {
                     out.push('@');
@@ -127,7 +132,11 @@ impl XSource {
                 }
                 out
             }
-            XSource::GitUrl { url, reference, subpath } => {
+            XSource::GitUrl {
+                url,
+                reference,
+                subpath,
+            } => {
                 let mut out = url.clone();
                 if let Some(reference) = reference {
                     out.push('@');
@@ -140,7 +149,12 @@ impl XSource {
                 out
             }
             XSource::LocalDir { path } => format!("file:{path}"),
-            XSource::GhRelease { owner, repo, tag, asset } => {
+            XSource::GhRelease {
+                owner,
+                repo,
+                tag,
+                asset,
+            } => {
                 format!("gh-release:{owner}/{repo}@{tag}#{asset}")
             }
             XSource::Npm { package, version } => match version {
@@ -187,13 +201,18 @@ pub fn parse_x_spec(spec: &str) -> Result<XSpec, String> {
         return Err("x spec: spec must not be empty".to_owned());
     }
     if spec.chars().any(char::is_whitespace) {
-        return Err(format!("x spec: spec must not contain whitespace: {spec:?}"));
+        return Err(format!(
+            "x spec: spec must not contain whitespace: {spec:?}"
+        ));
     }
     let (body, sha256) = split_x_spec_sha256_pin(spec)?;
     if body.is_empty() {
         return Err("x spec: spec must name a source before #sha256:".to_owned());
     }
-    Ok(XSpec { source: parse_x_source(body)?, sha256 })
+    Ok(XSpec {
+        source: parse_x_source(body)?,
+        sha256,
+    })
 }
 
 /// Split a trailing inline `#sha256:<64hex>` pin off the spec body.
@@ -203,7 +222,11 @@ fn split_x_spec_sha256_pin(spec: &str) -> Result<(&str, Option<String>), String>
     };
     let hex = &spec[index + "#sha256:".len()..];
     // mirrors plugin_plan.rs::normalize_plugin_install_sha256 — unify in WI-8
-    if hex.len() == 64 && hex.chars().all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase()) {
+    if hex.len() == 64
+        && hex
+            .chars()
+            .all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase())
+    {
         Ok((&spec[..index], Some(format!("sha256:{hex}"))))
     } else {
         Err("x spec: #sha256: pin must be 64 lowercase hex chars".to_owned())
@@ -265,7 +288,9 @@ fn parse_x_github_scheme(rest: &str) -> Result<XSource, String> {
     let mut parts = rest.splitn(3, '/');
     let owner = parts.next().unwrap_or_default();
     let Some(repo_and_ref) = parts.next() else {
-        return Err(format!("x spec: gh: spec must be gh:owner/repo[@ref][/sub], got 'gh:{rest}'"));
+        return Err(format!(
+            "x spec: gh: spec must be gh:owner/repo[@ref][/sub], got 'gh:{rest}'"
+        ));
     };
     let subpath = parts.next().map(normalize_x_subpath).transpose()?;
     let (repo, reference) = split_x_ref(repo_and_ref)?;
@@ -344,7 +369,10 @@ fn parse_x_git_url(body: &str) -> Result<XSource, String> {
             if reference.is_empty() {
                 return Err(format!("x spec: @ref must not be empty in '{body}'"));
             }
-            (&url_and_ref[..index + ".git".len()], Some(classify_x_git_ref(reference)))
+            (
+                &url_and_ref[..index + ".git".len()],
+                Some(classify_x_git_ref(reference)),
+            )
         }
         None => (url_and_ref, None),
     };
@@ -362,13 +390,16 @@ fn parse_x_local_dir(path: &str) -> Result<XSource, String> {
     if path.is_empty() {
         return Err("x spec: file: path must not be empty".to_owned());
     }
-    Ok(XSource::LocalDir { path: path.to_owned() })
+    Ok(XSource::LocalDir {
+        path: path.to_owned(),
+    })
 }
 
 /// `gh-release:owner/repo@tag#asset` — every part is required (v1.1).
 fn parse_x_gh_release(rest: &str) -> Result<XSource, String> {
-    let usage =
-        || format!("x spec: gh-release: spec must be gh-release:owner/repo@tag#asset, got 'gh-release:{rest}'");
+    let usage = || {
+        format!("x spec: gh-release: spec must be gh-release:owner/repo@tag#asset, got 'gh-release:{rest}'")
+    };
     let Some((head, asset)) = rest.split_once('#') else {
         return Err(usage());
     };
@@ -378,7 +409,12 @@ fn parse_x_gh_release(rest: &str) -> Result<XSource, String> {
     let Some((owner, repo)) = owner_repo.split_once('/') else {
         return Err(usage());
     };
-    if owner.is_empty() || repo.is_empty() || repo.contains('/') || tag.is_empty() || asset.is_empty() {
+    if owner.is_empty()
+        || repo.is_empty()
+        || repo.contains('/')
+        || tag.is_empty()
+        || asset.is_empty()
+    {
         return Err(usage());
     }
     Ok(XSource::GhRelease {
@@ -400,20 +436,29 @@ fn parse_x_npm(rest: &str) -> Result<XSource, String> {
         return Err("x spec: npm: package must not be empty".to_owned());
     }
     if version.as_deref() == Some("") {
-        return Err(format!("x spec: npm: version after '@' must not be empty in 'npm:{rest}'"));
+        return Err(format!(
+            "x spec: npm: version after '@' must not be empty in 'npm:{rest}'"
+        ));
     }
     let name_part = package.strip_prefix('@');
     if let Some(scoped) = name_part {
-        let valid_scope = scoped
-            .split_once('/')
-            .is_some_and(|(scope, name)| !scope.is_empty() && !name.is_empty() && !name.contains('/'));
+        let valid_scope = scoped.split_once('/').is_some_and(|(scope, name)| {
+            !scope.is_empty() && !name.is_empty() && !name.contains('/')
+        });
         if !valid_scope {
-            return Err(format!("x spec: npm: scoped package must be npm:@scope/pkg, got 'npm:{rest}'"));
+            return Err(format!(
+                "x spec: npm: scoped package must be npm:@scope/pkg, got 'npm:{rest}'"
+            ));
         }
     } else if package.contains('/') {
-        return Err(format!("x spec: npm: unscoped package must not contain '/', got 'npm:{rest}'"));
+        return Err(format!(
+            "x spec: npm: unscoped package must not contain '/', got 'npm:{rest}'"
+        ));
     }
-    Ok(XSource::Npm { package: package.to_owned(), version })
+    Ok(XSource::Npm {
+        package: package.to_owned(),
+        version,
+    })
 }
 
 fn parse_x_bare_verb(body: &str) -> Result<XSource, String> {
@@ -427,7 +472,10 @@ fn parse_x_bare_verb(body: &str) -> Result<XSource, String> {
             "x spec: '{verb}' is not a valid verb (ascii alphanumeric, '-', '_', '.')"
         ));
     }
-    Ok(XSource::Verb { verb: verb.to_owned(), reference })
+    Ok(XSource::Verb {
+        verb: verb.to_owned(),
+        reference,
+    })
 }
 
 /// Split an optional `@ref` off a segment; empty refs are an error.
@@ -455,11 +503,14 @@ fn classify_x_git_ref(reference: &str) -> XGitRef {
 }
 
 fn validate_x_owner_repo(owner: &str, repo: &str) -> Result<(), String> {
-    let valid = |part: &str| !part.is_empty() && part != "." && part != ".." && !part.contains('\\');
+    let valid =
+        |part: &str| !part.is_empty() && part != "." && part != ".." && !part.contains('\\');
     if valid(owner) && valid(repo) {
         Ok(())
     } else {
-        Err(format!("x spec: owner and repo must be non-empty path segments, got '{owner}/{repo}'"))
+        Err(format!(
+            "x spec: owner and repo must be non-empty path segments, got '{owner}/{repo}'"
+        ))
     }
 }
 
@@ -492,7 +543,12 @@ mod x_spec_parser_tests {
         parse_x_spec(spec).unwrap_or_else(|error| panic!("spec '{spec}' should parse: {error}"))
     }
 
-    fn github(owner: &str, repo: &str, subpath: Option<&str>, reference: Option<XGitRef>) -> XSource {
+    fn github(
+        owner: &str,
+        repo: &str,
+        subpath: Option<&str>,
+        reference: Option<XGitRef>,
+    ) -> XSource {
         XSource::GitHub {
             owner: owner.to_owned(),
             repo: repo.to_owned(),
@@ -507,7 +563,13 @@ mod x_spec_parser_tests {
     fn parses_bare_verb() {
         assert_eq!(
             parsed("costs"),
-            XSpec { source: XSource::Verb { verb: "costs".to_owned(), reference: None }, sha256: None }
+            XSpec {
+                source: XSource::Verb {
+                    verb: "costs".to_owned(),
+                    reference: None
+                },
+                sha256: None
+            }
         );
     }
 
@@ -515,7 +577,10 @@ mod x_spec_parser_tests {
     fn parses_bare_verb_with_ref() {
         assert_eq!(
             parsed("costs@main").source,
-            XSource::Verb { verb: "costs".to_owned(), reference: Some(XGitRef::Named("main".to_owned())) }
+            XSource::Verb {
+                verb: "costs".to_owned(),
+                reference: Some(XGitRef::Named("main".to_owned()))
+            }
         );
         assert_eq!(
             parsed("costs@v26.7.15").source,
@@ -528,7 +593,10 @@ mod x_spec_parser_tests {
 
     #[test]
     fn parses_github_shorthand() {
-        assert_eq!(parsed("acme/maw-tools").source, github("acme", "maw-tools", None, None));
+        assert_eq!(
+            parsed("acme/maw-tools").source,
+            github("acme", "maw-tools", None, None)
+        );
         assert_eq!(
             parsed("acme/maw-tools/packages/20-costs").source,
             github("acme", "maw-tools", Some("packages/20-costs"), None)
@@ -540,7 +608,12 @@ mod x_spec_parser_tests {
         // spec table form: owner/repo[/sub/path][@ref]
         assert_eq!(
             parsed("acme/maw-tools/packages/costs@main").source,
-            github("acme", "maw-tools", Some("packages/costs"), Some(XGitRef::Named("main".to_owned())))
+            github(
+                "acme",
+                "maw-tools",
+                Some("packages/costs"),
+                Some(XGitRef::Named("main".to_owned()))
+            )
         );
     }
 
@@ -549,11 +622,21 @@ mod x_spec_parser_tests {
         // today's install grammar (mirrors plugin_plan.rs): owner/repo@ref/sub
         assert_eq!(
             parsed("acme/maw-tools@main/packages/costs").source,
-            github("acme", "maw-tools", Some("packages/costs"), Some(XGitRef::Named("main".to_owned())))
+            github(
+                "acme",
+                "maw-tools",
+                Some("packages/costs"),
+                Some(XGitRef::Named("main".to_owned()))
+            )
         );
         assert_eq!(
             parsed("acme/maw-tools@main").source,
-            github("acme", "maw-tools", None, Some(XGitRef::Named("main".to_owned())))
+            github(
+                "acme",
+                "maw-tools",
+                None,
+                Some(XGitRef::Named("main".to_owned()))
+            )
         );
     }
 
@@ -574,23 +657,48 @@ mod x_spec_parser_tests {
     #[test]
     fn parses_inline_sha256_pin() {
         let spec = parsed(&format!("costs#sha256:{HEX64}"));
-        assert_eq!(spec.sha256.as_deref(), Some(format!("sha256:{HEX64}").as_str()));
-        assert_eq!(spec.source, XSource::Verb { verb: "costs".to_owned(), reference: None });
+        assert_eq!(
+            spec.sha256.as_deref(),
+            Some(format!("sha256:{HEX64}").as_str())
+        );
+        assert_eq!(
+            spec.source,
+            XSource::Verb {
+                verb: "costs".to_owned(),
+                reference: None
+            }
+        );
         let spec = parsed(&format!("gh:acme/maw-tools#sha256:{HEX64}"));
-        assert_eq!(spec.sha256.as_deref(), Some(format!("sha256:{HEX64}").as_str()));
+        assert_eq!(
+            spec.sha256.as_deref(),
+            Some(format!("sha256:{HEX64}").as_str())
+        );
         assert_eq!(spec.source, github("acme", "maw-tools", None, None));
     }
 
     #[test]
     fn parses_gh_scheme() {
-        assert_eq!(parsed("gh:acme/maw-tools").source, github("acme", "maw-tools", None, None));
+        assert_eq!(
+            parsed("gh:acme/maw-tools").source,
+            github("acme", "maw-tools", None, None)
+        );
         assert_eq!(
             parsed("gh:acme/maw-tools@main/packages/costs").source,
-            github("acme", "maw-tools", Some("packages/costs"), Some(XGitRef::Named("main".to_owned())))
+            github(
+                "acme",
+                "maw-tools",
+                Some("packages/costs"),
+                Some(XGitRef::Named("main".to_owned()))
+            )
         );
         assert_eq!(
             parsed(&format!("gh:acme/maw-tools@{HEX40}")).source,
-            github("acme", "maw-tools", None, Some(XGitRef::Commit(HEX40.to_owned())))
+            github(
+                "acme",
+                "maw-tools",
+                None,
+                Some(XGitRef::Commit(HEX40.to_owned()))
+            )
         );
     }
 
@@ -628,11 +736,36 @@ mod x_spec_parser_tests {
 
     #[test]
     fn parses_local_dirs() {
-        assert_eq!(parsed("file:./plugins/costs").source, XSource::LocalDir { path: "./plugins/costs".to_owned() });
-        assert_eq!(parsed("./plugins/costs").source, XSource::LocalDir { path: "./plugins/costs".to_owned() });
-        assert_eq!(parsed("../plugins/costs").source, XSource::LocalDir { path: "../plugins/costs".to_owned() });
-        assert_eq!(parsed("/abs/plugins/costs").source, XSource::LocalDir { path: "/abs/plugins/costs".to_owned() });
-        assert_eq!(parsed("~/plugins/costs").source, XSource::LocalDir { path: "~/plugins/costs".to_owned() });
+        assert_eq!(
+            parsed("file:./plugins/costs").source,
+            XSource::LocalDir {
+                path: "./plugins/costs".to_owned()
+            }
+        );
+        assert_eq!(
+            parsed("./plugins/costs").source,
+            XSource::LocalDir {
+                path: "./plugins/costs".to_owned()
+            }
+        );
+        assert_eq!(
+            parsed("../plugins/costs").source,
+            XSource::LocalDir {
+                path: "../plugins/costs".to_owned()
+            }
+        );
+        assert_eq!(
+            parsed("/abs/plugins/costs").source,
+            XSource::LocalDir {
+                path: "/abs/plugins/costs".to_owned()
+            }
+        );
+        assert_eq!(
+            parsed("~/plugins/costs").source,
+            XSource::LocalDir {
+                path: "~/plugins/costs".to_owned()
+            }
+        );
     }
 
     #[test]
@@ -655,22 +788,37 @@ mod x_spec_parser_tests {
         let spec = parsed("npm:@maw-rs/costs");
         assert_eq!(
             spec.source,
-            XSource::Npm { package: "@maw-rs/costs".to_owned(), version: None }
+            XSource::Npm {
+                package: "@maw-rs/costs".to_owned(),
+                version: None
+            }
         );
         assert_eq!(spec.tier(), XSpecTier::V2);
         assert_eq!(
             parsed("npm:@maw-rs/costs@1.2.3").source,
-            XSource::Npm { package: "@maw-rs/costs".to_owned(), version: Some("1.2.3".to_owned()) }
+            XSource::Npm {
+                package: "@maw-rs/costs".to_owned(),
+                version: Some("1.2.3".to_owned())
+            }
         );
         assert_eq!(
             parsed("npm:costs@1.2.3").source,
-            XSource::Npm { package: "costs".to_owned(), version: Some("1.2.3".to_owned()) }
+            XSource::Npm {
+                package: "costs".to_owned(),
+                version: Some("1.2.3".to_owned())
+            }
         );
     }
 
     #[test]
     fn v1_sources_report_v1_tier() {
-        for spec in ["costs", "acme/maw-tools", "gh:acme/maw-tools", "./dir", "https://example.com/r.git"] {
+        for spec in [
+            "costs",
+            "acme/maw-tools",
+            "gh:acme/maw-tools",
+            "./dir",
+            "https://example.com/r.git",
+        ] {
             assert_eq!(parsed(spec).tier(), XSpecTier::V1, "tier of '{spec}'");
         }
     }
@@ -681,35 +829,59 @@ mod x_spec_parser_tests {
     fn scheme_prefix_wins_over_local_path_test() {
         // The parser never consults the filesystem: a dir literally named
         // "gh:acme" or "npm:@scope" can never shadow the scheme.
-        assert!(matches!(parsed("gh:acme/maw-tools").source, XSource::GitHub { .. }));
-        assert!(matches!(parsed("npm:@scope/pkg").source, XSource::Npm { .. }));
-        assert!(matches!(parsed("gh-release:a/b@t#x").source, XSource::GhRelease { .. }));
-        assert!(matches!(parsed("file:gh:not-a-scheme").source, XSource::LocalDir { .. }));
+        assert!(matches!(
+            parsed("gh:acme/maw-tools").source,
+            XSource::GitHub { .. }
+        ));
+        assert!(matches!(
+            parsed("npm:@scope/pkg").source,
+            XSource::Npm { .. }
+        ));
+        assert!(matches!(
+            parsed("gh-release:a/b@t#x").source,
+            XSource::GhRelease { .. }
+        ));
+        assert!(matches!(
+            parsed("file:gh:not-a-scheme").source,
+            XSource::LocalDir { .. }
+        ));
     }
 
     #[test]
     fn forty_hex_ref_is_commit_everything_else_named() {
         assert_eq!(
             parsed(&format!("costs@{HEX40}")).source,
-            XSource::Verb { verb: "costs".to_owned(), reference: Some(XGitRef::Commit(HEX40.to_owned())) }
+            XSource::Verb {
+                verb: "costs".to_owned(),
+                reference: Some(XGitRef::Commit(HEX40.to_owned()))
+            }
         );
         // 39 hex chars → branch/tag name
         let hex39 = &HEX40[..39];
         assert!(matches!(
             parsed(&format!("acme/repo@{hex39}")).source,
-            XSource::GitHub { reference: Some(XGitRef::Named(_)), .. }
+            XSource::GitHub {
+                reference: Some(XGitRef::Named(_)),
+                ..
+            }
         ));
         // 40 chars but not hex → named
         let not_hex = format!("{}g", &HEX40[..39]);
         assert!(matches!(
             parsed(&format!("acme/repo@{not_hex}")).source,
-            XSource::GitHub { reference: Some(XGitRef::Named(_)), .. }
+            XSource::GitHub {
+                reference: Some(XGitRef::Named(_)),
+                ..
+            }
         ));
         // uppercase hex is not a canonical commit pin → named
         let upper = HEX40.to_uppercase();
         assert!(matches!(
             parsed(&format!("acme/repo@{upper}")).source,
-            XSource::GitHub { reference: Some(XGitRef::Named(_)), .. }
+            XSource::GitHub {
+                reference: Some(XGitRef::Named(_)),
+                ..
+            }
         ));
     }
 
@@ -725,20 +897,35 @@ mod x_spec_parser_tests {
         // looks URL-ish. Verbs win the tie against `is_x_explicit_git_source`.
         assert_eq!(
             parsed("httpx").source,
-            XSource::Verb { verb: "httpx".to_owned(), reference: None }
+            XSource::Verb {
+                verb: "httpx".to_owned(),
+                reference: None
+            }
         );
         assert_eq!(
             parsed("http-server").source,
-            XSource::Verb { verb: "http-server".to_owned(), reference: None }
+            XSource::Verb {
+                verb: "http-server".to_owned(),
+                reference: None
+            }
         );
         // `git@main` is verb "git" @ ref "main", NOT a git@host: URL (no ':').
         assert_eq!(
             parsed("git@main").source,
-            XSource::Verb { verb: "git".to_owned(), reference: Some(XGitRef::Named("main".to_owned())) }
+            XSource::Verb {
+                verb: "git".to_owned(),
+                reference: Some(XGitRef::Named("main".to_owned()))
+            }
         );
         // Real URL shapes still route to GitUrl.
-        assert!(matches!(parsed("https://x/y.git").source, XSource::GitUrl { .. }));
-        assert!(matches!(parsed("git@host:x/y.git").source, XSource::GitUrl { .. }));
+        assert!(matches!(
+            parsed("https://x/y.git").source,
+            XSource::GitUrl { .. }
+        ));
+        assert!(matches!(
+            parsed("git@host:x/y.git").source,
+            XSource::GitUrl { .. }
+        ));
     }
 
     // ── rejects ────────────────────────────────────────────────────────
@@ -773,8 +960,19 @@ mod x_spec_parser_tests {
 
     #[test]
     fn rejects_whitespace() {
-        for bad in [" costs", "costs ", "costs @main", "acme/my repo", "costs\tmain", "a\nb"] {
-            assert!(parse_x_spec(bad).is_err(), "'{}' should reject", bad.escape_default());
+        for bad in [
+            " costs",
+            "costs ",
+            "costs @main",
+            "acme/my repo",
+            "costs\tmain",
+            "a\nb",
+        ] {
+            assert!(
+                parse_x_spec(bad).is_err(),
+                "'{}' should reject",
+                bad.escape_default()
+            );
         }
     }
 
@@ -827,7 +1025,10 @@ mod x_spec_parser_tests {
     #[test]
     fn canonical_form_is_gh_scheme() {
         // spec §2.1: gh: is the canonical form the trust store/lock records
-        assert_eq!(parsed("acme/maw-tools@main").canonical(), "gh:acme/maw-tools@main");
+        assert_eq!(
+            parsed("acme/maw-tools@main").canonical(),
+            "gh:acme/maw-tools@main"
+        );
         assert_eq!(
             parsed("acme/maw-tools/packages/costs@main").canonical(),
             "gh:acme/maw-tools@main/packages/costs"
@@ -862,7 +1063,11 @@ mod x_spec_parser_tests {
         for spec in &canonical_specs {
             let first = parsed(spec);
             // canonical of a canonical spec is itself (idempotent)…
-            assert_eq!(&first.canonical(), spec, "canonical('{spec}') should be stable");
+            assert_eq!(
+                &first.canonical(),
+                spec,
+                "canonical('{spec}') should be stable"
+            );
             // …and reparsing the canonical form yields the same value.
             assert_eq!(parsed(&first.canonical()), first, "round-trip of '{spec}'");
         }
@@ -884,7 +1089,11 @@ mod x_spec_parser_tests {
             let first = parsed(&spec);
             let canonical = first.canonical();
             assert_eq!(parsed(&canonical), first, "reparse of canonical('{spec}')");
-            assert_eq!(parsed(&canonical).canonical(), canonical, "idempotent for '{spec}'");
+            assert_eq!(
+                parsed(&canonical).canonical(),
+                canonical,
+                "idempotent for '{spec}'"
+            );
         }
     }
 }

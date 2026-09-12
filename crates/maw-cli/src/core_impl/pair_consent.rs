@@ -1,6 +1,12 @@
 const DISPATCH_315: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "auto-pair-proof", handler: Handler::Sync(run_auto_pair_proof_plan) },
-    DispatcherEntry { command: "consent-pin", handler: Handler::Sync(run_consent_pin_plan) },
+    DispatcherEntry {
+        command: "auto-pair-proof",
+        handler: Handler::Sync(run_auto_pair_proof_plan),
+    },
+    DispatcherEntry {
+        command: "consent-pin",
+        handler: Handler::Sync(run_consent_pin_plan),
+    },
 ];
 
 fn parse_federation_health_peer(value: &str) -> Result<FederationPeerStatus, String> {
@@ -410,4 +416,3 @@ fn run_consent_pin_plan(argv: &[String]) -> CliOutput {
         stderr: String::new(),
     }
 }
-

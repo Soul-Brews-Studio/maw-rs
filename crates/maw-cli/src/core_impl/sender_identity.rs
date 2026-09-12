@@ -13,19 +13,42 @@ fn send_message_signature(
     text: &str,
 ) -> Result<Option<MessageSignature>, String> {
     if text.starts_with('[') {
-        return Err("bracket-prefixed hey text is reserved for signed transport prefixes".to_owned());
+        return Err(
+            "bracket-prefixed hey text is reserved for signed transport prefixes".to_owned(),
+        );
     }
-    let node = config.node.as_deref().filter(|value| !value.is_empty()).unwrap_or("local");
+    let node = config
+        .node
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .unwrap_or("local");
     let expected = format!("{sender_oracle}:{node}");
     if let Some(explicit) = from {
         if validate_wire_from(explicit)? != expected {
-            return Err(format!("--from {explicit} does not match signing identity {expected}"));
+            return Err(format!(
+                "--from {explicit} does not match signing identity {expected}"
+            ));
         }
     }
-    let Ok(peer_key) = load_peer_key() else { return Ok(None); };
-    let headers = maw_auth::sign_ed25519_headers_at(&peer_key, &expected, "POST", "/api/send", Some(text.as_bytes()), i64::try_from(current_epoch_seconds()).unwrap_or(i64::MAX))?;
-    if headers.get("X-Maw-Ed25519-Signature").unwrap_or_default().is_empty()
-        || headers.get("X-Maw-Ed25519-Pubkey").unwrap_or_default().is_empty()
+    let Ok(peer_key) = load_peer_key() else {
+        return Ok(None);
+    };
+    let headers = maw_auth::sign_ed25519_headers_at(
+        &peer_key,
+        &expected,
+        "POST",
+        "/api/send",
+        Some(text.as_bytes()),
+        i64::try_from(current_epoch_seconds()).unwrap_or(i64::MAX),
+    )?;
+    if headers
+        .get("X-Maw-Ed25519-Signature")
+        .unwrap_or_default()
+        .is_empty()
+        || headers
+            .get("X-Maw-Ed25519-Pubkey")
+            .unwrap_or_default()
+            .is_empty()
     {
         return Ok(None);
     }
@@ -47,7 +70,9 @@ fn resolve_hey_wire_from(
         .node
         .as_deref()
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| "cannot resolve sender identity; set MAW_SENDER or config node".to_owned())?;
+        .ok_or_else(|| {
+            "cannot resolve sender identity; set MAW_SENDER or config node".to_owned()
+        })?;
     Ok(format!("{sender_oracle}:{node}"))
 }
 
@@ -145,7 +170,10 @@ fn resolve_hey_sender_oracle_with<R: maw_tmux::TmuxRunner>(
     let sender = canonical.unwrap_or_else(|| {
         if in_tmux {
             let focused = tmux_window_name_with(runner, None);
-            return format!("pane/{}", resolve_sender_oracle(None, focused.as_deref(), None));
+            return format!(
+                "pane/{}",
+                resolve_sender_oracle(None, focused.as_deref(), None)
+            );
         }
         // Headless (no TMUX/TMUX_PANE): the focused-window query would name
         // whatever window the attached client happens to show — another
@@ -241,12 +269,18 @@ fn tmux_window_name_with<R: maw_tmux::TmuxRunner>(
     (!window.is_empty()).then(|| window.to_owned())
 }
 
-fn send_normalized_from(config: &HeyConfig, sender_oracle: &str, from: Option<&str>) -> Option<String> {
+fn send_normalized_from(
+    config: &HeyConfig,
+    sender_oracle: &str,
+    from: Option<&str>,
+) -> Option<String> {
     if let Some(from) = from {
         return wire_sender_to_human(from);
     }
     if let Ok(sender) = std::env::var("MAW_SENDER") {
-        return human_sender_to_wire_from(&sender).ok().and_then(|wire| wire_sender_to_human(&wire));
+        return human_sender_to_wire_from(&sender)
+            .ok()
+            .and_then(|wire| wire_sender_to_human(&wire));
     }
     let node = config.node.as_deref().filter(|node| !node.is_empty())?;
     // Warnings ignored here: this re-derives the display `from` for an audit

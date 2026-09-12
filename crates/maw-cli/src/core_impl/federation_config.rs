@@ -33,7 +33,9 @@ fn load_hey_config() -> HeyConfig {
         .and_then(serde_json::Value::as_object)
         .map(|map| {
             map.iter()
-                .filter_map(|(key, value)| value.as_str().map(|node| (key.clone(), node.to_owned())))
+                .filter_map(|(key, value)| {
+                    value.as_str().map(|node| (key.clone(), node.to_owned()))
+                })
                 .collect::<HashMap<_, _>>()
         })
         .unwrap_or_default();
@@ -279,7 +281,11 @@ fn real_xdg_env() -> MawXdgEnv {
         "MAW_TEST_MODE",
     ]
     .into_iter()
-    .filter_map(|name| std::env::var(name).ok().map(|value| (name.to_owned(), value)));
+    .filter_map(|name| {
+        std::env::var(name)
+            .ok()
+            .map(|value| (name.to_owned(), value))
+    });
     MawXdgEnv::with_vars(home, vars)
 }
 

@@ -1,6 +1,12 @@
 const DISPATCH_308: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "resolve", handler: Handler::Sync(run_resolve_plan) },
-    DispatcherEntry { command: "normalize", handler: Handler::Sync(run_normalize_plan) },
+    DispatcherEntry {
+        command: "resolve",
+        handler: Handler::Sync(run_resolve_plan),
+    },
+    DispatcherEntry {
+        command: "normalize",
+        handler: Handler::Sync(run_normalize_plan),
+    },
 ];
 
 fn parse_date_parts(value: &str) -> Result<DateParts, String> {
@@ -539,7 +545,10 @@ mod usage_menu_tests {
         let dispatcher_names = dispatcher_entries()
             .map(|entry| entry.command)
             .collect::<BTreeSet<_>>();
-        assert!(text.starts_with(&format!("registered commands ({dispatcher_count}):")), "{text}");
+        assert!(
+            text.starts_with(&format!("registered commands ({dispatcher_count}):")),
+            "{text}"
+        );
         let tagged_count = HELP_META
             .iter()
             .filter(|(name, tier, _)| *tier != HelpTier::Other && dispatcher_names.contains(name))
@@ -551,19 +560,35 @@ mod usage_menu_tests {
         );
 
         let names = help_all_names(&text);
-        assert!(names.len() > 100, "expected >100 verbs, got {}", names.len());
+        assert!(
+            names.len() > 100,
+            "expected >100 verbs, got {}",
+            names.len()
+        );
         for verb in ["wake", "work", "bg", "x", "hey", "ls", "plugin"] {
-            assert!(names.contains(verb), "missing {verb} in help --all:\n{text}");
+            assert!(
+                names.contains(verb),
+                "missing {verb} in help --all:\n{text}"
+            );
         }
         for entry in dispatcher_entries() {
             let command = entry.command;
             if command.starts_with('-') || command.starts_with("__") {
                 continue;
             }
-            assert!(names.contains(command), "registry verb {command} missing from help --all");
+            assert!(
+                names.contains(command),
+                "registry verb {command} missing from help --all"
+            );
         }
-        assert!(text.contains("  maw footer\n"), "untagged internal verb should render name-only under other:\n{text}");
-        assert!(text.ends_with("run maw <verb> --help for details\n"), "{text}");
+        assert!(
+            text.contains("  maw footer\n"),
+            "untagged internal verb should render name-only under other:\n{text}"
+        );
+        assert!(
+            text.ends_with("run maw <verb> --help for details\n"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -579,7 +604,11 @@ mod usage_menu_tests {
                 dispatcher_names.contains(name) || *name == "about",
                 "help metadata names non-dispatcher verb {name}"
             );
-            assert_ne!(*tier, HelpTier::Other, "omit Other rows and use fallback for {name}");
+            assert_ne!(
+                *tier,
+                HelpTier::Other,
+                "omit Other rows and use fallback for {name}"
+            );
             assert!(
                 !description.trim().is_empty(),
                 "help metadata for {name} needs a teaching description"
@@ -589,7 +618,10 @@ mod usage_menu_tests {
                 assert_eq!(help_meta_for(name).tier, HelpTier::Core);
             }
         }
-        assert_eq!(core_count, 40, "fanout must not change the proof core tier count");
+        assert_eq!(
+            core_count, 40,
+            "fanout must not change the proof core tier count"
+        );
     }
 
     fn help_all_names(text: &str) -> BTreeSet<&str> {
@@ -599,7 +631,6 @@ mod usage_menu_tests {
             .collect()
     }
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LsPanePlan {
@@ -829,7 +860,9 @@ fn parse_ls_plan_options(argv: &[String]) -> Result<LsPlanOptions, CliOutput> {
     }
 
     if options.watch_interval_sec.is_some() && options.json {
-        return Err(ls_usage_error("maw ls: --watch cannot be combined with --json"));
+        return Err(ls_usage_error(
+            "maw ls: --watch cannot be combined with --json",
+        ));
     }
 
     Ok(options)

@@ -72,7 +72,9 @@ impl ActivityClock for RealActivityClock {
     fn now_ms(&mut self) -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map_or(0, |duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
+            .map_or(0, |duration| {
+                u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+            })
     }
 
     fn sleep_ms(&mut self, ms: u64) {
@@ -137,22 +139,32 @@ fn parse_activity_cli(argv: &[String]) -> Result<(Option<String>, ActivityOption
             "--stuck-only" => opts.stuck_only = true,
             "--window" => {
                 index += 1;
-                let Some(value) = argv.get(index) else { return Err(ACTIVITY_USAGE.to_owned()); };
+                let Some(value) = argv.get(index) else {
+                    return Err(ACTIVITY_USAGE.to_owned());
+                };
                 opts.window = Some(value.clone());
             }
             "--samples" => {
                 index += 1;
-                let Some(value) = argv.get(index) else { return Err(ACTIVITY_USAGE.to_owned()); };
-                opts.samples = Some(value.parse::<u32>().map_err(|_| "activity: --samples must be an integer from 2 to 50".to_owned())?);
+                let Some(value) = argv.get(index) else {
+                    return Err(ACTIVITY_USAGE.to_owned());
+                };
+                opts.samples = Some(value.parse::<u32>().map_err(|_| {
+                    "activity: --samples must be an integer from 2 to 50".to_owned()
+                })?);
             }
             "--sampler" => {
                 index += 1;
-                let Some(value) = argv.get(index) else { return Err(ACTIVITY_USAGE.to_owned()); };
+                let Some(value) = argv.get(index) else {
+                    return Err(ACTIVITY_USAGE.to_owned());
+                };
                 opts.sampler = Some(value.clone());
             }
             _ if arg.starts_with("--window=") => opts.window = Some(arg[9..].to_owned()),
             _ if arg.starts_with("--samples=") => {
-                opts.samples = Some(arg[10..].parse::<u32>().map_err(|_| "activity: --samples must be an integer from 2 to 50".to_owned())?);
+                opts.samples = Some(arg[10..].parse::<u32>().map_err(|_| {
+                    "activity: --samples must be an integer from 2 to 50".to_owned()
+                })?);
             }
             _ if arg.starts_with("--sampler=") => opts.sampler = Some(arg[10..].to_owned()),
             _ if arg.starts_with('-') => return Err(ACTIVITY_USAGE.to_owned()),
@@ -204,7 +216,11 @@ fn parse_activity_options(opts: &ActivityOptions) -> Result<ParsedActivityOption
     })
 }
 
-#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss, clippy::cast_sign_loss)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
 fn parse_activity_duration_ms(value: &str) -> Option<u64> {
     let trimmed = value.trim();
     if trimmed.is_empty() || trimmed != value {
@@ -237,10 +253,15 @@ fn parse_activity_duration_ms(value: &str) -> Option<u64> {
 
 fn validate_activity_tmux_target(target: &str) -> Result<(), String> {
     if target.is_empty() || target.trim() != target || target.starts_with('-') {
-        return Err("activity: tmux target must be non-empty, unpadded, and not start with '-'".to_owned());
+        return Err(
+            "activity: tmux target must be non-empty, unpadded, and not start with '-'".to_owned(),
+        );
     }
     if target.chars().all(|ch| ch.is_ascii_digit()) {
-        return Err("activity: bare numeric tmux targets are refused; use session:window or %pane_id".to_owned());
+        return Err(
+            "activity: bare numeric tmux targets are refused; use session:window or %pane_id"
+                .to_owned(),
+        );
     }
     if !target
         .chars()
@@ -272,7 +293,11 @@ fn cmd_activity_once(
     let mut stderr = String::new();
     let results = if opts.all {
         if !opts.json {
-            let _ = writeln!(stderr, "activity: surveying fleet ({})...", sampling_description(opts)?);
+            let _ = writeln!(
+                stderr,
+                "activity: surveying fleet ({})...",
+                sampling_description(opts)?
+            );
         }
         sample_all_activity(opts, tmux, clock)?
     } else {
@@ -299,9 +324,19 @@ fn cmd_activity_watch(
     let mut stdout = String::new();
     let mut previous = BTreeMap::<String, ActivityState>::new();
     let mut transition_count = 0u32;
-    let scope = if opts.all { "fleet" } else { target.unwrap_or("") };
+    let scope = if opts.all {
+        "fleet"
+    } else {
+        target.unwrap_or("")
+    };
     if !opts.json {
-        stdout.push_str(&format_watch_table(scope, &[], opts, Some("sampling"), None)?);
+        stdout.push_str(&format_watch_table(
+            scope,
+            &[],
+            opts,
+            Some("sampling"),
+            None,
+        )?);
     }
     for iteration in 0..max {
         let results = if opts.all {
@@ -310,7 +345,8 @@ fn cmd_activity_watch(
             vec![sample_activity(target.unwrap_or(""), opts, tmux, clock)?]
         };
         let transitions = record_activity_transitions(&results, &mut previous);
-        transition_count = transition_count.saturating_add(u32::try_from(transitions.len()).unwrap_or(u32::MAX));
+        transition_count =
+            transition_count.saturating_add(u32::try_from(transitions.len()).unwrap_or(u32::MAX));
         if opts.json {
             for result in transitions {
                 if opts.stuck_only && result.state != ActivityState::Stuck {
@@ -361,12 +397,19 @@ fn sample_all_activity(
     let sessions = tmux.list_all()?;
     let targets = all_activity_targets(&load_native_fleet());
     let mut results = Vec::new();
-    for target in targets.into_iter().take(ACTIVITY_ALL_CONCURRENCY.max(1) * 1_000) {
-        let Some(snapshot_target) = resolve_activity_peek_target(&sessions, &target) else { continue; };
+    for target in targets
+        .into_iter()
+        .take(ACTIVITY_ALL_CONCURRENCY.max(1) * 1_000)
+    {
+        let Some(snapshot_target) = resolve_activity_peek_target(&sessions, &target) else {
+            continue;
+        };
         if validate_activity_tmux_target(&snapshot_target).is_err() {
             continue;
         }
-        if let Ok(result) = sample_resolved_activity(&target, &snapshot_target, &parsed, tmux, clock) {
+        if let Ok(result) =
+            sample_resolved_activity(&target, &snapshot_target, &parsed, tmux, clock)
+        {
             results.push(result);
         }
     }
@@ -406,8 +449,13 @@ fn resolve_activity_peek_target(sessions: &[TmuxSession], target: &str) -> Optio
     if window_name.parse::<u32>().is_ok() {
         return Some(target.to_owned());
     }
-    let session = sessions.iter().find(|session| session.name == session_name)?;
-    let window = session.windows.iter().find(|window| window.name == window_name)?;
+    let session = sessions
+        .iter()
+        .find(|session| session.name == session_name)?;
+    let window = session
+        .windows
+        .iter()
+        .find(|window| window.name == window_name)?;
     let base = format!("{}:{}", session.name, window.index);
     target
         .rsplit_once('.')
@@ -439,10 +487,17 @@ fn sample_resolved_activity(
         let at_ms = clock.now_ms();
         samples.push(ActivitySample { text, at_ms });
     }
-    Ok(classify_activity_snapshots(pane, &samples, parsed.window_ms))
+    Ok(classify_activity_snapshots(
+        pane,
+        &samples,
+        parsed.window_ms,
+    ))
 }
 
-fn filter_activity_results(results: &[ActivityResult], opts: &ActivityOptions) -> Vec<ActivityResult> {
+fn filter_activity_results(
+    results: &[ActivityResult],
+    opts: &ActivityOptions,
+) -> Vec<ActivityResult> {
     results
         .iter()
         .filter(|result| !opts.stuck_only || result.state == ActivityState::Stuck)
@@ -467,9 +522,18 @@ fn record_activity_transitions(
 fn format_activity_output(results: &[ActivityResult], opts: &ActivityOptions) -> String {
     if opts.json {
         if opts.all {
-            format!("[{}]\n", results.iter().map(format_activity_json_object).collect::<Vec<_>>().join(","))
+            format!(
+                "[{}]\n",
+                results
+                    .iter()
+                    .map(format_activity_json_object)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
         } else {
-            results.first().map_or_else(String::new, |result| format_activity_json(result) + "\n")
+            results
+                .first()
+                .map_or_else(String::new, |result| format_activity_json(result) + "\n")
         }
     } else {
         let text = results
@@ -509,9 +573,18 @@ fn format_activity_human(result: &ActivityResult) -> String {
         ActivityState::Stuck => "🔴",
     };
     let age = match result.state {
-        ActivityState::Busy => format!("last change {} ago", format_activity_duration(result.last_change_ago_seconds)),
-        ActivityState::Stuck => format!("at prompt (no change in {})", format_activity_duration(result.last_change_ago_seconds)),
-        ActivityState::Idle => format!("quiet (no change in {})", format_activity_duration(result.last_change_ago_seconds)),
+        ActivityState::Busy => format!(
+            "last change {} ago",
+            format_activity_duration(result.last_change_ago_seconds)
+        ),
+        ActivityState::Stuck => format!(
+            "at prompt (no change in {})",
+            format_activity_duration(result.last_change_ago_seconds)
+        ),
+        ActivityState::Idle => format!(
+            "quiet (no change in {})",
+            format_activity_duration(result.last_change_ago_seconds)
+        ),
     };
     format!(
         "{}: {icon} {} ({age}, {}/{} samples diff)",
@@ -522,7 +595,11 @@ fn format_activity_human(result: &ActivityResult) -> String {
     )
 }
 
-#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss, clippy::cast_sign_loss)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
 fn format_activity_duration(seconds: f64) -> String {
     if seconds < 60.0 {
         return format!("{}s", seconds.round() as u64);
@@ -569,10 +646,21 @@ fn format_watch_table(
     status: Option<&str>,
     footer: Option<&str>,
 ) -> Result<String, String> {
-    let rows = results.iter().map(format_activity_human).collect::<Vec<_>>();
-    let empty = if opts.stuck_only { "(no stuck panes)" } else { "(no panes resolved)" };
+    let rows = results
+        .iter()
+        .map(format_activity_human)
+        .collect::<Vec<_>>();
+    let empty = if opts.stuck_only {
+        "(no stuck panes)"
+    } else {
+        "(no panes resolved)"
+    };
     let body = if rows.is_empty() {
-        if status == Some("sampling") { "(sampling...)".to_owned() } else { empty.to_owned() }
+        if status == Some("sampling") {
+            "(sampling...)".to_owned()
+        } else {
+            empty.to_owned()
+        }
     } else {
         rows.join("\n")
     };
@@ -685,22 +773,40 @@ mod activity_tests {
         let busy = classify_activity_snapshots(
             "s:1",
             &[
-                ActivitySample { text: "hello".to_owned(), at_ms: 1_000 },
-                ActivitySample { text: "hello world".to_owned(), at_ms: 2_000 },
-                ActivitySample { text: "hello world".to_owned(), at_ms: 3_000 },
+                ActivitySample {
+                    text: "hello".to_owned(),
+                    at_ms: 1_000,
+                },
+                ActivitySample {
+                    text: "hello world".to_owned(),
+                    at_ms: 2_000,
+                },
+                ActivitySample {
+                    text: "hello world".to_owned(),
+                    at_ms: 3_000,
+                },
             ],
             30_000,
         );
         assert_eq!(busy.state, ActivityState::Busy);
         assert_eq!(busy.confidence, maw_activity::ActivityConfidence::High);
         assert_eq!(busy.diff_samples, 2);
-        assert_eq!(format_activity_human(&busy), "s:1: 🟢 BUSY (last change 1s ago, 2/3 samples diff)");
+        assert_eq!(
+            format_activity_human(&busy),
+            "s:1: 🟢 BUSY (last change 1s ago, 2/3 samples diff)"
+        );
 
         let idle = classify_activity_snapshots(
             "s:1",
             &[
-                ActivitySample { text: "working".to_owned(), at_ms: 1_000 },
-                ActivitySample { text: "working".to_owned(), at_ms: 2_000 },
+                ActivitySample {
+                    text: "working".to_owned(),
+                    at_ms: 1_000,
+                },
+                ActivitySample {
+                    text: "working".to_owned(),
+                    at_ms: 2_000,
+                },
             ],
             2_000,
         );
@@ -710,8 +816,14 @@ mod activity_tests {
         let stuck = classify_activity_snapshots(
             "s:1",
             &[
-                ActivitySample { text: "> ▌".to_owned(), at_ms: 1_000 },
-                ActivitySample { text: "> ▌".to_owned(), at_ms: 2_000 },
+                ActivitySample {
+                    text: "> ▌".to_owned(),
+                    at_ms: 1_000,
+                },
+                ActivitySample {
+                    text: "> ▌".to_owned(),
+                    at_ms: 2_000,
+                },
             ],
             2_000,
         );
@@ -734,8 +846,12 @@ mod activity_tests {
             captures: vec!["old".to_owned(), "new".to_owned()],
             ..FakeTmux::default()
         };
-        let mut clock = FakeClock { now: 0, sleeps: Vec::new() };
-        let output = cmd_activity(Some("agent:main"), &opts, &mut tmux, &mut clock).expect("activity");
+        let mut clock = FakeClock {
+            now: 0,
+            sleeps: Vec::new(),
+        };
+        let output =
+            cmd_activity(Some("agent:main"), &opts, &mut tmux, &mut clock).expect("activity");
         assert!(output.stdout.contains("activity: watching agent:main"));
         assert!(output.stdout.contains("agent:main: 🟢 BUSY"));
         assert_eq!(clock.sleeps, vec![2_000]);
@@ -746,16 +862,31 @@ mod activity_tests {
     fn activity_all_resolves_fleet_window_names_to_numeric_tmux_targets() {
         let fleet = vec![NativeFleetSession {
             name: "s".to_owned(),
-            windows: vec![NativeFleetWindow { name: "main".to_owned(), repo: String::new(), kind: None }],
+            windows: vec![NativeFleetWindow {
+                name: "main".to_owned(),
+                repo: String::new(),
+                kind: None,
+            }],
             ..NativeFleetSession::default()
         }];
         assert_eq!(all_activity_targets(&fleet), vec!["s:main".to_owned()]);
         let sessions = vec![TmuxSession {
             name: "s".to_owned(),
-            windows: vec![maw_tmux::TmuxWindow { index: 2, name: "main".to_owned(), active: true, cwd: None }],
+            windows: vec![maw_tmux::TmuxWindow {
+                index: 2,
+                name: "main".to_owned(),
+                active: true,
+                cwd: None,
+            }],
         }];
-        assert_eq!(resolve_activity_peek_target(&sessions, "s:main"), Some("s:2".to_owned()));
-        assert_eq!(resolve_activity_peek_target(&sessions, "s:main.1"), Some("s:2.1".to_owned()));
+        assert_eq!(
+            resolve_activity_peek_target(&sessions, "s:main"),
+            Some("s:2".to_owned())
+        );
+        assert_eq!(
+            resolve_activity_peek_target(&sessions, "s:main.1"),
+            Some("s:2.1".to_owned())
+        );
     }
 
     #[test]
@@ -796,7 +927,10 @@ mod activity_tests {
             captures: vec!["ready".to_owned(), "ready".to_owned()],
             ..FakeTmux::default()
         };
-        let mut clock = FakeClock { now: 0, sleeps: Vec::new() };
+        let mut clock = FakeClock {
+            now: 0,
+            sleeps: Vec::new(),
+        };
         let _guard = env_test_lock();
         let _restore = EnvVarRestore::capture("MAW_JS_REF_DIR");
         std::env::set_var("MAW_JS_REF_DIR", "/nonexistent");

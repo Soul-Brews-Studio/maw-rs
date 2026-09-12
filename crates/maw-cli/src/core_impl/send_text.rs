@@ -100,21 +100,34 @@ fn sendtext_usage() -> String {
 }
 
 fn sendtext_flag_like_target(target: &str) -> String {
-    format!("\"{target}\" looks like a flag, not a target.\n  usage: maw send-text <target> <text...>")
+    format!(
+        "\"{target}\" looks like a flag, not a target.\n  usage: maw send-text <target> <text...>"
+    )
 }
 
 fn sendtext_validate_tmux_target(value: &str) -> Result<(), String> {
     if value.is_empty() || value.trim() != value || value.starts_with('-') || value == "--" {
-        return Err("send-text target must be non-empty, unpadded, and not start with '-'".to_owned());
+        return Err(
+            "send-text target must be non-empty, unpadded, and not start with '-'".to_owned(),
+        );
     }
-    if value.chars().any(|ch| ch.is_control() || ch.is_whitespace()) {
-        return Err("send-text target must not contain whitespace or control characters".to_owned());
+    if value
+        .chars()
+        .any(|ch| ch.is_control() || ch.is_whitespace())
+    {
+        return Err(
+            "send-text target must not contain whitespace or control characters".to_owned(),
+        );
     }
     Ok(())
 }
 
 fn sendtext_success_output(target: &str, report: &maw_tmux::SendTextReport) -> CliOutput {
-    let method = if report.used_buffer { "buffer" } else { "literal" };
+    let method = if report.used_buffer {
+        "buffer"
+    } else {
+        "literal"
+    };
     CliOutput {
         code: 0,
         stdout: format!("  \x1b[32m✓\x1b[0m sent text to {target} ({method})\n"),
@@ -150,7 +163,11 @@ mod sendtext_tests {
     }
 
     impl maw_tmux::TmuxRunner for SendtextMockTmux {
-        fn run(&mut self, subcommand: &str, args: &[String]) -> Result<String, maw_tmux::TmuxError> {
+        fn run(
+            &mut self,
+            subcommand: &str,
+            args: &[String],
+        ) -> Result<String, maw_tmux::TmuxError> {
             if subcommand == "capture-pane"
                 && args.iter().any(|arg| arg == "-J")
                 && !std::mem::replace(&mut self.joined_capture_seen, true)
@@ -192,7 +209,8 @@ mod sendtext_tests {
                 .into_iter()
                 .map(|key| (key, std::env::var_os(key)))
                 .collect::<Vec<_>>();
-            let root = std::env::temp_dir().join(format!("maw-sendtext-test-{}", std::process::id()));
+            let root =
+                std::env::temp_dir().join(format!("maw-sendtext-test-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&root);
             std::fs::create_dir_all(root.join("config")).expect("config");
             std::env::set_var("HOME", root.join("home"));
@@ -262,16 +280,43 @@ mod sendtext_tests {
     fn sendtext_literal_path_joins_text_and_enters() {
         let _lock = super::env_test_lock();
         let _env = SendtextEnvGuard::sendtext_new();
-        let mut tmux =
-            SendtextMockTmux::sendtext_with_responses(vec![Ok("0"), Ok(""), Ok(""), Ok("$ \r"), Ok("$ \r")]);
+        let mut tmux = SendtextMockTmux::sendtext_with_responses(vec![
+            Ok("0"),
+            Ok(""),
+            Ok(""),
+            Ok("$ \r"),
+            Ok("$ \r"),
+        ]);
 
-        let output = sendtext_with_no_sleep(&sendtext_strings(&["%9", "hello", "world"]), &mut tmux)
-            .expect("send");
+        let output =
+            sendtext_with_no_sleep(&sendtext_strings(&["%9", "hello", "world"]), &mut tmux)
+                .expect("send");
 
-        assert_eq!(output.stdout, "  \x1b[32m✓\x1b[0m sent text to %9 (literal)\n");
-        assert_eq!(tmux.calls[0], ("display-message".to_owned(), sendtext_strings(&["-t", "%9", "-p", "#{pane_in_mode}"])));
-        assert_eq!(tmux.calls[1], ("send-keys".to_owned(), sendtext_strings(&["-t", "%9", "-l", "hello world"])));
-        assert_eq!(tmux.calls[2], ("send-keys".to_owned(), sendtext_strings(&["-t", "%9", "Enter"])));
+        assert_eq!(
+            output.stdout,
+            "  \x1b[32m✓\x1b[0m sent text to %9 (literal)\n"
+        );
+        assert_eq!(
+            tmux.calls[0],
+            (
+                "display-message".to_owned(),
+                sendtext_strings(&["-t", "%9", "-p", "#{pane_in_mode}"])
+            )
+        );
+        assert_eq!(
+            tmux.calls[1],
+            (
+                "send-keys".to_owned(),
+                sendtext_strings(&["-t", "%9", "-l", "hello world"])
+            )
+        );
+        assert_eq!(
+            tmux.calls[2],
+            (
+                "send-keys".to_owned(),
+                sendtext_strings(&["-t", "%9", "Enter"])
+            )
+        );
         assert!(tmux.stdin_calls.is_empty());
     }
 
@@ -280,14 +325,22 @@ mod sendtext_tests {
         let _lock = super::env_test_lock();
         let _env = SendtextEnvGuard::sendtext_new();
         let long_text = "x".repeat(501);
-        let mut tmux =
-            SendtextMockTmux::sendtext_with_responses(vec![Ok("0"), Ok(""), Ok(""), Ok("$ \r"), Ok("$ \r")]);
+        let mut tmux = SendtextMockTmux::sendtext_with_responses(vec![
+            Ok("0"),
+            Ok(""),
+            Ok(""),
+            Ok("$ \r"),
+            Ok("$ \r"),
+        ]);
 
         let output = sendtext_with_no_sleep(&[String::from("%9"), long_text.clone()], &mut tmux)
             .expect("send");
 
         assert!(output.stdout.contains("(buffer)"));
-        assert_eq!(tmux.calls[1], ("paste-buffer".to_owned(), sendtext_strings(&["-t", "%9"])));
+        assert_eq!(
+            tmux.calls[1],
+            ("paste-buffer".to_owned(), sendtext_strings(&["-t", "%9"]))
+        );
         assert_eq!(
             tmux.stdin_calls,
             vec![("load-buffer".to_owned(), vec!["-".to_owned()], long_text)]
@@ -340,7 +393,9 @@ mod sendtext_tests {
             Ok("❯ different queued input"),
         ]);
 
-        assert!(output.expect_err("different input must fail").contains("not be confirmed"));
+        assert!(output
+            .expect_err("different input must fail")
+            .contains("not be confirmed"));
         assert_eq!(enter_count, 1);
     }
 
@@ -353,16 +408,20 @@ mod sendtext_tests {
             Ok(SENDTEXT_BUFFERED_PLACEHOLDER),
         ]);
 
-        assert!(output.expect_err("unknown baseline must fail").contains("not be confirmed"));
+        assert!(output
+            .expect_err("unknown baseline must fail")
+            .contains("not be confirmed"));
         assert_eq!(enter_count, 1);
     }
 
     #[test]
     fn sendtext_rejects_separator_and_leading_dash_before_tmux() {
         let mut tmux = SendtextMockTmux::default();
-        let err = sendtext_with_no_sleep(&sendtext_strings(&["--", "hi"]), &mut tmux).expect_err("target");
+        let err = sendtext_with_no_sleep(&sendtext_strings(&["--", "hi"]), &mut tmux)
+            .expect_err("target");
         assert!(err.contains("-- separator"));
-        let err = sendtext_with_no_sleep(&sendtext_strings(&["sess:1", "-oops"]), &mut tmux).expect_err("text");
+        let err = sendtext_with_no_sleep(&sendtext_strings(&["sess:1", "-oops"]), &mut tmux)
+            .expect_err("text");
         assert!(err.contains("not start with '-'"));
         assert!(tmux.calls.is_empty());
     }
@@ -370,9 +429,11 @@ mod sendtext_tests {
     #[test]
     fn sendtext_rejects_bad_targets_before_tmux() {
         let mut tmux = SendtextMockTmux::default();
-        let err = sendtext_with_no_sleep(&sendtext_strings(&["bad target", "hi"]), &mut tmux).expect_err("target");
+        let err = sendtext_with_no_sleep(&sendtext_strings(&["bad target", "hi"]), &mut tmux)
+            .expect_err("target");
         assert!(err.contains("must not contain whitespace"));
-        let err = sendtext_with_no_sleep(&sendtext_strings(&["-Sbad", "hi"]), &mut tmux).expect_err("target");
+        let err = sendtext_with_no_sleep(&sendtext_strings(&["-Sbad", "hi"]), &mut tmux)
+            .expect_err("target");
         assert!(err.contains("looks like a flag"));
         assert!(tmux.calls.is_empty());
     }
@@ -405,7 +466,8 @@ mod sendtext_tests {
         assert_eq!(
             tmux.calls
                 .iter()
-                .filter(|(command, args)| command == "send-keys" && args.last().is_some_and(|arg| arg == "Enter"))
+                .filter(|(command, args)| command == "send-keys"
+                    && args.last().is_some_and(|arg| arg == "Enter"))
                 .count(),
             4
         );
@@ -418,7 +480,12 @@ mod sendtext_tests {
         let error = sendtext_with_no_sleep(&sendtext_strings(&["%9", "deploy"]), &mut tmux)
             .expect_err("existing input must be refused before mutation");
         assert!(error.contains("already has pending input"));
-        assert_eq!(tmux.preflight_args, Some(sendtext_strings(&["-t", "%9", "-e", "-p", "-J", "-S", "-80"])));
+        assert_eq!(
+            tmux.preflight_args,
+            Some(sendtext_strings(&[
+                "-t", "%9", "-e", "-p", "-J", "-S", "-80"
+            ]))
+        );
         assert!(tmux.calls.iter().all(|(command, _)| command != "send-keys"));
         assert!(tmux.stdin_calls.is_empty());
     }
@@ -435,9 +502,8 @@ mod sendtext_tests {
             Ok("$ different queued input"),
         ]);
 
-        let error =
-            sendtext_with_no_sleep(&sendtext_strings(&["%9", "deploy"]), &mut tmux)
-                .expect_err("different input must fail");
+        let error = sendtext_with_no_sleep(&sendtext_strings(&["%9", "deploy"]), &mut tmux)
+            .expect_err("different input must fail");
 
         assert!(error.contains("inspect the pane before retrying"));
         assert_eq!(
@@ -500,7 +566,8 @@ mod sendtext_tests {
         let _env = SendtextEnvGuard::sendtext_new();
         let mut tmux = SendtextMockTmux::sendtext_with_responses(vec![Ok("0"), Err("no pane")]);
 
-        let err = sendtext_with_no_sleep(&sendtext_strings(&["%9", "hi"]), &mut tmux).expect_err("tmux");
+        let err =
+            sendtext_with_no_sleep(&sendtext_strings(&["%9", "hi"]), &mut tmux).expect_err("tmux");
 
         assert!(err.contains("send-text failed: no pane"));
     }
@@ -527,10 +594,16 @@ mod sendtext_tests {
         )
         .expect("send");
 
-        assert_eq!(output.stdout, "  \x1b[32m✓\x1b[0m sent text to webhook-relay-v3:2 (literal)\n");
+        assert_eq!(
+            output.stdout,
+            "  \x1b[32m✓\x1b[0m sent text to webhook-relay-v3:2 (literal)\n"
+        );
         assert_eq!(
             tmux.calls[2],
-            ("send-keys".to_owned(), sendtext_strings(&["-t", "webhook-relay-v3:2", "-l", "hello"]))
+            (
+                "send-keys".to_owned(),
+                sendtext_strings(&["-t", "webhook-relay-v3:2", "-l", "hello"])
+            )
         );
     }
 
@@ -549,7 +622,10 @@ mod sendtext_tests {
         )
         .expect_err("missing window");
 
-        assert!(error.contains("no window 'codex-1' in session 'webhook-relay-v3'"), "{error}");
+        assert!(
+            error.contains("no window 'codex-1' in session 'webhook-relay-v3'"),
+            "{error}"
+        );
         assert_eq!(tmux.calls.len(), 1, "{:?}", tmux.calls);
     }
 }

@@ -20,8 +20,16 @@ struct TmuxLayoutOptions {
 
 fn run_tmux_layout_command(argv: &[String]) -> CliOutput {
     match tmux_layout_with_runner(argv, &mut maw_tmux::CommandTmuxRunner::new()) {
-        Ok(stdout) => CliOutput { code: 0, stdout, stderr: String::new() },
-        Err((code, message)) => CliOutput { code, stdout: String::new(), stderr: format!("{message}\n") },
+        Ok(stdout) => CliOutput {
+            code: 0,
+            stdout,
+            stderr: String::new(),
+        },
+        Err((code, message)) => CliOutput {
+            code,
+            stdout: String::new(),
+            stderr: format!("{message}\n"),
+        },
     }
 }
 
@@ -32,7 +40,12 @@ fn tmux_layout_current_with_runner<R: maw_tmux::TmuxRunner>(
     tmux_layout_validate_preset(preset)?;
     runner
         .run("select-layout", &[preset.to_owned()])
-        .map_err(|error| (1, format!("layout: select-layout failed: {}", error.message)))?;
+        .map_err(|error| {
+            (
+                1,
+                format!("layout: select-layout failed: {}", error.message),
+            )
+        })?;
     Ok(())
 }
 
@@ -46,10 +59,19 @@ fn tmux_layout_with_runner<R: maw_tmux::TmuxRunner>(
     let window = tmux_layout_window_target(&opts.target);
     tmux_layout_validate_target(&window).map_err(|message| (1, message))?;
     let select_args = vec!["-t".to_owned(), window.clone(), opts.preset.clone()];
-    runner
-        .run("select-layout", &select_args)
-        .map_err(|error| (1, format!("tmux layout: select-layout failed for '{window}': {}", error.message)))?;
-    Ok(format!("✓ layout {} applied to {} → {}\n", opts.preset, opts.target, window))
+    runner.run("select-layout", &select_args).map_err(|error| {
+        (
+            1,
+            format!(
+                "tmux layout: select-layout failed for '{window}': {}",
+                error.message
+            ),
+        )
+    })?;
+    Ok(format!(
+        "✓ layout {} applied to {} → {}\n",
+        opts.preset, opts.target, window
+    ))
 }
 
 fn tmux_layout_parse(argv: &[String]) -> Result<TmuxLayoutOptions, (i32, String)> {
@@ -64,9 +86,15 @@ fn tmux_layout_parse(argv: &[String]) -> Result<TmuxLayoutOptions, (i32, String)
         }
     }
     match positionals.as_slice() {
-        [target, preset] => Ok(TmuxLayoutOptions { target: target.clone(), preset: preset.clone() }),
+        [target, preset] => Ok(TmuxLayoutOptions {
+            target: target.clone(),
+            preset: preset.clone(),
+        }),
         [] | [_] => Err((2, "tmux layout: target and preset required".to_owned())),
-        _ => Err((2, "tmux layout: expected exactly <target> <preset>".to_owned())),
+        _ => Err((
+            2,
+            "tmux layout: expected exactly <target> <preset>".to_owned(),
+        )),
     }
 }
 
@@ -74,12 +102,20 @@ fn tmux_layout_validate_preset(value: &str) -> Result<(), (i32, String)> {
     if TMUX_LAYOUT_PRESETS.contains(&value) {
         Ok(())
     } else {
-        Err((2, format!("tmux layout: invalid layout '{value}'. Valid: {}", TMUX_LAYOUT_PRESETS.join(", "))))
+        Err((
+            2,
+            format!(
+                "tmux layout: invalid layout '{value}'. Valid: {}",
+                TMUX_LAYOUT_PRESETS.join(", ")
+            ),
+        ))
     }
 }
 
 fn tmux_layout_window_target(target: &str) -> String {
-    let Some((head, tail)) = target.rsplit_once('.') else { return target.to_owned(); };
+    let Some((head, tail)) = target.rsplit_once('.') else {
+        return target.to_owned();
+    };
     if !head.is_empty() && !tail.is_empty() && tail.bytes().all(|byte| byte.is_ascii_digit()) {
         head.to_owned()
     } else {
@@ -89,7 +125,10 @@ fn tmux_layout_window_target(target: &str) -> String {
 
 fn tmux_layout_validate_target(value: &str) -> Result<(), String> {
     if value.is_empty() || value.trim() != value || value == "--" || value.starts_with('-') {
-        return Err("tmux layout: target must be non-empty, unpadded, not '--', and not start with '-'".to_owned());
+        return Err(
+            "tmux layout: target must be non-empty, unpadded, not '--', and not start with '-'"
+                .to_owned(),
+        );
     }
     if value.chars().any(char::is_control) {
         return Err("tmux layout: target must not contain control characters".to_owned());
@@ -114,13 +153,19 @@ mod tmux_layout_tests {
     }
 
     impl maw_tmux::TmuxRunner for LayoutFakeRunner {
-        fn run(&mut self, subcommand: &str, args: &[String]) -> Result<String, maw_tmux::TmuxError> {
+        fn run(
+            &mut self,
+            subcommand: &str,
+            args: &[String],
+        ) -> Result<String, maw_tmux::TmuxError> {
             self.calls.push((subcommand.to_owned(), args.to_vec()));
             Ok(String::new())
         }
     }
 
-    fn strings(values: &[&str]) -> Vec<String> { values.iter().map(|value| (*value).to_owned()).collect() }
+    fn strings(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_owned()).collect()
+    }
 
     #[test]
     fn tmux_layout_fragment_is_part283_only() {
@@ -131,11 +176,15 @@ mod tmux_layout_tests {
     #[test]
     fn tmux_layout_uses_tmux_runner_arg_vector_and_strips_pane_suffix() {
         let mut runner = LayoutFakeRunner::default();
-        let out = tmux_layout_with_runner(&strings(&["session:1.2", "tiled"]), &mut runner).expect("layout");
+        let out = tmux_layout_with_runner(&strings(&["session:1.2", "tiled"]), &mut runner)
+            .expect("layout");
         assert_eq!(out, "✓ layout tiled applied to session:1.2 → session:1\n");
         assert_eq!(
             runner.calls,
-            vec![("select-layout".to_owned(), strings(&["-t", "session:1", "tiled"]))]
+            vec![(
+                "select-layout".to_owned(),
+                strings(&["-t", "session:1", "tiled"])
+            )]
         );
     }
 
@@ -143,25 +192,38 @@ mod tmux_layout_tests {
     fn tmux_layout_current_helper_keeps_internal_fleet_path_native() {
         let mut runner = LayoutFakeRunner::default();
         tmux_layout_current_with_runner("main-vertical", &mut runner).expect("current layout");
-        assert_eq!(runner.calls, vec![("select-layout".to_owned(), strings(&["main-vertical"]))]);
+        assert_eq!(
+            runner.calls,
+            vec![("select-layout".to_owned(), strings(&["main-vertical"]))]
+        );
     }
 
     #[test]
     fn tmux_layout_allows_only_known_presets_before_runner() {
         let mut runner = LayoutFakeRunner::default();
-        let err = tmux_layout_with_runner(&strings(&["session:1", "bad-layout"]), &mut runner).expect_err("preset guard");
+        let err = tmux_layout_with_runner(&strings(&["session:1", "bad-layout"]), &mut runner)
+            .expect_err("preset guard");
         assert_eq!(err.0, 2);
         assert!(err.1.contains("invalid layout"));
-        assert!(runner.calls.is_empty(), "invalid preset reached tmux: {:?}", runner.calls);
+        assert!(
+            runner.calls.is_empty(),
+            "invalid preset reached tmux: {:?}",
+            runner.calls
+        );
     }
 
     #[test]
     fn tmux_layout_rejects_bad_target_before_runner() {
         let mut runner = LayoutFakeRunner::default();
-        let err = tmux_layout_with_runner(&strings(&["bad;target", "tiled"]), &mut runner).expect_err("target guard");
+        let err = tmux_layout_with_runner(&strings(&["bad;target", "tiled"]), &mut runner)
+            .expect_err("target guard");
         assert_eq!(err.0, 1);
         assert!(err.1.contains("unsupported"));
-        assert!(runner.calls.is_empty(), "bad target reached tmux: {:?}", runner.calls);
+        assert!(
+            runner.calls.is_empty(),
+            "bad target reached tmux: {:?}",
+            runner.calls
+        );
     }
 
     #[test]

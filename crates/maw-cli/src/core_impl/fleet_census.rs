@@ -7,16 +7,29 @@
 fn fleet_render_census(state: &FleetState, options: &FleetOptions) -> Result<String, String> {
     let sessions = fleet_census_sessions(state, &options.squads);
     let groups = fleet_census_groups(state, &options.squads);
-    if options.json { return fleet_json_census(state, &sessions, &groups); }
+    if options.json {
+        return fleet_json_census(state, &sessions, &groups);
+    }
     let windows = fleet_window_count(&sessions);
     let mut out = String::new();
     let _ = writeln!(out, "\x1b[36mfleet\x1b[0m node {}", state.config.node);
-    let _ = writeln!(out, "  sessions: {} ({} windows, {} disabled)", sessions.len(), windows, state.disabled_count);
+    let _ = writeln!(
+        out,
+        "  sessions: {} ({} windows, {} disabled)",
+        sessions.len(),
+        windows,
+        state.disabled_count
+    );
     let _ = writeln!(out, "  peers: {}", state.config.peers.len());
     let _ = writeln!(out, "  agents: {}", state.config.agents.len());
     let _ = writeln!(out, "  session list:");
     for session in &sessions {
-        let _ = writeln!(out, "  - {} ({} windows)", session.name, session.windows.len());
+        let _ = writeln!(
+            out,
+            "  - {} ({} windows)",
+            session.name,
+            session.windows.len()
+        );
     }
     let _ = writeln!(out, "  squads: {}", groups.len());
     for group in &groups {
@@ -38,7 +51,11 @@ fn fleet_render_census(state: &FleetState, options: &FleetOptions) -> Result<Str
     Ok(out)
 }
 
-fn fleet_json_census(state: &FleetState, sessions: &[FleetSessionSummary], groups: &[FleetGroupSummary]) -> Result<String, String> {
+fn fleet_json_census(
+    state: &FleetState,
+    sessions: &[FleetSessionSummary],
+    groups: &[FleetGroupSummary],
+) -> Result<String, String> {
     let value = serde_json::json!({
         "node": state.config.node,
         "configDir": state.config_dir,
@@ -50,7 +67,9 @@ fn fleet_json_census(state: &FleetState, sessions: &[FleetSessionSummary], group
         "agentCount": state.config.agents.len(),
         "squads": groups.iter().map(fleet_json_group).collect::<Vec<_>>(),
     });
-    serde_json::to_string_pretty(&value).map(|text| format!("{text}\n")).map_err(|error| error.to_string())
+    serde_json::to_string_pretty(&value)
+        .map(|text| format!("{text}\n"))
+        .map_err(|error| error.to_string())
 }
 
 fn fleet_census_sessions(state: &FleetState, groups: &[String]) -> Vec<FleetSessionSummary> {
@@ -78,18 +97,28 @@ fn fleet_census_groups(state: &FleetState, groups: &[String]) -> Vec<FleetGroupS
     };
     let mut output = Vec::new();
     for entry in &state.fleet_entries {
-        let Some(squad_name) = fleet_roster_squad_name(entry) else { continue; };
-        if !groups.is_empty() && !filtered.iter().any(|group| fleet_roster_entry_matches(entry, group)) {
+        let Some(squad_name) = fleet_roster_squad_name(entry) else {
+            continue;
+        };
+        if !groups.is_empty()
+            && !filtered
+                .iter()
+                .any(|group| fleet_roster_entry_matches(entry, group))
+        {
             continue;
         }
         let mut member_summaries = Vec::new();
         let mut sessions = Vec::new();
         for member in entry.session.members.clone().unwrap_or_default() {
-            let session = fleet_member_session(&member.handle, &candidates).map(|session| session.name.clone());
+            let session = fleet_member_session(&member.handle, &candidates)
+                .map(|session| session.name.clone());
             if let Some(name) = &session {
                 sessions.push(name.to_owned());
             }
-            member_summaries.push(FleetGroupMemberSummary { handle: member.handle, session });
+            member_summaries.push(FleetGroupMemberSummary {
+                handle: member.handle,
+                session,
+            });
         }
         sessions.sort();
         sessions.dedup();

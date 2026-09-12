@@ -22,7 +22,18 @@ async fn gated_send_peer_message(
     sender_oracle: &str,
     acl_bypass: bool,
 ) -> CliOutput {
-    gated_send_peer_message_with_audit(command, peer_url, target, "", args, config, sender_oracle, &[], acl_bypass).await
+    gated_send_peer_message_with_audit(
+        command,
+        peer_url,
+        target,
+        "",
+        args,
+        config,
+        sender_oracle,
+        &[],
+        acl_bypass,
+    )
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -65,7 +76,18 @@ async fn send_acl_deliver_peer_message(
     sender_oracle: &str,
     stderr_prefix: String,
 ) -> CliOutput {
-    send_acl_deliver_peer_message_with_audit(command, peer_url, target, "", args, config, sender_oracle, &[], stderr_prefix).await
+    send_acl_deliver_peer_message_with_audit(
+        command,
+        peer_url,
+        target,
+        "",
+        args,
+        config,
+        sender_oracle,
+        &[],
+        stderr_prefix,
+    )
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -81,7 +103,17 @@ async fn send_acl_deliver_peer_message_with_audit(
     stderr_prefix: String,
 ) -> CliOutput {
     send_acl_apply_proceed_stderr(
-        send_peer_message(command, peer_url, target, node, args, config, sender_oracle, audit_args).await,
+        send_peer_message(
+            command,
+            peer_url,
+            target,
+            node,
+            args,
+            config,
+            sender_oracle,
+            audit_args,
+        )
+        .await,
         &stderr_prefix,
     )
 }
@@ -121,7 +153,12 @@ fn send_acl_gate_peer(
     if args.approve || acl_bypass {
         let mut stderr_prefix = String::new();
         if args.approve && args.trust {
-            if let Err(error) = scope_trust_add_to_path(&scope_trust_path(), &sender, &target, &inbox_iso_label(inbox_now_ms())) {
+            if let Err(error) = scope_trust_add_to_path(
+                &scope_trust_path(),
+                &sender,
+                &target,
+                &inbox_iso_label(inbox_now_ms()),
+            ) {
                 let _ = writeln!(
                     stderr_prefix,
                     "warn: ACL trust add failed, allowing send: {error} — fix {}",
@@ -175,7 +212,8 @@ fn send_acl_actor_from_target(target: &str) -> String {
 }
 
 fn send_acl_validate_actor(value: &str) -> Result<String, String> {
-    scope_trust_validate_actor("ACL actor", value).map_err(|error| format!("ACL actor rejected: {error}"))
+    scope_trust_validate_actor("ACL actor", value)
+        .map_err(|error| format!("ACL actor rejected: {error}"))
 }
 
 fn send_acl_evaluate_loaded(sender: &str, target: &str) -> Result<ScopeAclDecision, String> {
@@ -194,15 +232,23 @@ fn send_acl_load_scopes_strict() -> Result<Vec<ScopeNativeRecord>, String> {
     };
     let mut scopes = Vec::new();
     for entry in entries {
-        let entry = entry.map_err(|error| format!("ACL check failed, allowing send: read {}: {error} — fix {}", dir.display(), dir.display()))?;
+        let entry = entry.map_err(|error| {
+            format!(
+                "ACL check failed, allowing send: read {}: {error} — fix {}",
+                dir.display(),
+                dir.display()
+            )
+        })?;
         let path = entry.path();
         if path.extension().and_then(std::ffi::OsStr::to_str) != Some("json") {
             continue;
         }
-        let body = std::fs::read_to_string(&path)
-            .map_err(|error| format!("read {}: {error} — fix {}", path.display(), path.display()))?;
-        let scope = serde_json::from_str::<ScopeNativeRecord>(&body)
-            .map_err(|error| format!("parse {}: {error} — fix {}", path.display(), path.display()))?;
+        let body = std::fs::read_to_string(&path).map_err(|error| {
+            format!("read {}: {error} — fix {}", path.display(), path.display())
+        })?;
+        let scope = serde_json::from_str::<ScopeNativeRecord>(&body).map_err(|error| {
+            format!("parse {}: {error} — fix {}", path.display(), path.display())
+        })?;
         scopes.push(scope);
     }
     scopes.sort_by(|left, right| left.name.cmp(&right.name));
@@ -217,18 +263,31 @@ fn send_acl_load_trust_pairs_strict() -> Result<Vec<ScopeAclTrustPair>, String> 
     let value = serde_json::from_str::<serde_json::Value>(&body)
         .map_err(|error| format!("parse {}: {error} — fix {}", path.display(), path.display()))?;
     let Some(items) = value.as_array() else {
-        return Err(format!("parse {}: expected array — fix {}", path.display(), path.display()));
+        return Err(format!(
+            "parse {}: expected array — fix {}",
+            path.display(),
+            path.display()
+        ));
     };
     let mut entries = Vec::with_capacity(items.len());
     for item in items {
-        let entry = scope_trust_entry_from_json(item)
-            .ok_or_else(|| format!("parse {}: invalid trust entry — fix {}", path.display(), path.display()))?;
+        let entry = scope_trust_entry_from_json(item).ok_or_else(|| {
+            format!(
+                "parse {}: invalid trust entry — fix {}",
+                path.display(),
+                path.display()
+            )
+        })?;
         entries.push(entry);
     }
     Ok(scope_trust_pairs(&entries))
 }
 
-fn send_acl_queue_pending(sender: &str, target: &str, args: &SendArgs) -> Result<CliOutput, String> {
+fn send_acl_queue_pending(
+    sender: &str,
+    target: &str,
+    args: &SendArgs,
+) -> Result<CliOutput, String> {
     let env = inbox_real_env();
     let id = send_acl_pending_id()?;
     let message = InboxPendingMessage {

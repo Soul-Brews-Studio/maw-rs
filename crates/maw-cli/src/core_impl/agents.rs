@@ -325,7 +325,11 @@ fn agents_is_shell_command(command: &str) -> bool {
     )
 }
 
-fn agents_build_node_rows(routes: &HashMap<String, String>, requested_node: &str, local_node: &str) -> Vec<AgentsRow> {
+fn agents_build_node_rows(
+    routes: &HashMap<String, String>,
+    requested_node: &str,
+    local_node: &str,
+) -> Vec<AgentsRow> {
     let mut oracles = routes
         .iter()
         .filter(|(_, node)| agents_route_matches_node(node, requested_node, local_node))
@@ -346,15 +350,23 @@ fn agents_build_node_rows(routes: &HashMap<String, String>, requested_node: &str
 }
 
 fn agents_route_matches_node(route_node: &str, requested_node: &str, local_node: &str) -> bool {
-    route_node == requested_node || (route_node == "local" && (requested_node == "local" || requested_node == local_node))
+    route_node == requested_node
+        || (route_node == "local" && (requested_node == "local" || requested_node == local_node))
 }
 
 fn agents_oracle_window(oracle: &str) -> String {
-    if oracle.ends_with(AGENTS_ORACLE_SUFFIX) { oracle.to_owned() } else { format!("{oracle}{AGENTS_ORACLE_SUFFIX}") }
+    if oracle.ends_with(AGENTS_ORACLE_SUFFIX) {
+        oracle.to_owned()
+    } else {
+        format!("{oracle}{AGENTS_ORACLE_SUFFIX}")
+    }
 }
 
 fn agents_oracle_name(oracle: &str) -> String {
-    oracle.strip_suffix(AGENTS_ORACLE_SUFFIX).unwrap_or(oracle).to_owned()
+    oracle
+        .strip_suffix(AGENTS_ORACLE_SUFFIX)
+        .unwrap_or(oracle)
+        .to_owned()
 }
 
 fn agents_render_json(rows: &[AgentsRow]) -> Result<String, String> {
@@ -475,7 +487,10 @@ impl AgentsGcRuntime for AgentsGcSystemRuntime {
 
     fn gc_registry_names(&self) -> BTreeSet<String> {
         let mut names = BTreeSet::new();
-        for entry in fleet_load_entries().into_iter().filter(fleet_entry_is_session) {
+        for entry in fleet_load_entries()
+            .into_iter()
+            .filter(fleet_entry_is_session)
+        {
             names.insert(entry.session.name.clone());
             for window in &entry.session.windows {
                 names.insert(window.name.clone());
@@ -519,7 +534,11 @@ fn agents_gc_run(argv: &[String], runtime: &mut impl AgentsGcRuntime) -> Result<
             "--apply" => apply = true,
             "--dry-run" => apply = false,
             "--help" | "-h" => return Ok(format!("{AGENTS_GC_USAGE}\n")),
-            other => return Err(format!("agents gc: unknown argument {other}\n{AGENTS_GC_USAGE}")),
+            other => {
+                return Err(format!(
+                    "agents gc: unknown argument {other}\n{AGENTS_GC_USAGE}"
+                ))
+            }
         }
     }
     let scan = agents_gc_find_phantoms(runtime)?;
@@ -831,7 +850,10 @@ mod agents_tests {
     fn agents_node_and_help_do_not_touch_tmux() {
         let mut runtime = agents_fake_runtime();
         let node = agents_run(&agents_args(&["--node", "edge"]), &mut runtime).expect("node");
-        assert_eq!(node, include_str!("../../tests/fixtures/native-agents/node-edge.stdout"));
+        assert_eq!(
+            node,
+            include_str!("../../tests/fixtures/native-agents/node-edge.stdout")
+        );
         assert!(!runtime.touched_tmux);
         let help = agents_run(&agents_args(&["--help"]), &mut runtime).expect("help");
         assert_eq!(help, format!("{AGENTS_USAGE}\n"));
@@ -996,7 +1018,10 @@ mod agents_tests {
         assert_eq!(agents.len(), 1);
         assert!(agents.contains_key("digger"));
         assert_eq!(
-            runtime.config.get("node").and_then(serde_json::Value::as_str),
+            runtime
+                .config
+                .get("node")
+                .and_then(serde_json::Value::as_str),
             Some("m5")
         );
     }

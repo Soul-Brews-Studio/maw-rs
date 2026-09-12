@@ -24,7 +24,9 @@ fn route_sessions_from_tmux_runner<R: maw_tmux::TmuxRunner>(
             ],
         )
         .map_err(|error| format!("{command} target resolution failed: {}", error.message))?;
-    Ok(tmux_sessions_to_route_sessions(maw_tmux::parse_list_all_windows(&raw)))
+    Ok(tmux_sessions_to_route_sessions(
+        maw_tmux::parse_list_all_windows(&raw),
+    ))
 }
 
 fn tmux_sessions_to_route_sessions(sessions: Vec<TmuxSession>) -> Vec<RouteSession> {
@@ -99,7 +101,11 @@ fn prefer_pane_zero_for_ambiguous_agent<R: maw_tmux::TmuxRunner>(
     };
     let Ok(raw) = runner.run(
         "list-panes",
-        &["-a".to_owned(), "-F".to_owned(), maw_tmux::PANE_TARGET_FORMAT.to_owned()],
+        &[
+            "-a".to_owned(),
+            "-F".to_owned(),
+            maw_tmux::PANE_TARGET_FORMAT.to_owned(),
+        ],
     ) else {
         return target.to_owned();
     };
@@ -116,7 +122,12 @@ fn prefer_pane_zero_for_ambiguous_agent<R: maw_tmux::TmuxRunner>(
     }
     matches
         .iter()
-        .find(|candidate| candidate.target.rsplit_once('.').is_some_and(|(_, pane)| pane == "0"))
+        .find(|candidate| {
+            candidate
+                .target
+                .rsplit_once('.')
+                .is_some_and(|(_, pane)| pane == "0")
+        })
         .map_or_else(|| target.to_owned(), |candidate| candidate.target.clone())
 }
 
@@ -141,17 +152,16 @@ fn route_window_target_without_pane(target: &str) -> Option<&str> {
 }
 
 fn candidate_window_target(target: &str) -> Option<String> {
-    target
-        .rsplit_once('.')
-        .and_then(|(window, pane)| {
-            (!window.is_empty() && !pane.is_empty() && pane.bytes().all(|byte| byte.is_ascii_digit()))
-                .then(|| window.to_owned())
-        })
+    target.rsplit_once('.').and_then(|(window, pane)| {
+        (!window.is_empty() && !pane.is_empty() && pane.bytes().all(|byte| byte.is_ascii_digit()))
+            .then(|| window.to_owned())
+    })
 }
 
 fn route_split_pane_suffix(value: &str) -> (&str, Option<&str>) {
     if let Some((window, pane)) = value.rsplit_once('.') {
-        if !window.is_empty() && !pane.is_empty() && pane.bytes().all(|byte| byte.is_ascii_digit()) {
+        if !window.is_empty() && !pane.is_empty() && pane.bytes().all(|byte| byte.is_ascii_digit())
+        {
             return (window, Some(pane));
         }
     }
@@ -180,7 +190,9 @@ fn route_split_pane_suffix(value: &str) -> (&str, Option<&str>) {
 /// `black`.
 fn hey_strip_numeric_fleet_prefix(name: &str) -> &str {
     name.split_once('-')
-        .filter(|(prefix, _)| !prefix.is_empty() && prefix.bytes().all(|byte| byte.is_ascii_digit()))
+        .filter(|(prefix, _)| {
+            !prefix.is_empty() && prefix.bytes().all(|byte| byte.is_ascii_digit())
+        })
         .map_or(name, |(_, rest)| rest)
 }
 
@@ -188,7 +200,10 @@ fn hey_strip_numeric_fleet_prefix(name: &str) -> &str {
 /// existence makes maw-routing's explicit-local-target step claim the query
 /// before any peer lookup is even attempted. Returns the session's real name
 /// so a refusal can print the pane it would actually have hit.
-fn hey_local_session_matching_node<'a>(sessions: &'a [RouteSession], node: &str) -> Option<&'a str> {
+fn hey_local_session_matching_node<'a>(
+    sessions: &'a [RouteSession],
+    node: &str,
+) -> Option<&'a str> {
     let wanted = node.to_lowercase();
     sessions
         .iter()
@@ -251,7 +266,10 @@ fn hey_peer_url_for_node_stored_only(node: &str, config: &RouteConfig) -> Option
     if config.named_peers.iter().any(|peer| peer.name == node) {
         return None;
     }
-    peers_load_store().peers.get(node).map(|peer| peer.url.clone())
+    peers_load_store()
+        .peers
+        .get(node)
+        .map(|peer| peer.url.clone())
 }
 
 /// The `<node>` half of a `<node>:<rest>` query that names BOTH a live local
@@ -264,7 +282,11 @@ fn hey_local_peer_collision(
     config: &RouteConfig,
 ) -> Option<(String, String)> {
     let (node, rest) = query.split_once(':')?;
-    if node.is_empty() || rest.is_empty() || node.eq_ignore_ascii_case("local") || node.eq_ignore_ascii_case("me") {
+    if node.is_empty()
+        || rest.is_empty()
+        || node.eq_ignore_ascii_case("local")
+        || node.eq_ignore_ascii_case("me")
+    {
         return None;
     }
     let session = hey_local_session_matching_node(sessions, node)?;
@@ -340,7 +362,9 @@ fn hey_forced_peer_route(
         return None;
     }
     let rest = query.strip_prefix("peer:")?;
-    let (node, target) = rest.split_once(':').filter(|(node, target)| !node.is_empty() && !target.is_empty())?;
+    let (node, target) = rest
+        .split_once(':')
+        .filter(|(node, target)| !node.is_empty() && !target.is_empty())?;
     let real_peer_named_peer = hey_local_session_matching_node(sessions, "peer").is_some()
         || hey_peer_url_for_node("peer", config).is_some();
     if real_peer_named_peer {
@@ -366,7 +390,11 @@ fn hey_forced_peer_route(
             detail: format!("no peer named '{node}' in namedPeers or the peer store"),
             hint: Some("check `maw peers list`".to_owned()),
         },
-        |peer_url| RouteResult::Peer { peer_url, target: target.to_owned(), node: node.to_owned() },
+        |peer_url| RouteResult::Peer {
+            peer_url,
+            target: target.to_owned(),
+            node: node.to_owned(),
+        },
     ))
 }
 
@@ -394,7 +422,11 @@ fn hey_peers_json_fallback_route(
     let Some(peer_url) = hey_peer_url_for_node_stored_only(node, config) else {
         return result;
     };
-    RouteResult::Peer { peer_url, target: rest.to_owned(), node: node.to_owned() }
+    RouteResult::Peer {
+        peer_url,
+        target: rest.to_owned(),
+        node: node.to_owned(),
+    }
 }
 
 // --- #709: verify the resolved pane still looks like an agent ---
@@ -453,7 +485,11 @@ mod target_resolver_tests {
     }
 
     impl maw_tmux::TmuxRunner for FakeRunner {
-        fn run(&mut self, subcommand: &str, _args: &[String]) -> Result<String, maw_tmux::TmuxError> {
+        fn run(
+            &mut self,
+            subcommand: &str,
+            _args: &[String],
+        ) -> Result<String, maw_tmux::TmuxError> {
             if subcommand == "list-panes" {
                 self.calls += 1;
                 Ok(self.raw.clone())
@@ -477,11 +513,18 @@ mod target_resolver_tests {
 
         let result = route_result_prefer_pane_zero_for_ambiguous_agent(
             "81-kru32:kru32-oracle",
-            RouteResult::Local { target: "81-kru32:0".to_owned() },
+            RouteResult::Local {
+                target: "81-kru32:0".to_owned(),
+            },
             &mut runner,
         );
 
-        assert_eq!(result, RouteResult::Local { target: "81-kru32:0.0".to_owned() });
+        assert_eq!(
+            result,
+            RouteResult::Local {
+                target: "81-kru32:0.0".to_owned()
+            }
+        );
         assert_eq!(runner.calls, 1);
     }
 
@@ -489,7 +532,11 @@ mod target_resolver_tests {
     fn explicit_pane_or_single_match_keeps_resolved_target() {
         let mut explicit = FakeRunner::default();
         assert_eq!(
-            prefer_pane_zero_for_ambiguous_agent("81-kru32:kru32-oracle.2", "81-kru32:0.2", &mut explicit),
+            prefer_pane_zero_for_ambiguous_agent(
+                "81-kru32:kru32-oracle.2",
+                "81-kru32:0.2",
+                &mut explicit
+            ),
             "81-kru32:0.2"
         );
         assert_eq!(explicit.calls, 0);
@@ -499,7 +546,11 @@ mod target_resolver_tests {
             ..FakeRunner::default()
         };
         assert_eq!(
-            prefer_pane_zero_for_ambiguous_agent("81-kru32:kru32-oracle", "81-kru32:0", &mut single),
+            prefer_pane_zero_for_ambiguous_agent(
+                "81-kru32:kru32-oracle",
+                "81-kru32:0",
+                &mut single
+            ),
             "81-kru32:0"
         );
     }
@@ -507,11 +558,17 @@ mod target_resolver_tests {
     // --- #790/#681 ---
 
     fn hey_named_peer(name: &str, url: &str) -> RouteNamedPeer {
-        RouteNamedPeer { name: name.to_owned(), url: url.to_owned() }
+        RouteNamedPeer {
+            name: name.to_owned(),
+            url: url.to_owned(),
+        }
     }
 
     fn hey_config_with_named_peers(peers: Vec<RouteNamedPeer>) -> RouteConfig {
-        RouteConfig { named_peers: peers, ..RouteConfig::default() }
+        RouteConfig {
+            named_peers: peers,
+            ..RouteConfig::default()
+        }
     }
 
     fn hey_sessions(names: &[&str]) -> Vec<RouteSession> {
@@ -519,7 +576,12 @@ mod target_resolver_tests {
             .iter()
             .map(|name| RouteSession {
                 name: (*name).to_owned(),
-                windows: vec![RouteWindow { index: 0, name: "work".to_owned(), active: true, kind: None }],
+                windows: vec![RouteWindow {
+                    index: 0,
+                    name: "work".to_owned(),
+                    active: true,
+                    kind: None,
+                }],
                 source: None,
             })
             .collect()
@@ -538,10 +600,16 @@ mod target_resolver_tests {
             let path = std::env::temp_dir().join(format!(
                 "maw-rs-target-resolver-peers-{label}-{}-{}",
                 std::process::id(),
-                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos())
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_nanos())
             ));
             std::env::set_var("PEERS_FILE", &path);
-            Self { _restore: restore, path, _lock: lock }
+            Self {
+                _restore: restore,
+                path,
+                _lock: lock,
+            }
         }
 
         fn with_peer(label: &str, alias: &str, url: &str) -> Self {
@@ -560,7 +628,12 @@ mod target_resolver_tests {
     fn hey_818_sessions() -> Vec<RouteSession> {
         vec![RouteSession {
             name: "11-white".to_owned(),
-            windows: vec![RouteWindow { index: 3, name: "white".to_owned(), active: true, kind: None }],
+            windows: vec![RouteWindow {
+                index: 3,
+                name: "white".to_owned(),
+                active: true,
+                kind: None,
+            }],
             source: None,
         }]
     }
@@ -568,30 +641,56 @@ mod target_resolver_tests {
     #[test]
     fn colliding_node_name_refuses_instead_of_delivering_locally() {
         let sessions = hey_818_sessions();
-        let config = hey_config_with_named_peers(vec![hey_named_peer("white", "http://192.168.1.164:3456")]);
+        let config =
+            hey_config_with_named_peers(vec![hey_named_peer("white", "http://192.168.1.164:3456")]);
 
         // The misroute itself, unchanged: maw-routing hands back a LOCAL pane
         // for a query that names a peer, so nothing downstream ever contacts
         // it. This is the state `hey` used to deliver into with exit 0.
         let result = resolve_route_target("white:white", &config, &sessions);
-        assert_eq!(result, RouteResult::Local { target: "11-white:3".to_owned() });
+        assert_eq!(
+            result,
+            RouteResult::Local {
+                target: "11-white:3".to_owned()
+            }
+        );
 
-        let refusal = hey_local_peer_collision_refusal("hey", "white:white", &sessions, &config, &result)
-            .expect("#818: an ambiguous peer/session name must refuse, not deliver locally");
+        let refusal =
+            hey_local_peer_collision_refusal("hey", "white:white", &sessions, &config, &result)
+                .expect("#818: an ambiguous peer/session name must refuse, not deliver locally");
         assert_ne!(refusal.code, 0, "a refusal must not exit 0");
-        assert!(refusal.stdout.is_empty(), "nothing was delivered: {}", refusal.stdout);
+        assert!(
+            refusal.stdout.is_empty(),
+            "nothing was delivered: {}",
+            refusal.stdout
+        );
         // Both candidates named, and both unambiguous forms offered.
         assert!(refusal.stderr.contains("11-white"), "{}", refusal.stderr);
-        assert!(refusal.stderr.contains("http://192.168.1.164:3456"), "{}", refusal.stderr);
-        assert!(refusal.stderr.contains("peer:white:white"), "{}", refusal.stderr);
-        assert!(refusal.stderr.contains("local:white:white"), "{}", refusal.stderr);
+        assert!(
+            refusal.stderr.contains("http://192.168.1.164:3456"),
+            "{}",
+            refusal.stderr
+        );
+        assert!(
+            refusal.stderr.contains("peer:white:white"),
+            "{}",
+            refusal.stderr
+        );
+        assert!(
+            refusal.stderr.contains("local:white:white"),
+            "{}",
+            refusal.stderr
+        );
     }
 
     #[test]
     fn collision_refusal_is_silent_without_a_real_collision() {
         let sessions = hey_sessions(&["31-black"]);
-        let config = hey_config_with_named_peers(vec![hey_named_peer("black", "http://10.10.0.6:3456")]);
-        let local = RouteResult::Local { target: "31-black:0".to_owned() };
+        let config =
+            hey_config_with_named_peers(vec![hey_named_peer("black", "http://10.10.0.6:3456")]);
+        let local = RouteResult::Local {
+            target: "31-black:0".to_owned(),
+        };
         let refuse = |query: &str, sessions: &[RouteSession]| {
             hey_local_peer_collision_refusal("hey", query, sessions, &config, &local)
         };
@@ -605,14 +704,24 @@ mod target_resolver_tests {
         // Bare (no ':') targets are handled by the picker, not this helper.
         assert!(refuse("black", &sessions).is_none());
         // `send` keeps its historical routing; only `hey` gained the refusal.
-        assert!(hey_local_peer_collision_refusal("send", "black:oracle", &sessions, &config, &local).is_none());
+        assert!(hey_local_peer_collision_refusal(
+            "send",
+            "black:oracle",
+            &sessions,
+            &config,
+            &local
+        )
+        .is_none());
         // A route that already reached the peer shadowed nothing.
         let peer = RouteResult::Peer {
             peer_url: "http://10.10.0.6:3456".to_owned(),
             target: "oracle".to_owned(),
             node: "black".to_owned(),
         };
-        assert!(hey_local_peer_collision_refusal("hey", "black:oracle", &sessions, &config, &peer).is_none());
+        assert!(
+            hey_local_peer_collision_refusal("hey", "black:oracle", &sessions, &config, &peer)
+                .is_none()
+        );
     }
 
     #[test]
@@ -620,21 +729,30 @@ mod target_resolver_tests {
         let _guard = PeersFileGuard::with_peer("collision", "black", "http://10.10.0.6:3456");
         let sessions = hey_sessions(&["31-black"]);
         let config = RouteConfig::default(); // namedPeers empty — peers.json is the only source
-        let local = RouteResult::Local { target: "31-black:0".to_owned() };
+        let local = RouteResult::Local {
+            target: "31-black:0".to_owned(),
+        };
 
-        let refusal = hey_local_peer_collision_refusal("hey", "black:oracle", &sessions, &config, &local)
-            .expect("collision refusal from peers.json");
-        assert!(refusal.stderr.contains("http://10.10.0.6:3456"), "{}", refusal.stderr);
+        let refusal =
+            hey_local_peer_collision_refusal("hey", "black:oracle", &sessions, &config, &local)
+                .expect("collision refusal from peers.json");
+        assert!(
+            refusal.stderr.contains("http://10.10.0.6:3456"),
+            "{}",
+            refusal.stderr
+        );
     }
 
     #[test]
     fn forced_peer_prefix_routes_past_a_same_named_local_session() {
         let sessions = hey_818_sessions();
-        let config = hey_config_with_named_peers(vec![hey_named_peer("white", "http://192.168.1.164:3456")]);
+        let config =
+            hey_config_with_named_peers(vec![hey_named_peer("white", "http://192.168.1.164:3456")]);
 
         // The escape hatch resolves before local matching, so the local
         // session that shadowed "white:white" cannot claim this form...
-        let forced = hey_forced_peer_route("hey", "peer:white:white", &sessions, &config).expect("forced peer route");
+        let forced = hey_forced_peer_route("hey", "peer:white:white", &sessions, &config)
+            .expect("forced peer route");
         assert_eq!(
             forced,
             RouteResult::Peer {
@@ -644,7 +762,14 @@ mod target_resolver_tests {
             }
         );
         // ...and being a Peer route, it is exempt from the collision refusal.
-        assert!(hey_local_peer_collision_refusal("hey", "peer:white:white", &sessions, &config, &forced).is_none());
+        assert!(hey_local_peer_collision_refusal(
+            "hey",
+            "peer:white:white",
+            &sessions,
+            &config,
+            &forced
+        )
+        .is_none());
 
         // A multi-colon target keeps its window suffix (#410 form).
         assert_eq!(
@@ -660,10 +785,14 @@ mod target_resolver_tests {
     #[test]
     fn forced_peer_prefix_errors_clearly_and_leaves_other_targets_alone() {
         let _guard = PeersFileGuard::empty("forced");
-        let config = hey_config_with_named_peers(vec![hey_named_peer("white", "http://192.168.1.164:3456")]);
+        let config =
+            hey_config_with_named_peers(vec![hey_named_peer("white", "http://192.168.1.164:3456")]);
 
-        let unknown = hey_forced_peer_route("hey", "peer:ghost:oracle", &[], &config).expect("unknown peer error");
-        let RouteResult::Error { reason, detail, .. } = &unknown else { panic!("expected an error: {unknown:?}") };
+        let unknown = hey_forced_peer_route("hey", "peer:ghost:oracle", &[], &config)
+            .expect("unknown peer error");
+        let RouteResult::Error { reason, detail, .. } = &unknown else {
+            panic!("expected an error: {unknown:?}")
+        };
         assert_eq!(reason, "unknown_node");
         assert!(detail.contains("ghost"), "{detail}");
 
@@ -680,7 +809,8 @@ mod target_resolver_tests {
     // colon (panes use `.`), so the fix only claims the two-colon shape.
     #[test]
     fn forced_peer_prefix_falls_through_on_an_ordinary_one_colon_session_named_peer() {
-        let config = hey_config_with_named_peers(vec![hey_named_peer("white", "http://192.168.1.164:3456")]);
+        let config =
+            hey_config_with_named_peers(vec![hey_named_peer("white", "http://192.168.1.164:3456")]);
 
         // The exact reported over-fire: a session literally named "peer",
         // zero relevant peers configured. Must fall through, not error.
@@ -694,8 +824,11 @@ mod target_resolver_tests {
         // targets don't have two colons) -- keeps the helpful error rather
         // than silently falling through to a worse, unrelated failure.
         let _guard = PeersFileGuard::empty("forced-typo");
-        let typo = hey_forced_peer_route("hey", "peer:withe:oracle", &[], &config).expect("unknown peer error");
-        let RouteResult::Error { reason, .. } = &typo else { panic!("expected an error: {typo:?}") };
+        let typo = hey_forced_peer_route("hey", "peer:withe:oracle", &[], &config)
+            .expect("unknown peer error");
+        let RouteResult::Error { reason, .. } = &typo else {
+            panic!("expected an error: {typo:?}")
+        };
         assert_eq!(reason, "unknown_node");
     }
 
@@ -708,24 +841,44 @@ mod target_resolver_tests {
     // #818 already applies to every OTHER name collision.
     #[test]
     fn forced_peer_prefix_refuses_when_a_real_peer_is_literally_named_peer() {
-        let config = hey_config_with_named_peers(vec![hey_named_peer("peer", "http://peer-node.test:3456")]);
+        let config =
+            hey_config_with_named_peers(vec![hey_named_peer("peer", "http://peer-node.test:3456")]);
 
-        let refusal = hey_forced_peer_route("hey", "peer:01-hojo:3", &[], &config).expect("ambiguous keyword error");
-        let RouteResult::Error { reason, detail, hint } = &refusal else { panic!("expected an error: {refusal:?}") };
+        let refusal = hey_forced_peer_route("hey", "peer:01-hojo:3", &[], &config)
+            .expect("ambiguous keyword error");
+        let RouteResult::Error {
+            reason,
+            detail,
+            hint,
+        } = &refusal
+        else {
+            panic!("expected an error: {refusal:?}")
+        };
         assert_eq!(reason, "ambiguous_peer_keyword");
         assert!(detail.contains("'peer'"), "{detail}");
-        assert!(hint.as_deref().is_some_and(|h| h.contains("local:peer:3")), "{hint:?}");
+        assert!(
+            hint.as_deref().is_some_and(|h| h.contains("local:peer:3")),
+            "{hint:?}"
+        );
 
         // Same ambiguity when "peer" is a live LOCAL session rather than a
         // registered peer -- both sources of a real "peer" must trigger it.
-        let sessions = vec![RouteSession { name: "peer".to_owned(), windows: vec![], source: None }];
+        let sessions = vec![RouteSession {
+            name: "peer".to_owned(),
+            windows: vec![],
+            source: None,
+        }];
         let no_named_peers = RouteConfig::default();
-        let refusal2 = hey_forced_peer_route("hey", "peer:oracle:0", &sessions, &no_named_peers).expect("ambiguous keyword error");
-        assert!(matches!(refusal2, RouteResult::Error { reason, .. } if reason == "ambiguous_peer_keyword"));
+        let refusal2 = hey_forced_peer_route("hey", "peer:oracle:0", &sessions, &no_named_peers)
+            .expect("ambiguous keyword error");
+        assert!(
+            matches!(refusal2, RouteResult::Error { reason, .. } if reason == "ambiguous_peer_keyword")
+        );
 
         // Unaffected: no real "peer" anywhere -- the ordinary escape hatch
         // still works exactly as round 2 fixed it.
-        let clean_config = hey_config_with_named_peers(vec![hey_named_peer("white", "http://192.168.1.164:3456")]);
+        let clean_config =
+            hey_config_with_named_peers(vec![hey_named_peer("white", "http://192.168.1.164:3456")]);
         assert!(hey_forced_peer_route("hey", "peer:white:white", &[], &clean_config).is_some());
     }
 
@@ -741,13 +894,21 @@ mod target_resolver_tests {
     fn ambiguous_peer_keyword_hint_actually_resolves_locally() {
         let sessions = vec![RouteSession {
             name: "peer".to_owned(),
-            windows: vec![RouteWindow { index: 3, name: "01-hojo".to_owned(), active: true, kind: None }],
+            windows: vec![RouteWindow {
+                index: 3,
+                name: "01-hojo".to_owned(),
+                active: true,
+                kind: None,
+            }],
             source: None,
         }];
         let config = RouteConfig::default();
 
-        let refusal = hey_forced_peer_route("hey", "peer:01-hojo:3", &sessions, &config).expect("ambiguous keyword error");
-        let RouteResult::Error { hint, .. } = &refusal else { panic!("expected an error: {refusal:?}") };
+        let refusal = hey_forced_peer_route("hey", "peer:01-hojo:3", &sessions, &config)
+            .expect("ambiguous keyword error");
+        let RouteResult::Error { hint, .. } = &refusal else {
+            panic!("expected an error: {refusal:?}")
+        };
         let hint = hint.as_deref().expect("hint present");
         let suggested = hint
             .split_whitespace()
@@ -768,10 +929,20 @@ mod target_resolver_tests {
     // side must too.
     #[test]
     fn hey_peer_url_for_node_matches_case_insensitively() {
-        let config = hey_config_with_named_peers(vec![hey_named_peer("white", "http://192.168.1.164:3456")]);
-        assert_eq!(hey_peer_url_for_node("White", &config).as_deref(), Some("http://192.168.1.164:3456"));
-        assert_eq!(hey_peer_url_for_node("WHITE", &config).as_deref(), Some("http://192.168.1.164:3456"));
-        assert_eq!(hey_peer_url_for_node("white", &config).as_deref(), Some("http://192.168.1.164:3456"));
+        let config =
+            hey_config_with_named_peers(vec![hey_named_peer("white", "http://192.168.1.164:3456")]);
+        assert_eq!(
+            hey_peer_url_for_node("White", &config).as_deref(),
+            Some("http://192.168.1.164:3456")
+        );
+        assert_eq!(
+            hey_peer_url_for_node("WHITE", &config).as_deref(),
+            Some("http://192.168.1.164:3456")
+        );
+        assert_eq!(
+            hey_peer_url_for_node("white", &config).as_deref(),
+            Some("http://192.168.1.164:3456")
+        );
     }
 
     // End-to-end: before this fix, `White:white` (peer configured lowercase
@@ -782,10 +953,12 @@ mod target_resolver_tests {
     #[test]
     fn colliding_node_name_refuses_even_with_a_capitalization_mismatch() {
         let sessions = hey_818_sessions();
-        let config = hey_config_with_named_peers(vec![hey_named_peer("white", "http://192.168.1.164:3456")]);
+        let config =
+            hey_config_with_named_peers(vec![hey_named_peer("white", "http://192.168.1.164:3456")]);
         let result = resolve_route_target("White:white", &config, &sessions);
-        let refusal = hey_local_peer_collision_refusal("hey", "White:white", &sessions, &config, &result)
-            .expect("case mismatch must still refuse, not silently deliver locally");
+        let refusal =
+            hey_local_peer_collision_refusal("hey", "White:white", &sessions, &config, &result)
+                .expect("case mismatch must still refuse, not silently deliver locally");
         assert!(refusal.stderr.contains("11-white"), "{}", refusal.stderr);
     }
 
@@ -824,9 +997,13 @@ mod target_resolver_tests {
     // an error. Must stay case-sensitive, matching upstream's own rule.
     #[test]
     fn peers_json_fallback_stays_case_sensitive_against_named_peers() {
-        let _guard = PeersFileGuard::with_peer("fallback-case", "white", "http://legacy-white.example:3456");
+        let _guard =
+            PeersFileGuard::with_peer("fallback-case", "white", "http://legacy-white.example:3456");
         let sessions = hey_sessions(&["unrelated"]);
-        let config = hey_config_with_named_peers(vec![hey_named_peer("White", "http://different-white.example:3456")]);
+        let config = hey_config_with_named_peers(vec![hey_named_peer(
+            "White",
+            "http://different-white.example:3456",
+        )]);
         let error = RouteResult::Error {
             reason: "unknown_node".to_owned(),
             detail: "node 'white' not in namedPeers or peers".to_owned(),
@@ -854,17 +1031,33 @@ mod target_resolver_tests {
         // #790: if "black" is ALSO a local session, local-first precedence
         // must hold — the peers.json fallback must not steal the route.
         let sessions_with_local = hey_sessions(&["31-black"]);
-        let error = RouteResult::Error { reason: "session_window_not_found".to_owned(), detail: "no window 'oracle' in session '31-black'".to_owned(), hint: None };
+        let error = RouteResult::Error {
+            reason: "session_window_not_found".to_owned(),
+            detail: "no window 'oracle' in session '31-black'".to_owned(),
+            hint: None,
+        };
         assert_eq!(
-            hey_peers_json_fallback_route("black:oracle", &config, &sessions_with_local, error.clone()),
+            hey_peers_json_fallback_route(
+                "black:oracle",
+                &config,
+                &sessions_with_local,
+                error.clone()
+            ),
             error,
             "fallback must not override a real local-session collision"
         );
 
         // Non-Error results pass through untouched.
-        let local = RouteResult::Local { target: "31-black:0".to_owned() };
+        let local = RouteResult::Local {
+            target: "31-black:0".to_owned(),
+        };
         assert_eq!(
-            hey_peers_json_fallback_route("black:oracle", &config, &hey_sessions(&[]), local.clone()),
+            hey_peers_json_fallback_route(
+                "black:oracle",
+                &config,
+                &hey_sessions(&[]),
+                local.clone()
+            ),
             local
         );
     }
@@ -873,7 +1066,11 @@ mod target_resolver_tests {
     fn peers_json_fallback_leaves_non_node_shaped_errors_alone() {
         let _guard = PeersFileGuard::empty("shapeless");
         let config = RouteConfig::default();
-        let error = RouteResult::Error { reason: "not_found".to_owned(), detail: "'bare' not in local sessions or agents map".to_owned(), hint: None };
+        let error = RouteResult::Error {
+            reason: "not_found".to_owned(),
+            detail: "'bare' not in local sessions or agents map".to_owned(),
+            hint: None,
+        };
         assert_eq!(
             hey_peers_json_fallback_route("bare", &config, &hey_sessions(&[]), error.clone()),
             error
@@ -889,10 +1086,16 @@ mod target_resolver_tests {
     }
 
     impl maw_tmux::TmuxRunner for PaneInfoRunner {
-        fn run(&mut self, subcommand: &str, args: &[String]) -> Result<String, maw_tmux::TmuxError> {
+        fn run(
+            &mut self,
+            subcommand: &str,
+            args: &[String],
+        ) -> Result<String, maw_tmux::TmuxError> {
             if subcommand == "display-message" {
                 self.calls.push(args.to_vec());
-                self.info.clone().map_or_else(|| Err(maw_tmux::TmuxError::new("no such pane")), Ok)
+                self.info
+                    .clone()
+                    .map_or_else(|| Err(maw_tmux::TmuxError::new("no such pane")), Ok)
             } else {
                 Err(maw_tmux::TmuxError::new(format!("unexpected {subcommand}")))
             }
@@ -901,22 +1104,37 @@ mod target_resolver_tests {
 
     #[test]
     fn warns_when_resolved_pane_is_a_bare_shell() {
-        let mut runner = PaneInfoRunner { info: Some("bash|||bash".to_owned()), ..PaneInfoRunner::default() };
+        let mut runner = PaneInfoRunner {
+            info: Some("bash|||bash".to_owned()),
+            ..PaneInfoRunner::default()
+        };
 
         let note = warn_if_local_target_pane_is_not_agent("33-maw-rs:0", &mut runner)
             .expect("note about non-agent pane");
         assert!(note.contains("33-maw-rs:0"));
         assert!(note.contains("bash"));
         assert_eq!(runner.calls.len(), 1);
-        assert!(runner.calls[0].iter().any(|arg| arg == "33-maw-rs:0"), "should query the resolved target: {:?}", runner.calls[0]);
+        assert!(
+            runner.calls[0].iter().any(|arg| arg == "33-maw-rs:0"),
+            "should query the resolved target: {:?}",
+            runner.calls[0]
+        );
     }
 
     #[test]
     fn stays_silent_when_resolved_pane_looks_like_an_agent() {
-        let mut claude_command = PaneInfoRunner { info: Some("claude|||some title".to_owned()), ..PaneInfoRunner::default() };
-        assert!(warn_if_local_target_pane_is_not_agent("33-maw-rs:0", &mut claude_command).is_none());
+        let mut claude_command = PaneInfoRunner {
+            info: Some("claude|||some title".to_owned()),
+            ..PaneInfoRunner::default()
+        };
+        assert!(
+            warn_if_local_target_pane_is_not_agent("33-maw-rs:0", &mut claude_command).is_none()
+        );
 
-        let mut oracle_title = PaneInfoRunner { info: Some("node|||⠐ browser-oracle".to_owned()), ..PaneInfoRunner::default() };
+        let mut oracle_title = PaneInfoRunner {
+            info: Some("node|||⠐ browser-oracle".to_owned()),
+            ..PaneInfoRunner::default()
+        };
         assert!(warn_if_local_target_pane_is_not_agent("33-maw-rs:0", &mut oracle_title).is_none());
     }
 

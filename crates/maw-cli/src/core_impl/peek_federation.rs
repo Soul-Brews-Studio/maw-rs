@@ -62,9 +62,15 @@ fn peek_route_for(
         return PeekRoute::Local;
     };
     if local_sessions().iter().any(|session| session == prefix) {
-        return PeekRoute::Ambiguous { alias: prefix.to_owned(), target: rest.to_owned() };
+        return PeekRoute::Ambiguous {
+            alias: prefix.to_owned(),
+            target: rest.to_owned(),
+        };
     }
-    PeekRoute::Remote { peer, target: rest.to_owned() }
+    PeekRoute::Remote {
+        peer,
+        target: rest.to_owned(),
+    }
 }
 
 /// The message shown when a name is both a peer and a local session.
@@ -126,15 +132,24 @@ fn peek_parse_capture_response(alias: &str, status: u16, body: &str) -> Result<S
     if !(200..300).contains(&status) {
         let detail = serde_json::from_str::<serde_json::Value>(body)
             .ok()
-            .and_then(|value| value.get("error").and_then(|e| e.as_str()).map(str::to_owned))
+            .and_then(|value| {
+                value
+                    .get("error")
+                    .and_then(|e| e.as_str())
+                    .map(str::to_owned)
+            })
             .unwrap_or_else(|| format!("HTTP {status}"));
-        return Err(format!("peek: {alias} could not capture that target: {detail}"));
+        return Err(format!(
+            "peek: {alias} could not capture that target: {detail}"
+        ));
     }
     let value = serde_json::from_str::<serde_json::Value>(body)
         .map_err(|error| format!("peek: {alias} returned invalid JSON: {error}"))?;
     if let Some(error) = value.get("error").and_then(|e| e.as_str()) {
         if !error.is_empty() {
-            return Err(format!("peek: {alias} could not capture that target: {error}"));
+            return Err(format!(
+                "peek: {alias} could not capture that target: {error}"
+            ));
         }
     }
     value
@@ -152,7 +167,10 @@ fn peek_lookup_peer(alias: &str) -> Option<PeekPeer> {
     let store = serde_json::from_str::<KillPeersStore>(&raw).ok()?;
     let url = store.peers.get(alias)?.url.as_deref()?;
     kill_validate_peer_url(url).ok()?;
-    Some(PeekPeer { alias: alias.to_owned(), url: url.to_owned() })
+    Some(PeekPeer {
+        alias: alias.to_owned(),
+        url: url.to_owned(),
+    })
 }
 
 /// Build the curl argv for a signed `/api/capture` GET.
@@ -238,35 +256,54 @@ fn peek_fetch_remote(peer: &PeekPeer, target: &str) -> Result<String, String> {
 /// would be worse than proceeding.
 fn peek_local_session_names<R: maw_tmux::TmuxRunner>(runner: &mut R) -> Vec<String> {
     runner
-        .run("list-sessions", &["-F".to_owned(), "#{session_name}".to_owned()])
-        .map(|raw| raw.lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_owned).collect())
+        .run(
+            "list-sessions",
+            &["-F".to_owned(), "#{session_name}".to_owned()],
+        )
+        .map(|raw| {
+            raw.lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
         .unwrap_or_default()
 }
 
-    // Pins the live-call failure directly: the first version of peek_capture_curl_argv
-    // built the -w value as "\n%{http_code}" (a raw newline), which passed clippy and
-    // review but failed kill_validate_curl_argv's own control-character check on the
-    // first real request. This asserts the produced argv passes that exact validator,
-    // and separately proves the OLD shape would have failed it.
-    #[test]
-    fn peek_capture_curl_argv_passes_kill_validate_curl_argv() {
-        let headers =
-            Headers::new([("x-maw-from", "white:oracle"), ("x-maw-sig", "deadbeef")]).to_btree_map();
-        let argv = peek_capture_curl_argv("http://black.test:3467", "16-thclaws:0", &headers);
-        assert!(kill_validate_curl_argv(&argv).is_ok(), "{argv:?}");
-        assert!(argv.iter().any(|arg| arg.starts_with(KILL_PEER_HTTP_STATUS_MARKER)), "{argv:?}");
+// Pins the live-call failure directly: the first version of peek_capture_curl_argv
+// built the -w value as "\n%{http_code}" (a raw newline), which passed clippy and
+// review but failed kill_validate_curl_argv's own control-character check on the
+// first real request. This asserts the produced argv passes that exact validator,
+// and separately proves the OLD shape would have failed it.
+#[test]
+fn peek_capture_curl_argv_passes_kill_validate_curl_argv() {
+    let headers =
+        Headers::new([("x-maw-from", "white:oracle"), ("x-maw-sig", "deadbeef")]).to_btree_map();
+    let argv = peek_capture_curl_argv("http://black.test:3467", "16-thclaws:0", &headers);
+    assert!(kill_validate_curl_argv(&argv).is_ok(), "{argv:?}");
+    assert!(
+        argv.iter()
+            .any(|arg| arg.starts_with(KILL_PEER_HTTP_STATUS_MARKER)),
+        "{argv:?}"
+    );
 
-        // The exact regression: a raw newline in the -w value is what shipped and broke.
-        let broken = vec!["-w".to_owned(), "\n%{http_code}".to_owned()];
-        assert!(kill_validate_curl_argv(&broken).is_err(), "the bug this test exists to catch no longer reproduces");
-    }
+    // The exact regression: a raw newline in the -w value is what shipped and broke.
+    let broken = vec!["-w".to_owned(), "\n%{http_code}".to_owned()];
+    assert!(
+        kill_validate_curl_argv(&broken).is_err(),
+        "the bug this test exists to catch no longer reproduces"
+    );
+}
 
 #[cfg(test)]
 mod peek_federation_tests {
     use super::*;
 
     fn peer(alias: &str) -> PeekPeer {
-        PeekPeer { alias: alias.to_owned(), url: format!("http://{alias}:3456") }
+        PeekPeer {
+            alias: alias.to_owned(),
+            url: format!("http://{alias}:3456"),
+        }
     }
 
     fn peers<'a>(known: &'a [&'a str]) -> impl Fn(&str) -> Option<PeekPeer> + 'a {
@@ -276,9 +313,15 @@ mod peek_federation_tests {
     #[test]
     fn peek_route_plain_target_stays_local() {
         let lookup = peers(&["mba"]);
-        assert_eq!(peek_route_for("reviewer", &lookup, &mut Vec::new), PeekRoute::Local);
+        assert_eq!(
+            peek_route_for("reviewer", &lookup, &mut Vec::new),
+            PeekRoute::Local
+        );
         // session:window where the session is not a peer is an ordinary tmux target
-        assert_eq!(peek_route_for("16-thclaws:0", &lookup, &mut Vec::new), PeekRoute::Local);
+        assert_eq!(
+            peek_route_for("16-thclaws:0", &lookup, &mut Vec::new),
+            PeekRoute::Local
+        );
     }
 
     #[test]
@@ -286,7 +329,10 @@ mod peek_federation_tests {
         let lookup = peers(&["mba"]);
         assert_eq!(
             peek_route_for("mba:reviewer", &lookup, &mut Vec::new),
-            PeekRoute::Remote { peer: peer("mba"), target: "reviewer".to_owned() }
+            PeekRoute::Remote {
+                peer: peer("mba"),
+                target: "reviewer".to_owned()
+            }
         );
     }
 
@@ -298,7 +344,10 @@ mod peek_federation_tests {
         let lookup = peers(&["mba"]);
         assert_eq!(
             peek_route_for("mba:reviewer", &lookup, &mut || vec!["mba".to_owned()]),
-            PeekRoute::Ambiguous { alias: "mba".to_owned(), target: "reviewer".to_owned() }
+            PeekRoute::Ambiguous {
+                alias: "mba".to_owned(),
+                target: "reviewer".to_owned()
+            }
         );
         let message = peek_ambiguous_message("mba", "reviewer");
         assert!(message.contains("--peer mba"), "{message}");
@@ -308,8 +357,14 @@ mod peek_federation_tests {
     #[test]
     fn peek_route_ignores_degenerate_colon_forms() {
         let lookup = peers(&["mba"]);
-        assert_eq!(peek_route_for(":reviewer", &lookup, &mut Vec::new), PeekRoute::Local);
-        assert_eq!(peek_route_for("mba:", &lookup, &mut Vec::new), PeekRoute::Local);
+        assert_eq!(
+            peek_route_for(":reviewer", &lookup, &mut Vec::new),
+            PeekRoute::Local
+        );
+        assert_eq!(
+            peek_route_for("mba:", &lookup, &mut Vec::new),
+            PeekRoute::Local
+        );
     }
 
     #[test]
@@ -332,11 +387,16 @@ mod peek_federation_tests {
             "hello"
         );
         let unauthorized = peek_parse_capture_response("mba", 401, "{}").unwrap_err();
-        assert!(unauthorized.contains("rejected our credentials"), "{unauthorized}");
-        let bad = peek_parse_capture_response("mba", 400, r#"{"error":"no such pane"}"#).unwrap_err();
+        assert!(
+            unauthorized.contains("rejected our credentials"),
+            "{unauthorized}"
+        );
+        let bad =
+            peek_parse_capture_response("mba", 400, r#"{"error":"no such pane"}"#).unwrap_err();
         assert!(bad.contains("no such pane"), "{bad}");
         // A 200 carrying an error field is still a failure, not empty content.
-        let soft = peek_parse_capture_response("mba", 200, r#"{"content":"","error":"boom"}"#).unwrap_err();
+        let soft = peek_parse_capture_response("mba", 200, r#"{"content":"","error":"boom"}"#)
+            .unwrap_err();
         assert!(soft.contains("boom"), "{soft}");
     }
 

@@ -3,7 +3,8 @@ const DISPATCH_136: &[DispatcherEntry] = &[DispatcherEntry {
     handler: Handler::Sync(config_run_command),
 }];
 
-const CONFIG_USAGE: &str = "usage: maw config <show|sources|explain <key>|set <key> <value>> [--json]";
+const CONFIG_USAGE: &str =
+    "usage: maw config <show|sources|explain <key>|set <key> <value>> [--json]";
 
 fn config_run_command(argv: &[String]) -> CliOutput {
     match config_dispatch(argv) {
@@ -105,9 +106,11 @@ fn config_sources(json: bool) -> Result<String, String> {
                 })
             })
             .collect();
-        return serde_json::to_string_pretty(&serde_json::json!({ "sources": rows, "warnings": loaded.warnings }))
-            .map(|body| format!("{body}\n"))
-            .map_err(|error| format!("maw config: failed to render JSON: {error}"));
+        return serde_json::to_string_pretty(
+            &serde_json::json!({ "sources": rows, "warnings": loaded.warnings }),
+        )
+        .map(|body| format!("{body}\n"))
+        .map_err(|error| format!("maw config: failed to render JSON: {error}"));
     }
     let mut out = String::new();
     for source in loaded.sources {
@@ -135,7 +138,9 @@ fn config_explain(argv: &[String], json: bool) -> Result<String, String> {
         .ok_or_else(|| "usage: maw config explain <key> [--json]".to_owned())?;
     let loaded = config_load_layers()?;
     let mut entries = config_provenance_at_path(&loaded.provenance, key);
-    let mut final_value = config_value_at_path(&loaded.config, key).cloned().unwrap_or(serde_json::Value::Null);
+    let mut final_value = config_value_at_path(&loaded.config, key)
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
     if config_is_secret_path(key) {
         final_value = config_mask_secret(&final_value);
         for entry in &mut entries {
@@ -172,8 +177,7 @@ fn config_explain(argv: &[String], json: bool) -> Result<String, String> {
         let local = if entry.is_local { ".local" } else { "" };
         let value = serde_json::to_string(&entry.value)
             .map_err(|error| format!("maw config: failed to render value: {error}"))?;
-        let shadowed =
-            entry.scope == "project" && !winner_is_project && index + 1 < entries.len();
+        let shadowed = entry.scope == "project" && !winner_is_project && index + 1 < entries.len();
         let tag = if shadowed { " [SHADOWED]" } else { "" };
         let _ = writeln!(
             out,
@@ -203,7 +207,6 @@ fn config_explain_key_notes(key: &str) -> Vec<String> {
         })
         .collect()
 }
-
 
 type ConfigLayerSource = maw_xdg::MawConfigLayerSource;
 
@@ -280,7 +283,12 @@ fn config_load_layers() -> Result<ConfigLoadedLayers, String> {
     }
     let mut warnings = config_shadow_warnings(&provenance);
     warnings.extend(config_legacy_alias_warnings(&merged));
-    Ok(ConfigLoadedLayers { config: merged, sources, provenance, warnings })
+    Ok(ConfigLoadedLayers {
+        config: merged,
+        sources,
+        provenance,
+        warnings,
+    })
 }
 
 /// Legacy maw-js-era top-level key naming the default engine (#682). Still
@@ -313,7 +321,9 @@ const CONFIG_SHADOW_KEY_CAP: usize = 6;
 /// (project path, project weight, winner scope, winner path, winner weight)
 type ConfigShadowPair = (String, u32, &'static str, String, u32);
 
-fn config_shadow_warnings(provenance: &BTreeMap<String, Vec<ConfigProvenanceEntry>>) -> Vec<String> {
+fn config_shadow_warnings(
+    provenance: &BTreeMap<String, Vec<ConfigProvenanceEntry>>,
+) -> Vec<String> {
     let mut pairs: BTreeMap<ConfigShadowPair, Vec<String>> = BTreeMap::new();
     for (key, entries) in provenance {
         let Some((winner, earlier)) = entries.split_last() else {
@@ -360,20 +370,36 @@ fn config_record_provenance(
     value: &serde_json::Value,
     parent: &str,
 ) {
-    let Some(map) = value.as_object() else { return; };
+    let Some(map) = value.as_object() else {
+        return;
+    };
     for (key, child) in map {
-        let key_path = if parent.is_empty() { key.clone() } else { format!("{parent}.{key}") };
+        let key_path = if parent.is_empty() {
+            key.clone()
+        } else {
+            format!("{parent}.{key}")
+        };
         if child.is_null() {
-            provenance.entry(key_path).or_default().push(config_provenance_entry(source, child.clone(), "delete"));
+            provenance
+                .entry(key_path)
+                .or_default()
+                .push(config_provenance_entry(source, child.clone(), "delete"));
         } else if child.is_object() {
             config_record_provenance(provenance, source, child, &key_path);
         } else {
-            provenance.entry(key_path).or_default().push(config_provenance_entry(source, child.clone(), "set"));
+            provenance
+                .entry(key_path)
+                .or_default()
+                .push(config_provenance_entry(source, child.clone(), "set"));
         }
     }
 }
 
-fn config_provenance_entry(source: &ConfigLayerSource, value: serde_json::Value, action: &'static str) -> ConfigProvenanceEntry {
+fn config_provenance_entry(
+    source: &ConfigLayerSource,
+    value: serde_json::Value,
+    action: &'static str,
+) -> ConfigProvenanceEntry {
     ConfigProvenanceEntry {
         path: source.path.display().to_string(),
         weight: source.weight,
@@ -384,7 +410,10 @@ fn config_provenance_entry(source: &ConfigLayerSource, value: serde_json::Value,
     }
 }
 
-fn config_provenance_at_path(provenance: &BTreeMap<String, Vec<ConfigProvenanceEntry>>, key_path: &str) -> Vec<ConfigProvenanceEntry> {
+fn config_provenance_at_path(
+    provenance: &BTreeMap<String, Vec<ConfigProvenanceEntry>>,
+    key_path: &str,
+) -> Vec<ConfigProvenanceEntry> {
     if let Some(entries) = provenance.get(key_path) {
         return entries.clone();
     }
@@ -398,7 +427,10 @@ fn config_provenance_at_path(provenance: &BTreeMap<String, Vec<ConfigProvenanceE
     Vec::new()
 }
 
-fn config_value_at_path<'a>(root: &'a serde_json::Value, key_path: &str) -> Option<&'a serde_json::Value> {
+fn config_value_at_path<'a>(
+    root: &'a serde_json::Value,
+    key_path: &str,
+) -> Option<&'a serde_json::Value> {
     let mut cursor = root;
     for part in key_path.split('.') {
         cursor = cursor.get(part)?;
@@ -515,7 +547,10 @@ fn atomic_write_0600(
     context: &str,
 ) -> Result<(), String> {
     use std::io::Write as _;
-    if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
         std::fs::create_dir_all(parent)
             .map_err(|error| format!("{context}: create {} failed: {error}", parent.display()))?;
     }
@@ -539,7 +574,10 @@ fn atomic_write_0600(
     drop(file);
     std::fs::rename(tmp, path).map_err(|error| {
         let _ = std::fs::remove_file(tmp);
-        format!("{context}: atomic rename {} failed: {error}", path.display())
+        format!(
+            "{context}: atomic rename {} failed: {error}",
+            path.display()
+        )
     })
 }
 
@@ -570,12 +608,32 @@ fn config_atomic_write(path: &std::path::Path, body: &str) -> Result<(), String>
     atomic_write_0600(path, &tmp, body, "maw config")
 }
 
-fn config_audit_write(path: &std::path::Path, before: &serde_json::Value, after: &serde_json::Value) {
-    let before_keys = before.as_object().map_or_else(Vec::new, |map| map.keys().cloned().collect::<Vec<_>>());
-    let after_keys = after.as_object().map_or_else(Vec::new, |map| map.keys().cloned().collect::<Vec<_>>());
-    let added = after_keys.iter().filter(|key| !before_keys.contains(key)).cloned().collect::<Vec<_>>();
-    let removed = before_keys.iter().filter(|key| !after_keys.contains(key)).cloned().collect::<Vec<_>>();
-    let changed = after_keys.iter().filter(|key| before.get(*key) != after.get(*key) && before.get(*key).is_some()).cloned().collect::<Vec<_>>();
+fn config_audit_write(
+    path: &std::path::Path,
+    before: &serde_json::Value,
+    after: &serde_json::Value,
+) {
+    let before_keys = before
+        .as_object()
+        .map_or_else(Vec::new, |map| map.keys().cloned().collect::<Vec<_>>());
+    let after_keys = after
+        .as_object()
+        .map_or_else(Vec::new, |map| map.keys().cloned().collect::<Vec<_>>());
+    let added = after_keys
+        .iter()
+        .filter(|key| !before_keys.contains(key))
+        .cloned()
+        .collect::<Vec<_>>();
+    let removed = before_keys
+        .iter()
+        .filter(|key| !after_keys.contains(key))
+        .cloned()
+        .collect::<Vec<_>>();
+    let changed = after_keys
+        .iter()
+        .filter(|key| before.get(*key) != after.get(*key) && before.get(*key).is_some())
+        .cloned()
+        .collect::<Vec<_>>();
     let row = serde_json::json!({
         "ts": cli_dispatch_now_iso(),
         "cmd": "config-write",
@@ -659,7 +717,9 @@ mod config_tests {
     fn config_unknown_subcommand_reports_native_usage() {
         let output = super::config_run_command(&["unknown".to_owned()]);
         assert_eq!(output.code, 1);
-        assert!(output.stderr.contains("usage: maw config <show|sources|explain <key>|set <key> <value>> [--json]"));
+        assert!(output
+            .stderr
+            .contains("usage: maw config <show|sources|explain <key>|set <key> <value>> [--json]"));
     }
 
     #[test]
@@ -803,7 +863,11 @@ mod config_tests {
         );
         provenance.insert(
             "port".to_owned(),
-            vec![shadow_entry("/home/u/.config/maw/maw.config.50.json", 50, "user")],
+            vec![shadow_entry(
+                "/home/u/.config/maw/maw.config.50.json",
+                50,
+                "user",
+            )],
         );
         assert!(super::config_shadow_warnings(&provenance).is_empty());
     }
@@ -854,8 +918,7 @@ mod config_tests {
         let _config = EnvVarRestore::capture("MAW_CONFIG_DIR");
         let (root, project) = config_seed_shadow_fixture("explain");
         let cwd = ConfigCwdRestore::enter(&project);
-        let stdout =
-            config_dispatch(&["explain".to_owned(), "node".to_owned()]).expect("explain");
+        let stdout = config_dispatch(&["explain".to_owned(), "node".to_owned()]).expect("explain");
         assert_eq!(
             stdout
                 .lines()
@@ -884,7 +947,9 @@ mod config_tests {
         let stdout =
             config_dispatch(&["sources".to_owned(), "--json".to_owned()]).expect("sources json");
         let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("parseable json");
-        assert!(parsed["sources"].as_array().is_some_and(|rows| !rows.is_empty()));
+        assert!(parsed["sources"]
+            .as_array()
+            .is_some_and(|rows| !rows.is_empty()));
         let warnings = parsed["warnings"].as_array().expect("warnings array");
         assert_eq!(warnings.len(), 1);
         let warning = warnings[0].as_str().expect("warning string");

@@ -412,4 +412,3 @@ fn parse_auth_hmac_verify_args(argv: &[String]) -> Result<AuthPlanAction, String
             .ok_or_else(|| "auth hmac-verify: --signature is required".to_owned())?,
     })
 }
-

@@ -1,6 +1,12 @@
 const DISPATCH_317: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "consent-store", handler: Handler::Sync(run_consent_store_plan) },
-    DispatcherEntry { command: "consent-expiry", handler: Handler::Sync(run_consent_expiry_plan) },
+    DispatcherEntry {
+        command: "consent-store",
+        handler: Handler::Sync(run_consent_store_plan),
+    },
+    DispatcherEntry {
+        command: "consent-expiry",
+        handler: Handler::Sync(run_consent_expiry_plan),
+    },
 ];
 
 fn render_consent_approval_plan_json(
@@ -253,7 +259,11 @@ fn parse_consent_store_key(value: &str) -> Result<(String, String, ConsentAction
     if parts.next().is_some() {
         return Err("consent-store: key must use from:to:action".to_owned());
     }
-    Ok((from.to_owned(), to.to_owned(), parse_consent_store_action(action)?))
+    Ok((
+        from.to_owned(),
+        to.to_owned(),
+        parse_consent_store_action(action)?,
+    ))
 }
 
 fn parse_consent_store_status_update(value: &str) -> Result<(String, ConsentStatus), String> {

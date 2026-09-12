@@ -44,8 +44,9 @@ fn parse_plugin_ls_args(argv: &[String]) -> Result<PluginAction, PluginParseErro
                 index += 1;
             }
             "--runtime-version" => {
-                options.runtime_version = take_plugin_manifest_value(argv, index, "--runtime-version")
-                    .map_err(PluginParseError::Usage)?;
+                options.runtime_version =
+                    take_plugin_manifest_value(argv, index, "--runtime-version")
+                        .map_err(PluginParseError::Usage)?;
                 index += 1;
             }
             "--use-cache" => options.use_cache = true,
@@ -61,7 +62,10 @@ fn parse_plugin_ls_args(argv: &[String]) -> Result<PluginAction, PluginParseErro
         options.scan_dirs = scan_dirs;
     }
 
-    Ok(PluginAction::Ls { options, ls_options })
+    Ok(PluginAction::Ls {
+        options,
+        ls_options,
+    })
 }
 
 fn plugin_ls_help() -> CliOutput {
@@ -215,7 +219,12 @@ fn render_plugin_ls_table(rows: &[PluginLsRow<'_>]) -> String {
         }
         let widths = PluginLsWidths::new(&tier_rows);
 
-        let _ = writeln!(output, "\n\x1b[1m{}\x1b[0m ({})", tier.as_str(), tier_rows.len());
+        let _ = writeln!(
+            output,
+            "\n\x1b[1m{}\x1b[0m ({})",
+            tier.as_str(),
+            tier_rows.len()
+        );
         writeln_padded_row(
             &mut output,
             &["name", "version", "tier", "surfaces", "dir"],
@@ -227,7 +236,11 @@ fn render_plugin_ls_table(rows: &[PluginLsRow<'_>]) -> String {
             let tier_label = format!(
                 "{} {}",
                 plugin_ls_tier_icon(row.tier, row.disabled),
-                if row.disabled { "disabled" } else { row.tier.as_str() }
+                if row.disabled {
+                    "disabled"
+                } else {
+                    row.tier.as_str()
+                }
             );
             writeln_padded_row(
                 &mut output,
@@ -287,7 +300,9 @@ impl<'a> PluginLsRow<'a> {
         let api_path = manifest.api.as_ref().map(|api| api.path.as_str());
         let executable_path = match plugin.kind {
             LoadedPluginKind::Ts => plugin.entry_path.as_ref(),
-            LoadedPluginKind::Wasm => (!plugin.wasm_path.as_os_str().is_empty()).then_some(&plugin.wasm_path),
+            LoadedPluginKind::Wasm => {
+                (!plugin.wasm_path.as_os_str().is_empty()).then_some(&plugin.wasm_path)
+            }
         };
         Self {
             name: &manifest.name,
@@ -325,7 +340,11 @@ impl PluginLsWidths {
         for row in rows {
             widths.name = widths.name.max(row.name.chars().count());
             widths.version = widths.version.max(row.version.chars().count());
-            let tier_label = format!("{} {}", plugin_ls_tier_icon(row.tier, row.disabled), row.tier.as_str());
+            let tier_label = format!(
+                "{} {}",
+                plugin_ls_tier_icon(row.tier, row.disabled),
+                row.tier.as_str()
+            );
             widths.tier = widths.tier.max(tier_label.chars().count());
             widths.surfaces = widths.surfaces.max(row.surfaces.chars().count());
             widths.dir = widths.dir.max(row.dir.chars().count());
@@ -400,7 +419,9 @@ fn plugin_ls_surfaces(cli_command: Option<&str>, api_path: Option<&str>) -> Stri
 fn plugin_ls_cli_command(plugin: &LoadedPlugin) -> Option<String> {
     plugin.manifest.cli.as_ref().map_or_else(
         || match plugin.kind {
-            LoadedPluginKind::Ts if plugin.entry_path.is_some() => Some(plugin.manifest.name.clone()),
+            LoadedPluginKind::Ts if plugin.entry_path.is_some() => {
+                Some(plugin.manifest.name.clone())
+            }
             LoadedPluginKind::Wasm if !plugin.wasm_path.as_os_str().is_empty() => {
                 Some(plugin.manifest.name.clone())
             }
@@ -456,10 +477,18 @@ mod plugin_ls_shadow_tests {
     #[test]
     fn fallthrough_and_unowned_verbs_are_not_marked() {
         for command in ["cross-team-queue", "squad"] {
-            assert!(!plugin_ls_cli_shadowed_by_native(command), "{command} falls through");
-            assert_eq!(plugin_ls_surfaces(Some(command), None), format!("cli:{command}"));
+            assert!(
+                !plugin_ls_cli_shadowed_by_native(command),
+                "{command} falls through"
+            );
+            assert_eq!(
+                plugin_ls_surfaces(Some(command), None),
+                format!("cli:{command}")
+            );
         }
-        assert!(!plugin_ls_cli_shadowed_by_native("definitely-not-a-native-verb"));
+        assert!(!plugin_ls_cli_shadowed_by_native(
+            "definitely-not-a-native-verb"
+        ));
     }
 
     #[test]

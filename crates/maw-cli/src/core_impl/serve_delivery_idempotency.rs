@@ -23,7 +23,11 @@ fn serve_claim_inbox_idempotency(
     let Some(key) = idempotency_key.clone() else {
         return ServeInboxIdempotencyClaim::Claimed(None);
     };
-    match serve_delivery_idempotency_claim(state, key.clone(), serve_delivery_idempotency_now(state)) {
+    match serve_delivery_idempotency_claim(
+        state,
+        key.clone(),
+        serve_delivery_idempotency_now(state),
+    ) {
         DeliveryIdempotencyClaim::Claimed => ServeInboxIdempotencyClaim::Claimed(idempotency_key),
         DeliveryIdempotencyClaim::Duplicate(record) => {
             serve_log_delivery_deduped(
@@ -55,7 +59,9 @@ struct DeliveryIdempotencyKey {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DeliveryIdempotencyRecord {
-    InFlight { seen_at: i64 },
+    InFlight {
+        seen_at: i64,
+    },
     Complete {
         target: String,
         state: String,
@@ -105,7 +111,11 @@ fn serve_delivery_idempotency_key(
     let logical_ts = serve_delivery_logical_ts(headers)?;
     let raw_source = header_to_string(headers, "x-maw-from");
     let source = raw_source.trim();
-    let source = if source.is_empty() { fallback_source.trim() } else { source };
+    let source = if source.is_empty() {
+        fallback_source.trim()
+    } else {
+        source
+    };
     let target = target.trim();
     if source.is_empty() || target.is_empty() {
         return None;
@@ -175,7 +185,10 @@ fn serve_delivery_idempotency_cancel(state: &ServeState, key: &DeliveryIdempoten
         .delivery_idempotency
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if matches!(store.records.get(key), Some(DeliveryIdempotencyRecord::InFlight { .. })) {
+    if matches!(
+        store.records.get(key),
+        Some(DeliveryIdempotencyRecord::InFlight { .. })
+    ) {
         store.records.remove(key);
     }
 }

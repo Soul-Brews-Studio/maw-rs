@@ -50,7 +50,8 @@ impl FederationTransport134 for FederationCurlTransport134 {
         if !output.status.success() {
             return Err("peer fetch failed".to_owned());
         }
-        String::from_utf8(output.stdout).map_err(|error| format!("curl stdout was not utf8: {error}"))
+        String::from_utf8(output.stdout)
+            .map_err(|error| format!("curl stdout was not utf8: {error}"))
     }
 }
 
@@ -85,7 +86,10 @@ fn federation_dispatch(
         "status" | "ls" => federation_status(rest, config, transport),
         "sync" => federation_sync(rest, config, transport),
         "help" | "--help" | "-h" => Ok(federation_ok(&format!("{FEDERATION_USAGE}\n"))),
-        other => Err((2, format!("unknown subcommand {other:?}. {FEDERATION_USAGE}"))),
+        other => Err((
+            2,
+            format!("unknown subcommand {other:?}. {FEDERATION_USAGE}"),
+        )),
     }
 }
 
@@ -145,7 +149,11 @@ fn federation_sync(
     } else {
         federation_sync_text(options, &diff, &apply)
     };
-    Ok(CliOutput { code, stdout, stderr: String::new() })
+    Ok(CliOutput {
+        code,
+        stdout,
+        stderr: String::new(),
+    })
 }
 
 fn federation_parse_options(argv: &[String]) -> Result<FederationOptions134, String> {
@@ -159,12 +167,16 @@ fn federation_parse_options(argv: &[String]) -> Result<FederationOptions134, Str
             "--prune" => options.prune = true,
             "--force" => options.force = true,
             "--peers" => {
-                let Some(value) = argv.get(index + 1) else { return Err("--peers requires a value".to_owned()); };
+                let Some(value) = argv.get(index + 1) else {
+                    return Err("--peers requires a value".to_owned());
+                };
                 federation_validate_peer_source(value)?;
                 index += 1;
             }
             value if value.starts_with("--peers=") => federation_validate_peer_source(&value[8..])?,
-            "--verify" => return Err("--verify pair-symmetric check is not native in ZERO-BUN B2".to_owned()),
+            "--verify" => {
+                return Err("--verify pair-symmetric check is not native in ZERO-BUN B2".to_owned())
+            }
             flag if flag.starts_with('-') => return Err(format!("unknown flag {flag}")),
             other => return Err(format!("unexpected argument {other:?}. {FEDERATION_USAGE}")),
         }
@@ -209,10 +221,17 @@ fn federation_push_peer(
     if let Some(node) = node {
         federation_validate_token(node, "peer node").map_err(|message| (2, message))?;
     }
-    if peers.iter().any(|existing| existing.url == url || existing.name == name) {
+    if peers
+        .iter()
+        .any(|existing| existing.url == url || existing.name == name)
+    {
         return Ok(());
     }
-    peers.push(FederationPeer134 { name: name.to_owned(), url: url.to_owned(), node: node.map(ToOwned::to_owned) });
+    peers.push(FederationPeer134 {
+        name: name.to_owned(),
+        url: url.to_owned(),
+        node: node.map(ToOwned::to_owned),
+    });
     Ok(())
 }
 
@@ -222,17 +241,43 @@ fn federation_fetch_status_peer(
 ) -> FederationStatusRow134 {
     match transport.federation_get(&peer.url, "/api/federation/status") {
         Ok(raw) => federation_parse_status_peer(peer, &raw),
-        Err(error) => FederationStatusRow134 { url: peer.url.clone(), node: peer.node.clone().or_else(|| Some(peer.name.clone())), reachable: false, latency: None, agents: Vec::new(), error: Some(error) },
+        Err(error) => FederationStatusRow134 {
+            url: peer.url.clone(),
+            node: peer.node.clone().or_else(|| Some(peer.name.clone())),
+            reachable: false,
+            latency: None,
+            agents: Vec::new(),
+            error: Some(error),
+        },
     }
 }
 
 fn federation_parse_status_peer(peer: &FederationPeer134, raw: &str) -> FederationStatusRow134 {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
-        return FederationStatusRow134 { url: peer.url.clone(), node: peer.node.clone().or_else(|| Some(peer.name.clone())), reachable: false, latency: None, agents: Vec::new(), error: Some("invalid status json".to_owned()) };
+        return FederationStatusRow134 {
+            url: peer.url.clone(),
+            node: peer.node.clone().or_else(|| Some(peer.name.clone())),
+            reachable: false,
+            latency: None,
+            agents: Vec::new(),
+            error: Some("invalid status json".to_owned()),
+        };
     };
     let agents = federation_agents_from_status(&value);
-    let node = value.get("node").and_then(serde_json::Value::as_str).map(ToOwned::to_owned).or_else(|| peer.node.clone()).or_else(|| Some(peer.name.clone()));
-    FederationStatusRow134 { url: peer.url.clone(), node, reachable: true, latency: Some(0), agents, error: None }
+    let node = value
+        .get("node")
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| peer.node.clone())
+        .or_else(|| Some(peer.name.clone()));
+    FederationStatusRow134 {
+        url: peer.url.clone(),
+        node,
+        reachable: true,
+        latency: Some(0),
+        agents,
+        error: None,
+    }
 }
 
 fn federation_fetch_identity(
@@ -241,14 +286,35 @@ fn federation_fetch_identity(
 ) -> SyncPeerIdentity {
     match transport.federation_get(&peer.url, "/api/identity") {
         Ok(raw) => federation_parse_identity(peer, &raw),
-        Err(error) => SyncPeerIdentity { peer_name: peer.name.clone(), url: peer.url.clone(), node: peer.node.clone().unwrap_or_else(|| peer.name.clone()), agents: Vec::new(), reachable: false, error: Some(error) },
+        Err(error) => SyncPeerIdentity {
+            peer_name: peer.name.clone(),
+            url: peer.url.clone(),
+            node: peer.node.clone().unwrap_or_else(|| peer.name.clone()),
+            agents: Vec::new(),
+            reachable: false,
+            error: Some(error),
+        },
     }
 }
 
 fn federation_parse_identity(peer: &FederationPeer134, raw: &str) -> SyncPeerIdentity {
     match serde_json::from_str::<serde_json::Value>(raw) {
-        Ok(value) => SyncPeerIdentity { peer_name: peer.name.clone(), url: peer.url.clone(), node: federation_identity_node(peer, &value), agents: federation_identity_agents(&value), reachable: true, error: None },
-        Err(error) => SyncPeerIdentity { peer_name: peer.name.clone(), url: peer.url.clone(), node: peer.node.clone().unwrap_or_else(|| peer.name.clone()), agents: Vec::new(), reachable: false, error: Some(format!("invalid identity json: {error}")) },
+        Ok(value) => SyncPeerIdentity {
+            peer_name: peer.name.clone(),
+            url: peer.url.clone(),
+            node: federation_identity_node(peer, &value),
+            agents: federation_identity_agents(&value),
+            reachable: true,
+            error: None,
+        },
+        Err(error) => SyncPeerIdentity {
+            peer_name: peer.name.clone(),
+            url: peer.url.clone(),
+            node: peer.node.clone().unwrap_or_else(|| peer.name.clone()),
+            agents: Vec::new(),
+            reachable: false,
+            error: Some(format!("invalid identity json: {error}")),
+        },
     }
 }
 
@@ -262,7 +328,9 @@ fn federation_identity_node(peer: &FederationPeer134, value: &serde_json::Value)
 }
 
 fn federation_identity_agents(value: &serde_json::Value) -> Vec<String> {
-    value.get("agents").map_or_else(Vec::new, federation_string_array)
+    value
+        .get("agents")
+        .map_or_else(Vec::new, federation_string_array)
 }
 
 fn federation_agents_from_status(value: &serde_json::Value) -> Vec<String> {
@@ -279,7 +347,14 @@ fn federation_agents_from_status(value: &serde_json::Value) -> Vec<String> {
 fn federation_string_array(value: &serde_json::Value) -> Vec<String> {
     value
         .as_array()
-        .map(|items| items.iter().filter_map(serde_json::Value::as_str).map(ToOwned::to_owned).filter(|item| federation_validate_token(item, "agent").is_ok()).collect())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+                .filter(|item| federation_validate_token(item, "agent").is_ok())
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -293,36 +368,76 @@ fn federation_apply_preview(
     diff: &SyncDiff,
 ) -> SyncApplyResult {
     if options.dry_run || options.check || options.json {
-        return SyncApplyResult { agents: agents.clone(), applied: Vec::new() };
+        return SyncApplyResult {
+            agents: agents.clone(),
+            applied: Vec::new(),
+        };
     }
-    apply_sync_diff(agents, diff, SyncApplyOptions { force: options.force, prune: options.prune })
+    apply_sync_diff(
+        agents,
+        diff,
+        SyncApplyOptions {
+            force: options.force,
+            prune: options.prune,
+        },
+    )
 }
 
-fn federation_status_text(local_node: &str, local_url: &str, rows: &[FederationStatusRow134]) -> String {
-    let mut out = format!("\nFederation Status\n{} nodes (1 local + {} peers)\n\n", rows.len() + 1, rows.len());
+fn federation_status_text(
+    local_node: &str,
+    local_url: &str,
+    rows: &[FederationStatusRow134],
+) -> String {
+    let mut out = format!(
+        "\nFederation Status\n{} nodes (1 local + {} peers)\n\n",
+        rows.len() + 1,
+        rows.len()
+    );
     let _ = writeln!(out, "  ●  {local_node} (local)  online  0ms · 0 agents");
     let _ = writeln!(out, "     {local_url}");
     for row in rows {
         let status = if row.reachable { "online" } else { "offline" };
         let agents = row.agents.len();
         let node = row.node.as_deref().unwrap_or("unknown");
-        let _ = writeln!(out, "  {}  {node}  {status}  {}ms · {agents} agents", if row.reachable { "●" } else { "○" }, row.latency.unwrap_or(0));
+        let _ = writeln!(
+            out,
+            "  {}  {node}  {status}  {}ms · {agents} agents",
+            if row.reachable { "●" } else { "○" },
+            row.latency.unwrap_or(0)
+        );
         let _ = writeln!(out, "     {}", row.url);
     }
     let reachable = rows.iter().filter(|row| row.reachable).count();
-    let _ = writeln!(out, "\n{reachable}/{} reachable (one-way; use --verify for pair-symmetric check)", rows.len());
+    let _ = writeln!(
+        out,
+        "\n{reachable}/{} reachable (one-way; use --verify for pair-symmetric check)",
+        rows.len()
+    );
     out
 }
 
-fn federation_status_json(local_node: &str, local_url: &str, rows: &[FederationStatusRow134]) -> String {
-    let peers = rows.iter().map(federation_status_peer_json).collect::<Vec<_>>().join(",");
+fn federation_status_json(
+    local_node: &str,
+    local_url: &str,
+    rows: &[FederationStatusRow134],
+) -> String {
+    let peers = rows
+        .iter()
+        .map(federation_status_peer_json)
+        .collect::<Vec<_>>()
+        .join(",");
     format!("{{\"command\":\"federation\",\"action\":\"status\",\"node\":{},\"localUrl\":{},\"peers\":[{}]}}\n", json_string(local_node), json_string(local_url), peers)
 }
 
 fn federation_status_peer_json(peer: &FederationStatusRow134) -> String {
-    let mut fields = vec![format!("\"url\":{}", json_string(&peer.url)), format!("\"reachable\":{}", peer.reachable)];
+    let mut fields = vec![
+        format!("\"url\":{}", json_string(&peer.url)),
+        format!("\"reachable\":{}", peer.reachable),
+    ];
     push_json_opt(&mut fields, "node", peer.node.as_deref());
-    if let Some(latency) = peer.latency { fields.push(format!("\"latency\":{latency}")); }
+    if let Some(latency) = peer.latency {
+        fields.push(format!("\"latency\":{latency}"));
+    }
     fields.push(format!("\"agents\":{}", json_string_array(&peer.agents)));
     push_json_opt(&mut fields, "error", peer.error.as_deref());
     format!("{{{}}}", fields.join(","))
@@ -338,21 +453,39 @@ fn federation_sync_json(
     format!("{{\"command\":\"federation\",\"action\":\"sync\",\"node\":{},\"dryRun\":{},\"check\":{},\"force\":{},\"prune\":{},\"dirty\":{dirty},\"diff\":{},\"applied\":{},\"agents\":{}}}\n", json_string(node), options.dry_run, options.check, options.force, options.prune, render_sync_diff_json(diff), json_string_array(&result.applied), render_agents_json(&result.agents))
 }
 
-fn federation_sync_text(options: FederationOptions134, diff: &SyncDiff, result: &SyncApplyResult) -> String {
+fn federation_sync_text(
+    options: FederationOptions134,
+    diff: &SyncDiff,
+    result: &SyncApplyResult,
+) -> String {
     format!("federation sync add={} conflict={} stale={} unreachable={} applied={} dryRun={} check={} force={} prune={}\n", diff.add.len(), diff.conflict.len(), diff.stale.len(), diff.unreachable.len(), result.applied.len(), options.dry_run, options.check, options.force, options.prune)
 }
 
 fn federation_curl_argv(peer_url: &str, path: &str) -> Result<Vec<String>, String> {
     federation_validate_url(peer_url)?;
     federation_validate_path(path)?;
-    let argv = vec!["-sS".to_owned(), "--fail-with-body".to_owned(), "--max-time".to_owned(), FEDERATION_CURL_TIMEOUT_SECONDS.to_owned(), "--".to_owned(), format!("{}{}", peer_url.trim_end_matches('/'), path)];
+    let argv = vec![
+        "-sS".to_owned(),
+        "--fail-with-body".to_owned(),
+        "--max-time".to_owned(),
+        FEDERATION_CURL_TIMEOUT_SECONDS.to_owned(),
+        "--".to_owned(),
+        format!("{}{}", peer_url.trim_end_matches('/'), path),
+    ];
     federation_validate_curl_argv(&argv)?;
     Ok(argv)
 }
 
 fn federation_validate_curl_argv(argv: &[String]) -> Result<(), String> {
-    if !argv.iter().any(|arg| arg == "--") { return Err("curl argv must include -- URL separator".to_owned()); }
-    if argv.iter().any(|arg| arg.chars().any(|ch| ch == '\0' || ch.is_control())) { return Err("curl argv must not contain NUL/control characters".to_owned()); }
+    if !argv.iter().any(|arg| arg == "--") {
+        return Err("curl argv must include -- URL separator".to_owned());
+    }
+    if argv
+        .iter()
+        .any(|arg| arg.chars().any(|ch| ch == '\0' || ch.is_control()))
+    {
+        return Err("curl argv must not contain NUL/control characters".to_owned());
+    }
     Ok(())
 }
 
@@ -369,28 +502,59 @@ fn federation_validate_token(value: &str, label: &str) -> Result<(), String> {
     if value.is_empty() || value.starts_with('-') || value.len() > 64 {
         return Err(format!("{label} must be a safe token"));
     }
-    if value.chars().any(|ch| !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' || ch == '.')) {
-        return Err(format!("{label} must contain only ascii alnum, dot, underscore, or hyphen"));
+    if value
+        .chars()
+        .any(|ch| !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' || ch == '.'))
+    {
+        return Err(format!(
+            "{label} must contain only ascii alnum, dot, underscore, or hyphen"
+        ));
     }
     Ok(())
 }
 
 fn federation_validate_url(value: &str) -> Result<(), String> {
-    if value.starts_with('-') || value.chars().any(|ch| ch == '\0' || ch.is_control() || ch.is_whitespace()) { return Err("peer URL must be a safe http(s) URL".to_owned()); }
-    if !(value.starts_with("http://") || value.starts_with("https://")) { return Err("peer URL must start with http:// or https://".to_owned()); }
+    if value.starts_with('-')
+        || value
+            .chars()
+            .any(|ch| ch == '\0' || ch.is_control() || ch.is_whitespace())
+    {
+        return Err("peer URL must be a safe http(s) URL".to_owned());
+    }
+    if !(value.starts_with("http://") || value.starts_with("https://")) {
+        return Err("peer URL must start with http:// or https://".to_owned());
+    }
     let rest = value.split_once("://").map_or("", |(_, rest)| rest);
-    if rest.is_empty() || rest.starts_with('/') { return Err("peer URL must include a host".to_owned()); }
+    if rest.is_empty() || rest.starts_with('/') {
+        return Err("peer URL must include a host".to_owned());
+    }
     Ok(())
 }
 
 fn federation_validate_path(path: &str) -> Result<(), String> {
-    if !path.starts_with("/api/") || path.contains("..") || path.chars().any(|ch| ch == '\0' || ch.is_control() || ch.is_whitespace()) { return Err("unsafe federation path".to_owned()); }
+    if !path.starts_with("/api/")
+        || path.contains("..")
+        || path
+            .chars()
+            .any(|ch| ch == '\0' || ch.is_control() || ch.is_whitespace())
+    {
+        return Err("unsafe federation path".to_owned());
+    }
     Ok(())
 }
 
 fn federation_name_from_url(url: &str) -> String {
-    let host = url.split_once("://").map_or(url, |(_, rest)| rest).split(['/', ':']).next().unwrap_or("peer");
-    host.chars().filter(|ch| ch.is_ascii_alphanumeric() || *ch == '-' || *ch == '_' || *ch == '.').collect::<String>().trim_matches('.').to_owned()
+    let host = url
+        .split_once("://")
+        .map_or(url, |(_, rest)| rest)
+        .split(['/', ':'])
+        .next()
+        .unwrap_or("peer");
+    host.chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '-' || *ch == '_' || *ch == '.')
+        .collect::<String>()
+        .trim_matches('.')
+        .to_owned()
 }
 
 fn federation_local_node(config: &HeyConfig) -> String {
@@ -398,11 +562,18 @@ fn federation_local_node(config: &HeyConfig) -> String {
 }
 
 fn federation_local_url() -> String {
-    format!("http://127.0.0.1:{}", load_hey_config_port().unwrap_or(31_745))
+    format!(
+        "http://127.0.0.1:{}",
+        load_hey_config_port().unwrap_or(31_745)
+    )
 }
 
 fn federation_ok(stdout: &str) -> CliOutput {
-    CliOutput { code: 0, stdout: stdout.to_owned(), stderr: String::new() }
+    CliOutput {
+        code: 0,
+        stdout: stdout.to_owned(),
+        stderr: String::new(),
+    }
 }
 
 #[cfg(test)]
@@ -410,7 +581,9 @@ mod federation_tests {
     use super::*;
 
     #[derive(Default)]
-    struct FederationFakeTransport134 { calls: Vec<(String, String)> }
+    struct FederationFakeTransport134 {
+        calls: Vec<(String, String)>,
+    }
 
     impl FederationTransport134 for FederationFakeTransport134 {
         fn federation_get(&mut self, url: &str, path: &str) -> Result<String, String> {
@@ -435,26 +608,47 @@ mod federation_tests {
         fn new(label: &str) -> Self {
             let restore_peers = EnvVarRestore::capture("PEERS_FILE");
             let restore_config = EnvVarRestore::capture("MAW_CONFIG_DIR");
-            let root = std::env::temp_dir().join(format!("maw-rs-federation-{label}-{}", std::process::id()));
+            let root = std::env::temp_dir()
+                .join(format!("maw-rs-federation-{label}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&root);
             std::fs::create_dir_all(&root).expect("tmp");
             std::env::set_var("PEERS_FILE", root.join("peers.json"));
             std::env::set_var("MAW_CONFIG_DIR", root.join("config"));
-            Self { restore_peers, restore_config, root }
+            Self {
+                restore_peers,
+                restore_config,
+                root,
+            }
         }
     }
 
     impl Drop for FederationTestEnv134 {
-        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.root); }
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
     }
 
     fn federation_test_config() -> HeyConfig {
         let mut agents = HashMap::new();
         agents.insert("local-agent".to_owned(), "local".to_owned());
-        HeyConfig { node: Some("local-node".to_owned()), oracle: None, route: RouteConfig { node: Some("local-node".to_owned()), named_peers: vec![RouteNamedPeer { name: "peer1".to_owned(), url: "http://peer.example:3456".to_owned() }], peers: Vec::new(), agents } }
+        HeyConfig {
+            node: Some("local-node".to_owned()),
+            oracle: None,
+            route: RouteConfig {
+                node: Some("local-node".to_owned()),
+                named_peers: vec![RouteNamedPeer {
+                    name: "peer1".to_owned(),
+                    url: "http://peer.example:3456".to_owned(),
+                }],
+                peers: Vec::new(),
+                agents,
+            },
+        }
     }
 
-    fn federation_args(values: &[&str]) -> Vec<String> { values.iter().map(|value| (*value).to_owned()).collect() }
+    fn federation_args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_owned()).collect()
+    }
 
     #[test]
     fn federation_dispatch_registers_native_and_guards() {
@@ -462,7 +656,11 @@ mod federation_tests {
         let _guard = env_test_lock();
         let _env = FederationTestEnv134::new("guard");
         let mut fake = FederationFakeTransport134::default();
-        let out = federation_run_with(&federation_args(&["status", "--peers", "scout"]), &federation_test_config(), &mut fake);
+        let out = federation_run_with(
+            &federation_args(&["status", "--peers", "scout"]),
+            &federation_test_config(),
+            &mut fake,
+        );
         assert_ne!(out.code, 0);
         assert!(out.stderr.contains("config|both"));
     }
@@ -472,11 +670,21 @@ mod federation_tests {
         let _guard = env_test_lock();
         let _env = FederationTestEnv134::new("status");
         let mut fake = FederationFakeTransport134::default();
-        let out = federation_run_with(&federation_args(&["status", "--json"]), &federation_test_config(), &mut fake);
+        let out = federation_run_with(
+            &federation_args(&["status", "--json"]),
+            &federation_test_config(),
+            &mut fake,
+        );
         assert_eq!(out.code, 0, "{}", out.stderr);
         assert!(out.stdout.contains("\"action\":\"status\""));
         assert!(out.stdout.contains("peer-node"));
-        assert_eq!(fake.calls, vec![("http://peer.example:3456".to_owned(), "/api/federation/status".to_owned())]);
+        assert_eq!(
+            fake.calls,
+            vec![(
+                "http://peer.example:3456".to_owned(),
+                "/api/federation/status".to_owned()
+            )]
+        );
     }
 
     #[test]
@@ -484,7 +692,11 @@ mod federation_tests {
         let _guard = env_test_lock();
         let _env = FederationTestEnv134::new("sync");
         let mut fake = FederationFakeTransport134::default();
-        let out = federation_run_with(&federation_args(&["sync", "--json"]), &federation_test_config(), &mut fake);
+        let out = federation_run_with(
+            &federation_args(&["sync", "--json"]),
+            &federation_test_config(),
+            &mut fake,
+        );
         assert_eq!(out.code, 0, "{}", out.stderr);
         assert!(out.stdout.contains("\"action\":\"sync\""));
         assert!(out.stdout.contains("\"remote\""));
@@ -496,7 +708,11 @@ mod federation_tests {
         let _guard = env_test_lock();
         let _env = FederationTestEnv134::new("sync-refuse");
         let mut fake = FederationFakeTransport134::default();
-        let out = federation_run_with(&federation_args(&["sync"]), &federation_test_config(), &mut fake);
+        let out = federation_run_with(
+            &federation_args(&["sync"]),
+            &federation_test_config(),
+            &mut fake,
+        );
         assert_eq!(out.code, 2);
         assert!(out.stderr.contains("pending native safety review"));
     }
@@ -504,7 +720,10 @@ mod federation_tests {
     #[test]
     fn federation_curl_argv_is_no_shell_and_separator_guarded() {
         let argv = federation_curl_argv("http://peer.example:3456", "/api/identity").expect("argv");
-        assert_eq!(argv.last().map(String::as_str), Some("http://peer.example:3456/api/identity"));
+        assert_eq!(
+            argv.last().map(String::as_str),
+            Some("http://peer.example:3456/api/identity")
+        );
         assert!(argv.iter().any(|arg| arg == "--"));
         assert!(federation_curl_argv("http://peer.example", "/api/../secret").is_err());
     }

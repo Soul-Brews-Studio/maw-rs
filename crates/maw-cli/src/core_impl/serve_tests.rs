@@ -41,15 +41,26 @@ mod serve_tests {
     fn serve_pane_looks_like_agent_matches_keywords_and_versioned_commands() {
         assert!(serve_pane_looks_like_agent("codex", "shell"));
         assert!(serve_pane_looks_like_agent("bash", "maw-rs-oracle"));
-        assert!(serve_pane_looks_like_agent("2.1.219", "some task status line"));
+        assert!(serve_pane_looks_like_agent(
+            "2.1.219",
+            "some task status line"
+        ));
         assert!(!serve_pane_looks_like_agent("bash", "nat-LOCAL (shell)"));
-        assert!(!serve_pane_looks_like_agent("sudo", "MAWRS-REMOTE (live, read-only)"));
+        assert!(!serve_pane_looks_like_agent(
+            "sudo",
+            "MAWRS-REMOTE (live, read-only)"
+        ));
     }
 
     fn console_session() -> RouteSession {
         RouteSession {
             name: "33-maw-rs".to_owned(),
-            windows: vec![RouteWindow { index: 0, name: "console".to_owned(), active: true, kind: None }],
+            windows: vec![RouteWindow {
+                index: 0,
+                name: "console".to_owned(),
+                active: true,
+                kind: None,
+            }],
             source: None,
         }
     }
@@ -61,8 +72,14 @@ mod serve_tests {
             serve_window_name_for_resolved_target(&sessions, "33-maw-rs:0").as_deref(),
             Some("console")
         );
-        assert_eq!(serve_window_name_for_resolved_target(&sessions, "33-maw-rs:9"), None);
-        assert_eq!(serve_window_name_for_resolved_target(&sessions, "no-such-session:0"), None);
+        assert_eq!(
+            serve_window_name_for_resolved_target(&sessions, "33-maw-rs:9"),
+            None
+        );
+        assert_eq!(
+            serve_window_name_for_resolved_target(&sessions, "no-such-session:0"),
+            None
+        );
     }
 
     #[test]
@@ -89,9 +106,12 @@ mod serve_tests {
     fn serve_non_agent_pane_warning_from_panes_is_silent_for_real_agents_and_unknown_targets() {
         let sessions = vec![console_session()];
         let panes = vec![agent_pane("33-maw-rs:console.0", "2.1.219")];
-        assert!(serve_non_agent_pane_warning_from_panes(&sessions, &panes, "33-maw-rs:0").is_none());
         assert!(
-            serve_non_agent_pane_warning_from_panes(&sessions, &panes, "no-such-session:0").is_none(),
+            serve_non_agent_pane_warning_from_panes(&sessions, &panes, "33-maw-rs:0").is_none()
+        );
+        assert!(
+            serve_non_agent_pane_warning_from_panes(&sessions, &panes, "no-such-session:0")
+                .is_none(),
             "target not found is a different, already-handled failure mode"
         );
     }
@@ -112,7 +132,11 @@ mod serve_tests {
         assert_eq!(serve_peer_refresh_interval_secs(), 30);
 
         std::env::set_var("MAW_PEER_REFRESH_SECS", " 0 ");
-        assert_eq!(serve_peer_refresh_interval_secs(), 0, "0 disables the sweep");
+        assert_eq!(
+            serve_peer_refresh_interval_secs(),
+            0,
+            "0 disables the sweep"
+        );
 
         std::env::set_var("MAW_PEER_REFRESH_SECS", "not-a-number");
         assert_eq!(
@@ -299,7 +323,10 @@ mod serve_tests {
         })
     }
 
-    fn serve_test_receiver_inbox_at(repo: &std::path::Path, now_millis: u128) -> Arc<dyn ServeReceiverInbox> {
+    fn serve_test_receiver_inbox_at(
+        repo: &std::path::Path,
+        now_millis: u128,
+    ) -> Arc<dyn ServeReceiverInbox> {
         Arc::new(ServeSystemReceiverInbox {
             enabled: Some(true),
             fixed_now_millis: Some(now_millis),
@@ -419,34 +446,37 @@ mod serve_tests {
         api_token_auth: ServeApiTokenAuth,
         ws_tickets: Arc<maw_auth::WsTicketStore>,
     ) -> Router {
-        serve_router_with_ws_tickets(ServeState {
-            cached_pubkey: Some(KEY.to_owned()),
-            peer_pubkeys: HotReload::frozen(Vec::new()),
-            workspace_key: Some(KEY.to_owned()),
-            workspaces: Mutex::new(WorkspaceStore::default()),
-            requests: Mutex::new(RequestReplyStore::default()),
-            delivery: serve_test_delivery(),
-            receiver_inbox: serve_test_receiver_inbox(),
-            wake: serve_test_wake(),
-            delivery_idempotency: Mutex::new(DeliveryIdempotencyStore::default()),
-            feed: Mutex::new(Vec::new()),
-            peer_addr_override: Some(NON_LOOPBACK_TEST_PEER),
-            now_override: Some(1_782_277_200),
-            serve_core_state_override: None,
-            trust_store_path: serve_test_trust_store_path("api-token"),
-            plugin_serve_routes: vec![ServePluginRoute {
-                name: "testext".to_owned(),
-                command: None,
-                prefix: "/api/testext".to_owned(),
-                health_path: "/api/testext/health".to_owned(),
-                events: Vec::new(),
-                event_path: None,
-                dir: std::env::temp_dir(),
-                process: Arc::new(Mutex::new(None)),
-            }],
-            api_token_auth,
-            bound_port: DEFAULT_SERVE_PORT,
-        }, ws_tickets)
+        serve_router_with_ws_tickets(
+            ServeState {
+                cached_pubkey: Some(KEY.to_owned()),
+                peer_pubkeys: HotReload::frozen(Vec::new()),
+                workspace_key: Some(KEY.to_owned()),
+                workspaces: Mutex::new(WorkspaceStore::default()),
+                requests: Mutex::new(RequestReplyStore::default()),
+                delivery: serve_test_delivery(),
+                receiver_inbox: serve_test_receiver_inbox(),
+                wake: serve_test_wake(),
+                delivery_idempotency: Mutex::new(DeliveryIdempotencyStore::default()),
+                feed: Mutex::new(Vec::new()),
+                peer_addr_override: Some(NON_LOOPBACK_TEST_PEER),
+                now_override: Some(1_782_277_200),
+                serve_core_state_override: None,
+                trust_store_path: serve_test_trust_store_path("api-token"),
+                plugin_serve_routes: vec![ServePluginRoute {
+                    name: "testext".to_owned(),
+                    command: None,
+                    prefix: "/api/testext".to_owned(),
+                    health_path: "/api/testext/health".to_owned(),
+                    events: Vec::new(),
+                    event_path: None,
+                    dir: std::env::temp_dir(),
+                    process: Arc::new(Mutex::new(None)),
+                }],
+                api_token_auth,
+                bound_port: DEFAULT_SERVE_PORT,
+            },
+            ws_tickets,
+        )
     }
 
     fn serve_test_proxy_route(port: u16, child: Child) -> ServePluginRoute {
@@ -462,7 +492,12 @@ mod serve_tests {
         }
     }
 
-    fn signed_trust_request(method: &str, uri: &str, auth_path: &str, body: &'static str) -> axum::http::Request<Body> {
+    fn signed_trust_request(
+        method: &str,
+        uri: &str,
+        auth_path: &str,
+        body: &'static str,
+    ) -> axum::http::Request<Body> {
         let headers = sign_headers_v3_at(
             KEY,
             KEY,
@@ -483,18 +518,26 @@ mod serve_tests {
             builder = builder.header(name, value);
         }
         let mut request = builder.body(Body::from(body)).expect("request");
-        request.extensions_mut().insert(ConnectInfo(NON_LOOPBACK_TEST_PEER));
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(NON_LOOPBACK_TEST_PEER));
         request
     }
 
-    fn unsigned_trust_request(method: &str, uri: &str, body: &'static str) -> axum::http::Request<Body> {
+    fn unsigned_trust_request(
+        method: &str,
+        uri: &str,
+        body: &'static str,
+    ) -> axum::http::Request<Body> {
         let mut request = axum::http::Request::builder()
             .method(method)
             .uri(uri)
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .body(Body::from(body))
             .expect("request");
-        request.extensions_mut().insert(ConnectInfo(NON_LOOPBACK_TEST_PEER));
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(NON_LOOPBACK_TEST_PEER));
         request
     }
 
@@ -513,10 +556,14 @@ mod serve_tests {
     ) -> Request<Body> {
         let mut request = unsigned_json_request("POST", uri, body);
         if let Some(origin) = origin {
-            request.headers_mut().insert("origin", HeaderValue::from_static(origin));
+            request
+                .headers_mut()
+                .insert("origin", HeaderValue::from_static(origin));
         }
         if let Some((name, value)) = credential {
-            request.headers_mut().insert(name, HeaderValue::from_static(value));
+            request
+                .headers_mut()
+                .insert(name, HeaderValue::from_static(value));
         }
         request
     }
@@ -526,7 +573,12 @@ mod serve_tests {
         now: i64,
         peer_addr_override: Option<SocketAddr>,
     ) -> Router {
-        serve_test_app_with_o6_keys_and_delivery(keys, now, peer_addr_override, serve_test_delivery())
+        serve_test_app_with_o6_keys_and_delivery(
+            keys,
+            now,
+            peer_addr_override,
+            serve_test_delivery(),
+        )
     }
 
     fn serve_test_app_with_o6_keys_and_delivery(
@@ -581,9 +633,7 @@ mod serve_tests {
 
     fn captured_send_key() -> ServePeerPubkey {
         let fixture = captured_send_fixture();
-        let from = fixture["headers"]["X-Maw-From"]
-            .as_str()
-            .expect("from");
+        let from = fixture["headers"]["X-Maw-From"].as_str().expect("from");
         serve_test_peer_pubkey(from, fixture["testPeerKey"].as_str().expect("peer key"))
     }
 
@@ -597,20 +647,26 @@ mod serve_tests {
             builder = builder.header(name.as_str(), value.as_str().expect("header value"));
         }
         let mut request = builder.body(Body::from(body.to_owned())).expect("request");
-        request.extensions_mut().insert(ConnectInfo(NON_LOOPBACK_TEST_PEER));
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(NON_LOOPBACK_TEST_PEER));
         request
     }
 
-
-
-    fn unsigned_json_request(method: &str, uri: &str, body: &'static str) -> axum::http::Request<Body> {
+    fn unsigned_json_request(
+        method: &str,
+        uri: &str,
+        body: &'static str,
+    ) -> axum::http::Request<Body> {
         let mut request = axum::http::Request::builder()
             .method(method)
             .uri(uri)
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .body(Body::from(body))
             .expect("request");
-        request.extensions_mut().insert(ConnectInfo(NON_LOOPBACK_TEST_PEER));
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(NON_LOOPBACK_TEST_PEER));
         request
     }
 
@@ -641,16 +697,20 @@ mod serve_tests {
             builder = builder.header(name, value);
         }
         let mut request = builder.body(Body::from(body)).expect("request");
-        request.extensions_mut().insert(ConnectInfo(NON_LOOPBACK_TEST_PEER));
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(NON_LOOPBACK_TEST_PEER));
         request
     }
-
 
     #[tokio::test]
     async fn serve_send_accepts_signed_and_prefixes_bracket_text() {
         let body = r#"{"target":"capture-agent","text":"[fake:node] signed"}"#;
         let app = serve_test_app(serve_test_trust_store_path("signed-send"));
-        let response = app.oneshot(signed_api_send_json_request(body, KEY, FROM, 1_782_277_200)).await.expect("response");
+        let response = app
+            .oneshot(signed_api_send_json_request(body, KEY, FROM, 1_782_277_200))
+            .await
+            .expect("response");
         assert_eq!(response.status(), StatusCode::OK);
         let json = response_json(response).await;
         assert_eq!(json["ok"], true);
@@ -658,9 +718,19 @@ mod serve_tests {
 
     #[tokio::test]
     async fn serve_send_flags_not_rejects_unsigned_legacy_loopback() {
-        let app = serve_test_app_with_o6_keys(vec![], 1_782_277_200, Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 49_152)));
-        let mut unsigned_from = unsigned_json_request("POST", "/api/send", r#"{"target":"capture-agent","text":"[fake] hello"}"#);
-        unsigned_from.headers_mut().insert("x-maw-from", axum::http::HeaderValue::from_static(FROM));
+        let app = serve_test_app_with_o6_keys(
+            vec![],
+            1_782_277_200,
+            Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 49_152)),
+        );
+        let mut unsigned_from = unsigned_json_request(
+            "POST",
+            "/api/send",
+            r#"{"target":"capture-agent","text":"[fake] hello"}"#,
+        );
+        unsigned_from
+            .headers_mut()
+            .insert("x-maw-from", axum::http::HeaderValue::from_static(FROM));
         let response = app.oneshot(unsigned_from).await.expect("unsigned legacy");
         assert_eq!(response.status(), StatusCode::OK);
     }
@@ -681,7 +751,14 @@ mod serve_tests {
         let app = serve_test_app_with_wake(serve_test_trust_store_path("wake-exec"), wake.clone());
         let body = r#"{"target":"capture-agent","task":"fix issue"}"#;
         let response = app
-            .oneshot(signed_json_request("POST", "/api/wake", body, KEY, FROM, 1_782_277_200))
+            .oneshot(signed_json_request(
+                "POST",
+                "/api/wake",
+                body,
+                KEY,
+                FROM,
+                1_782_277_200,
+            ))
             .await
             .expect("response");
         assert_eq!(response.status(), StatusCode::OK);
@@ -710,10 +787,9 @@ mod serve_tests {
             let body = r#"{"target":"capture-agent"}"#;
             let mut request =
                 signed_json_request("POST", "/api/wake", body, KEY, FROM, 1_782_277_200);
-            request.headers_mut().insert(
-                "origin",
-                HeaderValue::from_static("https://evil.example"),
-            );
+            request
+                .headers_mut()
+                .insert("origin", HeaderValue::from_static("https://evil.example"));
             request.extensions_mut().insert(ConnectInfo(peer));
             request
         };
@@ -730,6 +806,7 @@ mod serve_tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn serve_browser_operator_preflight_and_credentials_are_bounded() {
         const GOD: &str = "https://god.buildwithoracle.com";
         let wake = Arc::new(FakeServeWake::default());
@@ -743,10 +820,15 @@ mod serve_tests {
             },
         );
         let browser_request = |credential: Option<(&'static str, &'static str)>| {
-            let mut request = unsigned_json_request("POST", "/api/wake", r#"{"target":"capture-agent"}"#);
-            request.headers_mut().insert("origin", HeaderValue::from_static(GOD));
+            let mut request =
+                unsigned_json_request("POST", "/api/wake", r#"{"target":"capture-agent"}"#);
+            request
+                .headers_mut()
+                .insert("origin", HeaderValue::from_static(GOD));
             if let Some((name, value)) = credential {
-                request.headers_mut().insert(name, HeaderValue::from_static(value));
+                request
+                    .headers_mut()
+                    .insert(name, HeaderValue::from_static(value));
             }
             request
         };
@@ -779,7 +861,14 @@ mod serve_tests {
             preflight!("access-control-request-method" => "POST", "access-control-request-method" => "GET"),
             preflight!("access-control-request-method" => "POST", "access-control-request-headers" => "x-evil"),
         ] {
-            assert_eq!(app.clone().oneshot(request).await.expect("invalid preflight").status(), StatusCode::FORBIDDEN);
+            assert_eq!(
+                app.clone()
+                    .oneshot(request)
+                    .await
+                    .expect("invalid preflight")
+                    .status(),
+                StatusCode::FORBIDDEN
+            );
         }
         assert!(wake.wakes().is_empty());
 
@@ -788,11 +877,19 @@ mod serve_tests {
             Some(("authorization", "Bearer wrong-token")),
             Some(("x-maw-operator-authenticated", "true")),
         ] {
-            let denied = app.clone().oneshot(browser_request(credential)).await.expect("browser denied");
+            let denied = app
+                .clone()
+                .oneshot(browser_request(credential))
+                .await
+                .expect("browser denied");
             assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
             assert_eq!(denied.headers()["access-control-allow-origin"], GOD);
             assert_eq!(denied.headers()["vary"], "Origin");
-            for name in ["access-control-allow-methods", "access-control-allow-headers", "access-control-allow-private-network"] {
+            for name in [
+                "access-control-allow-methods",
+                "access-control-allow-headers",
+                "access-control-allow-private-network",
+            ] {
                 assert!(!denied.headers().contains_key(name));
             }
         }
@@ -802,60 +899,143 @@ mod serve_tests {
             ("authorization", "Bearer secret-token"),
             ("x-maw-token", "secret-token"),
         ] {
-            let response = app.clone().oneshot(browser_request(Some((header, value)))).await.expect("operator wake");
+            let response = app
+                .clone()
+                .oneshot(browser_request(Some((header, value))))
+                .await
+                .expect("operator wake");
             assert_eq!(response.status(), StatusCode::OK);
         }
         assert_eq!(wake.wakes().len(), 2);
 
         let mut sessions = unsigned_trust_request("GET", "/api/sessions", "");
-        sessions.headers_mut().insert("origin", HeaderValue::from_static(GOD));
-        sessions.headers_mut().insert("x-maw-token", HeaderValue::from_static("secret-token"));
-        assert_auth_allowed(app.clone().oneshot(sessions).await.expect("operator sessions").status(), "operator sessions");
+        sessions
+            .headers_mut()
+            .insert("origin", HeaderValue::from_static(GOD));
+        sessions
+            .headers_mut()
+            .insert("x-maw-token", HeaderValue::from_static("secret-token"));
+        assert_auth_allowed(
+            app.clone()
+                .oneshot(sessions)
+                .await
+                .expect("operator sessions")
+                .status(),
+            "operator sessions",
+        );
 
-        let mut no_origin = unsigned_json_request("POST", "/api/wake", r#"{"target":"capture-agent"}"#);
-        no_origin.headers_mut().insert("authorization", HeaderValue::from_static("Bearer secret-token"));
-        assert_eq!(app.clone().oneshot(no_origin).await.expect("native bearer").status(), StatusCode::UNAUTHORIZED);
-        let open = serve_test_app_with_wake_and_auth(serve_test_trust_store_path("browser-open"), wake.clone(), ServeApiTokenAuth::open());
-        assert_eq!(open.oneshot(browser_request(Some(("x-maw-operator-authenticated", "true")))).await.expect("open forged marker").status(), StatusCode::UNAUTHORIZED);
+        let mut no_origin =
+            unsigned_json_request("POST", "/api/wake", r#"{"target":"capture-agent"}"#);
+        no_origin.headers_mut().insert(
+            "authorization",
+            HeaderValue::from_static("Bearer secret-token"),
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(no_origin)
+                .await
+                .expect("native bearer")
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let open = serve_test_app_with_wake_and_auth(
+            serve_test_trust_store_path("browser-open"),
+            wake.clone(),
+            ServeApiTokenAuth::open(),
+        );
+        assert_eq!(
+            open.oneshot(browser_request(Some((
+                "x-maw-operator-authenticated",
+                "true"
+            ))))
+            .await
+            .expect("open forged marker")
+            .status(),
+            StatusCode::UNAUTHORIZED
+        );
         assert_eq!(wake.wakes().len(), 2);
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn serve_ws_ticket_mint_uses_one_router_store_for_each_exact_path() {
         const GOD: &str = "https://god.buildwithoracle.com";
         let store = Arc::new(maw_auth::WsTicketStore::default());
-        let app = serve_test_app_with_api_auth_and_ws_tickets(ServeApiTokenAuth {
-            token: Some("secret-token".to_owned()),
-            loopback_exempt: true,
-            forced_open: false,
-        }, store.clone());
-        let preflight = Request::builder().method(Method::OPTIONS).uri("/api/auth/ws-ticket")
-            .header("origin", GOD).header("access-control-request-method", "POST")
-            .header("access-control-request-headers", "authorization, content-type")
-            .body(Body::empty()).unwrap();
+        let app = serve_test_app_with_api_auth_and_ws_tickets(
+            ServeApiTokenAuth {
+                token: Some("secret-token".to_owned()),
+                loopback_exempt: true,
+                forced_open: false,
+            },
+            store.clone(),
+        );
+        let preflight = Request::builder()
+            .method(Method::OPTIONS)
+            .uri("/api/auth/ws-ticket")
+            .header("origin", GOD)
+            .header("access-control-request-method", "POST")
+            .header(
+                "access-control-request-headers",
+                "authorization, content-type",
+            )
+            .body(Body::empty())
+            .unwrap();
         let preflight = app.clone().oneshot(preflight).await.unwrap();
         assert_eq!(preflight.status(), StatusCode::NO_CONTENT);
         for (name, value) in [("access-control-allow-origin", GOD), ("access-control-allow-methods", "GET, POST, OPTIONS"), ("access-control-allow-headers", "Authorization, Content-Type, X-Maw-Token"), ("vary", "Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Access-Control-Request-Private-Network")] {
             assert_eq!(preflight.headers()[name], value);
         }
-        assert!(axum::body::to_bytes(preflight.into_body(), 1).await.unwrap().is_empty());
-        let bad_preflight = Request::builder().method(Method::OPTIONS).uri("/api/auth/ws-ticket")
-            .header("origin", GOD).header("access-control-request-method", "DELETE")
-            .body(Body::empty()).unwrap();
-        assert_eq!(app.clone().oneshot(bad_preflight).await.unwrap().status(), StatusCode::FORBIDDEN);
-        let method = Request::builder().method(Method::GET).uri("/api/auth/ws-ticket").header("origin", GOD).header("x-maw-token", "secret-token").body(Body::empty()).unwrap();
+        assert!(axum::body::to_bytes(preflight.into_body(), 1)
+            .await
+            .unwrap()
+            .is_empty());
+        let bad_preflight = Request::builder()
+            .method(Method::OPTIONS)
+            .uri("/api/auth/ws-ticket")
+            .header("origin", GOD)
+            .header("access-control-request-method", "DELETE")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(bad_preflight).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+        let method = Request::builder()
+            .method(Method::GET)
+            .uri("/api/auth/ws-ticket")
+            .header("origin", GOD)
+            .header("x-maw-token", "secret-token")
+            .body(Body::empty())
+            .unwrap();
         let method = app.clone().oneshot(method).await.unwrap();
         assert_eq!(method.status(), StatusCode::METHOD_NOT_ALLOWED);
-        assert!(axum::body::to_bytes(method.into_body(), 1).await.unwrap().is_empty());
+        assert!(axum::body::to_bytes(method.into_body(), 1)
+            .await
+            .unwrap()
+            .is_empty());
         for (path, credential) in [
             ("/ws", ("authorization", "Bearer secret-token")),
             ("/ws/pty", ("x-maw-token", "secret-token")),
             ("/ws/tmux", ("authorization", "Bearer secret-token")),
         ] {
-            let body = match path { "/ws" => r#"{"path":"/ws"}"#, "/ws/pty" => r#"{"path":"/ws/pty"}"#, _ => r#"{"path":"/ws/tmux"}"# };
-            let mut request = ws_ticket_request("/api/auth/ws-ticket", body, Some(GOD), Some(credential));
-            if path == "/ws" { request.extensions_mut().insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 49_152)))); }
-            if path == "/ws/tmux" { request.headers_mut().insert(CONTENT_TYPE, HeaderValue::from_static("application/json; charset=utf-8")); }
+            let body = match path {
+                "/ws" => r#"{"path":"/ws"}"#,
+                "/ws/pty" => r#"{"path":"/ws/pty"}"#,
+                _ => r#"{"path":"/ws/tmux"}"#,
+            };
+            let mut request =
+                ws_ticket_request("/api/auth/ws-ticket", body, Some(GOD), Some(credential));
+            if path == "/ws" {
+                request
+                    .extensions_mut()
+                    .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 49_152))));
+            }
+            if path == "/ws/tmux" {
+                request.headers_mut().insert(
+                    CONTENT_TYPE,
+                    HeaderValue::from_static("application/json; charset=utf-8"),
+                );
+            }
             let response = app.clone().oneshot(request).await.unwrap();
             assert_eq!(response.status(), StatusCode::OK);
             assert_eq!(response.headers()["cache-control"], "no-store");
@@ -865,55 +1045,205 @@ mod serve_tests {
             assert_eq!(payload.as_object().unwrap().len(), 2);
             assert_eq!(payload["protocol"], SERVE_WS_PROTOCOL);
             let ticket = payload["ticket"].as_str().unwrap();
-            assert!(ticket.strip_prefix("mwt1_").is_some_and(|hex| hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())));
-            assert_eq!(store.consume(ticket, Some(GOD), maw_auth::WsTicketPath::try_from(path).unwrap(), Instant::now), maw_auth::WsTicketConsume::Accepted);
+            assert!(ticket
+                .strip_prefix("mwt1_")
+                .is_some_and(|hex| hex.len() == 64
+                    && hex
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())));
+            assert_eq!(
+                store.consume(
+                    ticket,
+                    Some(GOD),
+                    maw_auth::WsTicketPath::try_from(path).unwrap(),
+                    Instant::now
+                ),
+                maw_auth::WsTicketConsume::Accepted
+            );
         }
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn serve_ws_ticket_mint_denies_auth_bypasses_and_bad_input() {
         const GOD: &str = "https://god.buildwithoracle.com";
-        let auth = ServeApiTokenAuth { token: Some("secret-token".into()), loopback_exempt: true, forced_open: false };
+        let auth = ServeApiTokenAuth {
+            token: Some("secret-token".into()),
+            loopback_exempt: true,
+            forced_open: false,
+        };
         let app = serve_test_app_with_api_auth(auth.clone());
         for (origin, credential, expected) in [
             (Some(GOD), None, StatusCode::UNAUTHORIZED),
-            (Some(GOD), Some(("authorization", "Bearer wrong")), StatusCode::UNAUTHORIZED),
-            (None, Some(("x-maw-token", "secret-token")), StatusCode::UNAUTHORIZED),
-            (Some("https://evil.example"), Some(("x-maw-token", "secret-token")), StatusCode::FORBIDDEN),
+            (
+                Some(GOD),
+                Some(("authorization", "Bearer wrong")),
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                None,
+                Some(("x-maw-token", "secret-token")),
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                Some("https://evil.example"),
+                Some(("x-maw-token", "secret-token")),
+                StatusCode::FORBIDDEN,
+            ),
         ] {
-            assert_eq!(app.clone().oneshot(ws_ticket_request("/api/auth/ws-ticket", r#"{"path":"/ws"}"#, origin, credential)).await.unwrap().status(), expected);
+            assert_eq!(
+                app.clone()
+                    .oneshot(ws_ticket_request(
+                        "/api/auth/ws-ticket",
+                        r#"{"path":"/ws"}"#,
+                        origin,
+                        credential
+                    ))
+                    .await
+                    .unwrap()
+                    .status(),
+                expected
+            );
         }
-        let mut loopback = ws_ticket_request("/api/auth/ws-ticket", r#"{"path":"/ws"}"#, Some(GOD), None);
-        loopback.extensions_mut().insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 49_152))));
-        assert_eq!(app.clone().oneshot(loopback).await.unwrap().status(), StatusCode::UNAUTHORIZED);
-        let mut signed = signed_json_request("POST", "/api/auth/ws-ticket", r#"{"path":"/ws"}"#, KEY, FROM, 1_782_277_200);
-        signed.headers_mut().insert("origin", HeaderValue::from_static(GOD));
-        assert_eq!(app.clone().oneshot(signed).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+        let mut loopback =
+            ws_ticket_request("/api/auth/ws-ticket", r#"{"path":"/ws"}"#, Some(GOD), None);
+        loopback
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 49_152))));
+        assert_eq!(
+            app.clone().oneshot(loopback).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let mut signed = signed_json_request(
+            "POST",
+            "/api/auth/ws-ticket",
+            r#"{"path":"/ws"}"#,
+            KEY,
+            FROM,
+            1_782_277_200,
+        );
+        signed
+            .headers_mut()
+            .insert("origin", HeaderValue::from_static(GOD));
+        assert_eq!(
+            app.clone().oneshot(signed).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
         for bad in [
-            ws_ticket_request("/api/auth/ws-ticket?x=1", r#"{"path":"/ws"}"#, Some(GOD), Some(("x-maw-token", "secret-token"))),
-            ws_ticket_request("/api/auth/ws-ticket", r#"{"path":"/ws","extra":1}"#, Some(GOD), Some(("x-maw-token", "secret-token"))),
-            ws_ticket_request("/api/auth/ws-ticket", r#"{"path":"/WS"}"#, Some(GOD), Some(("x-maw-token", "secret-token"))),
-            ws_ticket_request("/api/auth/ws-ticket", "{}", Some(GOD), Some(("x-maw-token", "secret-token"))),
-            ws_ticket_request("/api/auth/ws-ticket", "{", Some(GOD), Some(("x-maw-token", "secret-token"))),
-            Request::builder().method(Method::POST).uri("/api/auth/ws-ticket").header("origin", GOD).header("x-maw-token", "secret-token").body(Body::from(r#"{"path":"/ws"}"#)).unwrap(),
-            Request::builder().method(Method::POST).uri("/api/auth/ws-ticket").header("origin", GOD).header("x-maw-token", "secret-token").header(CONTENT_TYPE, "text/plain").body(Body::from(r#"{"path":"/ws"}"#)).unwrap(),
-            Request::builder().method(Method::POST).uri("/api/auth/ws-ticket").header("origin", GOD).header("x-maw-token", "secret-token").header(CONTENT_TYPE, "application/json").body(Body::from(vec![b'x'; 129])).unwrap(),
+            ws_ticket_request(
+                "/api/auth/ws-ticket?x=1",
+                r#"{"path":"/ws"}"#,
+                Some(GOD),
+                Some(("x-maw-token", "secret-token")),
+            ),
+            ws_ticket_request(
+                "/api/auth/ws-ticket",
+                r#"{"path":"/ws","extra":1}"#,
+                Some(GOD),
+                Some(("x-maw-token", "secret-token")),
+            ),
+            ws_ticket_request(
+                "/api/auth/ws-ticket",
+                r#"{"path":"/WS"}"#,
+                Some(GOD),
+                Some(("x-maw-token", "secret-token")),
+            ),
+            ws_ticket_request(
+                "/api/auth/ws-ticket",
+                "{}",
+                Some(GOD),
+                Some(("x-maw-token", "secret-token")),
+            ),
+            ws_ticket_request(
+                "/api/auth/ws-ticket",
+                "{",
+                Some(GOD),
+                Some(("x-maw-token", "secret-token")),
+            ),
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/auth/ws-ticket")
+                .header("origin", GOD)
+                .header("x-maw-token", "secret-token")
+                .body(Body::from(r#"{"path":"/ws"}"#))
+                .unwrap(),
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/auth/ws-ticket")
+                .header("origin", GOD)
+                .header("x-maw-token", "secret-token")
+                .header(CONTENT_TYPE, "text/plain")
+                .body(Body::from(r#"{"path":"/ws"}"#))
+                .unwrap(),
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/auth/ws-ticket")
+                .header("origin", GOD)
+                .header("x-maw-token", "secret-token")
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(vec![b'x'; 129]))
+                .unwrap(),
         ] {
-            assert_eq!(app.clone().oneshot(bad).await.unwrap().status(), StatusCode::BAD_REQUEST);
+            assert_eq!(
+                app.clone().oneshot(bad).await.unwrap().status(),
+                StatusCode::BAD_REQUEST
+            );
         }
-        for denied_auth in [ServeApiTokenAuth::open(), ServeApiTokenAuth { forced_open: true, ..auth.clone() }] {
-            let denied = serve_test_app_with_api_auth(denied_auth).oneshot(ws_ticket_request("/api/auth/ws-ticket", r#"{"path":"/ws"}"#, Some(GOD), Some(("x-maw-token", "secret-token")))).await.unwrap();
+        for denied_auth in [
+            ServeApiTokenAuth::open(),
+            ServeApiTokenAuth {
+                forced_open: true,
+                ..auth.clone()
+            },
+        ] {
+            let denied = serve_test_app_with_api_auth(denied_auth)
+                .oneshot(ws_ticket_request(
+                    "/api/auth/ws-ticket",
+                    r#"{"path":"/ws"}"#,
+                    Some(GOD),
+                    Some(("x-maw-token", "secret-token")),
+                ))
+                .await
+                .unwrap();
             assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
         }
-        let mut duplicate_origin = ws_ticket_request("/api/auth/ws-ticket", r#"{"path":"/ws"}"#, Some(GOD), Some(("x-maw-token", "secret-token")));
-        duplicate_origin.headers_mut().append("origin", HeaderValue::from_static(GOD));
-        assert_eq!(app.clone().oneshot(duplicate_origin).await.unwrap().status(), StatusCode::FORBIDDEN);
+        let mut duplicate_origin = ws_ticket_request(
+            "/api/auth/ws-ticket",
+            r#"{"path":"/ws"}"#,
+            Some(GOD),
+            Some(("x-maw-token", "secret-token")),
+        );
+        duplicate_origin
+            .headers_mut()
+            .append("origin", HeaderValue::from_static(GOD));
+        assert_eq!(
+            app.clone()
+                .oneshot(duplicate_origin)
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
         let full = Arc::new(maw_auth::WsTicketStore::default());
         let mut rng = rand::rngs::StdRng::seed_from_u64(937);
-        for _ in 0..256 { full.issue(GOD, maw_auth::WsTicketPath::Ws, &mut rng, Instant::now).unwrap(); }
-        let unavailable = serve_test_app_with_api_auth_and_ws_tickets(auth, full).oneshot(ws_ticket_request("/api/auth/ws-ticket", r#"{"path":"/ws"}"#, Some(GOD), Some(("x-maw-token", "secret-token")))).await.unwrap();
+        for _ in 0..256 {
+            full.issue(GOD, maw_auth::WsTicketPath::Ws, &mut rng, Instant::now)
+                .unwrap();
+        }
+        let unavailable = serve_test_app_with_api_auth_and_ws_tickets(auth, full)
+            .oneshot(ws_ticket_request(
+                "/api/auth/ws-ticket",
+                r#"{"path":"/ws"}"#,
+                Some(GOD),
+                Some(("x-maw-token", "secret-token")),
+            ))
+            .await
+            .unwrap();
         assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert!(axum::body::to_bytes(unavailable.into_body(), 1).await.unwrap().is_empty());
+        assert!(axum::body::to_bytes(unavailable.into_body(), 1)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     fn ws_ticket_post(body: Body, content_type: Option<&'static str>) -> Request<Body> {
@@ -926,17 +1256,27 @@ mod serve_tests {
             builder = builder.header(CONTENT_TYPE, content_type);
         }
         let mut request = builder.body(body).expect("request");
-        request.extensions_mut().insert(ConnectInfo(NON_LOOPBACK_TEST_PEER));
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(NON_LOOPBACK_TEST_PEER));
         request
     }
 
     fn ws_ticket_test_auth() -> ServeApiTokenAuth {
-        ServeApiTokenAuth { token: Some("secret-token".to_owned()), loopback_exempt: true, forced_open: false }
+        ServeApiTokenAuth {
+            token: Some("secret-token".to_owned()),
+            loopback_exempt: true,
+            forced_open: false,
+        }
     }
 
     #[test]
     fn serve_auth_banner_states_the_enforced_browser_outcome_in_every_mode() {
-        let no_token = ServeApiTokenAuth { token: None, loopback_exempt: true, forced_open: false };
+        let no_token = ServeApiTokenAuth {
+            token: None,
+            loopback_exempt: true,
+            forced_open: false,
+        };
         let forced_open = ServeApiTokenAuth::open();
         let token = ws_ticket_test_auth();
         assert_eq!(
@@ -947,11 +1287,27 @@ mod serve_tests {
             forced_open.mode_label(),
             "open (configured) (browser clients refused unless loopback; forced_open does not open browser websockets)"
         );
-        assert_eq!(token.mode_label(), "token (browser clients authenticate with the same bearer token as /api)");
-        assert!(forced_open.mode_label().starts_with("open (configured)"), "the (configured) suffix must survive");
-        for label in [no_token.mode_label(), forced_open.mode_label(), token.mode_label()] {
-            assert!(label.contains("browser clients"), "banner must name the enforced browser outcome: {label}");
-            assert!(!label.contains("secret-token"), "banner must not echo the token: {label}");
+        assert_eq!(
+            token.mode_label(),
+            "token (browser clients authenticate with the same bearer token as /api)"
+        );
+        assert!(
+            forced_open.mode_label().starts_with("open (configured)"),
+            "the (configured) suffix must survive"
+        );
+        for label in [
+            no_token.mode_label(),
+            forced_open.mode_label(),
+            token.mode_label(),
+        ] {
+            assert!(
+                label.contains("browser clients"),
+                "banner must name the enforced browser outcome: {label}"
+            );
+            assert!(
+                !label.contains("secret-token"),
+                "banner must not echo the token: {label}"
+            );
         }
     }
 
@@ -961,15 +1317,62 @@ mod serve_tests {
         let credential = Some(("x-maw-token", "secret-token"));
         let app = serve_test_app_with_api_auth(ws_ticket_test_auth());
         let cases: Vec<(&str, Request<Body>)> = vec![
-            ("content-type-not-json", ws_ticket_post(Body::from(r#"{"path":"/ws"}"#), None)),
-            ("content-type-not-json", ws_ticket_post(Body::from(r#"{"path":"/ws"}"#), Some("text/plain"))),
-            ("query-string-not-allowed", ws_ticket_request("/api/auth/ws-ticket?x=1", r#"{"path":"/ws"}"#, Some(GOD), credential)),
-            ("body-too-large", ws_ticket_post(Body::from(vec![b'x'; 129]), Some("application/json"))),
-            ("body-not-a-ws-ticket-request", ws_ticket_request("/api/auth/ws-ticket", r#"{"path":"/ws","extra":1}"#, Some(GOD), credential)),
-            ("body-not-a-ws-ticket-request", ws_ticket_request("/api/auth/ws-ticket", "{}", Some(GOD), credential)),
-            ("body-not-a-ws-ticket-request", ws_ticket_request("/api/auth/ws-ticket", "{", Some(GOD), credential)),
-            ("path-not-allowed", ws_ticket_request("/api/auth/ws-ticket", r#"{"path":"/WS"}"#, Some(GOD), credential)),
-            ("path-not-allowed", ws_ticket_request("/api/auth/ws-ticket", r#"{"path":"/ws/nope"}"#, Some(GOD), credential)),
+            (
+                "content-type-not-json",
+                ws_ticket_post(Body::from(r#"{"path":"/ws"}"#), None),
+            ),
+            (
+                "content-type-not-json",
+                ws_ticket_post(Body::from(r#"{"path":"/ws"}"#), Some("text/plain")),
+            ),
+            (
+                "query-string-not-allowed",
+                ws_ticket_request(
+                    "/api/auth/ws-ticket?x=1",
+                    r#"{"path":"/ws"}"#,
+                    Some(GOD),
+                    credential,
+                ),
+            ),
+            (
+                "body-too-large",
+                ws_ticket_post(Body::from(vec![b'x'; 129]), Some("application/json")),
+            ),
+            (
+                "body-not-a-ws-ticket-request",
+                ws_ticket_request(
+                    "/api/auth/ws-ticket",
+                    r#"{"path":"/ws","extra":1}"#,
+                    Some(GOD),
+                    credential,
+                ),
+            ),
+            (
+                "body-not-a-ws-ticket-request",
+                ws_ticket_request("/api/auth/ws-ticket", "{}", Some(GOD), credential),
+            ),
+            (
+                "body-not-a-ws-ticket-request",
+                ws_ticket_request("/api/auth/ws-ticket", "{", Some(GOD), credential),
+            ),
+            (
+                "path-not-allowed",
+                ws_ticket_request(
+                    "/api/auth/ws-ticket",
+                    r#"{"path":"/WS"}"#,
+                    Some(GOD),
+                    credential,
+                ),
+            ),
+            (
+                "path-not-allowed",
+                ws_ticket_request(
+                    "/api/auth/ws-ticket",
+                    r#"{"path":"/ws/nope"}"#,
+                    Some(GOD),
+                    credential,
+                ),
+            ),
         ];
         let mut reasons = Vec::new();
         for (reason, request) in cases {
@@ -981,41 +1384,137 @@ mod serve_tests {
         }
         reasons.sort_unstable();
         reasons.dedup();
-        assert_eq!(reasons.len(), 5, "each documented mistake needs its own reason: {reasons:?}");
+        assert_eq!(
+            reasons.len(),
+            5,
+            "each documented mistake needs its own reason: {reasons:?}"
+        );
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn serve_ws_ticket_reason_bodies_keep_the_accept_reject_set_unchanged() {
         const GOD: &str = "https://god.buildwithoracle.com";
         const URI: &str = "/api/auth/ws-ticket";
         let credential = Some(("x-maw-token", "secret-token"));
         let app = serve_test_app_with_api_auth(ws_ticket_test_auth());
         let cases: Vec<(&str, StatusCode, Request<Body>)> = vec![
-            ("mint /ws", StatusCode::OK, ws_ticket_request(URI, r#"{"path":"/ws"}"#, Some(GOD), credential)),
-            ("mint /ws/pty", StatusCode::OK, ws_ticket_request(URI, r#"{"path":"/ws/pty"}"#, Some(GOD), credential)),
-            ("mint /ws/tmux", StatusCode::OK, ws_ticket_request(URI, r#"{"path":"/ws/tmux"}"#, Some(GOD), credential)),
-            ("mint with charset", StatusCode::OK, ws_ticket_post(Body::from(r#"{"path":"/ws"}"#), Some("application/json; charset=utf-8"))),
-            ("no credential", StatusCode::UNAUTHORIZED, ws_ticket_request(URI, r#"{"path":"/ws"}"#, Some(GOD), None)),
-            ("wrong credential", StatusCode::UNAUTHORIZED, ws_ticket_request(URI, r#"{"path":"/ws"}"#, Some(GOD), Some(("authorization", "Bearer wrong")))),
-            ("no origin", StatusCode::UNAUTHORIZED, ws_ticket_request(URI, r#"{"path":"/ws"}"#, None, credential)),
-            ("disallowed origin", StatusCode::FORBIDDEN, ws_ticket_request(URI, r#"{"path":"/ws"}"#, Some("https://evil.example"), credential)),
-            ("query string", StatusCode::BAD_REQUEST, ws_ticket_request("/api/auth/ws-ticket?x=1", r#"{"path":"/ws"}"#, Some(GOD), credential)),
-            ("unknown field", StatusCode::BAD_REQUEST, ws_ticket_request(URI, r#"{"path":"/ws","extra":1}"#, Some(GOD), credential)),
-            ("missing field", StatusCode::BAD_REQUEST, ws_ticket_request(URI, "{}", Some(GOD), credential)),
-            ("malformed json", StatusCode::BAD_REQUEST, ws_ticket_request(URI, "{", Some(GOD), credential)),
-            ("uppercased path", StatusCode::BAD_REQUEST, ws_ticket_request(URI, r#"{"path":"/WS"}"#, Some(GOD), credential)),
-            ("unlisted path", StatusCode::BAD_REQUEST, ws_ticket_request(URI, r#"{"path":"/ws/nope"}"#, Some(GOD), credential)),
-            ("no content type", StatusCode::BAD_REQUEST, ws_ticket_post(Body::from(r#"{"path":"/ws"}"#), None)),
-            ("wrong content type", StatusCode::BAD_REQUEST, ws_ticket_post(Body::from(r#"{"path":"/ws"}"#), Some("text/plain"))),
-            ("oversized body", StatusCode::BAD_REQUEST, ws_ticket_post(Body::from(vec![b'x'; 129]), Some("application/json"))),
+            (
+                "mint /ws",
+                StatusCode::OK,
+                ws_ticket_request(URI, r#"{"path":"/ws"}"#, Some(GOD), credential),
+            ),
+            (
+                "mint /ws/pty",
+                StatusCode::OK,
+                ws_ticket_request(URI, r#"{"path":"/ws/pty"}"#, Some(GOD), credential),
+            ),
+            (
+                "mint /ws/tmux",
+                StatusCode::OK,
+                ws_ticket_request(URI, r#"{"path":"/ws/tmux"}"#, Some(GOD), credential),
+            ),
+            (
+                "mint with charset",
+                StatusCode::OK,
+                ws_ticket_post(
+                    Body::from(r#"{"path":"/ws"}"#),
+                    Some("application/json; charset=utf-8"),
+                ),
+            ),
+            (
+                "no credential",
+                StatusCode::UNAUTHORIZED,
+                ws_ticket_request(URI, r#"{"path":"/ws"}"#, Some(GOD), None),
+            ),
+            (
+                "wrong credential",
+                StatusCode::UNAUTHORIZED,
+                ws_ticket_request(
+                    URI,
+                    r#"{"path":"/ws"}"#,
+                    Some(GOD),
+                    Some(("authorization", "Bearer wrong")),
+                ),
+            ),
+            (
+                "no origin",
+                StatusCode::UNAUTHORIZED,
+                ws_ticket_request(URI, r#"{"path":"/ws"}"#, None, credential),
+            ),
+            (
+                "disallowed origin",
+                StatusCode::FORBIDDEN,
+                ws_ticket_request(
+                    URI,
+                    r#"{"path":"/ws"}"#,
+                    Some("https://evil.example"),
+                    credential,
+                ),
+            ),
+            (
+                "query string",
+                StatusCode::BAD_REQUEST,
+                ws_ticket_request(
+                    "/api/auth/ws-ticket?x=1",
+                    r#"{"path":"/ws"}"#,
+                    Some(GOD),
+                    credential,
+                ),
+            ),
+            (
+                "unknown field",
+                StatusCode::BAD_REQUEST,
+                ws_ticket_request(URI, r#"{"path":"/ws","extra":1}"#, Some(GOD), credential),
+            ),
+            (
+                "missing field",
+                StatusCode::BAD_REQUEST,
+                ws_ticket_request(URI, "{}", Some(GOD), credential),
+            ),
+            (
+                "malformed json",
+                StatusCode::BAD_REQUEST,
+                ws_ticket_request(URI, "{", Some(GOD), credential),
+            ),
+            (
+                "uppercased path",
+                StatusCode::BAD_REQUEST,
+                ws_ticket_request(URI, r#"{"path":"/WS"}"#, Some(GOD), credential),
+            ),
+            (
+                "unlisted path",
+                StatusCode::BAD_REQUEST,
+                ws_ticket_request(URI, r#"{"path":"/ws/nope"}"#, Some(GOD), credential),
+            ),
+            (
+                "no content type",
+                StatusCode::BAD_REQUEST,
+                ws_ticket_post(Body::from(r#"{"path":"/ws"}"#), None),
+            ),
+            (
+                "wrong content type",
+                StatusCode::BAD_REQUEST,
+                ws_ticket_post(Body::from(r#"{"path":"/ws"}"#), Some("text/plain")),
+            ),
+            (
+                "oversized body",
+                StatusCode::BAD_REQUEST,
+                ws_ticket_post(Body::from(vec![b'x'; 129]), Some("application/json")),
+            ),
         ];
         for (name, expected, request) in cases {
             let response = app.clone().oneshot(request).await.expect("response");
             let status = response.status();
-            let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024).await.expect("body");
+            let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+                .await
+                .expect("body");
             let text = String::from_utf8_lossy(&bytes).into_owned();
             assert_eq!(status, expected, "{name}: {text}");
-            assert!(!text.contains("secret-token"), "{name} leaked the token: {text}");
+            assert!(
+                !text.contains("secret-token"),
+                "{name} leaked the token: {text}"
+            );
         }
     }
 
@@ -1026,7 +1525,14 @@ mod serve_tests {
         let app = serve_test_app_with_wake(serve_test_trust_store_path("wake-fail"), wake.clone());
         let body = r#"{"target":"bare-shell"}"#;
         let response = app
-            .oneshot(signed_json_request("POST", "/api/wake", body, KEY, FROM, 1_782_277_200))
+            .oneshot(signed_json_request(
+                "POST",
+                "/api/wake",
+                body,
+                KEY,
+                FROM,
+                1_782_277_200,
+            ))
             .await
             .expect("response");
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -1075,10 +1581,15 @@ mod serve_tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&tmux, std::fs::Permissions::from_mode(0o755)).expect("chmod fake tmux");
+            std::fs::set_permissions(&tmux, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod fake tmux");
         }
         let mut path = vec![bin];
-        path.extend(std::env::var_os("PATH").into_iter().flat_map(|value| std::env::split_paths(&value).collect::<Vec<_>>()));
+        path.extend(
+            std::env::var_os("PATH")
+                .into_iter()
+                .flat_map(|value| std::env::split_paths(&value).collect::<Vec<_>>()),
+        );
         std::env::set_var("PATH", std::env::join_paths(path).expect("fixture PATH"));
         std::env::set_var("HOME", root.join("home"));
         std::env::set_var("XDG_CONFIG_HOME", root.join("xdg-config"));
@@ -1106,7 +1617,14 @@ mod serve_tests {
         let wake = Arc::new(FakeServeWake::default());
         let app = serve_test_app_with_wake(serve_test_trust_store_path("wake-empty"), wake.clone());
         let response = app
-            .oneshot(signed_json_request("POST", "/api/wake", "{}", KEY, FROM, 1_782_277_200))
+            .oneshot(signed_json_request(
+                "POST",
+                "/api/wake",
+                "{}",
+                KEY,
+                FROM,
+                1_782_277_200,
+            ))
             .await
             .expect("response");
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -1119,7 +1637,8 @@ mod serve_tests {
     #[tokio::test]
     async fn serve_wake_rejects_tampered_signature_without_executing() {
         let wake = Arc::new(FakeServeWake::default());
-        let app = serve_test_app_with_wake(serve_test_trust_store_path("wake-tampered"), wake.clone());
+        let app =
+            serve_test_app_with_wake(serve_test_trust_store_path("wake-tampered"), wake.clone());
         let signed_body = r#"{"target":"capture-agent"}"#;
         let mut request =
             signed_json_request("POST", "/api/wake", signed_body, KEY, FROM, 1_782_277_200);
@@ -1216,9 +1735,11 @@ mod serve_tests {
 
         let entries = load_inbound_peer_pubkeys();
         assert!(
-            entries.iter().any(|entry| entry.from == "hermes-agent:black"
-                && entry.node == "black"
-                && entry.pubkey == "trust-store-peer-key-789"),
+            entries
+                .iter()
+                .any(|entry| entry.from == "hermes-agent:black"
+                    && entry.node == "black"
+                    && entry.pubkey == "trust-store-peer-key-789"),
             "trust-store.json entry did not surface as an inbound pubkey source: {entries:?}"
         );
     }
@@ -1270,7 +1791,8 @@ mod serve_tests {
             delivery.clone(),
         );
         let first_body = r#"{"target":"capture-agent","text":"codex-2 DONE #87 full suite green"}"#;
-        let intervening_body = r#"{"target":"capture-agent","text":"another turn between duplicate emissions"}"#;
+        let intervening_body =
+            r#"{"target":"capture-agent","text":"another turn between duplicate emissions"}"#;
 
         let first = app
             .clone()
@@ -1679,7 +2201,10 @@ mod serve_tests {
     #[tokio::test]
     async fn serve_o6_live_router_rejects_captured_maw_js_send_when_exact_from_key_missing() {
         let app = serve_test_app_with_o6_keys(
-            vec![serve_test_peer_pubkey("other-oracle:other-node", "wrong-first-peer-key")],
+            vec![serve_test_peer_pubkey(
+                "other-oracle:other-node",
+                "wrong-first-peer-key",
+            )],
             1_782_553_858,
             Some(NON_LOOPBACK_TEST_PEER),
         );
@@ -1697,7 +2222,8 @@ mod serve_tests {
     async fn serve_o6_live_router_rejects_captured_maw_js_send_with_wrong_from_key() {
         let mut key = captured_send_key();
         key.pubkey = "wrong-peer-key-393av2".to_owned();
-        let app = serve_test_app_with_o6_keys(vec![key], 1_782_553_858, Some(NON_LOOPBACK_TEST_PEER));
+        let app =
+            serve_test_app_with_o6_keys(vec![key], 1_782_553_858, Some(NON_LOOPBACK_TEST_PEER));
         let response = app
             .oneshot(captured_send_request())
             .await
@@ -1828,7 +2354,12 @@ mod serve_tests {
             repo_path
         }
 
-        fn write_local_scanned_oracles_json(&self, name: &str, repo: &str, local_path: &std::path::Path) {
+        fn write_local_scanned_oracles_json(
+            &self,
+            name: &str,
+            repo: &str,
+            local_path: &std::path::Path,
+        ) {
             let value = json!({
                 "schema": 1,
                 "oracles": [{
@@ -1893,8 +2424,14 @@ mod serve_tests {
         assert_eq!(payload["state"], "queued");
         assert_eq!(payload["target"], "capture-agent:0");
         assert_eq!(payload["receipt"], json!(["fallback_queued"]));
-        assert_eq!(payload["reason"], "--inbox requested; pane injection skipped");
-        assert!(delivery.sends().is_empty(), "inbox-only must not inject tmux");
+        assert_eq!(
+            payload["reason"],
+            "--inbox requested; pane injection skipped"
+        );
+        assert!(
+            delivery.sends().is_empty(),
+            "inbox-only must not inject tmux"
+        );
 
         let expected = repo
             .join("ψ")
@@ -1917,12 +2454,20 @@ mod serve_tests {
     #[test]
     fn receiver_inbox_falls_back_to_the_same_resolver_maw_locate_uses() {
         let env = ServeInboxManifestEnv::new("locate-fallback");
-        let repo = env.ghq.join("github.com").join("tonkmac").join("widget-oracle");
+        let repo = env
+            .ghq
+            .join("github.com")
+            .join("tonkmac")
+            .join("widget-oracle");
         std::fs::create_dir_all(repo.join("ψ")).expect("bare ghq-scanned repo");
         // Deliberately no add_fleet_repo / write_local_scanned_oracles_json —
         // none of receiver_inbox_repo_candidates' existing sources (psi_root,
         // live-target cwd, fleet manifest) can see this repo.
-        let config = HeyConfig { node: None, oracle: None, route: RouteConfig::default() };
+        let config = HeyConfig {
+            node: None,
+            oracle: None,
+            route: RouteConfig::default(),
+        };
 
         let result = persist_receiver_inbox(
             ReceiverInboxInput {
@@ -2022,7 +2567,10 @@ mod serve_tests {
         assert_eq!(payload["ok"], true);
         assert_eq!(payload["target"], "02-bigboy:0");
         assert_eq!(payload["source"], "inbox");
-        assert!(delivery.sends().is_empty(), "inbox-only must not inject tmux");
+        assert!(
+            delivery.sends().is_empty(),
+            "inbox-only must not inject tmux"
+        );
 
         let expected = repo
             .join("ψ")
@@ -2175,7 +2723,14 @@ mod serve_tests {
         );
         let body = r#"{"target":"capture-agent","text":"hello","inbox":true}"#;
         let response = app
-            .oneshot(signed_json_request("POST", "/api/send", body, KEY, FROM, 1_782_277_200))
+            .oneshot(signed_json_request(
+                "POST",
+                "/api/send",
+                body,
+                KEY,
+                FROM,
+                1_782_277_200,
+            ))
             .await
             .expect("inbox response");
         let status = response.status();
@@ -2183,7 +2738,10 @@ mod serve_tests {
         assert_eq!(status, StatusCode::BAD_GATEWAY, "{payload}");
         assert_eq!(payload["state"], "failed");
         assert_eq!(payload["error"], "receiver-inbox-unavailable");
-        assert!(payload["detail"].as_str().unwrap_or_default().contains("disabled"));
+        assert!(payload["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("disabled"));
         assert!(delivery.sends().is_empty());
     }
 
@@ -2201,7 +2759,14 @@ mod serve_tests {
         );
         let body = r#"{"target":"capture-agent","text":"hello","inbox":true}"#;
         let response = app
-            .oneshot(signed_json_request("POST", "/api/send", body, KEY, FROM, 1_782_277_200))
+            .oneshot(signed_json_request(
+                "POST",
+                "/api/send",
+                body,
+                KEY,
+                FROM,
+                1_782_277_200,
+            ))
             .await
             .expect("inbox response");
         let status = response.status();
@@ -2273,7 +2838,10 @@ mod serve_tests {
     async fn serve_api_send_auth_reject_is_logged_without_delivery() {
         let delivery = Arc::new(FakeServeDelivery::with_capture_agent());
         let app = serve_test_app_with_o6_keys_and_delivery(
-            vec![serve_test_peer_pubkey("other-oracle:other-node", "wrong-first-peer-key")],
+            vec![serve_test_peer_pubkey(
+                "other-oracle:other-node",
+                "wrong-first-peer-key",
+            )],
             1_782_553_858,
             Some(NON_LOOPBACK_TEST_PEER),
             delivery.clone(),
@@ -2393,11 +2961,18 @@ mod serve_tests {
     }
 
     async fn spawn_plugin_proxy_server(route: ServePluginRoute) -> SocketAddr {
-        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.expect("bind proxy");
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind proxy");
         let addr = listener.local_addr().expect("proxy addr");
         let app = serve_test_app_with_plugin_routes(vec![route]);
         tokio::spawn(async move {
-            axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await.expect("proxy server");
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .expect("proxy server");
         });
         addr
     }
@@ -2445,7 +3020,8 @@ mod serve_tests {
         let signed_at = "2026-06-24T05:00:00.000Z";
         let now = 1_782_277_200_i64;
         let body_hash = hash_body(Some(body.as_bytes()));
-        let payload = build_legacy_from_sign_payload(FROM, signed_at, "POST", "/api/send", &body_hash);
+        let payload =
+            build_legacy_from_sign_payload(FROM, signed_at, "POST", "/api/send", &body_hash);
         let legacy_sig = sign_hmac_sig(KEY, &payload);
         let response = client
             .post(&url)
@@ -2464,19 +3040,51 @@ mod serve_tests {
 
     #[tokio::test]
     async fn serve_plugin_proxy_websocket_passthrough() {
-        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.expect("bind ws upstream");
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind ws upstream");
         let port = listener.local_addr().expect("addr").port();
         tokio::spawn(async move {
             let (stream, _) = listener.accept().await.expect("accept ws upstream");
-            let mut ws = tokio_tungstenite::accept_async(stream).await.expect("accept websocket");
-            assert_eq!(ws.next().await.expect("frame").expect("ok").into_text().expect("text"), "ping");
-            ws.send(tokio_tungstenite::tungstenite::Message::Text("pong".to_owned())).await.expect("send pong");
+            let mut ws = tokio_tungstenite::accept_async(stream)
+                .await
+                .expect("accept websocket");
+            assert_eq!(
+                ws.next()
+                    .await
+                    .expect("frame")
+                    .expect("ok")
+                    .into_text()
+                    .expect("text"),
+                "ping"
+            );
+            ws.send(tokio_tungstenite::tungstenite::Message::Text(
+                "pong".to_owned(),
+            ))
+            .await
+            .expect("send pong");
         });
-        let child = Command::new("/bin/sleep").arg("5").spawn().expect("sleep child");
+        let child = Command::new("/bin/sleep")
+            .arg("5")
+            .spawn()
+            .expect("sleep child");
         let addr = spawn_plugin_proxy_server(serve_test_proxy_route(port, child)).await;
-        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/api/testext/ws?room=1")).await.expect("connect proxy ws");
-        ws.send(tokio_tungstenite::tungstenite::Message::Text("ping".to_owned())).await.expect("send ping");
-        let reply = ws.next().await.expect("reply").expect("reply ok").into_text().expect("text");
+        let (mut ws, _) =
+            tokio_tungstenite::connect_async(format!("ws://{addr}/api/testext/ws?room=1"))
+                .await
+                .expect("connect proxy ws");
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(
+            "ping".to_owned(),
+        ))
+        .await
+        .expect("send ping");
+        let reply = ws
+            .next()
+            .await
+            .expect("reply")
+            .expect("reply ok")
+            .into_text()
+            .expect("text");
         assert_eq!(reply, "pong");
     }
 
@@ -2484,7 +3092,9 @@ mod serve_tests {
     async fn serve_plugin_proxy_spa_index_fallback_on_extensionless_404() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.expect("bind upstream");
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind upstream");
         let port = listener.local_addr().expect("addr").port();
         tokio::spawn(async move {
             for response in [b"HTTP/1.1 404 Not Found\r\nconnection: close\r\ncontent-length: 0\r\n\r\n".as_slice(), b"HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: 13\r\n\r\n<main></main>".as_slice()] {
@@ -2496,11 +3106,23 @@ mod serve_tests {
                 stream.write_all(response).await.expect("write response");
             }
         });
-        let child = Command::new("/bin/sleep").arg("5").spawn().expect("sleep child");
+        let child = Command::new("/bin/sleep")
+            .arg("5")
+            .spawn()
+            .expect("sleep child");
         let app = serve_test_app_with_plugin_routes(vec![serve_test_proxy_route(port, child)]);
-        let response = app.oneshot(axum::http::Request::get("/api/testext/board/42").body(Body::empty()).unwrap()).await.expect("proxy response");
+        let response = app
+            .oneshot(
+                axum::http::Request::get("/api/testext/board/42")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("proxy response");
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), 64 * 1024).await.expect("body");
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("body");
         assert_eq!(&body[..], b"<main></main>");
     }
 
@@ -2508,7 +3130,9 @@ mod serve_tests {
     async fn serve_plugin_engine_command_prefix_http_proxies_when_process_is_up() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.expect("bind upstream");
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind upstream");
         let port = listener.local_addr().expect("addr").port();
         tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.expect("accept upstream");
@@ -2518,11 +3142,23 @@ mod serve_tests {
             assert!(request.starts_with("GET /api/testext/assets/app.js?x=1 "));
             stream.write_all(b"HTTP/1.1 202 Accepted\r\ncontent-type: text/plain\r\ncontent-length: 7\r\n\r\nproxied").await.expect("write response");
         });
-        let child = Command::new("/bin/sleep").arg("60").spawn().expect("sleep child");
+        let child = Command::new("/bin/sleep")
+            .arg("60")
+            .spawn()
+            .expect("sleep child");
         let app = serve_test_app_with_plugin_routes(vec![serve_test_proxy_route(port, child)]);
-        let response = app.oneshot(axum::http::Request::get("/api/testext/assets/app.js?x=1").body(Body::empty()).unwrap()).await.expect("proxy response");
+        let response = app
+            .oneshot(
+                axum::http::Request::get("/api/testext/assets/app.js?x=1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("proxy response");
         assert_eq!(response.status(), StatusCode::ACCEPTED);
-        let body = axum::body::to_bytes(response.into_body(), 64 * 1024).await.expect("body");
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("body");
         assert_eq!(&body[..], b"proxied");
     }
 
@@ -2539,7 +3175,14 @@ mod serve_tests {
             process: Arc::new(Mutex::new(None)),
         };
         let app = serve_test_app_with_plugin_routes(vec![route]);
-        let response = app.oneshot(axum::http::Request::get("/api/testext/health").body(Body::empty()).unwrap()).await.expect("health");
+        let response = app
+            .oneshot(
+                axum::http::Request::get("/api/testext/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("health");
         assert_eq!(response.status(), StatusCode::OK);
         let payload = response_json(response).await;
         assert_eq!(payload["plugin"], "testext");
@@ -2553,26 +3196,49 @@ mod serve_tests {
             loopback_exempt: false,
             forced_open: false,
         });
-        let denied = app.clone().oneshot(axum::http::Request::get("/api/feed").body(Body::empty()).unwrap()).await.expect("denied");
+        let denied = app
+            .clone()
+            .oneshot(
+                axum::http::Request::get("/api/feed")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("denied");
         assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
 
-        let health = app.clone().oneshot(axum::http::Request::get("/api/health").body(Body::empty()).unwrap()).await.expect("health");
+        let health = app
+            .clone()
+            .oneshot(
+                axum::http::Request::get("/api/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("health");
         assert_eq!(health.status(), StatusCode::OK);
 
-        let bearer = app.clone().oneshot(
-            axum::http::Request::get("/api/feed")
-                .header("authorization", "Bearer secret-token")
-                .body(Body::empty())
-                .unwrap(),
-        ).await.expect("bearer");
+        let bearer = app
+            .clone()
+            .oneshot(
+                axum::http::Request::get("/api/feed")
+                    .header("authorization", "Bearer secret-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("bearer");
         assert_eq!(bearer.status(), StatusCode::OK);
 
-        let plugin = app.oneshot(
-            axum::http::Request::get("/api/testext/health")
-                .header("x-maw-token", "secret-token")
-                .body(Body::empty())
-                .unwrap(),
-        ).await.expect("plugin x token");
+        let plugin = app
+            .oneshot(
+                axum::http::Request::get("/api/testext/health")
+                    .header("x-maw-token", "secret-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("plugin x token");
         assert_eq!(plugin.status(), StatusCode::OK);
     }
 
@@ -2618,16 +3284,26 @@ mod serve_tests {
 
         for path in ["/ws", "/ws/pty", "/ws/tmux"] {
             let mut request = format!("ws://{addr}{path}").into_client_request().unwrap();
-            request.headers_mut().insert("origin", HeaderValue::from_static(GOD));
-            request.headers_mut().insert("x-maw-token", HeaderValue::from_static("secret-token"));
-            assert_eq!(browser_ws_status(request).await, StatusCode::SWITCHING_PROTOCOLS, "{path} old-style client");
+            request
+                .headers_mut()
+                .insert("origin", HeaderValue::from_static(GOD));
+            request
+                .headers_mut()
+                .insert("x-maw-token", HeaderValue::from_static("secret-token"));
+            assert_eq!(
+                browser_ws_status(request).await,
+                StatusCode::SWITCHING_PROTOCOLS,
+                "{path} old-style client"
+            );
         }
 
         // The Origin allowlist from #928-931 stays enforced: an untrusted
         // Origin is still refused even with a valid bearer token.
         let mut evil = format!("ws://{addr}/ws").into_client_request().unwrap();
-        evil.headers_mut().insert("origin", HeaderValue::from_static("https://evil.example"));
-        evil.headers_mut().insert("x-maw-token", HeaderValue::from_static("secret-token"));
+        evil.headers_mut()
+            .insert("origin", HeaderValue::from_static("https://evil.example"));
+        evil.headers_mut()
+            .insert("x-maw-token", HeaderValue::from_static("secret-token"));
         assert_eq!(browser_ws_status(evil).await, StatusCode::FORBIDDEN);
     }
 
@@ -2640,7 +3316,9 @@ mod serve_tests {
     fn ws_offer_request(url: &str, origin: &str, carrier: &str) -> axum::http::Request<()> {
         use tokio_tungstenite::tungstenite::client::IntoClientRequest;
         let mut request = url.into_client_request().unwrap();
-        request.headers_mut().insert("origin", origin.parse().unwrap());
+        request
+            .headers_mut()
+            .insert("origin", origin.parse().unwrap());
         request
             .headers_mut()
             .insert("sec-websocket-protocol", carrier.parse().unwrap());
@@ -2679,7 +3357,10 @@ mod serve_tests {
             tokio_tungstenite::connect_async(ws_offer_request(&url, "http://localhost", &carrier))
                 .await
                 .expect("credentialed upgrade must be accepted and echoed");
-        assert_eq!(response.headers()["sec-websocket-protocol"], SERVE_WS_PROTOCOL);
+        assert_eq!(
+            response.headers()["sec-websocket-protocol"],
+            SERVE_WS_PROTOCOL
+        );
         // The ticket must never be reflected into a response header.
         assert!(!response
             .headers()
@@ -2688,10 +3369,17 @@ mod serve_tests {
         drop(socket);
 
         // A bare offer negotiates the same stable protocol.
-        let (socket, response) = tokio_tungstenite::connect_async(ws_offer_request(&url, "http://localhost", SERVE_WS_PROTOCOL))
+        let (socket, response) = tokio_tungstenite::connect_async(ws_offer_request(
+            &url,
+            "http://localhost",
+            SERVE_WS_PROTOCOL,
+        ))
         .await
         .expect("bare stable offer must be accepted");
-        assert_eq!(response.headers()["sec-websocket-protocol"], SERVE_WS_PROTOCOL);
+        assert_eq!(
+            response.headers()["sec-websocket-protocol"],
+            SERVE_WS_PROTOCOL
+        );
         drop(socket);
     }
 
@@ -2712,7 +3400,11 @@ mod serve_tests {
                 .oneshot(serve_ws_upgrade_request(uri).body(Body::empty()).unwrap())
                 .await
                 .expect("ws denied");
-            assert_eq!(denied.status(), StatusCode::UNAUTHORIZED, "{uri} unauthenticated");
+            assert_eq!(
+                denied.status(),
+                StatusCode::UNAUTHORIZED,
+                "{uri} unauthenticated"
+            );
         }
 
         // The credentialed upgrade still reaches the handler; oneshot has no
@@ -2737,7 +3429,11 @@ mod serve_tests {
 
         let feed = app
             .clone()
-            .oneshot(axum::http::Request::get("/api/feed").body(Body::empty()).unwrap())
+            .oneshot(
+                axum::http::Request::get("/api/feed")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .expect("open mode feed");
         assert_eq!(feed.status(), StatusCode::OK);
@@ -2756,7 +3452,14 @@ mod serve_tests {
     #[tokio::test]
     async fn serve_api_token_auth_open_mode_is_backward_compatible() {
         let app = serve_test_app_with_api_auth(ServeApiTokenAuth::open());
-        let response = app.oneshot(axum::http::Request::get("/api/feed").body(Body::empty()).unwrap()).await.expect("open mode");
+        let response = app
+            .oneshot(
+                axum::http::Request::get("/api/feed")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("open mode");
         assert_eq!(response.status(), StatusCode::OK);
     }
 
@@ -2784,7 +3487,11 @@ mod serve_tests {
             bound_port: non_default_port,
         });
         let response = app
-            .oneshot(axum::http::Request::get("/api/health").body(Body::empty()).unwrap())
+            .oneshot(
+                axum::http::Request::get("/api/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .expect("health");
         assert_eq!(response.status(), StatusCode::OK);
@@ -2796,7 +3503,11 @@ mod serve_tests {
     #[tokio::test]
     async fn serve_api_health_real_wire_reports_actually_bound_port() {
         let addr = spawn_test_server().await;
-        assert_ne!(addr.port(), DEFAULT_SERVE_PORT, "ephemeral bind should not land on the default port");
+        assert_ne!(
+            addr.port(),
+            DEFAULT_SERVE_PORT,
+            "ephemeral bind should not land on the default port"
+        );
         let client = reqwest::Client::builder().build().expect("client");
         let response = client
             .get(format!("http://{addr}/api/health"))
@@ -2808,7 +3519,6 @@ mod serve_tests {
         assert_eq!(payload["ok"], true);
         assert_eq!(payload["port"], u64::from(addr.port()));
     }
-
 
     #[tokio::test]
     async fn serve_mounts_discovered_plugin_engine_serve_health_and_skips_bad_manifest() {
@@ -2858,7 +3568,11 @@ mod serve_tests {
             .expect("bad plugin skipped");
         assert_eq!(missing.status(), StatusCode::NOT_FOUND);
         let core = app
-            .oneshot(axum::http::Request::get("/api/health").body(Body::empty()).unwrap())
+            .oneshot(
+                axum::http::Request::get("/api/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .expect("core health");
         assert_eq!(core.status(), StatusCode::OK);
@@ -2868,7 +3582,11 @@ mod serve_tests {
     fn serve_write_plugin(root: &std::path::Path, name: &str, serve: &Value) {
         let dir = root.join(name);
         std::fs::create_dir_all(&dir).expect("plugin dir");
-        std::fs::write(dir.join("index.ts"), "export default async function run() {}\n").expect("entry");
+        std::fs::write(
+            dir.join("index.ts"),
+            "export default async function run() {}\n",
+        )
+        .expect("entry");
         std::fs::write(
             dir.join("plugin.json"),
             serde_json::to_vec_pretty(&json!({
@@ -2893,7 +3611,8 @@ mod serve_tests {
         assert!(maw_auth::is_protected("/api/trust", "GET"));
 
         let secret_key = "ed25519:alpha-peer-key-secret";
-        let body = r#"{"sender":"alpha","target":"beta","peerKey":"ed25519:alpha-peer-key-secret"}"#;
+        let body =
+            r#"{"sender":"alpha","target":"beta","peerKey":"ed25519:alpha-peer-key-secret"}"#;
         let denied = app
             .clone()
             .oneshot(unsigned_trust_request("POST", "/api/trust", body))
@@ -2916,10 +3635,16 @@ mod serve_tests {
         assert!(stored.contains(secret_key));
         assert!(!path.with_extension("json.tmp").exists());
 
-        let mismatch = r#"{"sender":"beta","target":"alpha","peerKey":"ed25519:different-peer-key"}"#;
+        let mismatch =
+            r#"{"sender":"beta","target":"alpha","peerKey":"ed25519:different-peer-key"}"#;
         let rejected = app
             .clone()
-            .oneshot(signed_trust_request("POST", "/api/trust", "/trust", mismatch))
+            .oneshot(signed_trust_request(
+                "POST",
+                "/api/trust",
+                "/trust",
+                mismatch,
+            ))
             .await
             .expect("mismatch");
         assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
@@ -3007,14 +3732,17 @@ mod serve_tests {
     /// `X-Maw-Signature` over the same `auth_path`, so this takes one path rather
     /// than letting the two signatures disagree (which is exactly the peek bug).
     fn signed_peer_get(uri: &str, auth_path: &str) -> axum::http::Request<Body> {
-        let headers = sign_headers_v3_at(KEY, KEY, FROM, "GET", auth_path, Some(b""), 1_782_277_200)
-            .expect("sign peer get");
+        let headers =
+            sign_headers_v3_at(KEY, KEY, FROM, "GET", auth_path, Some(b""), 1_782_277_200)
+                .expect("sign peer get");
         let mut builder = axum::http::Request::builder().method("GET").uri(uri);
         for (name, value) in headers.to_btree_map() {
             builder = builder.header(name, value);
         }
         let mut request = builder.body(Body::empty()).expect("request");
-        request.extensions_mut().insert(ConnectInfo(NON_LOOPBACK_TEST_PEER));
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(NON_LOOPBACK_TEST_PEER));
         request
     }
 
@@ -3029,7 +3757,11 @@ mod serve_tests {
     /// Asserting the auth property directly is both more honest and immune to
     /// that coupling; the handler's own 200-vs-503 behavior is #860's to test.
     fn assert_auth_allowed(status: StatusCode, label: &str) {
-        assert_ne!(status, StatusCode::FORBIDDEN, "{label}: auth refused with 403");
+        assert_ne!(
+            status,
+            StatusCode::FORBIDDEN,
+            "{label}: auth refused with 403"
+        );
         assert_ne!(
             status,
             StatusCode::UNAUTHORIZED,
@@ -3043,9 +3775,10 @@ mod serve_tests {
             .uri(uri)
             .body(Body::empty())
             .expect("loopback request");
-        request
-            .extensions_mut()
-            .insert(ConnectInfo(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 51_000)));
+        request.extensions_mut().insert(ConnectInfo(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            51_000,
+        )));
         request
     }
 
@@ -3105,7 +3838,11 @@ mod serve_tests {
         // test env); either way it is NOT refused, which is the defect.
         let denied = app
             .clone()
-            .oneshot(unsigned_trust_request("GET", "/api/capture?target=nova:1.0", ""))
+            .oneshot(unsigned_trust_request(
+                "GET",
+                "/api/capture?target=nova:1.0",
+                "",
+            ))
             .await
             .expect("denied capture");
         assert_eq!(
@@ -3149,7 +3886,11 @@ mod serve_tests {
     async fn serve_head_requests_are_gated_exactly_like_their_get_counterparts() {
         let app = serve_test_app(serve_test_trust_store_path("head-alias"));
 
-        for uri in ["/api/trust", "/api/sessions", "/api/capture?target=nova:1.0"] {
+        for uri in [
+            "/api/trust",
+            "/api/sessions",
+            "/api/capture?target=nova:1.0",
+        ] {
             let denied = app
                 .clone()
                 .oneshot(unsigned_trust_request("HEAD", uri, ""))
@@ -3188,17 +3929,17 @@ mod serve_tests {
         let app = serve_test_app(serve_test_trust_store_path("near-miss"));
 
         for uri in [
-            "/api/sessions/",       // trailing slash
-            "//api/sessions",       // doubled leading slash
-            "/api//sessions",       // doubled interior slash
-            "/API/sessions",        // upper-case prefix
-            "/api/SESSIONS",        // upper-case segment
-            "/api/%73essions",      // percent-encoded first letter
-            "/api/sessions/.",      // dot segment
-            "/api/x/../sessions",   // dot-dot traversal
-            "/api/sessions%20",     // encoded trailing space
-            "/api/sessions.",       // trailing dot
-            "/api/capture/",        // same set for the other new route
+            "/api/sessions/",     // trailing slash
+            "//api/sessions",     // doubled leading slash
+            "/api//sessions",     // doubled interior slash
+            "/API/sessions",      // upper-case prefix
+            "/api/SESSIONS",      // upper-case segment
+            "/api/%73essions",    // percent-encoded first letter
+            "/api/sessions/.",    // dot segment
+            "/api/x/../sessions", // dot-dot traversal
+            "/api/sessions%20",   // encoded trailing space
+            "/api/sessions.",     // trailing dot
+            "/api/capture/",      // same set for the other new route
             "/api/CAPTURE?target=nova:1.0",
             "/api/%63apture?target=nova:1.0",
         ] {
@@ -3311,7 +4052,9 @@ mod serve_tests {
         // old-peer path: extra headers must not turn a served route into a
         // refusal. (Mechanism A is unaffected either way: `token_matches` only
         // ever reads `Authorization: Bearer` / `x-maw-token`.)
-        let mut old_peer_builder = axum::http::Request::builder().method("GET").uri("/api/feed");
+        let mut old_peer_builder = axum::http::Request::builder()
+            .method("GET")
+            .uri("/api/feed");
         for (name, value) in map {
             old_peer_builder = old_peer_builder.header(name, value);
         }
@@ -3457,12 +4200,10 @@ mod serve_tests {
         // Negative control 1: the divergence peek actually shipped in #820.
         // Signing the query-bearing path yields different bytes, so the equality
         // above is load-bearing and not two constants agreeing about nothing.
-        let query_signed = federation_signed_get_headers_at(
-            "/api/capture?target=nova%3A1.0",
-            SIGNED_AT,
-        )
-        .expect("query-path signing")
-        .to_btree_map();
+        let query_signed =
+            federation_signed_get_headers_at("/api/capture?target=nova%3A1.0", SIGNED_AT)
+                .expect("query-path signing")
+                .to_btree_map();
         assert_ne!(
             query_signed, shared_wire,
             "the #820 bug this test exists to catch no longer reproduces"
@@ -3737,7 +4478,10 @@ mod serve_tests {
         let addr = spawn_test_server().await;
         let url = format!("ws://{addr}/ws");
         let request = |origin: &str| {
-            let mut request = url.clone().into_client_request().expect("websocket request");
+            let mut request = url
+                .clone()
+                .into_client_request()
+                .expect("websocket request");
             request
                 .headers_mut()
                 .insert("origin", origin.parse().expect("origin header"));
@@ -3770,16 +4514,18 @@ mod serve_tests {
             }
         })
         .await;
-        assert!(ack.is_ok(), "websocket should ack subscribe after stream frames");
+        assert!(
+            ack.is_ok(),
+            "websocket should ack subscribe after stream frames"
+        );
         ws.close(None).await.expect("close native websocket");
 
         // Revert of #934/#937: this loopback-exempt server no longer needs a
         // ws-ticket, so the allowlisted God UI origin upgrades too.
-        let (god_socket, _response) = tokio_tungstenite::connect_async(request(
-            "https://god.buildwithoracle.com",
-        ))
-        .await
-        .expect("God UI origin upgrades on loopback trust alone");
+        let (god_socket, _response) =
+            tokio_tungstenite::connect_async(request("https://god.buildwithoracle.com"))
+                .await
+                .expect("God UI origin upgrades on loopback trust alone");
         drop(god_socket);
 
         let err = tokio_tungstenite::connect_async(request("https://evil.example"))

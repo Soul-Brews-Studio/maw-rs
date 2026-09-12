@@ -42,21 +42,47 @@ fn servepeerstartupwarnings_run_command(argv: &[String]) -> CliOutput {
     }
 }
 
-fn servepeerstartupwarnings_run(argv: &[String]) -> Result<ServepeerstartupwarningsResult, (i32, String)> {
+fn servepeerstartupwarnings_run(
+    argv: &[String],
+) -> Result<ServepeerstartupwarningsResult, (i32, String)> {
     servepeerstartupwarnings_parse(argv)?;
     let config = servepeerstartupwarnings_load_config();
     let peers = servepeerstartupwarnings_load_peers();
-    Ok(servepeerstartupwarnings_evaluate(&config, &peers, std::env::var("MAW_HOST").ok().as_deref()))
+    Ok(servepeerstartupwarnings_evaluate(
+        &config,
+        &peers,
+        std::env::var("MAW_HOST").ok().as_deref(),
+    ))
 }
 
 fn servepeerstartupwarnings_parse(argv: &[String]) -> Result<(), (i32, String)> {
     if let Some(arg) = argv.first() {
         match arg.as_str() {
             "--help" | "-h" => return Err((0, SERVEPEERSTARTUPWARNINGS_USAGE.to_owned())),
-            "--" => return Err((2, "serve-peer-startup-warnings: -- separator is not accepted".to_owned())),
-            value if value.starts_with('-') => return Err((2, format!("serve-peer-startup-warnings: unknown flag {value}"))),
-            value if value.is_empty() || value.chars().any(char::is_control) => return Err((2, "serve-peer-startup-warnings: arguments must be printable".to_owned())),
-            value => return Err((2, format!("serve-peer-startup-warnings: unexpected argument {value}"))),
+            "--" => {
+                return Err((
+                    2,
+                    "serve-peer-startup-warnings: -- separator is not accepted".to_owned(),
+                ))
+            }
+            value if value.starts_with('-') => {
+                return Err((
+                    2,
+                    format!("serve-peer-startup-warnings: unknown flag {value}"),
+                ))
+            }
+            value if value.is_empty() || value.chars().any(char::is_control) => {
+                return Err((
+                    2,
+                    "serve-peer-startup-warnings: arguments must be printable".to_owned(),
+                ))
+            }
+            value => {
+                return Err((
+                    2,
+                    format!("serve-peer-startup-warnings: unexpected argument {value}"),
+                ))
+            }
         }
     }
     Ok(())
@@ -74,17 +100,37 @@ fn servepeerstartupwarnings_parse_config(raw: &str) -> Option<Servepeerstartupwa
     let value: serde_json::Value = serde_json::from_str(raw).ok()?;
     let object = value.as_object()?;
     Some(ServepeerstartupwarningsConfig {
-        port: object.get("port").and_then(serde_json::Value::as_u64).and_then(|port| u16::try_from(port).ok()),
-        node: object.get("node").and_then(|node| node.as_str()).map(str::to_owned),
-        oracle: object.get("oracle").and_then(|oracle| oracle.as_str()).map(str::to_owned),
-        federation_token: object.get("federationToken").and_then(|token| token.as_str()).filter(|token| !token.is_empty()).map(str::to_owned),
-        peers_len: object.get("peers").and_then(|peers| peers.as_array()).map_or(0, Vec::len),
-        named_peers_len: object.get("namedPeers").and_then(|peers| peers.as_array()).map_or(0, Vec::len),
+        port: object
+            .get("port")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|port| u16::try_from(port).ok()),
+        node: object
+            .get("node")
+            .and_then(|node| node.as_str())
+            .map(str::to_owned),
+        oracle: object
+            .get("oracle")
+            .and_then(|oracle| oracle.as_str())
+            .map(str::to_owned),
+        federation_token: object
+            .get("federationToken")
+            .and_then(|token| token.as_str())
+            .filter(|token| !token.is_empty())
+            .map(str::to_owned),
+        peers_len: object
+            .get("peers")
+            .and_then(|peers| peers.as_array())
+            .map_or(0, Vec::len),
+        named_peers_len: object
+            .get("namedPeers")
+            .and_then(|peers| peers.as_array())
+            .map_or(0, Vec::len),
     })
 }
 
 fn servepeerstartupwarnings_load_peers() -> maw_peer::PeerStoreFile {
-    let home = std::env::var_os("HOME").map_or_else(|| std::path::PathBuf::from("."), std::path::PathBuf::from);
+    let home = std::env::var_os("HOME")
+        .map_or_else(|| std::path::PathBuf::from("."), std::path::PathBuf::from);
     let vars = [
         "PEERS_FILE",
         "MAW_HOME",
@@ -110,7 +156,10 @@ fn servepeerstartupwarnings_evaluate(
     maw_host: Option<&str>,
 ) -> ServepeerstartupwarningsResult {
     let bind = resolve_bind_host(
-        &BindConfig { peers_len: config.peers_len, named_peers_len: config.named_peers_len },
+        &BindConfig {
+            peers_len: config.peers_len,
+            named_peers_len: config.named_peers_len,
+        },
         maw_host,
         Ok(peers.peers.len()),
     );
@@ -123,13 +172,24 @@ fn servepeerstartupwarnings_evaluate(
     };
     let duplicate_scan_ran = true;
     servepeerstartupwarnings_push_duplicate_warnings(config, peers, &mut warnings);
-    ServepeerstartupwarningsResult { missing_token_warned, duplicate_scan_ran, warnings }
+    ServepeerstartupwarningsResult {
+        missing_token_warned,
+        duplicate_scan_ran,
+        warnings,
+    }
 }
 
 fn servepeerstartupwarnings_push_missing_token(port: u16, warnings: &mut Vec<String>) {
-    warnings.push("\u{1b}[31m⚠ WARNING: peers configured but no federationToken set!\u{1b}[0m\n".to_owned());
-    warnings.push(format!("\u{1b}[31m  Port {port} is exposed to network WITHOUT authentication.\u{1b}[0m\n"));
-    warnings.push("\u{1b}[31m  Add \"federationToken\" (min 16 chars) to maw.config.json\u{1b}[0m\n".to_owned());
+    warnings.push(
+        "\u{1b}[31m⚠ WARNING: peers configured but no federationToken set!\u{1b}[0m\n".to_owned(),
+    );
+    warnings.push(format!(
+        "\u{1b}[31m  Port {port} is exposed to network WITHOUT authentication.\u{1b}[0m\n"
+    ));
+    warnings.push(
+        "\u{1b}[31m  Add \"federationToken\" (min 16 chars) to maw.config.json\u{1b}[0m\n"
+            .to_owned(),
+    );
 }
 
 fn servepeerstartupwarnings_push_duplicate_warnings(
@@ -138,26 +198,41 @@ fn servepeerstartupwarnings_push_duplicate_warnings(
     warnings: &mut Vec<String>,
 ) {
     // Duplicate checks compare node identity from config/peer-store, not the current sender window.
-    let local = config.node.as_ref().map(|node| (config.oracle.as_deref().unwrap_or("mawjs"), node.as_str()));
+    let local = config
+        .node
+        .as_ref()
+        .map(|node| (config.oracle.as_deref().unwrap_or("mawjs"), node.as_str()));
     let mut groups: BTreeMap<String, Vec<(String, Option<String>)>> = BTreeMap::new();
     if let Some((oracle, node)) = local {
-        groups.insert(format!("{oracle}:{node}"), vec![("<local>".to_owned(), None)]);
+        groups.insert(
+            format!("{oracle}:{node}"),
+            vec![("<local>".to_owned(), None)],
+        );
     }
     for (alias, peer) in &peers.peers {
-        let Some(identity) = &peer.identity else { continue; };
-        if identity.oracle.is_empty() || identity.node.is_empty() { continue; }
+        let Some(identity) = &peer.identity else {
+            continue;
+        };
+        if identity.oracle.is_empty() || identity.node.is_empty() {
+            continue;
+        }
         groups
             .entry(format!("{}:{}", identity.oracle, identity.node))
             .or_default()
             .push((alias.clone(), Some(peer.url.clone())));
     }
-    for (key, claimants) in groups.into_iter().filter(|(_, claimants)| claimants.len() >= 2) {
+    for (key, claimants) in groups
+        .into_iter()
+        .filter(|(_, claimants)| claimants.len() >= 2)
+    {
         let tail = claimants
             .into_iter()
             .map(|(alias, url)| url.map_or(alias.clone(), |url| format!("{alias} ({url})")))
             .collect::<Vec<_>>()
             .join(", ");
-        warnings.push(format!("\u{1b}[33m⚠ duplicate <oracle>:<node> claim \"{key}\" — {tail}\u{1b}[0m\n"));
+        warnings.push(format!(
+            "\u{1b}[33m⚠ duplicate <oracle>:<node> claim \"{key}\" — {tail}\u{1b}[0m\n"
+        ));
         warnings.push("\u{1b}[33m  investigate with `maw peers list` and `maw peers remove <alias>` if stale.\u{1b}[0m\n".to_owned());
     }
 }
@@ -177,7 +252,10 @@ mod servepeerstartupwarnings_tests {
             nickname: None,
             pubkey: None,
             pubkey_first_seen: None,
-            identity: Some(maw_peer::PeerIdentity { oracle: oracle.to_owned(), node: node.to_owned() }),
+            identity: Some(maw_peer::PeerIdentity {
+                oracle: oracle.to_owned(),
+                node: node.to_owned(),
+            }),
             one_way: None,
             last_symmetric_check: None,
             auth_ok: None,
@@ -186,7 +264,10 @@ mod servepeerstartupwarnings_tests {
 
     #[test]
     fn servepeerstartupwarnings_dispatch_registers_native() {
-        assert_eq!(dispatcher_status("serve-peer-startup-warnings"), DispatchKind::Native);
+        assert_eq!(
+            dispatcher_status("serve-peer-startup-warnings"),
+            DispatchKind::Native
+        );
     }
 
     #[test]
@@ -199,12 +280,21 @@ mod servepeerstartupwarnings_tests {
             ..ServepeerstartupwarningsConfig::default()
         };
         let mut peers = maw_peer::PeerStoreFile::default();
-        peers.peers.insert("one".to_owned(), peer("https://one.example.test", "sender", "m5"));
+        peers.peers.insert(
+            "one".to_owned(),
+            peer("https://one.example.test", "sender", "m5"),
+        );
         let result = servepeerstartupwarnings_evaluate(&config, &peers, None);
         assert!(result.missing_token_warned);
         assert!(result.duplicate_scan_ran);
-        assert!(result.warnings.join("").contains("peers configured but no federationToken"));
-        assert!(result.warnings.join("").contains("duplicate <oracle>:<node> claim \"sender:m5\""));
+        assert!(result
+            .warnings
+            .join("")
+            .contains("peers configured but no federationToken"));
+        assert!(result
+            .warnings
+            .join("")
+            .contains("duplicate <oracle>:<node> claim \"sender:m5\""));
     }
 
     #[test]

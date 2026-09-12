@@ -151,8 +151,13 @@ fn trust_parse_remove(argv: &[String]) -> Result<TrustCommandPlan, String> {
     let sender = trust_validate_actor("sender", &argv[1])?;
     let target = trust_validate_actor("target", &argv[2])?;
     trust_validate_not_self(&sender, &target)?;
-    let yes = argv.get(3).is_some_and(|flag| flag == "--yes" || flag == "-y");
-    if argv.get(3).is_some_and(|flag| flag != "--yes" && flag != "-y") {
+    let yes = argv
+        .get(3)
+        .is_some_and(|flag| flag == "--yes" || flag == "-y");
+    if argv
+        .get(3)
+        .is_some_and(|flag| flag != "--yes" && flag != "-y")
+    {
         return Err("trust remove: only --yes is supported as a flag".to_owned());
     }
     Ok(TrustCommandPlan::Remove {
@@ -182,7 +187,13 @@ fn trust_execute_command(command: &TrustCommandPlan) -> CliOutput {
 }
 
 fn trust_execute_add(sender: &str, target: &str, peer_key: &str) -> CliOutput {
-    match trust_store_add(&trust_store_path(), sender, target, peer_key, trust_now_ms()) {
+    match trust_store_add(
+        &trust_store_path(),
+        sender,
+        target,
+        peer_key,
+        trust_now_ms(),
+    ) {
         Ok(TrustWriteOutcome::Added | TrustWriteOutcome::UpdatedPin) => trust_ok(&format!(
             "trusted: \"{sender}\" ↔ \"{target}\" (peer key received redacted)"
         )),
@@ -204,7 +215,9 @@ fn trust_execute_remove(sender: &str, target: &str, yes: bool) -> CliOutput {
         };
     }
     match trust_store_remove(&trust_store_path(), sender, target) {
-        Ok(true) => trust_ok(&format!("removed trust relationship \"{sender}\" ↔ \"{target}\"")),
+        Ok(true) => trust_ok(&format!(
+            "removed trust relationship \"{sender}\" ↔ \"{target}\""
+        )),
         Ok(false) => trust_error("trust remove: no entry found for requested sender/target"),
         Err(message) => trust_error(&message),
     }
@@ -233,7 +246,8 @@ fn trust_store_remove(path: &Path, sender: &str, target: &str) -> Result<bool, S
     trust_validate_not_self(&sender, &target)?;
     let mut entries = trust_read_store(path)?;
     let before = entries.len();
-    entries.retain(|entry| !trust_same_relationship(&entry.sender, &entry.target, &sender, &target));
+    entries
+        .retain(|entry| !trust_same_relationship(&entry.sender, &entry.target, &sender, &target));
     let removed = entries.len() != before;
     if removed {
         trust_write_store_atomic(path, &entries)?;
@@ -254,7 +268,9 @@ fn trust_upsert_entry(
     {
         if let Some(existing) = &entry.peer_key {
             if existing != peer_key {
-                return Err("trust add: peer-key mismatch for known peer; refusing to re-pin".to_owned());
+                return Err(
+                    "trust add: peer-key mismatch for known peer; refusing to re-pin".to_owned(),
+                );
             }
             return Ok(TrustWriteOutcome::AlreadyTrusted);
         }
@@ -274,7 +290,8 @@ fn trust_read_store(path: &Path) -> Result<Vec<TrustEntryPlan>, String> {
     if !path.exists() {
         return Ok(Vec::new());
     }
-    let body = std::fs::read_to_string(path).map_err(|error| format!("trust-store: read failed: {error}"))?;
+    let body = std::fs::read_to_string(path)
+        .map_err(|error| format!("trust-store: read failed: {error}"))?;
     trust_parse_store_entries(&body)
 }
 
@@ -284,7 +301,10 @@ fn trust_parse_store_entries(body: &str) -> Result<Vec<TrustEntryPlan>, String> 
     let Some(items) = value.as_array() else {
         return Err("trust-store: expected trust-store array".to_owned());
     };
-    let entries = items.iter().filter_map(trust_entry_from_json).collect::<Vec<_>>();
+    let entries = items
+        .iter()
+        .filter_map(trust_entry_from_json)
+        .collect::<Vec<_>>();
     if entries.len() != items.len() {
         return Err("trust-store: invalid trust-store entry".to_owned());
     }
@@ -315,7 +335,8 @@ fn trust_write_store_atomic(path: &Path, entries: &[TrustEntryPlan]) -> Result<(
         let _ = std::fs::remove_file(&tmp);
         return Err("trust-store: tmp validation mismatch".to_owned());
     }
-    std::fs::rename(&tmp, path).map_err(|error| format!("trust-store: atomic rename failed: {error}"))?;
+    std::fs::rename(&tmp, path)
+        .map_err(|error| format!("trust-store: atomic rename failed: {error}"))?;
     Ok(())
 }
 
@@ -367,9 +388,14 @@ fn trust_validate_actor(label: &str, value: &str) -> Result<String, String> {
         return Err(format!("trust: {label} must not start with '-'"));
     }
     if value == "--" || value.contains('/') || value.contains('\\') || value.contains("..") {
-        return Err(format!("trust: {label} contains a rejected path-like value"));
+        return Err(format!(
+            "trust: {label} contains a rejected path-like value"
+        ));
     }
-    if value.chars().any(|ch| ch.is_control() || ch.is_whitespace()) {
+    if value
+        .chars()
+        .any(|ch| ch.is_control() || ch.is_whitespace())
+    {
         return Err(format!(
             "trust: {label} must not contain whitespace or control characters"
         ));
@@ -393,7 +419,10 @@ fn trust_validate_peer_key(value: &str) -> Result<String, String> {
     if value.len() > 4096 {
         return Err("trust: peer-key is too long".to_owned());
     }
-    if value.bytes().any(|byte| byte == 0 || byte.is_ascii_control()) {
+    if value
+        .bytes()
+        .any(|byte| byte == 0 || byte.is_ascii_control())
+    {
         return Err("trust: peer-key must not contain control characters".to_owned());
     }
     if value.bytes().any(|byte| byte.is_ascii_whitespace()) {
@@ -404,7 +433,10 @@ fn trust_validate_peer_key(value: &str) -> Result<String, String> {
 
 fn trust_validate_not_self(sender: &str, target: &str) -> Result<(), String> {
     if sender == target {
-        return Err("trust add: refusing self-trust relationship; self-messages are always allowed".to_owned());
+        return Err(
+            "trust add: refusing self-trust relationship; self-messages are always allowed"
+                .to_owned(),
+        );
     }
     Ok(())
 }

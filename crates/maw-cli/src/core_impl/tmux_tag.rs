@@ -67,7 +67,12 @@ impl TagTmux for TagSystemTmux {
     fn tag_set_title(&mut self, target: &str, title: &str) -> Result<(), String> {
         tag_validate_tmux_target(target)?;
         tag_validate_label(title, "title")?;
-        tag_tmux_run(&mut self.runner, "select-pane", &["-t", target, "-T", title]).map(|_| ())
+        tag_tmux_run(
+            &mut self.runner,
+            "select-pane",
+            &["-t", target, "-T", title],
+        )
+        .map(|_| ())
     }
 
     fn tag_set_meta(&mut self, target: &str, key: &str, value: &str) -> Result<(), String> {
@@ -129,11 +134,7 @@ fn tag_parse_args(argv: &[String]) -> Result<TagOptions, String> {
     Ok(options)
 }
 
-fn tag_parse_arg(
-    argv: &[String],
-    index: usize,
-    options: &mut TagOptions,
-) -> Result<usize, String> {
+fn tag_parse_arg(argv: &[String], index: usize, options: &mut TagOptions) -> Result<usize, String> {
     let arg = argv[index].as_str();
     match arg {
         "--" => Err("tag: -- separator is not allowed for tmux targets or labels".to_owned()),
@@ -206,7 +207,6 @@ fn tag_flag_like_target(value: &str) -> String {
     format!("\"{value}\" looks like a flag, not a target.\n  usage: maw tag <target> ...")
 }
 
-
 fn tag_validate_parse_target(target: &str) -> Result<(), String> {
     let (raw_session, raw_window) = tag_split_target(target)?;
     tag_validate_user_target(&raw_session)?;
@@ -256,7 +256,10 @@ fn tag_write(
         let option_key = tag_option_key(&key);
         tmux.tag_set_meta(target, &option_key, &value)
             .map_err(|error| format!("set-option failed: {error}"))?;
-        let _ = writeln!(output, "  \x1b[32m✓\x1b[0m meta: {target} {option_key} = '{value}'");
+        let _ = writeln!(
+            output,
+            "  \x1b[32m✓\x1b[0m meta: {target} {option_key} = '{value}'"
+        );
     }
     Ok(output)
 }
@@ -312,7 +315,10 @@ fn tag_resolve_or_error<'a>(
     raw: &str,
     sessions: &'a [TagSession],
 ) -> Result<&'a TagSession, String> {
-    let names = sessions.iter().map(|session| session.name.clone()).collect::<Vec<_>>();
+    let names = sessions
+        .iter()
+        .map(|session| session.name.clone())
+        .collect::<Vec<_>>();
     match resolve_session_target(raw, &names) {
         ResolveResult::Exact { matched } | ResolveResult::Fuzzy { matched } => sessions
             .iter()
@@ -407,7 +413,10 @@ fn tag_validate_user_target(value: &str) -> Result<(), String> {
     if value.is_empty() || value == "--" || value.starts_with('-') || value.trim() != value {
         return Err("tag target must be non-empty, unpadded, and not start with '-'".to_owned());
     }
-    if value.chars().any(|ch| ch.is_control() || ch.is_whitespace()) {
+    if value
+        .chars()
+        .any(|ch| ch.is_control() || ch.is_whitespace())
+    {
         return Err("tag target must not contain whitespace or control characters".to_owned());
     }
     Ok(())
@@ -415,19 +424,31 @@ fn tag_validate_user_target(value: &str) -> Result<(), String> {
 
 fn tag_validate_target_segment(value: &str, label: &str) -> Result<(), String> {
     if value.is_empty() || value == "--" || value.starts_with('-') || value.trim() != value {
-        return Err(format!("tag {label} must be non-empty, unpadded, and not start with '-'"));
+        return Err(format!(
+            "tag {label} must be non-empty, unpadded, and not start with '-'"
+        ));
     }
-    if value.chars().any(|ch| ch.is_control() || ch.is_whitespace()) {
-        return Err(format!("tag {label} must not contain whitespace or control characters"));
+    if value
+        .chars()
+        .any(|ch| ch.is_control() || ch.is_whitespace())
+    {
+        return Err(format!(
+            "tag {label} must not contain whitespace or control characters"
+        ));
     }
     Ok(())
 }
 
 fn tag_validate_tmux_target(value: &str) -> Result<(), String> {
     if value.is_empty() || value == "--" || value.starts_with('-') || value.trim() != value {
-        return Err("tag tmux target must be non-empty, unpadded, and not start with '-'".to_owned());
+        return Err(
+            "tag tmux target must be non-empty, unpadded, and not start with '-'".to_owned(),
+        );
     }
-    if value.chars().any(|ch| ch.is_control() || ch.is_whitespace()) {
+    if value
+        .chars()
+        .any(|ch| ch.is_control() || ch.is_whitespace())
+    {
         return Err("tag tmux target must not contain whitespace or control characters".to_owned());
     }
     Ok(())
@@ -494,28 +515,49 @@ mod tag_tests {
         fn tag_display_title(&mut self, target: &str) -> Result<String, String> {
             tag_validate_tmux_target(target)?;
             self.calls.push(TagCall::Display(target.to_owned()));
-            if tag_has_failure(&self.failures, "display") { Err("no pane".to_owned()) } else { Ok(self.title.clone()) }
+            if tag_has_failure(&self.failures, "display") {
+                Err("no pane".to_owned())
+            } else {
+                Ok(self.title.clone())
+            }
         }
 
         fn tag_show_options(&mut self, target: &str) -> Result<String, String> {
             tag_validate_tmux_target(target)?;
             self.calls.push(TagCall::Show(target.to_owned()));
-            if tag_has_failure(&self.failures, "show") { Err("no options".to_owned()) } else { Ok(self.options.clone()) }
+            if tag_has_failure(&self.failures, "show") {
+                Err("no options".to_owned())
+            } else {
+                Ok(self.options.clone())
+            }
         }
 
         fn tag_set_title(&mut self, target: &str, title: &str) -> Result<(), String> {
             tag_validate_tmux_target(target)?;
             tag_validate_label(title, "title")?;
-            self.calls.push(TagCall::Title(target.to_owned(), title.to_owned()));
-            if tag_has_failure(&self.failures, "title") { Err("bad title".to_owned()) } else { Ok(()) }
+            self.calls
+                .push(TagCall::Title(target.to_owned(), title.to_owned()));
+            if tag_has_failure(&self.failures, "title") {
+                Err("bad title".to_owned())
+            } else {
+                Ok(())
+            }
         }
 
         fn tag_set_meta(&mut self, target: &str, key: &str, value: &str) -> Result<(), String> {
             tag_validate_tmux_target(target)?;
             tag_validate_option_key(key)?;
             tag_validate_label(value, "meta value")?;
-            self.calls.push(TagCall::Meta(target.to_owned(), key.to_owned(), value.to_owned()));
-            if tag_has_failure(&self.failures, "meta") { Err("bad meta".to_owned()) } else { Ok(()) }
+            self.calls.push(TagCall::Meta(
+                target.to_owned(),
+                key.to_owned(),
+                value.to_owned(),
+            ));
+            if tag_has_failure(&self.failures, "meta") {
+                Err("bad meta".to_owned())
+            } else {
+                Ok(())
+            }
         }
     }
 
@@ -528,11 +570,17 @@ mod tag_tests {
     }
 
     fn tag_session(name: &str, windows: &[u32]) -> TagSession {
-        TagSession { name: name.to_owned(), windows: windows.to_vec() }
+        TagSession {
+            name: name.to_owned(),
+            windows: windows.to_vec(),
+        }
     }
 
     fn tag_fake() -> TagFakeTmux {
-        TagFakeTmux { sessions: vec![tag_session("03-neo", &[2, 4])], ..TagFakeTmux::default() }
+        TagFakeTmux {
+            sessions: vec![tag_session("03-neo", &[2, 4])],
+            ..TagFakeTmux::default()
+        }
     }
 
     #[test]
@@ -553,13 +601,30 @@ mod tag_tests {
         assert!(output.contains("title:\x1b[0m oracle"));
         assert!(output.contains("@agent-name neo"));
         assert!(output.contains("@role oracle"));
-        assert_eq!(tmux.calls, vec![TagCall::List, TagCall::Display("03-neo:2".to_owned()), TagCall::Show("03-neo:2".to_owned())]);
+        assert_eq!(
+            tmux.calls,
+            vec![
+                TagCall::List,
+                TagCall::Display("03-neo:2".to_owned()),
+                TagCall::Show("03-neo:2".to_owned())
+            ]
+        );
     }
 
     #[test]
     fn tag_write_title_and_meta_validates_before_tmux_calls() {
         let mut tmux = tag_fake();
-        let args = tag_strings(&["neo:4", "--pane", "1", "--title", "scout", "--meta", "agent-name=scout", "--meta", "@role=teammate"]);
+        let args = tag_strings(&[
+            "neo:4",
+            "--pane",
+            "1",
+            "--title",
+            "scout",
+            "--meta",
+            "agent-name=scout",
+            "--meta",
+            "@role=teammate",
+        ]);
 
         let output = tag_run(&args, &mut tmux).expect("tag write");
 
@@ -567,9 +632,26 @@ mod tag_tests {
         assert!(output.contains("meta: 03-neo:4.1 @agent-name = 'scout'"));
         assert!(output.contains("meta: 03-neo:4.1 @role = 'teammate'"));
         assert_eq!(tmux.calls[0], TagCall::List);
-        assert_eq!(tmux.calls[1], TagCall::Title("03-neo:4.1".to_owned(), "scout".to_owned()));
-        assert_eq!(tmux.calls[2], TagCall::Meta("03-neo:4.1".to_owned(), "@agent-name".to_owned(), "scout".to_owned()));
-        assert_eq!(tmux.calls[3], TagCall::Meta("03-neo:4.1".to_owned(), "@role".to_owned(), "teammate".to_owned()));
+        assert_eq!(
+            tmux.calls[1],
+            TagCall::Title("03-neo:4.1".to_owned(), "scout".to_owned())
+        );
+        assert_eq!(
+            tmux.calls[2],
+            TagCall::Meta(
+                "03-neo:4.1".to_owned(),
+                "@agent-name".to_owned(),
+                "scout".to_owned()
+            )
+        );
+        assert_eq!(
+            tmux.calls[3],
+            TagCall::Meta(
+                "03-neo:4.1".to_owned(),
+                "@role".to_owned(),
+                "teammate".to_owned()
+            )
+        );
     }
 
     #[test]
@@ -593,7 +675,8 @@ mod tag_tests {
         let mut tmux = tag_fake();
         let window = tag_run(&tag_strings(&["neo:-1"]), &mut tmux).expect_err("window guard");
         assert!(window.contains("window"));
-        let pane = tag_run(&tag_strings(&["neo", "--pane", "--"]), &mut tmux).expect_err("pane guard");
+        let pane =
+            tag_run(&tag_strings(&["neo", "--pane", "--"]), &mut tmux).expect_err("pane guard");
         assert!(pane.contains("--pane value"));
         assert!(tmux.calls.is_empty());
     }
@@ -601,9 +684,11 @@ mod tag_tests {
     #[test]
     fn tag_rejects_leading_dash_labels_before_tmux() {
         let mut tmux = tag_fake();
-        let title = tag_run(&tag_strings(&["neo", "--title", "-bad"]), &mut tmux).expect_err("title guard");
+        let title =
+            tag_run(&tag_strings(&["neo", "--title", "-bad"]), &mut tmux).expect_err("title guard");
         assert!(title.contains("--title value"));
-        let meta = tag_run(&tag_strings(&["neo", "--meta", "role=-bad"]), &mut tmux).expect_err("meta guard");
+        let meta = tag_run(&tag_strings(&["neo", "--meta", "role=-bad"]), &mut tmux)
+            .expect_err("meta guard");
         assert!(meta.contains("meta value"));
         assert!(tmux.calls.is_empty());
     }
@@ -611,16 +696,21 @@ mod tag_tests {
     #[test]
     fn tag_rejects_invalid_meta_before_tmux() {
         let mut tmux = tag_fake();
-        let error = tag_run(&tag_strings(&["neo", "--meta", "noval"]), &mut tmux).expect_err("meta guard");
+        let error =
+            tag_run(&tag_strings(&["neo", "--meta", "noval"]), &mut tmux).expect_err("meta guard");
         assert!(error.contains("--meta must be key=val"));
         assert!(tmux.calls.is_empty());
     }
 
     #[test]
     fn tag_reports_ambiguous_session_without_write() {
-        let mut tmux = TagFakeTmux { sessions: vec![tag_session("01-neo", &[0]), tag_session("02-neo", &[0])], ..TagFakeTmux::default() };
+        let mut tmux = TagFakeTmux {
+            sessions: vec![tag_session("01-neo", &[0]), tag_session("02-neo", &[0])],
+            ..TagFakeTmux::default()
+        };
 
-        let error = tag_run(&tag_strings(&["neo", "--title", "x"]), &mut tmux).expect_err("ambiguous");
+        let error =
+            tag_run(&tag_strings(&["neo", "--title", "x"]), &mut tmux).expect_err("ambiguous");
 
         assert!(error.contains("'neo' is ambiguous"));
         assert_eq!(tmux.calls, vec![TagCall::List]);
@@ -628,9 +718,13 @@ mod tag_tests {
 
     #[test]
     fn tag_missing_session_prints_hints_without_write() {
-        let mut tmux = TagFakeTmux { sessions: vec![tag_session("03-neon", &[0])], ..TagFakeTmux::default() };
+        let mut tmux = TagFakeTmux {
+            sessions: vec![tag_session("03-neon", &[0])],
+            ..TagFakeTmux::default()
+        };
 
-        let error = tag_run(&tag_strings(&["neo", "--title", "x"]), &mut tmux).expect_err("missing");
+        let error =
+            tag_run(&tag_strings(&["neo", "--title", "x"]), &mut tmux).expect_err("missing");
 
         assert!(error.contains("session 'neo' not found"));
         assert!(error.contains("03-neon"));

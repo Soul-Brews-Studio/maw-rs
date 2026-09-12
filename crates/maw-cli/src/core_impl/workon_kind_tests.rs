@@ -10,14 +10,23 @@ mod workon_kind_tests {
     }
 
     impl maw_tmux::TmuxRunner for WorkonKindMockTmux {
-        fn run(&mut self, subcommand: &str, args: &[String]) -> Result<String, maw_tmux::TmuxError> {
+        fn run(
+            &mut self,
+            subcommand: &str,
+            args: &[String],
+        ) -> Result<String, maw_tmux::TmuxError> {
             self.calls.push((subcommand.to_owned(), args.to_vec()));
             match subcommand {
                 "has-session" => {
-                    if self.has_session { Ok(String::new()) } else { Err(maw_tmux::TmuxError::new("no session")) }
+                    if self.has_session {
+                        Ok(String::new())
+                    } else {
+                        Err(maw_tmux::TmuxError::new("no session"))
+                    }
                 }
                 "list-windows" => Ok(self.windows.clone()),
-                "display-message" | "new-session" | "new-window" | "send-keys" | "select-window" | "capture-pane" => Ok(String::new()),
+                "display-message" | "new-session" | "new-window" | "send-keys"
+                | "select-window" | "capture-pane" => Ok(String::new()),
                 other => Err(maw_tmux::TmuxError::new(format!("unexpected {other}"))),
             }
         }
@@ -26,7 +35,10 @@ mod workon_kind_tests {
     fn workon_kind_temp_root(label: &str) -> std::path::PathBuf {
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let seq = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!("maw-rs-workon-kind-{label}-{}-{seq}", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "maw-rs-workon-kind-{label}-{}-{seq}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("temp root");
         path
@@ -74,7 +86,8 @@ mod workon_kind_tests {
             layout: WorkonLayout::Nested,
         };
         let mut runner = WorkonKindMockTmux::default();
-        let (stdout, _attach) = workon_cmd_with_runner(&options, &repo, &mut runner).expect("oracle workon");
+        let (stdout, _attach) =
+            workon_cmd_with_runner(&options, &repo, &mut runner).expect("oracle workon");
         assert!(stdout.contains("fleet registered foo:foo"), "{stdout}");
         assert!(root.join("state/fleet/foo.json").exists());
 
@@ -89,7 +102,8 @@ mod workon_kind_tests {
             layout: WorkonLayout::Nested,
         };
         let mut runner = WorkonKindMockTmux::default();
-        let (stdout, _attach) = workon_cmd_with_runner(&options, &repo, &mut runner).expect("project workon");
+        let (stdout, _attach) =
+            workon_cmd_with_runner(&options, &repo, &mut runner).expect("project workon");
         assert!(!stdout.contains("fleet registered"), "{stdout}");
         assert!(!root.join("state/fleet/bar-oracle.json").exists());
     }

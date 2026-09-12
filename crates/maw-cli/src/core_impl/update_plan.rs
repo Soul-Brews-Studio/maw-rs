@@ -235,13 +235,17 @@ fn update_libc_from_override(value: Option<&str>) -> Option<UpdateLibc> {
 ///  2. otherwise `ldd --version` naming GNU/GLIBC means glibc.
 ///  3. otherwise a glibc dynamic loader on disk means glibc.
 ///  4. otherwise musl — the safe default when nothing is provable.
-fn update_classify_libc(ldd_version_output: Option<&str>, glibc_loader_present: bool) -> UpdateLibc {
+fn update_classify_libc(
+    ldd_version_output: Option<&str>,
+    glibc_loader_present: bool,
+) -> UpdateLibc {
     if let Some(text) = ldd_version_output {
         let lower = text.to_ascii_lowercase();
         if lower.contains("musl") {
             return UpdateLibc::Musl;
         }
-        if lower.contains("gnu libc") || lower.contains("glibc") || lower.contains("gnu c library") {
+        if lower.contains("gnu libc") || lower.contains("glibc") || lower.contains("gnu c library")
+        {
             return UpdateLibc::Gnu;
         }
     }
@@ -309,9 +313,15 @@ mod update_plan_tests {
     #[test]
     fn update_channel_inference_from_build_versions() {
         assert_eq!(update_infer_channel("26.7.16"), UpdateChannel::Stable);
-        assert_eq!(update_infer_channel("26.7.16-alpha.1159"), UpdateChannel::Alpha);
+        assert_eq!(
+            update_infer_channel("26.7.16-alpha.1159"),
+            UpdateChannel::Alpha
+        );
         // git-describe dev forms are hyphenated, so they follow the alpha channel
-        assert_eq!(update_infer_channel("26.7.15-alpha.1755-20-g072a086f"), UpdateChannel::Alpha);
+        assert_eq!(
+            update_infer_channel("26.7.15-alpha.1755-20-g072a086f"),
+            UpdateChannel::Alpha
+        );
         assert_eq!(update_infer_channel("26.7.16-dirty"), UpdateChannel::Alpha);
         // bare short-SHA fallback has no hyphen: stable per the inference rule
         assert_eq!(update_infer_channel("072a086f"), UpdateChannel::Stable);
@@ -344,23 +354,54 @@ mod update_plan_tests {
         let same_day_stable = update_classify_tag("v26.7.16").expect("tag");
 
         let local = "26.7.16-alpha.1159";
-        assert_eq!(update_compare_to_local(local, &newer_alpha), UpdateCompare::RemoteNewer);
-        assert_eq!(update_compare_to_local(local, &same_alpha), UpdateCompare::Equal);
-        assert_eq!(update_compare_to_local(local, &older_alpha), UpdateCompare::RemoteOlder);
+        assert_eq!(
+            update_compare_to_local(local, &newer_alpha),
+            UpdateCompare::RemoteNewer
+        );
+        assert_eq!(
+            update_compare_to_local(local, &same_alpha),
+            UpdateCompare::Equal
+        );
+        assert_eq!(
+            update_compare_to_local(local, &older_alpha),
+            UpdateCompare::RemoteOlder
+        );
         // stable of the same day is the promotion of that day's alphas
-        assert_eq!(update_compare_to_local(local, &same_day_stable), UpdateCompare::RemoteNewer);
+        assert_eq!(
+            update_compare_to_local(local, &same_day_stable),
+            UpdateCompare::RemoteNewer
+        );
 
         // later alpha HMM on the same day is newer
         let later_hmm = update_classify_tag("v26.7.16-alpha.1830").expect("tag");
-        assert_eq!(update_compare_to_local(local, &later_hmm), UpdateCompare::RemoteNewer);
+        assert_eq!(
+            update_compare_to_local(local, &later_hmm),
+            UpdateCompare::RemoteNewer
+        );
 
         // stable local: same-day alpha is older than the stable cut
-        assert_eq!(update_compare_to_local("26.7.16", &same_alpha), UpdateCompare::RemoteOlder);
-        assert_eq!(update_compare_to_local("26.7.16", &same_day_stable), UpdateCompare::Equal);
+        assert_eq!(
+            update_compare_to_local("26.7.16", &same_alpha),
+            UpdateCompare::RemoteOlder
+        );
+        assert_eq!(
+            update_compare_to_local("26.7.16", &same_day_stable),
+            UpdateCompare::Equal
+        );
 
         // dev builds are incomparable regardless of the remote tag
-        for dev in ["26.7.15-alpha.1755-20-g072a086f", "26.7.16-dirty", "26.7.16-alpha.1159-dirty", "072a086f", ""] {
-            assert_eq!(update_compare_to_local(dev, &newer_alpha), UpdateCompare::LocalDev, "dev form {dev:?}");
+        for dev in [
+            "26.7.15-alpha.1755-20-g072a086f",
+            "26.7.16-dirty",
+            "26.7.16-alpha.1159-dirty",
+            "072a086f",
+            "",
+        ] {
+            assert_eq!(
+                update_compare_to_local(dev, &newer_alpha),
+                UpdateCompare::LocalDev,
+                "dev form {dev:?}"
+            );
         }
     }
 
@@ -379,13 +420,19 @@ mod update_plan_tests {
         assert_eq!(alpha.tag, "v26.7.17-alpha.1830");
         let stable = update_pick_latest_tag(&all, UpdateChannel::Stable).expect("stable");
         assert_eq!(stable.tag, "v26.7.16");
-        assert_eq!(update_pick_latest_tag(&tags(&["v26.7.17-beta.900"]), UpdateChannel::Stable), None);
+        assert_eq!(
+            update_pick_latest_tag(&tags(&["v26.7.17-beta.900"]), UpdateChannel::Stable),
+            None
+        );
     }
 
     #[test]
     fn update_asset_selection_per_platform() {
         for libc in [UpdateLibc::Gnu, UpdateLibc::Musl] {
-            assert_eq!(update_asset_for_platform("macos", "aarch64", libc), Some("maw-rs-macos-arm64"));
+            assert_eq!(
+                update_asset_for_platform("macos", "aarch64", libc),
+                Some("maw-rs-macos-arm64")
+            );
             assert_eq!(update_asset_for_platform("windows", "x86_64", libc), None);
             assert_eq!(update_asset_for_platform("linux", "aarch64", libc), None);
         }
@@ -423,16 +470,31 @@ mod update_plan_tests {
         assert_eq!(update_classify_libc(None, false), UpdateLibc::Musl);
 
         // unrecognizable ldd output is ambiguous, never a reason to pick gnu
-        assert_eq!(update_classify_libc(Some("ldd: unrecognized option"), false), UpdateLibc::Musl);
+        assert_eq!(
+            update_classify_libc(Some("ldd: unrecognized option"), false),
+            UpdateLibc::Musl
+        );
         assert_eq!(update_classify_libc(Some(""), false), UpdateLibc::Musl);
-        assert_eq!(update_classify_libc(Some("ldd: unrecognized option"), true), UpdateLibc::Gnu);
+        assert_eq!(
+            update_classify_libc(Some("ldd: unrecognized option"), true),
+            UpdateLibc::Gnu
+        );
     }
 
     #[test]
     fn update_libc_override_accepts_only_shipped_names() {
-        assert_eq!(update_libc_from_override(Some("gnu")), Some(UpdateLibc::Gnu));
-        assert_eq!(update_libc_from_override(Some("glibc")), Some(UpdateLibc::Gnu));
-        assert_eq!(update_libc_from_override(Some(" MUSL \n")), Some(UpdateLibc::Musl));
+        assert_eq!(
+            update_libc_from_override(Some("gnu")),
+            Some(UpdateLibc::Gnu)
+        );
+        assert_eq!(
+            update_libc_from_override(Some("glibc")),
+            Some(UpdateLibc::Gnu)
+        );
+        assert_eq!(
+            update_libc_from_override(Some(" MUSL \n")),
+            Some(UpdateLibc::Musl)
+        );
         assert_eq!(update_libc_from_override(Some("uclibc")), None);
         assert_eq!(update_libc_from_override(Some("")), None);
         assert_eq!(update_libc_from_override(None), None);
@@ -579,19 +641,34 @@ mod update_plan_tests {
     fn update_glibc_loader_paths_are_absolute_and_nonempty() {
         assert!(!UPDATE_GLIBC_LOADER_PATHS.is_empty());
         for path in UPDATE_GLIBC_LOADER_PATHS {
-            assert!(path.starts_with('/'), "loader probe path must be absolute: {path}");
+            assert!(
+                path.starts_with('/'),
+                "loader probe path must be absolute: {path}"
+            );
         }
     }
 
     #[test]
     fn update_sha256_sidecar_parses_first_field_of_line_one() {
         let hex = "a".repeat(64);
-        assert_eq!(update_parse_sha256_sidecar(&format!("{hex}  maw-rs-macos-arm64\n")), Some(hex.clone()));
-        assert_eq!(update_parse_sha256_sidecar(&hex.to_ascii_uppercase()), Some(hex));
-        assert_eq!(update_parse_sha256_sidecar("not-a-hash maw-rs-macos-arm64\n"), None);
+        assert_eq!(
+            update_parse_sha256_sidecar(&format!("{hex}  maw-rs-macos-arm64\n")),
+            Some(hex.clone())
+        );
+        assert_eq!(
+            update_parse_sha256_sidecar(&hex.to_ascii_uppercase()),
+            Some(hex)
+        );
+        assert_eq!(
+            update_parse_sha256_sidecar("not-a-hash maw-rs-macos-arm64\n"),
+            None
+        );
         assert_eq!(update_parse_sha256_sidecar(""), None);
         assert_eq!(update_parse_sha256_sidecar(&"a".repeat(63)), None);
-        assert_eq!(update_parse_sha256_sidecar(&format!("{} x", "z".repeat(64))), None);
+        assert_eq!(
+            update_parse_sha256_sidecar(&format!("{} x", "z".repeat(64))),
+            None
+        );
     }
 
     #[test]

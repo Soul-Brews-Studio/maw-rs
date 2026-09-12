@@ -142,7 +142,11 @@ fn ui_run(argv: &[String], context: &UiContext) -> Result<String, String> {
     ui_run_with_runner(argv, context, &mut runner)
 }
 
-fn ui_run_with_runner(argv: &[String], context: &UiContext, runner: &mut dyn UiExecRunner) -> Result<String, String> {
+fn ui_run_with_runner(
+    argv: &[String],
+    context: &UiContext,
+    runner: &mut dyn UiExecRunner,
+) -> Result<String, String> {
     let options = ui_parse_args(argv)?;
     if ui_has_flag(&options, UI_FLAG_VERSION) {
         return Ok(format!("maw ui {}\n", env!("CARGO_PKG_VERSION")));
@@ -194,10 +198,16 @@ fn ui_build_plan(options: &UiOptions, context: &UiContext) -> Result<UiPlan, Str
     let mode = ui_mode(options);
     if ui_has_flag(options, UI_FLAG_INSTALL) {
         commands.push(ui_command(&["install", ui_path_text(&dist_dir)?.as_str()]));
-        notes.push("install validates the dist path; native port does not execute installers in CI".to_owned());
+        notes.push(
+            "install validates the dist path; native port does not execute installers in CI"
+                .to_owned(),
+        );
     }
     if ui_has_flag(options, UI_FLAG_SOURCE) {
-        commands.push(ui_command(&["build-source", ui_path_text(&source_dir)?.as_str()]));
+        commands.push(ui_command(&[
+            "build-source",
+            ui_path_text(&source_dir)?.as_str(),
+        ]));
         notes.push("source build runs through the validated native git/bun runner".to_owned());
     }
     if ui_has_flag(options, UI_FLAG_DEV) {
@@ -244,7 +254,10 @@ fn ui_validate_context(context: &UiContext) -> Result<(), String> {
     Ok(())
 }
 
-fn ui_install_from_source(context: &UiContext, runner: &mut dyn UiExecRunner) -> Result<String, String> {
+fn ui_install_from_source(
+    context: &UiContext,
+    runner: &mut dyn UiExecRunner,
+) -> Result<String, String> {
     ui_validate_context(context)?;
     ui_validate_repo_url(UI_SOURCE_REPO_URL)?;
     let temp_root = ui_temp_root(context)?;
@@ -266,17 +279,30 @@ fn ui_install_from_source_inner(
     source_dir: &std::path::Path,
     dist_dir: &std::path::Path,
 ) -> Result<String, String> {
-    std::fs::create_dir_all(temp_root).map_err(|err| format!("ui: failed to create temp root: {err}"))?;
+    std::fs::create_dir_all(temp_root)
+        .map_err(|err| format!("ui: failed to create temp root: {err}"))?;
     ui_validate_child_path(temp_root, source_dir, "source checkout")?;
     let source_arg = ui_path_text(source_dir)?;
     ui_exec_checked(
         runner,
         "git",
-        &ui_strings(&["clone", "--depth", "1", UI_SOURCE_REPO_URL, source_arg.as_str()]),
+        &ui_strings(&[
+            "clone",
+            "--depth",
+            "1",
+            UI_SOURCE_REPO_URL,
+            source_arg.as_str(),
+        ]),
         None,
         "git clone maw-ui",
     )?;
-    ui_exec_checked(runner, "bun", &ui_strings(&["install"]), Some(source_dir), "bun install")?;
+    ui_exec_checked(
+        runner,
+        "bun",
+        &ui_strings(&["install"]),
+        Some(source_dir),
+        "bun install",
+    )?;
     ui_exec_checked(
         runner,
         "bun",
@@ -287,7 +313,10 @@ fn ui_install_from_source_inner(
     let built_dist = source_dir.join("dist");
     let built_index = built_dist.join("index.html");
     if !built_index.is_file() {
-        return Err(format!("ui: maw-ui build did not produce {}", built_index.display()));
+        return Err(format!(
+            "ui: maw-ui build did not produce {}",
+            built_index.display()
+        ));
     }
     ui_install_built_dist(context, &built_dist, dist_dir)?;
     if let Some(marker) = ui_source_marker_ref(runner, source_dir)? {
@@ -317,10 +346,16 @@ fn ui_exec_checked(
     } else {
         ui_redact_exec_output(&output.stderr)
     };
-    Err(format!("ui: {label} failed (exit {}): {detail}", output.code))
+    Err(format!(
+        "ui: {label} failed (exit {}): {detail}",
+        output.code
+    ))
 }
 
-fn ui_source_marker_ref(runner: &mut dyn UiExecRunner, source_dir: &std::path::Path) -> Result<Option<String>, String> {
+fn ui_source_marker_ref(
+    runner: &mut dyn UiExecRunner,
+    source_dir: &std::path::Path,
+) -> Result<Option<String>, String> {
     let source_arg = ui_path_text(source_dir)?;
     let output = ui_exec_checked(
         runner,
@@ -339,28 +374,40 @@ fn ui_source_marker_ref(runner: &mut dyn UiExecRunner, source_dir: &std::path::P
     Ok(Some(format!("source:{rev}")))
 }
 
-fn ui_install_built_dist(context: &UiContext, built_dist: &std::path::Path, dist_dir: &std::path::Path) -> Result<(), String> {
+fn ui_install_built_dist(
+    context: &UiContext,
+    built_dist: &std::path::Path,
+    dist_dir: &std::path::Path,
+) -> Result<(), String> {
     ui_validate_path(built_dist, "built dist")?;
     ui_validate_path(dist_dir, "dist dir")?;
-    std::fs::create_dir_all(&context.data_dir).map_err(|err| format!("ui: failed to create ui data dir: {err}"))?;
+    std::fs::create_dir_all(&context.data_dir)
+        .map_err(|err| format!("ui: failed to create ui data dir: {err}"))?;
     let _ = ui_bounded_remove_dir_all(&context.data_dir, dist_dir, false)?;
-    std::fs::create_dir_all(dist_dir).map_err(|err| format!("ui: failed to create dist dir: {err}"))?;
+    std::fs::create_dir_all(dist_dir)
+        .map_err(|err| format!("ui: failed to create dist dir: {err}"))?;
     ui_copy_dir_recursive(built_dist, dist_dir)
 }
 
 fn ui_copy_dir_recursive(source: &std::path::Path, target: &std::path::Path) -> Result<(), String> {
-    for entry in std::fs::read_dir(source).map_err(|err| format!("ui: failed to read built dist: {err}"))? {
+    for entry in
+        std::fs::read_dir(source).map_err(|err| format!("ui: failed to read built dist: {err}"))?
+    {
         let entry = entry.map_err(|err| format!("ui: failed to read built dist entry: {err}"))?;
-        let file_type = entry.file_type().map_err(|err| format!("ui: failed to inspect built dist entry: {err}"))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|err| format!("ui: failed to inspect built dist entry: {err}"))?;
         if file_type.is_symlink() {
             return Err("ui: built dist symlink is rejected".to_owned());
         }
         let next_target = target.join(entry.file_name());
         if file_type.is_dir() {
-            std::fs::create_dir_all(&next_target).map_err(|err| format!("ui: failed to create dist subdir: {err}"))?;
+            std::fs::create_dir_all(&next_target)
+                .map_err(|err| format!("ui: failed to create dist subdir: {err}"))?;
             ui_copy_dir_recursive(&entry.path(), &next_target)?;
         } else if file_type.is_file() {
-            std::fs::copy(entry.path(), &next_target).map_err(|err| format!("ui: failed to copy dist file: {err}"))?;
+            std::fs::copy(entry.path(), &next_target)
+                .map_err(|err| format!("ui: failed to copy dist file: {err}"))?;
         }
     }
     Ok(())
@@ -386,7 +433,8 @@ fn ui_bounded_remove_dir_all(
     if !canonical_target.starts_with(&canonical_root) {
         return Err("ui: cleanup target escaped root".to_owned());
     }
-    std::fs::remove_dir_all(&canonical_target).map_err(|err| format!("ui: failed to remove cleanup target: {err}"))?;
+    std::fs::remove_dir_all(&canonical_target)
+        .map_err(|err| format!("ui: failed to remove cleanup target: {err}"))?;
     Ok(true)
 }
 
@@ -398,7 +446,12 @@ fn ui_count_top_level_entries(path: &std::path::Path) -> Result<usize, String> {
 
 fn ui_validate_path(path: &std::path::Path, label: &str) -> Result<(), String> {
     let text = ui_path_text(path)?;
-    if text == "--" || text.starts_with('-') || text.contains('\0') || text.contains('\n') || text.contains('\r') {
+    if text == "--"
+        || text.starts_with('-')
+        || text.contains('\0')
+        || text.contains('\n')
+        || text.contains('\r')
+    {
         return Err(format!("ui: {label} path is rejected"));
     }
     if path.components().any(ui_rejected_component) {
@@ -417,17 +470,24 @@ fn ui_path_text(path: &std::path::Path) -> Result<String, String> {
 
 fn ui_rejected_component(component: std::path::Component<'_>) -> bool {
     matches!(component, std::path::Component::ParentDir)
-        || component
-            .as_os_str()
-            .to_str()
-            .is_some_and(|segment| segment == "--" || segment.starts_with('-') || segment.chars().any(char::is_control))
+        || component.as_os_str().to_str().is_some_and(|segment| {
+            segment == "--" || segment.starts_with('-') || segment.chars().any(char::is_control)
+        })
 }
 
 fn ui_validate_url(value: &str) -> Result<(), String> {
-    if value.is_empty() || value.trim() != value || value == "--" || value.starts_with('-') || value.chars().any(char::is_control) {
+    if value.is_empty()
+        || value.trim() != value
+        || value == "--"
+        || value.starts_with('-')
+        || value.chars().any(char::is_control)
+    {
         return Err("ui: serve url is rejected".to_owned());
     }
-    let Some(rest) = value.strip_prefix("http://").or_else(|| value.strip_prefix("https://")) else {
+    let Some(rest) = value
+        .strip_prefix("http://")
+        .or_else(|| value.strip_prefix("https://"))
+    else {
         return Err("ui: serve url must be http(s)".to_owned());
     };
     if rest.is_empty() || rest.contains(' ') || rest.contains("..") {
@@ -446,7 +506,11 @@ fn ui_validate_repo_url(value: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn ui_validate_child_path(root: &std::path::Path, child: &std::path::Path, label: &str) -> Result<(), String> {
+fn ui_validate_child_path(
+    root: &std::path::Path,
+    child: &std::path::Path,
+    label: &str,
+) -> Result<(), String> {
     ui_validate_path(root, "path root")?;
     ui_validate_path(child, label)?;
     if child == root || !child.starts_with(root) {
@@ -496,7 +560,8 @@ fn ui_temp_root(context: &UiContext) -> Result<std::path::PathBuf, String> {
         .map_err(|err| format!("ui: invalid system time: {err}"))?
         .as_nanos();
     let seq = TEMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let root = std::env::temp_dir().join(format!("maw-ui-src-{}-{nanos}-{seq}", std::process::id()));
+    let root =
+        std::env::temp_dir().join(format!("maw-ui-src-{}-{nanos}-{seq}", std::process::id()));
     ui_validate_path(&root, "temp root")?;
     ui_validate_path(&context.data_dir, "data dir")?;
     Ok(root)
@@ -527,11 +592,18 @@ fn ui_render_plan(plan: &UiPlan) -> String {
 }
 
 fn ui_shell_words(words: &[String]) -> String {
-    words.iter().map(|word| ui_shell_word(word)).collect::<Vec<_>>().join(" ")
+    words
+        .iter()
+        .map(|word| ui_shell_word(word))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn ui_shell_word(word: &str) -> String {
-    if word.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-' | ':' )) {
+    if word
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-' | ':'))
+    {
         word.to_owned()
     } else {
         format!("'{}'", word.replace('\'', "'\\''"))
@@ -582,8 +654,11 @@ mod ui_tests {
             cwd: Option<&std::path::Path>,
             _timeout_ms: u64,
         ) -> Result<UiExecOutput, String> {
-            self.calls
-                .push((program.to_owned(), args.to_vec(), cwd.map(std::path::Path::to_path_buf)));
+            self.calls.push((
+                program.to_owned(),
+                args.to_vec(),
+                cwd.map(std::path::Path::to_path_buf),
+            ));
             if self.fail_bun_install && program == "bun" && args == ui_strings(&["install"]) {
                 return Ok(UiExecOutput {
                     code: 17,
@@ -629,7 +704,8 @@ mod ui_tests {
 
     #[test]
     fn ui_parse_flags_and_renders_plan_without_exec() {
-        let output = ui_run(&ui_strings(&["--install", "--dev", "--3d"]), &ui_context()).expect("plan");
+        let output =
+            ui_run(&ui_strings(&["--install", "--dev", "--3d"]), &ui_context()).expect("plan");
         assert!(output.contains("mode: install"));
         assert!(output.contains("install /tmp/maw-ui-test/data/ui/dist"));
         assert!(output.contains("dev /tmp/maw-ui-test/repo/ui"));
@@ -640,7 +716,8 @@ mod ui_tests {
     fn ui_source_build_uses_fake_runner_and_real_end_state() {
         let context = ui_temp_context("success");
         let mut runner = UiFakeRunner::default();
-        let output = ui_run_with_runner(&ui_strings(&["--source"]), &context, &mut runner).expect("source build");
+        let output = ui_run_with_runner(&ui_strings(&["--source"]), &context, &mut runner)
+            .expect("source build");
         assert!(output.contains("maw-ui default branch built and installed"));
         let dist = context.data_dir.join("dist");
         assert!(dist.join("index.html").is_file());
@@ -651,12 +728,19 @@ mod ui_tests {
         );
         assert_eq!(runner.calls.len(), 4);
         assert_eq!(runner.calls[0].0, "git");
-        assert_eq!(&runner.calls[0].1[..4], ["clone", "--depth", "1", UI_SOURCE_REPO_URL]);
+        assert_eq!(
+            &runner.calls[0].1[..4],
+            ["clone", "--depth", "1", UI_SOURCE_REPO_URL]
+        );
         let source_dir = std::path::PathBuf::from(runner.calls[0].1.last().expect("source dir"));
         assert!(!source_dir.parent().expect("temp root").exists());
         assert_eq!(
             runner.calls[1],
-            ("bun".to_owned(), ui_strings(&["install"]), Some(source_dir.clone()))
+            (
+                "bun".to_owned(),
+                ui_strings(&["install"]),
+                Some(source_dir.clone())
+            )
         );
         assert_eq!(
             runner.calls[2],
@@ -670,7 +754,13 @@ mod ui_tests {
             runner.calls[3],
             (
                 "git".to_owned(),
-                ui_strings(&["-C", source_dir.to_string_lossy().as_ref(), "rev-parse", "--short", "HEAD"]),
+                ui_strings(&[
+                    "-C",
+                    source_dir.to_string_lossy().as_ref(),
+                    "rev-parse",
+                    "--short",
+                    "HEAD"
+                ]),
                 None
             )
         );
@@ -683,10 +773,14 @@ mod ui_tests {
             skip_dist: true,
             ..UiFakeRunner::default()
         };
-        let err = ui_run_with_runner(&ui_strings(&["--source"]), &context, &mut runner).expect_err("missing index");
+        let err = ui_run_with_runner(&ui_strings(&["--source"]), &context, &mut runner)
+            .expect_err("missing index");
         assert!(err.contains("did not produce"));
         assert!(!context.data_dir.join("dist").join("index.html").exists());
-        assert!(runner.calls.iter().all(|(program, _, _)| program == "git" || program == "bun"));
+        assert!(runner
+            .calls
+            .iter()
+            .all(|(program, _, _)| program == "git" || program == "bun"));
     }
 
     #[test]
@@ -696,7 +790,8 @@ mod ui_tests {
             fail_bun_install: true,
             ..UiFakeRunner::default()
         };
-        let err = ui_run_with_runner(&ui_strings(&["--source"]), &context, &mut runner).expect_err("bun failed");
+        let err = ui_run_with_runner(&ui_strings(&["--source"]), &context, &mut runner)
+            .expect_err("bun failed");
         assert!(err.contains("<redacted>"));
         assert!(!err.contains("token should not leak"));
     }

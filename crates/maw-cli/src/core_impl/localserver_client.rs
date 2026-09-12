@@ -68,7 +68,9 @@ async fn run_health_async_impl(raw_args: &[String]) -> CliOutput {
 }
 
 async fn run_messages_async_impl(raw_args: &[String]) -> CliOutput {
-    if let Some(output) = messages_lifecycle_subcommand152(raw_args) { return output; }
+    if let Some(output) = messages_lifecycle_subcommand152(raw_args) {
+        return output;
+    }
     let mut path = "/api/message-ledger".to_owned();
     let mut passthrough = Vec::<String>::new();
     let mut index = 0;
@@ -76,14 +78,25 @@ async fn run_messages_async_impl(raw_args: &[String]) -> CliOutput {
         match raw_args[index].as_str() {
             "--limit" | "--from" | "--to" | "--direction" | "--state" | "--q" => {
                 let Some(value) = raw_args.get(index + 1) else {
-                    return messages_usage_error(&format!("messages: missing {} value", raw_args[index]));
+                    return messages_usage_error(&format!(
+                        "messages: missing {} value",
+                        raw_args[index]
+                    ));
                 };
-                passthrough.push(format!("{}={}", raw_args[index].trim_start_matches("--"), percent_encode_query(value)));
+                passthrough.push(format!(
+                    "{}={}",
+                    raw_args[index].trim_start_matches("--"),
+                    percent_encode_query(value)
+                ));
                 index += 1;
             }
             "--json" => passthrough.push("json=1".to_owned()),
-            value if value.starts_with('-') => return messages_usage_error(&format!("messages: unknown argument {value}")),
-            value => return messages_usage_error(&format!("messages: unexpected argument {value}")),
+            value if value.starts_with('-') => {
+                return messages_usage_error(&format!("messages: unknown argument {value}"))
+            }
+            value => {
+                return messages_usage_error(&format!("messages: unexpected argument {value}"))
+            }
         }
         index += 1;
     }
@@ -98,9 +111,24 @@ async fn run_messages_async_impl(raw_args: &[String]) -> CliOutput {
     })
     .await
     {
-        Ok(resp) if resp.status < 400 => CliOutput { code: 0, stdout: ensure_trailing_newline(resp.body), stderr: String::new() },
-        Ok(resp) => CliOutput { code: 1, stdout: String::new(), stderr: format!("messages: local maw server returned HTTP {}: {}\n", resp.status, resp.body) },
-        Err(message) => CliOutput { code: 1, stdout: String::new(), stderr: format!("messages: {message}\n") },
+        Ok(resp) if resp.status < 400 => CliOutput {
+            code: 0,
+            stdout: ensure_trailing_newline(resp.body),
+            stderr: String::new(),
+        },
+        Ok(resp) => CliOutput {
+            code: 1,
+            stdout: String::new(),
+            stderr: format!(
+                "messages: local maw server returned HTTP {}: {}\n",
+                resp.status, resp.body
+            ),
+        },
+        Err(message) => CliOutput {
+            code: 1,
+            stdout: String::new(),
+            stderr: format!("messages: {message}\n"),
+        },
     }
 }
 
@@ -113,16 +141,40 @@ fn messages_usage_error(message: &str) -> CliOutput {
 }
 
 async fn run_reply_async_impl(raw_args: &[String]) -> CliOutput {
-    if raw_args.first().is_some_and(|arg| arg == "--list" || arg == "-l") {
+    if raw_args
+        .first()
+        .is_some_and(|arg| arg == "--list" || arg == "-l")
+    {
         let mut path = "/api/requests?status=delivered".to_owned();
         if let Some(oracle) = raw_args.get(1) {
             path.push_str("&oracle=");
             path.push_str(&percent_encode_query(oracle));
         }
-        return match localserver_request(LocalserverCliRequest { method: "GET".to_owned(), path, body: None }).await {
-            Ok(resp) if resp.status < 400 => CliOutput { code: 0, stdout: format_reply_list(&resp.body), stderr: String::new() },
-            Ok(resp) => CliOutput { code: 1, stdout: String::new(), stderr: format!("reply: local maw server returned HTTP {}: {}\n", resp.status, resp.body) },
-            Err(message) => CliOutput { code: 1, stdout: String::new(), stderr: format!("reply: {message}\n") },
+        return match localserver_request(LocalserverCliRequest {
+            method: "GET".to_owned(),
+            path,
+            body: None,
+        })
+        .await
+        {
+            Ok(resp) if resp.status < 400 => CliOutput {
+                code: 0,
+                stdout: format_reply_list(&resp.body),
+                stderr: String::new(),
+            },
+            Ok(resp) => CliOutput {
+                code: 1,
+                stdout: String::new(),
+                stderr: format!(
+                    "reply: local maw server returned HTTP {}: {}\n",
+                    resp.status, resp.body
+                ),
+            },
+            Err(message) => CliOutput {
+                code: 1,
+                stdout: String::new(),
+                stderr: format!("reply: {message}\n"),
+            },
         };
     }
     if raw_args.len() < 2 {
@@ -136,47 +188,97 @@ async fn run_reply_async_impl(raw_args: &[String]) -> CliOutput {
     let reply = raw_args[1..].join(" ");
     let body = serde_json::json!({ "reply": reply }).to_string();
     let path = format!("/api/reply/{}", percent_encode_path(correlation_id));
-    match localserver_request(LocalserverCliRequest { method: "POST".to_owned(), path, body: Some(body) }).await {
-        Ok(resp) if resp.status < 400 => CliOutput { code: 0, stdout: format!("\u{1b}[32mreplied\u{1b}[0m → {correlation_id}\n"), stderr: String::new() },
-        Ok(resp) if resp.body.contains("already replied") => CliOutput { code: 0, stdout: String::new(), stderr: format!("\u{1b}[33mwarn\u{1b}[0m: request '{correlation_id}' already replied\n") },
-        Ok(resp) if resp.body.contains("request not found") => CliOutput { code: 1, stdout: String::new(), stderr: format!("\u{1b}[31merror\u{1b}[0m: request '{correlation_id}' not found\n") },
-        Ok(resp) => CliOutput { code: 1, stdout: String::new(), stderr: format!("reply: local maw server returned HTTP {}: {}\n", resp.status, resp.body) },
-        Err(message) => CliOutput { code: 1, stdout: String::new(), stderr: format!("reply: {message}\n") },
+    match localserver_request(LocalserverCliRequest {
+        method: "POST".to_owned(),
+        path,
+        body: Some(body),
+    })
+    .await
+    {
+        Ok(resp) if resp.status < 400 => CliOutput {
+            code: 0,
+            stdout: format!("\u{1b}[32mreplied\u{1b}[0m → {correlation_id}\n"),
+            stderr: String::new(),
+        },
+        Ok(resp) if resp.body.contains("already replied") => CliOutput {
+            code: 0,
+            stdout: String::new(),
+            stderr: format!(
+                "\u{1b}[33mwarn\u{1b}[0m: request '{correlation_id}' already replied\n"
+            ),
+        },
+        Ok(resp) if resp.body.contains("request not found") => CliOutput {
+            code: 1,
+            stdout: String::new(),
+            stderr: format!("\u{1b}[31merror\u{1b}[0m: request '{correlation_id}' not found\n"),
+        },
+        Ok(resp) => CliOutput {
+            code: 1,
+            stdout: String::new(),
+            stderr: format!(
+                "reply: local maw server returned HTTP {}: {}\n",
+                resp.status, resp.body
+            ),
+        },
+        Err(message) => CliOutput {
+            code: 1,
+            stdout: String::new(),
+            stderr: format!("reply: {message}\n"),
+        },
     }
 }
 
-async fn localserver_request(request: LocalserverCliRequest) -> Result<maw_transport::HttpResponse, String> {
+async fn localserver_request(
+    request: LocalserverCliRequest,
+) -> Result<maw_transport::HttpResponse, String> {
     let base = resolve_localserver_base_url();
     let url = format!("{}{}", base.trim_end_matches('/'), request.path);
     let client = ReqwestHttpTransportIo::new(5_000)?;
-    client.request(&TransportHttpRequest {
-        method: request.method,
-        url,
-        headers: BTreeMap::new(),
-        body: request.body,
-        timeout_ms: Some(5_000),
-        follow_redirects: false,
-        pinned_addr: None,
-        max_response_bytes: None,
-    }).await
+    client
+        .request(&TransportHttpRequest {
+            method: request.method,
+            url,
+            headers: BTreeMap::new(),
+            body: request.body,
+            timeout_ms: Some(5_000),
+            follow_redirects: false,
+            pinned_addr: None,
+            max_response_bytes: None,
+        })
+        .await
 }
 
 fn resolve_localserver_base_url() -> String {
-    if let Ok(url) = std::env::var("MAW_LOCALSERVER_URL").or_else(|_| std::env::var("MAW_ENGINE_URL")) {
+    if let Ok(url) =
+        std::env::var("MAW_LOCALSERVER_URL").or_else(|_| std::env::var("MAW_ENGINE_URL"))
+    {
         return url.trim_end_matches('/').to_owned();
     }
-    let port = load_hey_config_port().unwrap_or_else(|| std::env::var("MAW_PORT").ok().and_then(|value| value.parse::<u16>().ok()).unwrap_or(31_745));
+    let port = load_hey_config_port().unwrap_or_else(|| {
+        std::env::var("MAW_PORT")
+            .ok()
+            .and_then(|value| value.parse::<u16>().ok())
+            .unwrap_or(31_745)
+    });
     format!("http://127.0.0.1:{port}")
 }
 
 fn localserver_port_label() -> String {
-    resolve_localserver_base_url().rsplit(':').next().unwrap_or("?").to_owned()
+    resolve_localserver_base_url()
+        .rsplit(':')
+        .next()
+        .unwrap_or("?")
+        .to_owned()
 }
 
 pub(crate) fn load_hey_config_port() -> Option<u16> {
     let env = real_xdg_env();
     let value = merged_config_value_for_env(&env);
-    value.get("port").and_then(|port| port.as_u64().and_then(|n| u16::try_from(n).ok()).or_else(|| port.as_str()?.parse::<u16>().ok()))
+    value.get("port").and_then(|port| {
+        port.as_u64()
+            .and_then(|n| u16::try_from(n).ok())
+            .or_else(|| port.as_str()?.parse::<u16>().ok())
+    })
 }
 
 fn ensure_trailing_newline(mut value: String) -> String {
@@ -197,7 +299,9 @@ fn percent_encode_path(value: &str) -> String {
 fn percent_encode(value: &str, slash: bool) -> String {
     let mut out = String::new();
     for byte in value.bytes() {
-        let ok = byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') || (slash && byte == b'/');
+        let ok = byte.is_ascii_alphanumeric()
+            || matches!(byte, b'-' | b'_' | b'.' | b'~')
+            || (slash && byte == b'/');
         if ok {
             out.push(char::from(byte));
         } else {
@@ -219,12 +323,26 @@ fn format_reply_list(body: &str) -> String {
     }
     let mut lines = Vec::new();
     for request in requests {
-        let id = request.get("correlationId").and_then(serde_json::Value::as_str).unwrap_or("?");
-        let from = request.get("from").and_then(serde_json::Value::as_str).unwrap_or("?");
-        let message = request.get("message").and_then(serde_json::Value::as_str).unwrap_or("");
-        lines.push(format!("  \u{1b}[36m{id}\u{1b}[0m from \u{1b}[33m{from}\u{1b}[0m → {message}"));
+        let id = request
+            .get("correlationId")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("?");
+        let from = request
+            .get("from")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("?");
+        let message = request
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        lines.push(format!(
+            "  \u{1b}[36m{id}\u{1b}[0m from \u{1b}[33m{from}\u{1b}[0m → {message}"
+        ));
     }
-    let total = value.get("total").and_then(serde_json::Value::as_u64).unwrap_or(requests.len() as u64);
+    let total = value
+        .get("total")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(requests.len() as u64);
     lines.push(String::new());
     lines.push(format!("{total} pending request(s)"));
     ensure_trailing_newline(lines.join("\n"))

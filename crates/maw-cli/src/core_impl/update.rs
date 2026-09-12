@@ -4,8 +4,14 @@
 // (the maw-js updater once wiped namedPeers/federationToken — see tests).
 
 const DISPATCH_150: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "update", handler: Handler::Sync(update_run_command) },
-    DispatcherEntry { command: "upgrade", handler: Handler::Sync(upgrade_run_command) },
+    DispatcherEntry {
+        command: "update",
+        handler: Handler::Sync(update_run_command),
+    },
+    DispatcherEntry {
+        command: "upgrade",
+        handler: Handler::Sync(upgrade_run_command),
+    },
 ];
 
 const UPDATE_USAGE: &str = "usage: maw update [--check] [--channel stable|alpha] [--version vYY.M.DD] [--force]\n\n  Self-update maw-rs from GitHub releases (Soul-Brews-Studio/maw-rs).\n  The channel defaults to the running build's channel: a hyphenated\n  version (e.g. 26.7.16-alpha.1159) means alpha, plain means stable.\n\n  Flags:\n    --check            report the newest release on the channel, change nothing\n    --channel <name>   stable | alpha (also accepted as a bare positional)\n    --version <tag>    install an exact release tag, e.g. v26.7.16\n    --force            reinstall even when already up to date (or a dev build)\n    --yes, -y          accepted for script compatibility (no prompt exists)\n    --help, -h         show this message and exit (no side effects)\n\n  Linux ships two x86_64 builds and they are not interchangeable:\n    gnu   dynamic, needs a glibc host, resolves .local/mDNS names\n    musl  static, portable across distros, CANNOT resolve .local/mDNS\n  The host libc is detected automatically (glibc preferred, musl when\n  unclear); set MAW_LIBC=gnu|musl to force one.\n\n  sha256 verification against the release .sha256 sidecar is mandatory;\n  a mismatch always refuses to install (there is no override flag).";
@@ -22,22 +28,37 @@ struct UpdateRequest150 {
     version: Option<String>,
 }
 
-fn update_run_command(argv: &[String]) -> CliOutput { update_run_command_in("update", argv) }
+fn update_run_command(argv: &[String]) -> CliOutput {
+    update_run_command_in("update", argv)
+}
 
-fn upgrade_run_command(argv: &[String]) -> CliOutput { update_run_command_in("upgrade", argv) }
+fn upgrade_run_command(argv: &[String]) -> CliOutput {
+    update_run_command_in("upgrade", argv)
+}
 
 fn update_run_command_in(command: &'static str, argv: &[String]) -> CliOutput {
     match update_parse_request(command, argv) {
         Ok(request) if request.help => update_output(0, format!("{UPDATE_USAGE}\n"), String::new()),
         Ok(request) => match update_execute(&request) {
             Ok(stdout) => update_output(0, stdout, String::new()),
-            Err(message) => update_output(1, String::new(), format!("\u{1b}[31merror\u{1b}[0m: {message}\n")),
+            Err(message) => update_output(
+                1,
+                String::new(),
+                format!("\u{1b}[31merror\u{1b}[0m: {message}\n"),
+            ),
         },
-        Err(message) => update_output(1, String::new(), format!("\u{1b}[31merror\u{1b}[0m: {message}\n")),
+        Err(message) => update_output(
+            1,
+            String::new(),
+            format!("\u{1b}[31merror\u{1b}[0m: {message}\n"),
+        ),
     }
 }
 
-fn update_parse_request(command: &'static str, argv: &[String]) -> Result<UpdateRequest150, String> {
+fn update_parse_request(
+    command: &'static str,
+    argv: &[String],
+) -> Result<UpdateRequest150, String> {
     let mut request = UpdateRequest150 {
         command,
         help: false,
@@ -58,11 +79,15 @@ fn update_parse_request(command: &'static str, argv: &[String]) -> Result<Update
             "--yes" | "-y" => {}
             "--" => return Err(format!("-- separator is not allowed for maw {command}")),
             "--channel" => {
-                let value = iter.next().ok_or_else(|| "--channel requires a value (stable|alpha)".to_owned())?;
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "--channel requires a value (stable|alpha)".to_owned())?;
                 request.channel = Some(update_channel_from_name(value)?);
             }
             "--version" => {
-                let value = iter.next().ok_or_else(|| "--version requires a value, e.g. v26.7.16".to_owned())?;
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "--version requires a value, e.g. v26.7.16".to_owned())?;
                 request.version = Some(update_validate_version_arg(value)?);
             }
             "stable" | "alpha" => request.channel = Some(update_channel_from_name(arg)?),
@@ -74,7 +99,9 @@ fn update_parse_request(command: &'static str, argv: &[String]) -> Result<Update
                 } else if value.starts_with('v') && value.contains('.') {
                     request.version = Some(update_validate_version_arg(value)?);
                 } else if value.starts_with('-') {
-                    return Err(format!("unknown flag \"{value}\" — run `maw {command} --help` for usage"));
+                    return Err(format!(
+                        "unknown flag \"{value}\" — run `maw {command} --help` for usage"
+                    ));
                 } else {
                     return Err(format!(
                         "unexpected argument \"{value}\" — expected stable, alpha, or a release tag like v26.7.16"
@@ -89,7 +116,9 @@ fn update_parse_request(command: &'static str, argv: &[String]) -> Result<Update
 fn update_validate_version_arg(value: &str) -> Result<String, String> {
     let shaped = value.starts_with('v')
         && value.len() > 1
-        && value.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-'));
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-'));
     if shaped {
         Ok(value.to_owned())
     } else {
@@ -101,18 +130,30 @@ fn update_execute(request: &UpdateRequest150) -> Result<String, String> {
     use std::fmt::Write as _;
 
     let local = MAW_RS_BUILD_VERSION;
-    let channel = request.channel.unwrap_or_else(|| update_infer_channel(local));
+    let channel = request
+        .channel
+        .unwrap_or_else(|| update_infer_channel(local));
     let mut out = String::new();
-    let _ = writeln!(out, "maw {}: current {local} ({} channel)", request.command, channel.as_str());
+    let _ = writeln!(
+        out,
+        "maw {}: current {local} ({} channel)",
+        request.command,
+        channel.as_str()
+    );
 
     let target = if let Some(version) = &request.version {
         update_classify_tag(version).ok_or_else(|| {
-            format!("unrecognized release tag \"{version}\" — expected vYY.M.DD or vYY.M.DD-alpha.HMM")
+            format!(
+                "unrecognized release tag \"{version}\" — expected vYY.M.DD or vYY.M.DD-alpha.HMM"
+            )
         })?
     } else {
         let tags = update_fetch_release_tags()?;
         update_pick_latest_tag(&tags, channel).ok_or_else(|| {
-            format!("no {} releases found in the last 50 releases of Soul-Brews-Studio/maw-rs", channel.as_str())
+            format!(
+                "no {} releases found in the last 50 releases of Soul-Brews-Studio/maw-rs",
+                channel.as_str()
+            )
         })?
     };
 
@@ -156,7 +197,12 @@ fn update_execute(request: &UpdateRequest150) -> Result<String, String> {
         )
     })?;
     if std::env::consts::OS == "linux" {
-        let _ = writeln!(out, "  host libc: {}{}", update_libc_label(libc), update_libc_note(libc));
+        let _ = writeln!(
+            out,
+            "  host libc: {}{}",
+            update_libc_label(libc),
+            update_libc_note(libc)
+        );
     }
 
     // The asset that actually landed, which is not always the one asked for:
@@ -168,7 +214,11 @@ fn update_execute(request: &UpdateRequest150) -> Result<String, String> {
 
     let proof = update_prove_and_finalize(&install_target, backup.as_deref())
         .map_err(|error| update_annotate_proof_failure(error, installed_asset))?;
-    let _ = writeln!(out, "  proof (`{} version`):\n{proof}", install_target.display());
+    let _ = writeln!(
+        out,
+        "  proof (`{} version`):\n{proof}",
+        install_target.display()
+    );
     if update_maw_serve_running() {
         out.push_str("  maw-serve runs under PM2 — restart it to pick up the new binary: pm2 restart maw-serve\n");
     }
@@ -197,8 +247,9 @@ fn update_detect_host_libc() -> UpdateLibc {
             text.push_str(&String::from_utf8_lossy(&output.stderr));
             text
         });
-    let loader_present =
-        UPDATE_GLIBC_LOADER_PATHS.iter().any(|path| std::path::Path::new(path).exists());
+    let loader_present = UPDATE_GLIBC_LOADER_PATHS
+        .iter()
+        .any(|path| std::path::Path::new(path).exists());
     update_classify_libc(ldd.as_deref(), loader_present)
 }
 
@@ -246,7 +297,9 @@ fn update_libc_note(libc: UpdateLibc) -> &'static str {
 /// anywhere, so it is the floor. A missing musl or macOS asset is a real
 /// packaging failure with nothing to degrade to, and must stay fatal.
 fn update_asset_fallback_after_not_found(asset: &str) -> Option<&'static str> {
-    asset.ends_with("-gnu").then_some("maw-rs-linux-x86_64-musl")
+    asset
+        .ends_with("-gnu")
+        .then_some("maw-rs-linux-x86_64-musl")
 }
 
 fn update_download_verify_replace<'a>(
@@ -273,22 +326,35 @@ fn update_download_verify_replace<'a>(
             else {
                 return Err(error.into_message());
             };
-            let _ = writeln!(out, "  {asset} is not published for {tag} — falling back to {fallback}");
-            let _ = writeln!(out, "  note: the musl build CANNOT resolve .local/mDNS names (#812)");
+            let _ = writeln!(
+                out,
+                "  {asset} is not published for {tag} — falling back to {fallback}"
+            );
+            let _ = writeln!(
+                out,
+                "  note: the musl build CANNOT resolve .local/mDNS names (#812)"
+            );
             asset = fallback;
             asset_url = update_download_url(tag, asset);
             update_http_get_bytes(&asset_url, std::time::Duration::from_mins(10))
                 .map_err(UpdateHttpError::into_message)?
         }
     };
-    let sidecar_bytes = update_http_get_bytes(&format!("{asset_url}.sha256"), std::time::Duration::from_mins(1))
-        .map_err(UpdateHttpError::into_message)?;
+    let sidecar_bytes = update_http_get_bytes(
+        &format!("{asset_url}.sha256"),
+        std::time::Duration::from_mins(1),
+    )
+    .map_err(UpdateHttpError::into_message)?;
     let expected = update_parse_sha256_sidecar(&String::from_utf8_lossy(&sidecar_bytes))
         .ok_or_else(|| format!("malformed sha256 sidecar for {asset} — refusing to install"))?;
 
     let backup = update_safe_replace(install_target, &binary_bytes, &expected)?;
     let _ = writeln!(out, "  sha256 verified: {expected}");
-    let _ = writeln!(out, "  installed: {} (old binary moved aside — new inode)", install_target.display());
+    let _ = writeln!(
+        out,
+        "  installed: {} (old binary moved aside — new inode)",
+        install_target.display()
+    );
     Ok((backup, asset))
 }
 
@@ -296,7 +362,8 @@ fn update_resolve_install_target() -> Result<std::path::PathBuf, String> {
     let path = if let Some(value) = std::env::var_os("MAW_RS_SELF_BIN") {
         std::path::PathBuf::from(value)
     } else {
-        std::env::current_exe().map_err(|error| format!("cannot locate the running binary: {error}"))?
+        std::env::current_exe()
+            .map_err(|error| format!("cannot locate the running binary: {error}"))?
     };
     let resolved = std::fs::canonicalize(&path).unwrap_or(path);
     update_target_dir_guard(&resolved)?;
@@ -306,7 +373,9 @@ fn update_resolve_install_target() -> Result<std::path::PathBuf, String> {
 /// sha256 verification is mandatory; a mismatch always refuses (no override).
 fn update_verify_sha256(path: &std::path::Path, expected_hex: &str) -> Result<(), String> {
     let observed = hash_file(path)?;
-    let observed_hex = observed.strip_prefix("sha256:").unwrap_or(observed.as_str());
+    let observed_hex = observed
+        .strip_prefix("sha256:")
+        .unwrap_or(observed.as_str());
     if observed_hex == expected_hex {
         Ok(())
     } else {
@@ -328,16 +397,26 @@ fn update_safe_replace(
     new_bytes: &[u8],
     expected_sha256: &str,
 ) -> Result<Option<std::path::PathBuf>, String> {
-    let dir = target.parent().ok_or_else(|| format!("install target {} has no parent directory", target.display()))?;
+    let dir = target.parent().ok_or_else(|| {
+        format!(
+            "install target {} has no parent directory",
+            target.display()
+        )
+    })?;
     let name = target
         .file_name()
         .and_then(|value| value.to_str())
         .ok_or_else(|| format!("install target {} has no file name", target.display()))?;
     let tmp = dir.join(format!(".{name}.update-new-{}", std::process::id()));
     std::fs::write(&tmp, new_bytes).map_err(|error| {
-        format!("cannot stage new binary at {} (install dir not writable?): {error}", tmp.display())
+        format!(
+            "cannot stage new binary at {} (install dir not writable?): {error}",
+            tmp.display()
+        )
     })?;
-    if let Err(error) = update_verify_sha256(&tmp, expected_sha256).and_then(|()| update_mark_executable(&tmp)) {
+    if let Err(error) =
+        update_verify_sha256(&tmp, expected_sha256).and_then(|()| update_mark_executable(&tmp))
+    {
         let _ = std::fs::remove_file(&tmp);
         return Err(error);
     }
@@ -345,7 +424,10 @@ fn update_safe_replace(
         let aside = dir.join(format!("{name}.bak-update-{}", std::process::id()));
         if let Err(error) = std::fs::rename(target, &aside) {
             let _ = std::fs::remove_file(&tmp);
-            return Err(format!("cannot move old binary aside to {}: {error}", aside.display()));
+            return Err(format!(
+                "cannot move old binary aside to {}: {error}",
+                aside.display()
+            ));
         }
         Some(aside)
     } else {
@@ -356,7 +438,10 @@ fn update_safe_replace(
         if let Some(aside) = &backup {
             let _ = std::fs::rename(aside, target);
         }
-        return Err(format!("cannot move new binary into place at {}: {error}", target.display()));
+        return Err(format!(
+            "cannot move new binary into place at {}: {error}",
+            target.display()
+        ));
     }
     Ok(backup)
 }
@@ -369,7 +454,9 @@ fn update_mark_executable(path: &std::path::Path) -> Result<(), String> {
 }
 
 #[cfg(not(unix))]
-fn update_mark_executable(_path: &std::path::Path) -> Result<(), String> { Ok(()) }
+fn update_mark_executable(_path: &std::path::Path) -> Result<(), String> {
+    Ok(())
+}
 
 /// Run the version proof on the freshly installed binary, then settle the
 /// backup: proof passes → delete the backup; proof fails → rename the backup
@@ -387,7 +474,10 @@ fn update_prove_and_finalize(
         }
         Err(error) => Err(match backup {
             Some(backup) => match std::fs::rename(backup, target) {
-                Ok(()) => format!("{error} — restored the previous binary from {}", backup.display()),
+                Ok(()) => format!(
+                    "{error} — restored the previous binary from {}",
+                    backup.display()
+                ),
                 Err(restore_error) => format!(
                     "{error} — and restoring the previous binary from {} failed: {restore_error}",
                     backup.display()
@@ -425,9 +515,14 @@ fn update_spawn_version_proof(binary: &std::path::Path) -> Result<String, String
         }
     };
     if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).trim_end().to_owned())
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .trim_end()
+            .to_owned())
     } else {
-        Err(format!("new binary exited nonzero from `{} version`", binary.display()))
+        Err(format!(
+            "new binary exited nonzero from `{} version`",
+            binary.display()
+        ))
     }
 }
 
@@ -481,8 +576,8 @@ fn update_fetch_release_tags() -> Result<Vec<String>, String> {
     let url = format!("https://api.github.com/repos/{UPDATE_REPO}/releases?per_page=50");
     let bytes = update_http_get_bytes(&url, std::time::Duration::from_secs(30))
         .map_err(UpdateHttpError::into_message)?;
-    let value: serde_json::Value =
-        serde_json::from_slice(&bytes).map_err(|error| format!("releases API returned invalid JSON: {error}"))?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("releases API returned invalid JSON: {error}"))?;
     let releases = value
         .as_array()
         .ok_or_else(|| "releases API returned a non-array response".to_owned())?;
@@ -493,7 +588,10 @@ fn update_fetch_release_tags() -> Result<Vec<String>, String> {
         .collect())
 }
 
-fn update_http_get_bytes(url: &str, timeout: std::time::Duration) -> Result<Vec<u8>, UpdateHttpError> {
+fn update_http_get_bytes(
+    url: &str,
+    timeout: std::time::Duration,
+) -> Result<Vec<u8>, UpdateHttpError> {
     let url = url.to_owned();
     let handle = std::thread::spawn(move || {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -502,9 +600,11 @@ fn update_http_get_bytes(url: &str, timeout: std::time::Duration) -> Result<Vec<
             .map_err(|error| UpdateHttpError::Other(format!("update runtime failed: {error}")))?;
         runtime.block_on(update_http_get_bytes_async(&url, timeout))
     });
-    handle
-        .join()
-        .unwrap_or_else(|_| Err(UpdateHttpError::Other("update download thread panicked".to_owned())))
+    handle.join().unwrap_or_else(|_| {
+        Err(UpdateHttpError::Other(
+            "update download thread panicked".to_owned(),
+        ))
+    })
 }
 
 async fn update_http_get_bytes_async(
@@ -518,7 +618,10 @@ async fn update_http_get_bytes_async(
         .map_err(|error| UpdateHttpError::Other(format!("http client failed: {error}")))?;
     let response = client
         .get(url)
-        .header("Accept", "application/vnd.github+json, application/octet-stream")
+        .header(
+            "Accept",
+            "application/vnd.github+json, application/octet-stream",
+        )
         .send()
         .await
         .map_err(|error| UpdateHttpError::Other(format!("GET {url} failed: {error}")))?;
@@ -533,7 +636,13 @@ async fn update_http_get_bytes_async(
         .map_err(|error| UpdateHttpError::Other(format!("GET {url} body failed: {error}")))
 }
 
-fn update_output(code: i32, stdout: String, stderr: String) -> CliOutput { CliOutput { code, stdout, stderr } }
+fn update_output(code: i32, stdout: String, stderr: String) -> CliOutput {
+    CliOutput {
+        code,
+        stdout,
+        stderr,
+    }
+}
 
 #[cfg(test)]
 mod update_upgrade_tests150 {
@@ -607,8 +716,14 @@ mod update_upgrade_tests150 {
             update_asset_fallback_after_not_found("maw-rs-linux-x86_64-gnu"),
             Some("maw-rs-linux-x86_64-musl")
         );
-        assert_eq!(update_asset_fallback_after_not_found("maw-rs-linux-x86_64-musl"), None);
-        assert_eq!(update_asset_fallback_after_not_found("maw-rs-macos-arm64"), None);
+        assert_eq!(
+            update_asset_fallback_after_not_found("maw-rs-linux-x86_64-musl"),
+            None
+        );
+        assert_eq!(
+            update_asset_fallback_after_not_found("maw-rs-macos-arm64"),
+            None
+        );
     }
 
     // The fallback keys off this classification, so widening it to a 4xx range
@@ -640,12 +755,16 @@ mod update_upgrade_tests150 {
         assert!(update_parse_request("update", &update_args(&["--yess"]))
             .expect_err("flag")
             .contains("unknown flag"));
-        assert!(update_parse_request("update", &update_args(&["--channel", "beta"]))
-            .expect_err("channel")
-            .contains("unknown channel"));
-        assert!(update_parse_request("update", &update_args(&["--version", "26.7.16"]))
-            .expect_err("version")
-            .contains("invalid version"));
+        assert!(
+            update_parse_request("update", &update_args(&["--channel", "beta"]))
+                .expect_err("channel")
+                .contains("unknown channel")
+        );
+        assert!(
+            update_parse_request("update", &update_args(&["--version", "26.7.16"]))
+                .expect_err("version")
+                .contains("invalid version")
+        );
         assert!(update_parse_request("update", &update_args(&["--channel"]))
             .expect_err("value")
             .contains("requires a value"));
@@ -673,7 +792,11 @@ mod update_upgrade_tests150 {
     fn update_help_documents_the_two_linux_builds() {
         let out = update_run_command(&update_args(&["--help"]));
         assert!(out.stdout.contains("MAW_LIBC"), "stdout={}", out.stdout);
-        assert!(out.stdout.contains("CANNOT resolve .local"), "stdout={}", out.stdout);
+        assert!(
+            out.stdout.contains("CANNOT resolve .local"),
+            "stdout={}",
+            out.stdout
+        );
     }
 
     /// The libc choice must be explained to the operator, not just made (#812).
@@ -688,12 +811,20 @@ mod update_upgrade_tests150 {
 
     #[test]
     fn update_proof_failure_points_at_the_musl_escape_hatch_for_gnu_only() {
-        let annotated =
-            update_annotate_proof_failure("new binary exited nonzero".to_owned(), "maw-rs-linux-x86_64-gnu");
-        assert!(annotated.starts_with("new binary exited nonzero"), "annotated={annotated}");
+        let annotated = update_annotate_proof_failure(
+            "new binary exited nonzero".to_owned(),
+            "maw-rs-linux-x86_64-gnu",
+        );
+        assert!(
+            annotated.starts_with("new binary exited nonzero"),
+            "annotated={annotated}"
+        );
         assert!(annotated.contains("MAW_LIBC=musl"), "annotated={annotated}");
         for asset in ["maw-rs-linux-x86_64-musl", "maw-rs-macos-arm64"] {
-            assert_eq!(update_annotate_proof_failure("boom".to_owned(), asset), "boom");
+            assert_eq!(
+                update_annotate_proof_failure("boom".to_owned(), asset),
+                "boom"
+            );
         }
     }
 
@@ -758,19 +889,28 @@ mod update_upgrade_tests150 {
         let new_meta = std::fs::metadata(&target).expect("meta");
         assert_eq!(std::fs::read(&target).expect("read"), b"new binary");
         assert_ne!(new_meta.ino(), old_inode, "live inode must never be reused");
-        assert_eq!(new_meta.permissions().mode() & 0o111, 0o111, "exec bits set");
+        assert_eq!(
+            new_meta.permissions().mode() & 0o111,
+            0o111,
+            "exec bits set"
+        );
         assert_eq!(std::fs::read(&backup).expect("backup"), b"old binary");
         assert_eq!(
             std::fs::metadata(&backup).expect("backup meta").ino(),
             old_inode,
             "old inode moved aside, not overwritten"
         );
-        assert!(backup.exists(), "backup is kept for the version proof, not deleted here");
+        assert!(
+            backup.exists(),
+            "backup is kept for the version proof, not deleted here"
+        );
 
         // no pre-existing target: replace still installs, no backup
         let fresh = root.join("fresh");
         let fresh_hex = update_hex_of(&root, "fresh", b"fresh binary");
-        assert!(update_safe_replace(&fresh, b"fresh binary", &fresh_hex).expect("replace").is_none());
+        assert!(update_safe_replace(&fresh, b"fresh binary", &fresh_hex)
+            .expect("replace")
+            .is_none());
         assert_eq!(std::fs::read(&fresh).expect("read"), b"fresh binary");
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -783,10 +923,15 @@ mod update_upgrade_tests150 {
         std::fs::write(&target, b"old binary").expect("old");
 
         let wrong_hex = "a".repeat(64);
-        let error = update_safe_replace(&target, b"tampered bytes", &wrong_hex).expect_err("mismatch");
+        let error =
+            update_safe_replace(&target, b"tampered bytes", &wrong_hex).expect_err("mismatch");
         assert!(error.contains("sha256 mismatch"), "error={error}");
         assert!(error.contains("refusing to install"), "error={error}");
-        assert_eq!(std::fs::read(&target).expect("read"), b"old binary", "target untouched");
+        assert_eq!(
+            std::fs::read(&target).expect("read"),
+            b"old binary",
+            "target untouched"
+        );
 
         let leftovers: Vec<String> = std::fs::read_dir(&root)
             .expect("read dir")
@@ -809,7 +954,10 @@ mod update_upgrade_tests150 {
 
         let proof = update_prove_and_finalize(&target, Some(&backup)).expect("proof");
         assert!(proof.contains("proof-marker-26"), "proof={proof}");
-        assert!(!backup.exists(), "backup deleted once the new binary proved itself");
+        assert!(
+            !backup.exists(),
+            "backup deleted once the new binary proved itself"
+        );
         assert!(target.exists());
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -825,15 +973,25 @@ mod update_upgrade_tests150 {
 
         let error = update_prove_and_finalize(&target, Some(&backup)).expect_err("proof fails");
         assert!(error.contains("exited nonzero"), "error={error}");
-        assert!(error.contains("restored the previous binary"), "error={error}");
+        assert!(
+            error.contains("restored the previous binary"),
+            "error={error}"
+        );
         assert!(!backup.exists(), "backup renamed back over the target");
-        assert_eq!(std::fs::read(&target).expect("target"), b"old binary", "old binary restored");
+        assert_eq!(
+            std::fs::read(&target).expect("target"),
+            b"old binary",
+            "old binary restored"
+        );
 
         // no backup existed (fresh install): the error says so honestly
         let fresh = root.join("fresh");
         update_write_script(&fresh, "#!/bin/sh\nexit 1\n");
         let error = update_prove_and_finalize(&fresh, None).expect_err("proof fails");
-        assert!(error.contains("no previous binary existed to restore"), "error={error}");
+        assert!(
+            error.contains("no previous binary existed to restore"),
+            "error={error}"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -844,8 +1002,14 @@ mod update_upgrade_tests150 {
         // reference that file, in any code path. Comments are stripped so the
         // invariant checks code, not prose.
         let sources = [
-            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/core_impl/update.rs")),
-            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/core_impl/update_plan.rs")),
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/src/core_impl/update.rs"
+            )),
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/src/core_impl/update_plan.rs"
+            )),
         ];
         let code: String = sources
             .iter()

@@ -77,14 +77,7 @@ mod inbox_tests {
     }
 
     fn inbox_write_fixture(env: &InboxEnv, filename: &str, from: &str, read: bool, body: &str) {
-        inbox_write_fixture_at(
-            env,
-            filename,
-            from,
-            read,
-            "2026-06-25T00:00:00.000Z",
-            body,
-        );
+        inbox_write_fixture_at(env, filename, from, read, "2026-06-25T00:00:00.000Z", body);
     }
 
     #[test]
@@ -186,7 +179,10 @@ mod inbox_tests {
 
         assert!(list.contains("ID R FROM"), "{list}");
         assert!(list.contains("  1 \u{001b}[90m○\u{001b}[0m bob"), "{list}");
-        assert!(list.contains("  2 \u{001b}[32m●\u{001b}[0m alice"), "{list}");
+        assert!(
+            list.contains("  2 \u{001b}[32m●\u{001b}[0m alice"),
+            "{list}"
+        );
     }
 
     #[test]
@@ -215,12 +211,20 @@ mod inbox_tests {
         assert!(read.contains("2026-06-26_00-00_bob_new.md"), "{read}");
         assert!(read.contains("from: bob"), "{read}");
         assert!(read.contains("when: 2026-06-26T00:00:00.000Z"), "{read}");
-        assert!(read.contains("first line\nsecond line with full body"), "{read}");
-        assert!(read.contains("marked read: 2026-06-26_00-00_bob_new.md"), "{read}");
-        let stored = std::fs::read_to_string(env.inbox_dir.join("2026-06-26_00-00_bob_new.md")).unwrap();
+        assert!(
+            read.contains("first line\nsecond line with full body"),
+            "{read}"
+        );
+        assert!(
+            read.contains("marked read: 2026-06-26_00-00_bob_new.md"),
+            "{read}"
+        );
+        let stored =
+            std::fs::read_to_string(env.inbox_dir.join("2026-06-26_00-00_bob_new.md")).unwrap();
         assert!(stored.contains("read: true"), "{stored}");
         assert!(stored.contains("readAt:"), "{stored}");
-        let old = std::fs::read_to_string(env.inbox_dir.join("2026-06-25_00-00_alice_old.md")).unwrap();
+        let old =
+            std::fs::read_to_string(env.inbox_dir.join("2026-06-25_00-00_alice_old.md")).unwrap();
         assert!(old.contains("read: false"), "{old}");
     }
 
@@ -303,13 +307,8 @@ mod inbox_tests {
             "second inbox",
         );
 
-        let first_status = inbox_build_status(
-            &first.oracle,
-            &first.inbox_dir,
-            &first,
-            INBOX_TEST_NOW_MS,
-        )
-        .unwrap();
+        let first_status =
+            inbox_build_status(&first.oracle, &first.inbox_dir, &first, INBOX_TEST_NOW_MS).unwrap();
         let second_status = inbox_build_status(
             &second.oracle,
             &second.inbox_dir,
@@ -404,17 +403,35 @@ mod inbox_tests {
         let mut sender = InboxFakeSender::default();
 
         let pending = inbox_run_test(&inbox_strings(&["pending"]), &env, &mut sender).unwrap();
-        assert_eq!(pending, include_str!("../../tests/fixtures/native-scope-acl/inbox-pending-list.stdout"));
+        assert_eq!(
+            pending,
+            include_str!("../../tests/fixtures/native-scope-acl/inbox-pending-list.stdout")
+        );
 
-        let detail = inbox_run_test(&inbox_strings(&["show-pending", "abc"]), &env, &mut sender).unwrap();
-        assert_eq!(detail, include_str!("../../tests/fixtures/native-scope-acl/inbox-show-pending.stdout"));
+        let detail =
+            inbox_run_test(&inbox_strings(&["show-pending", "abc"]), &env, &mut sender).unwrap();
+        assert_eq!(
+            detail,
+            include_str!("../../tests/fixtures/native-scope-acl/inbox-show-pending.stdout")
+        );
 
-        let approved = inbox_run_test(&inbox_strings(&["approve", "abc"]), &env, &mut sender).unwrap();
-        assert_eq!(approved, include_str!("../../tests/fixtures/native-scope-acl/inbox-approve.stdout"));
-        assert_eq!(sender.sent, vec![("bob".to_owned(), "hello fleet".to_owned(), true)]);
+        let approved =
+            inbox_run_test(&inbox_strings(&["approve", "abc"]), &env, &mut sender).unwrap();
+        assert_eq!(
+            approved,
+            include_str!("../../tests/fixtures/native-scope-acl/inbox-approve.stdout")
+        );
+        assert_eq!(
+            sender.sent,
+            vec![("bob".to_owned(), "hello fleet".to_owned(), true)]
+        );
 
-        let rejected = inbox_run_test(&inbox_strings(&["reject", "def"]), &env, &mut sender).unwrap();
-        assert_eq!(rejected, include_str!("../../tests/fixtures/native-scope-acl/inbox-reject.stdout"));
+        let rejected =
+            inbox_run_test(&inbox_strings(&["reject", "def"]), &env, &mut sender).unwrap();
+        assert_eq!(
+            rejected,
+            include_str!("../../tests/fixtures/native-scope-acl/inbox-reject.stdout")
+        );
     }
 
     #[test]
@@ -428,7 +445,8 @@ mod inbox_tests {
         let detail =
             inbox_run_test(&inbox_strings(&["show-pending", "abc"]), &env, &mut sender).unwrap();
         assert!(detail.contains("message:"));
-        let approved = inbox_run_test(&inbox_strings(&["approve", "abc"]), &env, &mut sender).unwrap();
+        let approved =
+            inbox_run_test(&inbox_strings(&["approve", "abc"]), &env, &mut sender).unwrap();
         assert!(approved.contains("approved: abc123"));
         assert_eq!(
             sender.sent,
@@ -436,7 +454,8 @@ mod inbox_tests {
         );
         assert!(std::env::var("MAW_ACL_BYPASS").is_err());
         assert!(!inbox_state_pending_dir(&env).join("abc123.json").exists());
-        let rejected = inbox_run_test(&inbox_strings(&["reject", "def"]), &env, &mut sender).unwrap();
+        let rejected =
+            inbox_run_test(&inbox_strings(&["reject", "def"]), &env, &mut sender).unwrap();
         assert!(rejected.contains("rejected: def456"));
         assert!(!inbox_state_pending_dir(&env).join("def456.json").exists());
     }
@@ -490,7 +509,11 @@ mod inbox_tests {
         };
         inbox_write_pending(&inbox_state_pending_dir(&env), &expired).unwrap();
 
-        let rows = inbox_load_pending_for_env(&env, inbox_parse_iso_ms("2026-06-26T00:00:00.000Z").unwrap()).unwrap();
+        let rows = inbox_load_pending_for_env(
+            &env,
+            inbox_parse_iso_ms("2026-06-26T00:00:00.000Z").unwrap(),
+        )
+        .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].sender, "state");
         assert!(!inbox_state_pending_dir(&env).join("old999.json").exists());
@@ -500,7 +523,8 @@ mod inbox_tests {
         assert!(list.contains("same123"));
         assert!(list.contains("state"));
         assert!(!list.contains("SECRET_BODY"));
-        let detail = inbox_run_test(&inbox_strings(&["show-pending", "same"]), &env, &mut sender).unwrap();
+        let detail =
+            inbox_run_test(&inbox_strings(&["show-pending", "same"]), &env, &mut sender).unwrap();
         assert!(detail.contains("SECRET_BODY"));
     }
 
@@ -512,7 +536,8 @@ mod inbox_tests {
             fail: true,
             ..InboxFakeSender::default()
         };
-        let err = inbox_run_test(&inbox_strings(&["approve", "abc"]), &env, &mut sender).expect_err("send failure");
+        let err = inbox_run_test(&inbox_strings(&["approve", "abc"]), &env, &mut sender)
+            .expect_err("send failure");
         assert!(err.contains("fake send failed"));
         let path = inbox_state_pending_dir(&env).join("abc123.json");
         assert!(path.exists());
@@ -525,7 +550,11 @@ mod inbox_tests {
         let env = inbox_temp_env("pending-perms");
         inbox_pending_fixture(&env, "abc123", "pending");
         assert_eq!(
-            inbox_pending_id(inbox_parse_iso_ms("2026-06-26T00:00:00.000Z").unwrap(), "A1B2c3").unwrap(),
+            inbox_pending_id(
+                inbox_parse_iso_ms("2026-06-26T00:00:00.000Z").unwrap(),
+                "A1B2c3"
+            )
+            .unwrap(),
             "2026-06-26T00-00-00-000Z-a1b2c3"
         );
         assert!(inbox_pending_id(0, "nope").is_err());
@@ -535,9 +564,9 @@ mod inbox_tests {
             .unwrap()
             .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
             .collect::<Vec<_>>();
-        assert!(!siblings
-            .iter()
-            .any(|name| std::path::Path::new(name).extension().is_some_and(|ext| ext == "tmp")));
+        assert!(!siblings.iter().any(|name| std::path::Path::new(name)
+            .extension()
+            .is_some_and(|ext| ext == "tmp")));
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

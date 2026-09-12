@@ -183,9 +183,7 @@ struct LocateOracleCacheEntry {
 fn run_locate_command(argv: &[String]) -> CliOutput {
     let mut tmux = TmuxClient::local();
     match tmux.list_all() {
-        Ok(sessions) => {
-            run_locate_command_with_sessions(argv, &sessions, &mut LocateSystemGithub)
-        }
+        Ok(sessions) => run_locate_command_with_sessions(argv, &sessions, &mut LocateSystemGithub),
         Err(error) => CliOutput {
             code: 1,
             stdout: String::new(),
@@ -200,16 +198,24 @@ fn run_locate_command_with_sessions(
     github: &mut dyn LocateGithubRunner,
 ) -> CliOutput {
     match locate_parse_args(argv) {
-        Ok((oracle, opts)) => match locate_picker_target(&oracle, &opts, sessions)
-            .and_then(|target| locate_cmd_with_sessions(&target, &opts, sessions, github).map_err(|message| CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") }))
-        {
-            Ok(stdout) => CliOutput {
-                code: 0,
-                stdout,
-                stderr: String::new(),
-            },
-            Err(output) => output,
-        },
+        Ok((oracle, opts)) => {
+            match locate_picker_target(&oracle, &opts, sessions).and_then(|target| {
+                locate_cmd_with_sessions(&target, &opts, sessions, github).map_err(|message| {
+                    CliOutput {
+                        code: 1,
+                        stdout: String::new(),
+                        stderr: format!("{message}\n"),
+                    }
+                })
+            }) {
+                Ok(stdout) => CliOutput {
+                    code: 0,
+                    stdout,
+                    stderr: String::new(),
+                },
+                Err(output) => output,
+            }
+        }
         Err(message) => CliOutput {
             code: 1,
             stdout: String::new(),
@@ -286,33 +292,71 @@ fn locate_cmd_with_sessions(
         return Err(format!(
             "no repo path for '{oracle}' (session: {}, fleet: {})",
             info.session_name.as_deref().unwrap_or("none"),
-            if info.fleet_config_path.is_some() { "yes" } else { "no" }
+            if info.fleet_config_path.is_some() {
+                "yes"
+            } else {
+                "no"
+            }
         ));
     }
 
     Ok(locate_render_text(oracle, &info))
 }
 
-fn locate_picker_target(target: &str, opts: &LocateOptions, sessions: &[TmuxSession]) -> Result<String, CliOutput> {
-    match typed_picker_plan(target, &locate_typed_candidates(sessions), locate_kind_priority, locate_picker_row) {
+fn locate_picker_target(
+    target: &str,
+    opts: &LocateOptions,
+    sessions: &[TmuxSession],
+) -> Result<String, CliOutput> {
+    match typed_picker_plan(
+        target,
+        &locate_typed_candidates(sessions),
+        locate_kind_priority,
+        locate_picker_row,
+    ) {
         TypedPickerPlan::Target(target) => Ok(target),
-        TypedPickerPlan::Pick { context, rows } => picker_choose_target("locate", target, context, &rows, opts.json),
+        TypedPickerPlan::Pick { context, rows } => {
+            picker_choose_target("locate", target, context, &rows, opts.json)
+        }
     }
 }
 
 fn locate_typed_candidates(sessions: &[TmuxSession]) -> Vec<maw_matcher::ResolveTypedCandidate> {
-    let alive = sessions.iter().map(|session| session.name.clone()).collect::<BTreeSet<_>>();
+    let alive = sessions
+        .iter()
+        .map(|session| session.name.clone())
+        .collect::<BTreeSet<_>>();
     let mut candidates = local_resolver_candidates(&alive);
-    candidates.retain(|candidate| candidate.kind != maw_matcher::ResolveCandidateKind::FleetSquad && candidate.kind != maw_matcher::ResolveCandidateKind::Peer);
-    candidates.extend(sessions.iter().flat_map(|session| session.windows.iter().map(|window| maw_matcher::ResolveTypedCandidate {
-        kind: maw_matcher::ResolveCandidateKind::Window, name: window.name.clone(), aliases: Vec::new(),
-    })));
+    candidates.retain(|candidate| {
+        candidate.kind != maw_matcher::ResolveCandidateKind::FleetSquad
+            && candidate.kind != maw_matcher::ResolveCandidateKind::Peer
+    });
+    candidates.extend(sessions.iter().flat_map(|session| {
+        session
+            .windows
+            .iter()
+            .map(|window| maw_matcher::ResolveTypedCandidate {
+                kind: maw_matcher::ResolveCandidateKind::Window,
+                name: window.name.clone(),
+                aliases: Vec::new(),
+            })
+    }));
     for entry in locate_load_manifest() {
-        let aliases = [entry.session, entry.window, entry.repo].into_iter().flatten().collect::<Vec<_>>();
-        if let Some(candidate) = candidates.iter_mut().find(|candidate| candidate.kind == maw_matcher::ResolveCandidateKind::Oracle && candidate.name.eq_ignore_ascii_case(&entry.name)) {
+        let aliases = [entry.session, entry.window, entry.repo]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        if let Some(candidate) = candidates.iter_mut().find(|candidate| {
+            candidate.kind == maw_matcher::ResolveCandidateKind::Oracle
+                && candidate.name.eq_ignore_ascii_case(&entry.name)
+        }) {
             candidate.aliases.extend(aliases);
         } else {
-            candidates.push(maw_matcher::ResolveTypedCandidate { kind: maw_matcher::ResolveCandidateKind::Oracle, name: entry.name, aliases });
+            candidates.push(maw_matcher::ResolveTypedCandidate {
+                kind: maw_matcher::ResolveCandidateKind::Oracle,
+                name: entry.name,
+                aliases,
+            });
         }
     }
     candidates
@@ -323,13 +367,18 @@ fn locate_kind_priority(kind: maw_matcher::ResolveCandidateKind) -> u8 {
         maw_matcher::ResolveCandidateKind::Oracle => 0,
         maw_matcher::ResolveCandidateKind::SleepingRegistry => 1,
         maw_matcher::ResolveCandidateKind::Repo => 2,
-        maw_matcher::ResolveCandidateKind::LiveSession | maw_matcher::ResolveCandidateKind::Window => 3,
+        maw_matcher::ResolveCandidateKind::LiveSession
+        | maw_matcher::ResolveCandidateKind::Window => 3,
         _ => 4,
     }
 }
 
 fn locate_picker_row(matched: maw_matcher::ResolveMatch) -> PickerRow {
-    PickerRow { action: format!("maw locate {}", matched.candidate.name), detail: None, matched }
+    PickerRow {
+        action: format!("maw locate {}", matched.candidate.name),
+        detail: None,
+        matched,
+    }
 }
 
 fn locate_gather_info(
@@ -340,11 +389,15 @@ fn locate_gather_info(
 ) -> Result<LocateResult, String> {
     locate_validate_name(oracle)?;
     let aliases = locate_enrichment_names(oracle);
-    let repo_path = aliases.iter().find_map(|alias| locate_find_oracle_repo_path(alias));
+    let repo_path = aliases
+        .iter()
+        .find_map(|alias| locate_find_oracle_repo_path(alias));
     let (session_name, window_count) = aliases
         .iter()
         .find_map(|alias| locate_resolve_session(alias, sessions))
-        .map_or((None, 0), |session| (Some(session.name.clone()), session.windows.len()));
+        .map_or((None, 0), |session| {
+            (Some(session.name.clone()), session.windows.len())
+        });
     let fleet_config_path = aliases
         .iter()
         .find_map(|alias| locate_find_fleet_config_path(alias, session_name.as_deref()));
@@ -356,7 +409,9 @@ fn locate_gather_info(
         .find_map(|alias| locate_lookup_manifest_entry(alias));
     let config = locate_load_config();
     let manifest_layer = locate_agents_map_node(&config, &aliases);
-    let in_agents_config = aliases.iter().any(|alias| config.agents.contains_key(alias.as_str()));
+    let in_agents_config = aliases
+        .iter()
+        .any(|alias| config.agents.contains_key(alias.as_str()));
     let federation_node = if in_agents_config {
         aliases
             .iter()
@@ -387,29 +442,35 @@ fn locate_gather_info(
         registry: fleet_config_path.clone(),
         github: github_layer,
     };
-    let result_repo_path = repo_path.or_else(|| manifest_entry.as_ref().and_then(|entry| entry.local_path.clone()));
-    let (site, site_source) = locate_resolve_site(manifest_entry.as_ref(), result_repo_path.as_deref());
+    let result_repo_path = repo_path.or_else(|| {
+        manifest_entry
+            .as_ref()
+            .and_then(|entry| entry.local_path.clone())
+    });
+    let (site, site_source) =
+        locate_resolve_site(manifest_entry.as_ref(), result_repo_path.as_deref());
 
     Ok(LocateResult {
-        name: aliases
-            .last()
-            .cloned()
-            .unwrap_or_else(|| oracle.to_owned()),
+        name: aliases.last().cloned().unwrap_or_else(|| oracle.to_owned()),
         session: session_name
             .clone()
-            .or_else(|| manifest_entry.as_ref().and_then(|entry| entry.session.clone()))
+            .or_else(|| {
+                manifest_entry
+                    .as_ref()
+                    .and_then(|entry| entry.session.clone())
+            })
             .unwrap_or_else(|| oracle.to_owned()),
-        handle: aliases
-            .last()
-            .cloned()
-            .unwrap_or_else(|| oracle.to_owned()),
+        handle: aliases.last().cloned().unwrap_or_else(|| oracle.to_owned()),
         repo_path: result_repo_path,
         site,
         site_source,
         has_psi: if has_psi {
             true
         } else {
-            manifest_entry.as_ref().and_then(|entry| entry.has_psi).unwrap_or(false)
+            manifest_entry
+                .as_ref()
+                .and_then(|entry| entry.has_psi)
+                .unwrap_or(false)
         },
         session_name,
         window_count,
@@ -438,9 +499,15 @@ fn locate_agents_map_node(config: &LocateConfig, aliases: &[String]) -> Option<S
 fn locate_validate_name(value: &str) -> Result<(), String> {
     let trimmed = value.trim();
     if trimmed.is_empty() || trimmed != value || trimmed.starts_with('-') {
-        return Err("locate: oracle name must be non-empty, unpadded, and not start with '-'".to_owned());
+        return Err(
+            "locate: oracle name must be non-empty, unpadded, and not start with '-'".to_owned(),
+        );
     }
-    if value.contains("..") || value.starts_with('/') || value.ends_with('/') || value.contains("//") {
+    if value.contains("..")
+        || value.starts_with('/')
+        || value.ends_with('/')
+        || value.contains("//")
+    {
         return Err("locate: oracle name contains a refused path segment".to_owned());
     }
     if !value
@@ -465,7 +532,12 @@ fn locate_ghq_find(suffix: &str) -> Option<String> {
         let Ok(entries) = std::fs::read_dir(org.path()) else {
             continue;
         };
-        repos.extend(entries.flatten().map(|entry| entry.path()).filter(|path| path.is_dir()));
+        repos.extend(
+            entries
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| path.is_dir()),
+        );
     }
     repos.sort();
     repos
@@ -476,8 +548,11 @@ fn locate_ghq_find(suffix: &str) -> Option<String> {
 
 fn locate_find_oracle_repo_path(oracle: &str) -> Option<String> {
     locate_declared_oracle_repo_path(oracle)
-    .or_else(|| locate_ghq_find_oracle_suffix(oracle))
-    .or_else(|| locate_ghq_find(&format!("/{oracle}")).filter(|path| native_repo_path_is_oracle(std::path::Path::new(path), oracle)))
+        .or_else(|| locate_ghq_find_oracle_suffix(oracle))
+        .or_else(|| {
+            locate_ghq_find(&format!("/{oracle}"))
+                .filter(|path| native_repo_path_is_oracle(std::path::Path::new(path), oracle))
+        })
 }
 
 // Keep raw/stem ordering for stable output fields and filesystem/config enrichment.
@@ -492,16 +567,23 @@ fn locate_enrichment_names(oracle: &str) -> Vec<String> {
 }
 
 fn locate_declared_oracle_repo_path(oracle: &str) -> Option<String> {
-    for entry in fleet_load_entries().into_iter().filter(fleet_entry_is_session) {
+    for entry in fleet_load_entries()
+        .into_iter()
+        .filter(fleet_entry_is_session)
+    {
         for window in &entry.session.windows {
             if window.kind != Some(NativeRepoKind::Oracle) {
                 continue;
             }
-            let Some(name) = native_fleet_window_oracle_name(window) else { continue; };
+            let Some(name) = native_fleet_window_oracle_name(window) else {
+                continue;
+            };
             if name != oracle {
                 continue;
             }
-            let Some(path) = native_fleet_repo_path(&window.repo) else { continue; };
+            let Some(path) = native_fleet_repo_path(&window.repo) else {
+                continue;
+            };
             if path.exists() {
                 return Some(path_string(path));
             }
@@ -512,12 +594,18 @@ fn locate_declared_oracle_repo_path(oracle: &str) -> Option<String> {
 
 fn locate_ghq_find_oracle_suffix(oracle: &str) -> Option<String> {
     let path = locate_ghq_find(&format!("/{oracle}-oracle"))?;
-    native_repo_path_is_oracle(std::path::Path::new(&path), &format!("{oracle}-oracle")).then_some(path)
+    native_repo_path_is_oracle(std::path::Path::new(&path), &format!("{oracle}-oracle"))
+        .then_some(path)
 }
 
-fn locate_resolve_session<'a>(oracle: &str, sessions: &'a [TmuxSession]) -> Option<&'a TmuxSession> {
+fn locate_resolve_session<'a>(
+    oracle: &str,
+    sessions: &'a [TmuxSession],
+) -> Option<&'a TmuxSession> {
     let wanted = maw_matcher::normalized_match_names(oracle);
-    sessions.iter().find(|session| locate_session_matches(session, &wanted))
+    sessions
+        .iter()
+        .find(|session| locate_session_matches(session, &wanted))
 }
 
 fn locate_session_matches(session: &TmuxSession, wanted: &[String]) -> bool {
@@ -547,11 +635,10 @@ fn locate_fleet_entry_matches(entry: &LocateFleetEntry, names: &BTreeSet<String>
     [file_base, entry.session.name.as_str()]
         .into_iter()
         .any(|name| names.contains(name))
-        || entry
-            .session
-            .windows
-            .iter()
-            .any(|locate_window| native_fleet_window_is_oracle(locate_window) && names.contains(locate_window.name.as_str()))
+        || entry.session.windows.iter().any(|locate_window| {
+            native_fleet_window_is_oracle(locate_window)
+                && names.contains(locate_window.name.as_str())
+        })
 }
 
 fn locate_load_fleet_entries() -> Vec<LocateFleetEntry> {
@@ -581,13 +668,20 @@ struct LocateFleetSiteWindow {
 }
 
 fn locate_load_fleet_window_sites(path: &std::path::Path) -> HashMap<String, String> {
-    let Some(file) = std::fs::read_to_string(path).ok().and_then(|text| serde_json::from_str::<LocateFleetSiteFile>(&text).ok()) else {
+    let Some(file) = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<LocateFleetSiteFile>(&text).ok())
+    else {
         return HashMap::new();
     };
     file.windows
         .into_iter()
         .filter_map(|window| {
-            let site = window.site.as_deref().or(window.pages.as_deref()).and_then(locate_clean_site_url)?;
+            let site = window
+                .site
+                .as_deref()
+                .or(window.pages.as_deref())
+                .and_then(locate_clean_site_url)?;
             Some((window.name, site))
         })
         .collect()
@@ -618,12 +712,20 @@ fn locate_load_manifest() -> Vec<LocateManifestEntry> {
             let entry = locate_ensure_manifest_entry(&mut by_name, &name);
             locate_add_manifest_source(entry, "fleet");
             entry.has_fleet_config = Some(true);
-            entry.session.get_or_insert_with(|| fleet.session.name.clone());
-            entry.window.get_or_insert_with(|| locate_window.name.clone());
+            entry
+                .session
+                .get_or_insert_with(|| fleet.session.name.clone());
+            entry
+                .window
+                .get_or_insert_with(|| locate_window.name.clone());
             if !locate_window.repo.is_empty() {
                 entry.repo.get_or_insert_with(|| locate_window.repo.clone());
             }
-            if let Some(site) = fleet.window_sites.get(&locate_window.name).and_then(|site| locate_clean_site_url(site)) {
+            if let Some(site) = fleet
+                .window_sites
+                .get(&locate_window.name)
+                .and_then(|site| locate_clean_site_url(site))
+            {
                 entry.site.get_or_insert(site);
             }
             entry.node.get_or_insert_with(|| "local".to_owned());
@@ -652,13 +754,19 @@ fn locate_load_manifest() -> Vec<LocateManifestEntry> {
                 entry.repo = Some(format!("{}/{}", oracle.org, oracle.repo));
             }
             if entry.site.is_none() {
-                entry.site = oracle.site.as_deref().or(oracle.pages.as_deref()).and_then(locate_clean_site_url);
+                entry.site = oracle
+                    .site
+                    .as_deref()
+                    .or(oracle.pages.as_deref())
+                    .and_then(locate_clean_site_url);
             }
             if entry.local_path.is_none() && !oracle.local_path.is_empty() {
                 entry.local_path = Some(oracle.local_path);
             }
             entry.has_psi.get_or_insert(oracle.has_psi);
-            entry.has_fleet_config.get_or_insert(oracle.has_fleet_config);
+            entry
+                .has_fleet_config
+                .get_or_insert(oracle.has_fleet_config);
             if entry.node.is_none() {
                 entry.node = oracle.federation_node;
             }
@@ -671,20 +779,22 @@ fn locate_ensure_manifest_entry<'a>(
     by_name: &'a mut BTreeMap<String, LocateManifestEntry>,
     name: &str,
 ) -> &'a mut LocateManifestEntry {
-    by_name.entry(name.to_owned()).or_insert_with(|| LocateManifestEntry {
-        name: name.to_owned(),
-        sources: Vec::new(),
-        node: None,
-        session: None,
-        window: None,
-        repo: None,
-        site: None,
-        local_path: None,
-        session_id: None,
-        has_psi: None,
-        has_fleet_config: None,
-        is_live: false,
-    })
+    by_name
+        .entry(name.to_owned())
+        .or_insert_with(|| LocateManifestEntry {
+            name: name.to_owned(),
+            sources: Vec::new(),
+            node: None,
+            session: None,
+            window: None,
+            repo: None,
+            site: None,
+            local_path: None,
+            session_id: None,
+            has_psi: None,
+            has_fleet_config: None,
+            is_live: false,
+        })
 }
 
 fn locate_add_manifest_source(entry: &mut LocateManifestEntry, source: &str) {
@@ -693,7 +803,9 @@ fn locate_add_manifest_source(entry: &mut LocateManifestEntry, source: &str) {
     }
 }
 
-fn locate_name_from_window(window: &NativeFleetWindow) -> Option<String> { native_fleet_window_oracle_name(window) }
+fn locate_name_from_window(window: &NativeFleetWindow) -> Option<String> {
+    native_fleet_window_oracle_name(window)
+}
 
 fn locate_load_registry_cache() -> Option<LocateRegistryCache> {
     let env = current_xdg_env();
@@ -708,7 +820,10 @@ fn locate_load_registry_cache() -> Option<LocateRegistryCache> {
 fn locate_load_config() -> LocateConfig {
     let value = merged_config_value();
     LocateConfig {
-        node: value.get("node").and_then(serde_json::Value::as_str).map(ToOwned::to_owned),
+        node: value
+            .get("node")
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned),
         agents: locate_string_map(value.get("agents")),
         sessions: locate_string_map(value.get("sessions")),
     }
@@ -719,13 +834,18 @@ fn locate_string_map(value: Option<&serde_json::Value>) -> HashMap<String, Strin
         .and_then(serde_json::Value::as_object)
         .map(|map| {
             map.iter()
-                .filter_map(|(key, value)| value.as_str().map(|value| (key.clone(), value.to_owned())))
+                .filter_map(|(key, value)| {
+                    value.as_str().map(|value| (key.clone(), value.to_owned()))
+                })
                 .collect()
         })
         .unwrap_or_default()
 }
 
-fn locate_resolve_site(manifest_entry: Option<&LocateManifestEntry>, repo_path: Option<&str>) -> (Option<String>, Option<String>) {
+fn locate_resolve_site(
+    manifest_entry: Option<&LocateManifestEntry>,
+    repo_path: Option<&str>,
+) -> (Option<String>, Option<String>) {
     if let Some(site) = manifest_entry.and_then(|entry| entry.site.clone()) {
         return (Some(site), None);
     }
@@ -733,14 +853,18 @@ fn locate_resolve_site(manifest_entry: Option<&LocateManifestEntry>, repo_path: 
         .and_then(|entry| entry.repo.as_deref())
         .map(str::to_owned)
         .or_else(|| repo_path.and_then(locate_repo_slug_from_path));
-    locate_derive_github_pages_site(repo.as_deref()).map_or((None, None), |site| (Some(site), Some("derived".to_owned())))
+    locate_derive_github_pages_site(repo.as_deref()).map_or((None, None), |site| {
+        (Some(site), Some("derived".to_owned()))
+    })
 }
 
 fn locate_clean_site_url(value: &str) -> Option<String> {
     let value = value.trim();
     (!value.is_empty()
         && (value.starts_with("https://") || value.starts_with("http://"))
-        && !value.chars().any(|ch| ch.is_control() || ch.is_whitespace()))
+        && !value
+            .chars()
+            .any(|ch| ch.is_control() || ch.is_whitespace()))
     .then(|| value.to_owned())
 }
 
@@ -750,7 +874,10 @@ fn locate_derive_github_pages_site(repo: Option<&str>) -> Option<String> {
     let mut parts = repo.split('/');
     let owner = parts.next()?;
     let name = parts.next()?;
-    if parts.next().is_some() || !locate_github_pages_segment_ok(owner) || !locate_github_pages_segment_ok(name) {
+    if parts.next().is_some()
+        || !locate_github_pages_segment_ok(owner)
+        || !locate_github_pages_segment_ok(name)
+    {
         return None;
     }
     Some(format!("https://{owner}.github.io/{name}"))
@@ -760,7 +887,9 @@ fn locate_repo_slug_from_path(path: &str) -> Option<String> {
     let root = ghq_root().join("github.com");
     let path = std::path::Path::new(path);
     let rel = path.strip_prefix(root).ok()?;
-    let mut parts = rel.components().map(|part| part.as_os_str().to_string_lossy());
+    let mut parts = rel
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy());
     let owner = parts.next()?;
     let repo = parts.next()?;
     if parts.next().is_some() {
@@ -773,7 +902,9 @@ fn locate_github_pages_segment_ok(value: &str) -> bool {
     !value.is_empty()
         && !value.starts_with('-')
         && !value.ends_with('-')
-        && value.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
 }
 
 fn locate_find_federation_hits(_oracle: &str) -> Vec<LocateFederationHit> {
@@ -796,7 +927,10 @@ fn locate_remote_orgs(config: &serde_json::Value) -> Vec<String> {
                     .collect()
             })
             .unwrap_or_default(),
-        None => LOCATE_DEFAULT_ORGS.iter().map(|org| (*org).to_owned()).collect(),
+        None => LOCATE_DEFAULT_ORGS
+            .iter()
+            .map(|org| (*org).to_owned())
+            .collect(),
     }
 }
 
@@ -873,7 +1007,10 @@ fn locate_github_timeout() -> std::time::Duration {
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|millis| (100..=60_000).contains(millis))
-        .map_or_else(|| std::time::Duration::from_secs(4), std::time::Duration::from_millis)
+        .map_or_else(
+            || std::time::Duration::from_secs(4),
+            std::time::Duration::from_millis,
+        )
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -893,7 +1030,9 @@ fn locate_gh_repo_list_with_timeout(
     std::thread::spawn(move || {
         let _ = sender.send(
             std::process::Command::new("gh")
-                .args(["repo", "list", &org_arg, "--json", "name", "--limit", "1000"])
+                .args([
+                    "repo", "list", &org_arg, "--json", "name", "--limit", "1000",
+                ])
                 .stdin(std::process::Stdio::null())
                 .output(),
         );
@@ -908,7 +1047,11 @@ fn locate_gh_repo_list_with_timeout(
     };
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let first = stderr.lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or("");
+        let first = stderr
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .unwrap_or("");
         return Err(if first.is_empty() {
             format!("gh exited {}", output.status)
         } else {
@@ -924,11 +1067,19 @@ fn locate_render_text(oracle: &str, info: &LocateResult) -> String {
     let mut out = format!("\n📍 {oracle}\n");
     if let Some(repo_path) = &info.repo_path {
         let _ = writeln!(out, "   repo:     {repo_path}");
-        let _ = writeln!(out, "   ψ/:       {}", if info.has_psi { "present" } else { "missing" });
+        let _ = writeln!(
+            out,
+            "   ψ/:       {}",
+            if info.has_psi { "present" } else { "missing" }
+        );
     }
     if let Some(session_name) = &info.session_name {
         let suffix = if info.window_count == 1 { "" } else { "s" };
-        let _ = writeln!(out, "   session:  {session_name} ({} window{suffix})", info.window_count);
+        let _ = writeln!(
+            out,
+            "   session:  {session_name} ({} window{suffix})",
+            info.window_count
+        );
     }
     if let Some(fleet_config_path) = &info.fleet_config_path {
         let _ = writeln!(out, "   fleet:    {fleet_config_path}");
@@ -936,7 +1087,11 @@ fn locate_render_text(oracle: &str, info: &LocateResult) -> String {
     if let Some(manifest_entry) = &info.manifest_entry {
         let _ = writeln!(out, "   source:   {}", manifest_entry.sources.join(", "));
         if manifest_entry.repo.is_some() && info.repo_path.is_none() {
-            let _ = writeln!(out, "   repo:     {}", manifest_entry.repo.as_deref().unwrap_or_default());
+            let _ = writeln!(
+                out,
+                "   repo:     {}",
+                manifest_entry.repo.as_deref().unwrap_or_default()
+            );
         }
         if manifest_entry.has_fleet_config == Some(true) && info.fleet_config_path.is_none() {
             out.push_str("   fleet:    known (manifest)\n");
@@ -947,7 +1102,12 @@ fn locate_render_text(oracle: &str, info: &LocateResult) -> String {
             " (from config.agents)"
         } else if info.session_name.is_some() {
             " (this node)"
-        } else if info.manifest_entry.as_ref().and_then(|entry| entry.node.as_ref()).is_some() {
+        } else if info
+            .manifest_entry
+            .as_ref()
+            .and_then(|entry| entry.node.as_ref())
+            .is_some()
+        {
             " (from manifest)"
         } else {
             " (this node)"
@@ -956,7 +1116,10 @@ fn locate_render_text(oracle: &str, info: &LocateResult) -> String {
     }
     for hit in &info.federation {
         let label = hit.node.as_ref().unwrap_or(&hit.alias);
-        let location = hit.url.as_ref().map_or(String::new(), |url| format!(" ({url})"));
+        let location = hit
+            .url
+            .as_ref()
+            .map_or(String::new(), |url| format!(" ({url})"));
         let suffix = if hit.window_count == 1 { "" } else { "s" };
         let _ = writeln!(
             out,
@@ -987,7 +1150,11 @@ fn locate_render_layers(info: &LocateResult, out: &mut String) {
     match &layers.session {
         Some(name) => {
             let suffix = if info.window_count == 1 { "" } else { "s" };
-            let _ = writeln!(out, "   session:   ✓ {name} ({} window{suffix})", info.window_count);
+            let _ = writeln!(
+                out,
+                "   session:   ✓ {name} ({} window{suffix})",
+                info.window_count
+            );
         }
         None => out.push_str("   session:   ✗ none\n"),
     }
@@ -1011,7 +1178,10 @@ fn locate_render_github_layer(layers: &LocateLayers) -> String {
             };
             format!("   github:    ✓ {repo}{hint}\n")
         }
-        "not-found" => format!("   github:    ✗ not on github (orgs: {})\n", github.orgs.join(", ")),
+        "not-found" => format!(
+            "   github:    ✗ not on github (orgs: {})\n",
+            github.orgs.join(", ")
+        ),
         _ => format!(
             "   github:    (skipped: {})\n",
             github.reason.as_deref().unwrap_or("unknown")
@@ -1115,7 +1285,6 @@ mod locate_tests {
         }
     }
 
-
     fn locate_temp_root(name: &str) -> std::path::PathBuf {
         let root = std::env::temp_dir().join(format!(
             "maw-rs-locate-{name}-{}",
@@ -1137,7 +1306,10 @@ mod locate_tests {
 
     fn locate_expected_golden(fleet_config: &std::path::Path, repo: &std::path::Path) -> String {
         include_str!("../../tests/fixtures/locate/atlas.json")
-            .replace("__CONFIG_PLACEHOLDER__/maw/fleet/alpha.json", &path_string(fleet_config))
+            .replace(
+                "__CONFIG_PLACEHOLDER__/maw/fleet/alpha.json",
+                &path_string(fleet_config),
+            )
             .replace("__REPO_PLACEHOLDER__", &path_string(repo))
     }
 
@@ -1170,7 +1342,10 @@ mod locate_tests {
     impl LocateGithubRunner for LocateFakeGithub {
         fn locate_gh_repo_names(&mut self, org: &str) -> Result<Vec<String>, String> {
             self.calls.push(org.to_owned());
-            self.responses.get(org).cloned().unwrap_or_else(|| Ok(Vec::new()))
+            self.responses
+                .get(org)
+                .cloned()
+                .unwrap_or_else(|| Ok(Vec::new()))
         }
     }
 
@@ -1210,7 +1385,8 @@ mod locate_tests {
             windows: vec![locate_window(1, "atlas-oracle"), locate_window(2, "logs")],
         }];
 
-        let info = locate_gather_info("atlas", true, &sessions, locate_github_off()).expect("locate info");
+        let info =
+            locate_gather_info("atlas", true, &sessions, locate_github_off()).expect("locate info");
         let rendered = serde_json::to_string_pretty(&info).expect("json") + "\n";
         let expected = locate_expected_golden(&fleet_config, &repo);
         assert_eq!(rendered, expected);
@@ -1231,9 +1407,14 @@ mod locate_tests {
             &env.maw_config_path(&["fleet", "pathfinder.json"]),
             r#"{"name":"pathfinder","windows":[{"name":"pathfinder-oracle","repo":"acme/pathfinder-oracle"}]}"#,
         );
-        let opts = LocateOptions { path: true, json: false, no_remote: false };
+        let opts = LocateOptions {
+            path: true,
+            json: false,
+            no_remote: false,
+        };
         assert_eq!(
-            locate_cmd_with_sessions("pathfinder", &opts, &[], &mut LocateFakeGithub::default()).expect("path"),
+            locate_cmd_with_sessions("pathfinder", &opts, &[], &mut LocateFakeGithub::default())
+                .expect("path"),
             format!("{}\n", repo.display())
         );
     }
@@ -1247,10 +1428,19 @@ mod locate_tests {
             r#"{"name":"kru32","windows":[{"name":"kru32-oracle","repo":"owner/kru32-oracle","site":"https://kru32.example.test/feed"}]}"#,
         );
 
-        let info = locate_gather_info("kru32", true, &[], locate_github_off()).expect("locate info");
-        assert_eq!(info.site.as_deref(), Some("https://kru32.example.test/feed"));
+        let info =
+            locate_gather_info("kru32", true, &[], locate_github_off()).expect("locate info");
+        assert_eq!(
+            info.site.as_deref(),
+            Some("https://kru32.example.test/feed")
+        );
         assert_eq!(info.site_source, None);
-        assert_eq!(info.manifest_entry.as_ref().and_then(|entry| entry.site.as_deref()), Some("https://kru32.example.test/feed"));
+        assert_eq!(
+            info.manifest_entry
+                .as_ref()
+                .and_then(|entry| entry.site.as_deref()),
+            Some("https://kru32.example.test/feed")
+        );
         let rendered = serde_json::to_value(&info).expect("json");
         assert_eq!(rendered["site"], "https://kru32.example.test/feed");
         assert!(rendered.get("siteSource").is_none());
@@ -1260,9 +1450,13 @@ mod locate_tests {
     fn locate_json_omits_site_when_manifest_and_repo_are_absent() {
         let _guard = env_test_lock();
         let env = LocateHermeticEnv::new("no-site");
-        locate_write(&env.maw_config_path(&["maw.config.json"]), r#"{"agents":{"ghost":"edge"}}"#);
+        locate_write(
+            &env.maw_config_path(&["maw.config.json"]),
+            r#"{"agents":{"ghost":"edge"}}"#,
+        );
 
-        let info = locate_gather_info("ghost", true, &[], locate_github_off()).expect("locate info");
+        let info =
+            locate_gather_info("ghost", true, &[], locate_github_off()).expect("locate info");
         assert_eq!(info.site, None);
         assert_eq!(info.site_source, None);
         let rendered = serde_json::to_value(&info).expect("json");
@@ -1282,13 +1476,22 @@ mod locate_tests {
             &env.maw_config_path(&["fleet", "kind.json"]),
             r#"{"name":"kind","windows":[{"name":"foo","repo":"acme/foo","kind":"oracle"},{"name":"bar-oracle","repo":"acme/bar-oracle","kind":"project"}]}"#,
         );
-        let opts = LocateOptions { path: true, json: false, no_remote: false };
+        let opts = LocateOptions {
+            path: true,
+            json: false,
+            no_remote: false,
+        };
 
         assert_eq!(
-            locate_cmd_with_sessions("foo", &opts, &[], &mut LocateFakeGithub::default()).expect("foo path"),
+            locate_cmd_with_sessions("foo", &opts, &[], &mut LocateFakeGithub::default())
+                .expect("foo path"),
             format!("{}\n", foo.display())
         );
-        assert!(locate_cmd_with_sessions("bar", &opts, &[], &mut LocateFakeGithub::default()).expect_err("bar project").contains("no oracle"));
+        assert!(
+            locate_cmd_with_sessions("bar", &opts, &[], &mut LocateFakeGithub::default())
+                .expect_err("bar project")
+                .contains("no oracle")
+        );
     }
 
     #[test]
@@ -1306,9 +1509,14 @@ mod locate_tests {
         let repo = env.ghq.join("github.com/acme/spore");
         std::fs::create_dir_all(repo.join("ψ")).expect("psi dir");
         std::fs::write(repo.join("CLAUDE.md"), "# spore\n").expect("claude md");
-        let opts = LocateOptions { path: true, json: false, no_remote: false };
+        let opts = LocateOptions {
+            path: true,
+            json: false,
+            no_remote: false,
+        };
         assert_eq!(
-            locate_cmd_with_sessions("spore", &opts, &[], &mut LocateFakeGithub::default()).expect("bare-name oracle path"),
+            locate_cmd_with_sessions("spore", &opts, &[], &mut LocateFakeGithub::default())
+                .expect("bare-name oracle path"),
             format!("{}\n", repo.display())
         );
     }
@@ -1330,13 +1538,20 @@ mod locate_tests {
             &env.maw_config_path(&["fleet", "81-track.json"]),
             r#"{"name":"81-track","windows":[{"name":"track-oracle","repo":"acme/track-oracle"}]}"#,
         );
-        let options = LocateOptions { path: true, json: false, no_remote: false };
+        let options = LocateOptions {
+            path: true,
+            json: false,
+            no_remote: false,
+        };
         assert_eq!(
-            locate_cmd_with_sessions("81-track", &options, &[], &mut LocateFakeGithub::default()).expect("track path"),
+            locate_cmd_with_sessions("81-track", &options, &[], &mut LocateFakeGithub::default())
+                .expect("track path"),
             format!("{}\n", repo.display())
         );
-        let info = locate_gather_info("81-track", true, &[], locate_github_off()).expect("prefixed locate info");
-        let info_plain = locate_gather_info("track", true, &[], locate_github_off()).expect("plain locate info");
+        let info = locate_gather_info("81-track", true, &[], locate_github_off())
+            .expect("prefixed locate info");
+        let info_plain =
+            locate_gather_info("track", true, &[], locate_github_off()).expect("plain locate info");
         assert_eq!(info.repo_path, info_plain.repo_path);
         assert_eq!(info.name, info_plain.name);
         assert_eq!(info.session, "81-track");
@@ -1374,7 +1589,11 @@ mod locate_tests {
             &env.maw_config_path(&["fleet", "81-track.json"]),
             r#"{"name":"81-track","windows":[{"name":"track-oracle","repo":"acme/track-oracle"}]}"#,
         );
-        let options = LocateOptions { path: true, json: false, no_remote: false };
+        let options = LocateOptions {
+            path: true,
+            json: false,
+            no_remote: false,
+        };
         // An exact query for the literal registry session name ("81-track")
         // resolves to itself, not the shorter oracle-derived alias ("track")
         // -- #665's literal_name_tiebreak (predates this by an unrelated
@@ -1383,16 +1602,27 @@ mod locate_tests {
         // else's alias. This assertion encoded the pre-#665 behavior;
         // confirmed via a worktree at 3979e88^ that it passed there and
         // fails after -- not an env leak, a stale expectation (#700/#688).
-        assert_eq!(locate_picker_target("81-track", &options, &[]).expect("exact"), "81-track");
+        assert_eq!(
+            locate_picker_target("81-track", &options, &[]).expect("exact"),
+            "81-track"
+        );
 
-        match typed_picker_plan("trac", &locate_typed_candidates(&[]), locate_kind_priority, locate_picker_row) {
+        match typed_picker_plan(
+            "trac",
+            &locate_typed_candidates(&[]),
+            locate_kind_priority,
+            locate_picker_row,
+        ) {
             TypedPickerPlan::Pick { context, rows } => {
                 assert_eq!(rows.len(), 1);
                 assert_eq!(rows[0].matched.candidate.name, "track");
                 assert_eq!(rows[0].action, "maw locate track");
                 // #782: exactly one row is printed here -- the message must
                 // not claim "matches multiple targets" over a list of one.
-                assert_eq!(context, "was not found exactly", "single fuzzy candidate must not be reported as ambiguous");
+                assert_eq!(
+                    context, "was not found exactly",
+                    "single fuzzy candidate must not be reported as ambiguous"
+                );
             }
             plan @ TypedPickerPlan::Target(_) => panic!("expected fuzzy picker, got {plan:?}"),
         }
@@ -1400,7 +1630,8 @@ mod locate_tests {
 
     #[test]
     fn locate_parse_accepts_no_remote_and_rejects_unknown_flags() {
-        let (oracle, opts) = locate_parse_args(&["atlas".to_owned(), "--no-remote".to_owned()]).expect("parse");
+        let (oracle, opts) =
+            locate_parse_args(&["atlas".to_owned(), "--no-remote".to_owned()]).expect("parse");
         assert_eq!(oracle, "atlas");
         assert!(opts.no_remote);
         assert!(!opts.path);
@@ -1415,16 +1646,38 @@ mod locate_tests {
             &env.maw_config_path(&["maw.config.json"]),
             r#"{"agents":{"unconference":"m5"},"locate":{"orgs":["laris-co"]}}"#,
         );
-        let mut github = LocateFakeGithub::default()
-            .with("laris-co", Ok(vec!["unrelated".to_owned(), "unconference-oracle".to_owned()]));
+        let mut github = LocateFakeGithub::default().with(
+            "laris-co",
+            Ok(vec![
+                "unrelated".to_owned(),
+                "unconference-oracle".to_owned(),
+            ]),
+        );
 
-        let output = run_locate_command_with_sessions(&["unconference".to_owned()], &[], &mut github);
+        let output =
+            run_locate_command_with_sessions(&["unconference".to_owned()], &[], &mut github);
         assert_eq!(output.code, 0, "{}", output.stderr);
         assert_eq!(github.calls, vec!["laris-co".to_owned()]);
-        assert!(output.stdout.contains("   manifest:  ✓ m5 (agents map)\n"), "{}", output.stdout);
-        assert!(output.stdout.contains("   disk:      ✗ not cloned (ghq)\n"), "{}", output.stdout);
-        assert!(output.stdout.contains("   session:   ✗ none\n"), "{}", output.stdout);
-        assert!(output.stdout.contains("   registry:  ✗ none\n"), "{}", output.stdout);
+        assert!(
+            output.stdout.contains("   manifest:  ✓ m5 (agents map)\n"),
+            "{}",
+            output.stdout
+        );
+        assert!(
+            output.stdout.contains("   disk:      ✗ not cloned (ghq)\n"),
+            "{}",
+            output.stdout
+        );
+        assert!(
+            output.stdout.contains("   session:   ✗ none\n"),
+            "{}",
+            output.stdout
+        );
+        assert!(
+            output.stdout.contains("   registry:  ✗ none\n"),
+            "{}",
+            output.stdout
+        );
         assert!(
             output.stdout.contains(
                 "   github:    ✓ laris-co/unconference-oracle   → maw work https://github.com/laris-co/unconference-oracle\n"
@@ -1450,8 +1703,18 @@ mod locate_tests {
             &mut github,
         );
         assert_eq!(output.code, 0, "{}", output.stderr);
-        assert!(github.calls.is_empty(), "remote scanned despite --no-remote: {:?}", github.calls);
-        assert!(output.stdout.contains("   github:    (skipped: --no-remote)\n"), "{}", output.stdout);
+        assert!(
+            github.calls.is_empty(),
+            "remote scanned despite --no-remote: {:?}",
+            github.calls
+        );
+        assert!(
+            output
+                .stdout
+                .contains("   github:    (skipped: --no-remote)\n"),
+            "{}",
+            output.stdout
+        );
     }
 
     #[test]
@@ -1466,22 +1729,43 @@ mod locate_tests {
             .with("Soul-Brews-Studio", Err("gh not installed".to_owned()))
             .with("laris-co", Ok(vec!["unconference-oracle".to_owned()]));
 
-        let output = run_locate_command_with_sessions(&["unconference".to_owned()], &[], &mut github);
+        let output =
+            run_locate_command_with_sessions(&["unconference".to_owned()], &[], &mut github);
         assert_eq!(output.code, 0, "{}", output.stderr);
-        assert_eq!(github.calls, vec!["Soul-Brews-Studio".to_owned()], "gh-missing must short-circuit");
-        assert!(output.stdout.contains("   github:    (skipped: gh not installed)\n"), "{}", output.stdout);
+        assert_eq!(
+            github.calls,
+            vec!["Soul-Brews-Studio".to_owned()],
+            "gh-missing must short-circuit"
+        );
+        assert!(
+            output
+                .stdout
+                .contains("   github:    (skipped: gh not installed)\n"),
+            "{}",
+            output.stdout
+        );
     }
 
     #[test]
     fn locate_remote_auth_failure_skips_with_reason_after_trying_all_orgs() {
         let mut github = LocateFakeGithub::default()
-            .with("acme", Err("To get started with GitHub CLI, please run: gh auth login".to_owned()))
+            .with(
+                "acme",
+                Err("To get started with GitHub CLI, please run: gh auth login".to_owned()),
+            )
             .with("beta", Ok(Vec::new()));
 
-        let layer = locate_scan_github("ghost", &["acme".to_owned(), "beta".to_owned()], &mut github);
+        let layer = locate_scan_github(
+            "ghost",
+            &["acme".to_owned(), "beta".to_owned()],
+            &mut github,
+        );
         assert_eq!(github.calls, vec!["acme".to_owned(), "beta".to_owned()]);
         assert_eq!(layer.status, "skipped");
-        assert_eq!(layer.reason.as_deref(), Some("To get started with GitHub CLI, please run: gh auth login"));
+        assert_eq!(
+            layer.reason.as_deref(),
+            Some("To get started with GitHub CLI, please run: gh auth login")
+        );
     }
 
     #[test]
@@ -1496,17 +1780,31 @@ mod locate_tests {
 
         let output = run_locate_command_with_sessions(&["ghost".to_owned()], &[], &mut github);
         assert_eq!(output.code, 1, "{}", output.stdout);
-        assert!(output.stderr.contains("no oracle named 'ghost'"), "{}", output.stderr);
-        assert!(output.stderr.contains("(github: not found in acme)"), "{}", output.stderr);
+        assert!(
+            output.stderr.contains("no oracle named 'ghost'"),
+            "{}",
+            output.stderr
+        );
+        assert!(
+            output.stderr.contains("(github: not found in acme)"),
+            "{}",
+            output.stderr
+        );
     }
 
     #[test]
     fn locate_default_orgs_apply_only_when_config_key_is_absent() {
         let absent = serde_json::json!({});
-        assert_eq!(locate_remote_orgs(&absent), vec!["Soul-Brews-Studio".to_owned(), "laris-co".to_owned()]);
+        assert_eq!(
+            locate_remote_orgs(&absent),
+            vec!["Soul-Brews-Studio".to_owned(), "laris-co".to_owned()]
+        );
 
         let configured = serde_json::json!({"locate": {"orgs": ["acme", "beta"]}});
-        assert_eq!(locate_remote_orgs(&configured), vec!["acme".to_owned(), "beta".to_owned()]);
+        assert_eq!(
+            locate_remote_orgs(&configured),
+            vec!["acme".to_owned(), "beta".to_owned()]
+        );
 
         let empty = serde_json::json!({"locate": {"orgs": []}});
         assert_eq!(locate_remote_orgs(&empty), Vec::<String>::new());
@@ -1519,9 +1817,16 @@ mod locate_tests {
     fn locate_scan_refuses_option_injection_org_names() {
         let mut github = LocateFakeGithub::default();
         let layer = locate_scan_github("ghost", &["--bad-org".to_owned()], &mut github);
-        assert!(github.calls.is_empty(), "gh invoked with unsafe org: {:?}", github.calls);
+        assert!(
+            github.calls.is_empty(),
+            "gh invoked with unsafe org: {:?}",
+            github.calls
+        );
         assert_eq!(layer.status, "skipped");
-        assert_eq!(layer.reason.as_deref(), Some("invalid org name '--bad-org'"));
+        assert_eq!(
+            layer.reason.as_deref(),
+            Some("invalid org name '--bad-org'")
+        );
     }
 
     #[test]
@@ -1538,15 +1843,40 @@ mod locate_tests {
             &env.maw_config_path(&["fleet", "alpha.json"]),
             r#"{"name":"alpha","windows":[{"name":"atlas-oracle","repo":"acme/atlas-oracle"}]}"#,
         );
-        let mut github = LocateFakeGithub::default().with("acme", Ok(vec!["atlas-oracle".to_owned()]));
+        let mut github =
+            LocateFakeGithub::default().with("acme", Ok(vec!["atlas-oracle".to_owned()]));
 
         let output = run_locate_command_with_sessions(&["atlas".to_owned()], &[], &mut github);
         assert_eq!(output.code, 0, "{}", output.stderr);
-        assert!(output.stdout.contains(&format!("   disk:      ✓ {}\n", repo.display())), "{}", output.stdout);
-        assert!(output.stdout.contains("   registry:  ✓ "), "{}", output.stdout);
-        assert!(output.stdout.contains("   github:    ✓ acme/atlas-oracle\n"), "{}", output.stdout);
-        assert!(!output.stdout.contains("→ maw work"), "hint printed for a cloned repo: {}", output.stdout);
-        assert!(output.stdout.contains("   repo:     "), "legacy fields must remain: {}", output.stdout);
+        assert!(
+            output
+                .stdout
+                .contains(&format!("   disk:      ✓ {}\n", repo.display())),
+            "{}",
+            output.stdout
+        );
+        assert!(
+            output.stdout.contains("   registry:  ✓ "),
+            "{}",
+            output.stdout
+        );
+        assert!(
+            output
+                .stdout
+                .contains("   github:    ✓ acme/atlas-oracle\n"),
+            "{}",
+            output.stdout
+        );
+        assert!(
+            !output.stdout.contains("→ maw work"),
+            "hint printed for a cloned repo: {}",
+            output.stdout
+        );
+        assert!(
+            output.stdout.contains("   repo:     "),
+            "legacy fields must remain: {}",
+            output.stdout
+        );
     }
 
     #[test]
@@ -1557,7 +1887,8 @@ mod locate_tests {
             &env.maw_config_path(&["maw.config.json"]),
             r#"{"agents":{"unconference":"m5"},"locate":{"orgs":["laris-co"]}}"#,
         );
-        let mut github = LocateFakeGithub::default().with("laris-co", Ok(vec!["unconference-oracle".to_owned()]));
+        let mut github = LocateFakeGithub::default()
+            .with("laris-co", Ok(vec!["unconference-oracle".to_owned()]));
 
         let output = run_locate_command_with_sessions(
             &["unconference".to_owned(), "--json".to_owned()],
@@ -1571,7 +1902,13 @@ mod locate_tests {
         assert_eq!(rendered["layers"]["session"], serde_json::Value::Null);
         assert_eq!(rendered["layers"]["registry"], serde_json::Value::Null);
         assert_eq!(rendered["layers"]["github"]["status"], "found");
-        assert_eq!(rendered["layers"]["github"]["repo"], "laris-co/unconference-oracle");
-        assert_eq!(rendered["layers"]["github"]["url"], "https://github.com/laris-co/unconference-oracle");
+        assert_eq!(
+            rendered["layers"]["github"]["repo"],
+            "laris-co/unconference-oracle"
+        );
+        assert_eq!(
+            rendered["layers"]["github"]["url"],
+            "https://github.com/laris-co/unconference-oracle"
+        );
     }
 }

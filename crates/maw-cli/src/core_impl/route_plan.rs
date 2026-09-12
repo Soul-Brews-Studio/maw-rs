@@ -1,6 +1,7 @@
-const DISPATCH_311: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "route", handler: Handler::Sync(run_route_plan) },
-];
+const DISPATCH_311: &[DispatcherEntry] = &[DispatcherEntry {
+    command: "route",
+    handler: Handler::Sync(run_route_plan),
+}];
 
 fn render_discover_inventory_text(
     result: &PeerSourceResult,

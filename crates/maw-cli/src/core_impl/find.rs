@@ -1,6 +1,7 @@
-const DISPATCH_110: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "find", handler: Handler::Sync(find_run_command) },
-];
+const DISPATCH_110: &[DispatcherEntry] = &[DispatcherEntry {
+    command: "find",
+    handler: Handler::Sync(find_run_command),
+}];
 
 #[derive(Debug, Clone)]
 struct FindArgs {
@@ -26,7 +27,11 @@ fn find_run_command(cli_args: &[String]) -> CliOutput {
         Ok(parsed) => parsed,
         Err(error) => return find_error(&error),
     };
-    CliOutput { code: 0, stdout: find_native_render(&parsed), stderr: String::new() }
+    CliOutput {
+        code: 0,
+        stdout: find_native_render(&parsed),
+        stderr: String::new(),
+    }
 }
 
 fn find_parse_args(argv: &[String]) -> Result<FindArgs, String> {
@@ -55,13 +60,17 @@ fn find_parse_args(argv: &[String]) -> Result<FindArgs, String> {
             }
         }
     }
-    let Some(keyword) = keyword else { return Err(find_usage().to_owned()); };
+    let Some(keyword) = keyword else {
+        return Err(find_usage().to_owned());
+    };
     Ok(FindArgs { keyword, oracle })
 }
 
 fn find_take_value(argv: &[String], index: &mut usize, flag: &str) -> Result<String, String> {
     *index += 1;
-    let Some(value) = argv.get(*index) else { return Err(format!("find: missing {flag} value")); };
+    let Some(value) = argv.get(*index) else {
+        return Err(format!("find: missing {flag} value"));
+    };
     find_validate_value(flag, value)?;
     *index += 1;
     Ok(value.clone())
@@ -83,10 +92,16 @@ fn find_validate_value(kind: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn find_usage() -> &'static str { "usage: maw find <keyword> [--oracle <name>]" }
+fn find_usage() -> &'static str {
+    "usage: maw find <keyword> [--oracle <name>]"
+}
 
 fn find_error(message: &str) -> CliOutput {
-    CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") }
+    CliOutput {
+        code: 1,
+        stdout: String::new(),
+        stderr: format!("{message}\n"),
+    }
 }
 
 fn find_native_render(args: &FindArgs) -> String {
@@ -97,7 +112,13 @@ fn find_native_render(args: &FindArgs) -> String {
     let fleet_matches = find_fleet_matches(&fleet, &kw, args.oracle.as_deref());
     let targets = find_code_targets(&repos_root, &fleet, args.oracle.as_deref());
     let code_results = find_code_matches(&targets, &kw);
-    find_native_render_sections(args, &oracle_matches, &fleet_matches, &code_results, targets.len())
+    find_native_render_sections(
+        args,
+        &oracle_matches,
+        &fleet_matches,
+        &code_results,
+        targets.len(),
+    )
 }
 
 fn find_oracle_matches(
@@ -106,11 +127,15 @@ fn find_oracle_matches(
     oracle_filter: Option<&str>,
 ) -> Vec<FindOracleMatch> {
     let mut matches = Vec::new();
-    let Ok(orgs) = std::fs::read_dir(repos_root) else { return matches; };
+    let Ok(orgs) = std::fs::read_dir(repos_root) else {
+        return matches;
+    };
     for org in orgs.flatten().filter(|entry| entry.path().is_dir()) {
         find_scan_org(&org, kw, oracle_filter, &mut matches);
     }
-    matches.sort_by(|left, right| (left.name.as_str(), left.slug.as_str()).cmp(&(right.name.as_str(), right.slug.as_str())));
+    matches.sort_by(|left, right| {
+        (left.name.as_str(), left.slug.as_str()).cmp(&(right.name.as_str(), right.slug.as_str()))
+    });
     matches
 }
 
@@ -121,7 +146,9 @@ fn find_scan_org(
     out: &mut Vec<FindOracleMatch>,
 ) {
     let org_name = org.file_name().to_string_lossy().into_owned();
-    let Ok(repos) = std::fs::read_dir(org.path()) else { return; };
+    let Ok(repos) = std::fs::read_dir(org.path()) else {
+        return;
+    };
     for repo in repos.flatten().filter(|entry| entry.path().is_dir()) {
         find_maybe_push_oracle(&org_name, &repo, kw, oracle_filter, out);
     }
@@ -135,17 +162,27 @@ fn find_maybe_push_oracle(
     out: &mut Vec<FindOracleMatch>,
 ) {
     let repo_name_raw = repo.file_name().to_string_lossy().into_owned();
-    let repo_name = repo_name_raw.strip_suffix("-oracle").unwrap_or(&repo_name_raw).to_owned();
+    let repo_name = repo_name_raw
+        .strip_suffix("-oracle")
+        .unwrap_or(&repo_name_raw)
+        .to_owned();
     let slug = format!("{org_name}/{repo_name_raw}");
     if oracle_filter.is_some_and(|wanted| wanted != repo_name) {
         return;
     }
     if repo_name.to_lowercase().contains(kw) || slug.to_lowercase().contains(kw) {
-        out.push(FindOracleMatch { name: repo_name, slug });
+        out.push(FindOracleMatch {
+            name: repo_name,
+            slug,
+        });
     }
 }
 
-fn find_fleet_matches(fleet: &[NativeFleetSession], kw: &str, oracle_filter: Option<&str>) -> Vec<String> {
+fn find_fleet_matches(
+    fleet: &[NativeFleetSession],
+    kw: &str,
+    oracle_filter: Option<&str>,
+) -> Vec<String> {
     let mut matches = Vec::new();
     for session in fleet {
         find_maybe_push_fleet_session(session, kw, oracle_filter, &mut matches);
@@ -215,7 +252,9 @@ fn find_maybe_push_fleet_target(
     if oracle_filter.is_some_and(|wanted| wanted != oracle_name) {
         return;
     }
-    let Some(window) = session.windows.first() else { return; };
+    let Some(window) = session.windows.first() else {
+        return;
+    };
     if window.repo.is_empty() {
         return;
     }
@@ -251,8 +290,15 @@ fn find_code_matches(targets: &[(String, std::path::PathBuf)], kw: &str) -> Vec<
     results
 }
 
-fn find_collect_code_matches(name: &str, root: &std::path::Path, kw: &str, out: &mut Vec<FindCodeMatch>) {
-    let Ok(entries) = std::fs::read_dir(root) else { return; };
+fn find_collect_code_matches(
+    name: &str,
+    root: &std::path::Path,
+    kw: &str,
+    out: &mut Vec<FindCodeMatch>,
+) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
     for entry in entries.flatten() {
         find_scan_code_entry(name, root, kw, &entry.path(), out);
     }
@@ -269,10 +315,22 @@ fn find_scan_code_entry(
         find_collect_code_matches(name, path, kw, out);
         return;
     }
-    let Ok(text) = std::fs::read_to_string(path) else { return; };
-    let Some(line) = text.lines().find(|line| line.to_lowercase().contains(kw)) else { return; };
-    let rel = path.strip_prefix(root).unwrap_or(path).to_string_lossy().into_owned();
-    out.push(FindCodeMatch { oracle: name.to_owned(), file: rel, line: line.trim().to_owned() });
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return;
+    };
+    let Some(line) = text.lines().find(|line| line.to_lowercase().contains(kw)) else {
+        return;
+    };
+    let rel = path
+        .strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .into_owned();
+    out.push(FindCodeMatch {
+        oracle: name.to_owned(),
+        file: rel,
+        line: line.trim().to_owned(),
+    });
 }
 
 fn find_native_render_sections(
@@ -285,13 +343,21 @@ fn find_native_render_sections(
     let total = oracle_matches.len() + fleet_matches.len() + code_results.len();
     let mut out = format!("\n  \x1b[36m🔍 Searching\x1b[0m — \"{}\"\n\n", args.keyword);
     if total == 0 {
-        let _ = write!(out, "  \x1b[90m○\x1b[0m no matches found across {target_count} oracle(s)\n\n");
+        let _ = write!(
+            out,
+            "  \x1b[90m○\x1b[0m no matches found across {target_count} oracle(s)\n\n"
+        );
         return out;
     }
     find_native_render_oracles(&mut out, oracle_matches);
     find_native_render_fleet(&mut out, fleet_matches);
     find_native_render_code(&mut out, code_results);
-    find_native_render_summary(&mut out, oracle_matches.len(), fleet_matches.len(), code_results.len());
+    find_native_render_summary(
+        &mut out,
+        oracle_matches.len(),
+        fleet_matches.len(),
+        code_results.len(),
+    );
     out
 }
 
@@ -301,7 +367,11 @@ fn find_native_render_oracles(out: &mut String, matches: &[FindOracleMatch]) {
     }
     out.push_str("  \x1b[36m── Oracles ──\x1b[0m\n");
     for item in matches {
-        let _ = writeln!(out, "    \x1b[1m{}\x1b[0m \x1b[90m({})\x1b[0m", item.name, item.slug);
+        let _ = writeln!(
+            out,
+            "    \x1b[1m{}\x1b[0m \x1b[90m({})\x1b[0m",
+            item.name, item.slug
+        );
     }
     out.push('\n');
 }
@@ -333,7 +403,12 @@ fn find_native_render_code(out: &mut String, matches: &[FindCodeMatch]) {
 }
 
 fn find_native_render_code_group(out: &mut String, oracle: &str, matches: &[&FindCodeMatch]) {
-    let _ = writeln!(out, "    \x1b[36m{oracle}\x1b[0m ({} match{})", matches.len(), if matches.len() == 1 { "" } else { "es" });
+    let _ = writeln!(
+        out,
+        "    \x1b[36m{oracle}\x1b[0m ({} match{})",
+        matches.len(),
+        if matches.len() == 1 { "" } else { "es" }
+    );
     for item in matches.iter().take(10) {
         let _ = writeln!(out, "      \x1b[90m{}\x1b[0m", item.file);
         if !item.line.is_empty() {
@@ -342,11 +417,20 @@ fn find_native_render_code_group(out: &mut String, oracle: &str, matches: &[&Fin
         }
     }
     if matches.len() > 10 {
-        let _ = writeln!(out, "      \x1b[90m... and {} more\x1b[0m", matches.len() - 10);
+        let _ = writeln!(
+            out,
+            "      \x1b[90m... and {} more\x1b[0m",
+            matches.len() - 10
+        );
     }
 }
 
-fn find_native_render_summary(out: &mut String, oracle_count: usize, fleet_count: usize, code_count: usize) {
+fn find_native_render_summary(
+    out: &mut String,
+    oracle_count: usize,
+    fleet_count: usize,
+    code_count: usize,
+) {
     let total = oracle_count + fleet_count + code_count;
     let mut parts = Vec::new();
     if oracle_count > 0 {
@@ -358,7 +442,11 @@ fn find_native_render_summary(out: &mut String, oracle_count: usize, fleet_count
     if code_count > 0 {
         parts.push(format!("{code_count} code"));
     }
-    let _ = write!(out, "  \x1b[32m{total} match(es)\x1b[0m — {}\n\n", parts.join(", "));
+    let _ = write!(
+        out,
+        "  \x1b[32m{total} match(es)\x1b[0m — {}\n\n",
+        parts.join(", ")
+    );
 }
 
 fn find_oracle_name(session_name: &str) -> &str {
@@ -368,8 +456,10 @@ fn find_oracle_name(session_name: &str) -> &str {
 fn find_ghq_root() -> std::path::PathBuf {
     std::env::var_os("GHQ_ROOT").map_or_else(
         || {
-            std::env::var_os("HOME")
-                .map_or_else(|| std::path::PathBuf::from(".").join("Code"), |home| std::path::PathBuf::from(home).join("Code"))
+            std::env::var_os("HOME").map_or_else(
+                || std::path::PathBuf::from(".").join("Code"),
+                |home| std::path::PathBuf::from(home).join("Code"),
+            )
         },
         |value| {
             let mut path = std::path::PathBuf::from(value);
