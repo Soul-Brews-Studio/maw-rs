@@ -1556,11 +1556,28 @@ pub fn servecore_apply_pipeline_with_views_config<S>(
 where
     S: Clone + Send + Sync + 'static,
 {
+    let origin_policy = ServecoreOriginPolicy::from_process_env();
+    servecore_apply_pipeline_with_views_config_and_origin_policy(
+        router,
+        views_config,
+        origin_policy,
+    )
+}
+
+pub fn servecore_apply_pipeline_with_views_config_and_origin_policy<S>(
+    router: Router<S>,
+    views_config: modules::static_views::ViewsConfig,
+    origin_policy: ServecoreOriginPolicy,
+) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
     modules::static_views::views_apply_fallback_with_config(router, views_config)
         .layer(middleware::from_fn(servecore_auth_default_deny))
         .layer(middleware::from_fn(servecore_engine_proxy))
         .layer(middleware::from_fn(servecore_ws_upgrade_gate))
         .layer(middleware::from_fn(servecore_cors_preflight))
+        .layer(Extension(origin_policy))
 }
 
 #[must_use]
@@ -1580,9 +1597,13 @@ fn servecore_validate_path(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) async fn servecore_cors_preflight(req: Request<Body>, next: Next) -> Response {
+pub(crate) async fn servecore_cors_preflight(
+    Extension(origin_policy): Extension<ServecoreOriginPolicy>,
+    req: Request<Body>,
+    next: Next,
+) -> Response {
     let origin = req.headers().get("origin").cloned();
-    if !servecore_request_origin_allowed(req.headers()) {
+    if !servecore_request_origin_allowed(req.headers(), &origin_policy) {
         return servecore_forbidden("origin-not-allowed");
     }
     if req.method() == Method::OPTIONS {
@@ -1649,68 +1670,150 @@ fn servecore_single_header<'a>(
     Ok(value)
 }
 
-pub(crate) fn servecore_request_origin_allowed(headers: &HeaderMap) -> bool {
+pub(crate) fn servecore_request_origin_allowed(
+    headers: &HeaderMap,
+    origin_policy: &ServecoreOriginPolicy,
+) -> bool {
     let mut origins = headers.get_all("origin").iter();
     let Some(origin) = origins.next() else {
         return true;
     };
-    origins.next().is_none() && servecore_origin_allowed(origin)
+    origins.next().is_none()
+        && origin
+            .to_str()
+            .is_ok_and(|origin| origin_policy.allows(origin))
 }
 
-fn servecore_origin_allowed(origin: &HeaderValue) -> bool {
-    let Ok(origin) = origin.to_str() else {
-        return false;
-    };
-    let configured = std::env::var("MAW_SERVE_ALLOWED_ORIGINS").ok();
-    servecore_origin_allowed_with(origin, configured.as_deref())
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ServecoreOriginPolicy {
+    entries: Vec<String>,
+    invalid: Option<String>,
 }
 
-fn servecore_origin_allowed_with(origin: &str, configured: Option<&str>) -> bool {
-    if !servecore_valid_web_origin(origin) {
-        return false;
+impl ServecoreOriginPolicy {
+    #[must_use]
+    pub fn from_process_env() -> Self {
+        match std::env::var("MAW_SERVE_ALLOWED_ORIGINS") {
+            Ok(origins) => Self::from_comma_separated(Some(origins)),
+            Err(std::env::VarError::NotPresent) => Self::default(),
+            Err(std::env::VarError::NotUnicode(_)) => {
+                Self::invalid("MAW_SERVE_ALLOWED_ORIGINS contains non-Unicode data")
+            }
+        }
     }
-    if origin == "https://god.buildwithoracle.com" || servecore_loopback_origin(origin) {
-        return true;
+
+    #[must_use]
+    pub fn from_comma_separated(configured: Option<String>) -> Self {
+        configured.map_or_else(Self::default, |origins| {
+            Self::from_entries(
+                origins
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|entry| !entry.is_empty())
+                    .map(ToOwned::to_owned)
+                    .collect(),
+                origins.len(),
+            )
+        })
     }
-    configured.is_some_and(|origins| {
-        if origins.len() > 4_096 {
+
+    fn from_entries(entries: Vec<String>, bytes: usize) -> Self {
+        let invalid = if bytes > 4_096 {
+            Some("configured value exceeds the 4096-byte limit".to_owned())
+        } else if entries.len() > SERVECORE_MAX_ALLOWED_ORIGINS {
+            Some(format!(
+                "configured list exceeds the {SERVECORE_MAX_ALLOWED_ORIGINS}-origin limit"
+            ))
+        } else {
+            entries
+                .iter()
+                .find(|entry| !servecore_valid_web_origin(entry))
+                .map(|entry| {
+                    format!(
+                        "rejected entry {}: {}",
+                        servecore_origin_diagnostic_label(entry),
+                        servecore_invalid_web_origin_reason(entry)
+                    )
+                })
+        };
+        Self { entries, invalid }
+    }
+
+    #[must_use]
+    pub fn invalid(reason: &str) -> Self {
+        Self {
+            entries: Vec::new(),
+            invalid: Some(reason.to_owned()),
+        }
+    }
+
+    #[must_use]
+    pub fn invalid_diagnostic(&self) -> Option<String> {
+        self.invalid.as_ref().map(|reason| {
+            format!("maw-rs serve allowed origins: {reason}; custom allowlist fails closed")
+        })
+    }
+
+    pub(crate) fn allows(&self, origin: &str) -> bool {
+        if !servecore_valid_web_origin(origin) {
             return false;
         }
-        let entries = origins
-            .split(',')
-            .map(str::trim)
-            .filter(|entry| !entry.is_empty())
-            .collect::<Vec<_>>();
-        !entries.is_empty()
-            && entries.len() <= SERVECORE_MAX_ALLOWED_ORIGINS
-            && entries
-                .iter()
-                .all(|entry| servecore_valid_web_origin(entry))
-            && entries.contains(&origin)
-    })
+        if origin == "https://god.buildwithoracle.com" || servecore_loopback_origin(origin) {
+            return true;
+        }
+        self.invalid.is_none() && self.entries.iter().any(|entry| entry == origin)
+    }
+}
+
+fn servecore_origin_diagnostic_label(origin: &str) -> String {
+    if origin.contains('@') {
+        "<credential-bearing origin redacted>".to_owned()
+    } else {
+        format!("{origin:?}")
+    }
+}
+
+#[cfg(test)]
+fn servecore_origin_allowed_with(origin: &str, configured: Option<&str>) -> bool {
+    ServecoreOriginPolicy::from_comma_separated(configured.map(ToOwned::to_owned)).allows(origin)
 }
 
 fn servecore_valid_web_origin(origin: &str) -> bool {
-    if origin.is_empty() || origin.len() > 2_048 || origin.contains('*') {
-        return false;
+    servecore_invalid_web_origin_reason(origin).is_empty()
+}
+
+fn servecore_invalid_web_origin_reason(origin: &str) -> &'static str {
+    if origin.is_empty() {
+        return "origin is empty";
+    }
+    if origin.len() > 2_048 {
+        return "origin exceeds the 2048-byte limit";
+    }
+    if origin.contains('*') {
+        return "wildcard origins are not allowed";
     }
     let Ok(uri) = origin.parse::<Uri>() else {
-        return false;
+        return "origin is not a valid URI";
     };
     let Some(scheme) = uri.scheme_str() else {
-        return false;
+        return "origin must include an http or https scheme";
     };
     let Some(authority) = uri.authority() else {
-        return false;
+        return "origin must include a host";
     };
     let suffix = authority.as_str().strip_prefix(authority.host());
     let port_valid = matches!(suffix, Some(""))
         || suffix.is_some_and(|part| part.starts_with(':') && authority.port_u16().is_some());
-    matches!(scheme, "http" | "https")
+    if matches!(scheme, "http" | "https")
         && !authority.host().is_empty()
         && port_valid
         && !origin.contains('@')
         && origin == format!("{scheme}://{authority}")
+    {
+        ""
+    } else {
+        "origin must be an exact http(s) scheme and authority without credentials or a path"
+    }
 }
 
 fn servecore_loopback_origin(origin: &str) -> bool {
@@ -1774,8 +1877,12 @@ fn servecore_add_vary_origin(headers: &mut HeaderMap) {
     headers.insert("vary", value);
 }
 
-async fn servecore_ws_upgrade_gate(req: Request<Body>, next: Next) -> Response {
-    if !servecore_request_origin_allowed(req.headers()) {
+async fn servecore_ws_upgrade_gate(
+    Extension(origin_policy): Extension<ServecoreOriginPolicy>,
+    req: Request<Body>,
+    next: Next,
+) -> Response {
+    if !servecore_request_origin_allowed(req.headers(), &origin_policy) {
         return servecore_forbidden("origin-not-allowed");
     }
     next.run(req).await
@@ -3129,6 +3236,19 @@ mod tests {
                 Some(configured)
             ));
         }
+        let invalid = ServecoreOriginPolicy::from_comma_separated(Some(
+            "https://good.example,https://*.bad.example".to_owned(),
+        ));
+        let diagnostic = invalid
+            .invalid_diagnostic()
+            .expect("invalid configured entry must produce a startup diagnostic");
+        assert!(diagnostic.contains("https://*.bad.example"), "{diagnostic}");
+        assert!(diagnostic.contains("wildcard"), "{diagnostic}");
+        assert!(!invalid.allows("https://good.example"));
+        let credential = ServecoreOriginPolicy::from_comma_separated(Some(
+            "https://operator:secret@example.com".to_owned(),
+        ));
+        assert!(!credential.invalid_diagnostic().unwrap().contains("secret"));
         let too_many = (0..=SERVECORE_MAX_ALLOWED_ORIGINS)
             .map(|index| format!("https://office-{index}.example"))
             .collect::<Vec<_>>()
