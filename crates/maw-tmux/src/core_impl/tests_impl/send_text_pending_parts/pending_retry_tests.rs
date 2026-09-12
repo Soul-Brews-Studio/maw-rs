@@ -303,3 +303,29 @@
         assert!(!pane_input_pending_from_capture("command output only"));
         assert_eq!(strip_tmux_ansi("a\u{1b}[31mred\u{1b}[0m"), "ared");
     }
+
+    #[test]
+    fn forced_send_skips_autocomplete_preflight_but_confirms_submission() {
+        let runner = FakeRunner::with_responses(vec![
+            Ok("0"), Ok(""), Ok(""), Ok("❯ "), Ok("❯ "),
+        ]);
+        let mut client = TmuxClient::new(runner);
+        let report = client
+            .send_text_with_force_and_sleeper("sess:oracle.0", "hello", true, |_| {})
+            .expect("forced send should not inspect the autocomplete before typing");
+        assert_eq!(report.enter_attempts, 1);
+        assert_eq!(client.runner.calls[1].0, "send-keys");
+        assert_eq!(client.runner.calls.iter().filter(|(cmd, _)| cmd == "capture-pane").count(), 2);
+    }
+
+    #[test]
+    fn forced_send_still_refuses_unconfirmed_submission() {
+        let runner = FakeRunner::with_responses(vec![
+            Ok("0"), Ok(""), Ok(""), Ok("> different draft"), Ok("> different draft"),
+        ]);
+        let mut client = TmuxClient::new(runner);
+        let error = client
+            .send_text_with_force_and_sleeper("sess:oracle.0", "hello", true, |_| {})
+            .expect_err("force must not disable confirmation");
+        assert!(error.message.contains("could not be confirmed"));
+    }

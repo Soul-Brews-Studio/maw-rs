@@ -569,7 +569,7 @@ fn send_local_message_with_audit(
         }
     };
     let outbound = format_local_hey_message(text, config, sender_oracle, from);
-    if let Err(error) = tmux.send_text(target, &outbound) {
+    if let Err(error) = tmux.send_text_with_force(target, &outbound, command == "hey") {
         return CliOutput {
             code: 1,
             stdout: String::new(),

@@ -136,6 +136,23 @@ where
         self.send_text_with_sleeper(target, text, std::thread::sleep)
     }
 
+    /// Send text while optionally skipping the preexisting-composer guard.
+    ///
+    /// Forced delivery may append to real drafts as well as autocomplete hints.
+    /// Post-Enter confirmation is always retained.
+    ///
+    /// # Errors
+    ///
+    /// Returns runner errors or unconfirmed submission errors.
+    pub fn send_text_with_force(
+        &mut self,
+        target: &str,
+        text: &str,
+        force: bool,
+    ) -> Result<SendTextReport, TmuxError> {
+        self.send_text_with_force_and_sleeper(target, text, force, std::thread::sleep)
+    }
+
     /// Run [`Self::send_text`] with an injected sleep function for deterministic
     /// callers. Production callbacks must honor every requested delay.
     ///
@@ -146,12 +163,34 @@ where
         &mut self,
         target: &str,
         text: &str,
+        sleep: F,
+    ) -> Result<SendTextReport, TmuxError>
+    where
+        F: FnMut(std::time::Duration),
+    {
+        self.send_text_with_force_and_sleeper(target, text, false, sleep)
+    }
+
+    /// Run [`Self::send_text_with_force`] with deterministic sleep injection.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::send_text_with_force`].
+    pub fn send_text_with_force_and_sleeper<F>(
+        &mut self,
+        target: &str,
+        text: &str,
+        force: bool,
         mut sleep: F,
     ) -> Result<SendTextReport, TmuxError>
     where
         F: FnMut(std::time::Duration),
     {
-        self.preflight_send_text(target)?;
+        if force {
+            self.exit_mode_if_needed(target)?;
+        } else {
+            self.preflight_send_text(target)?;
+        }
         let used_buffer = text.contains('\n') || text.len() > 500;
         if used_buffer {
             self.load_buffer(text)?;
