@@ -298,12 +298,23 @@ quick_tests() {
     run_step "test (affected:$crates)" cargo test "${pkgs[@]}" --no-fail-fast
 }
 
+# maw-cli's build script discovers core_impl/*.rs and writes their include!
+# statements into OUT_DIR. rustfmt cannot follow that generated path from
+# core_impl/mod.rs, so cargo fmt --all silently skips these include-only files.
+# Check them explicitly; rustfmt accepts the nested-include item fragments too.
+include_only_format_check() {
+    local sources=("$REPO_ROOT"/crates/maw-cli/src/core_impl/*.rs)
+    [ -e "${sources[0]}" ] || return 0
+    rustfmt --edition 2021 --check "${sources[@]}"
+}
+
 # ---- tiers -------------------------------------------------------------------
 gate_quick() {
     preflight
     acquire_lock
     warm_seed
     run_step "fmt --check" cargo fmt --all -- --check
+    run_step "fmt include-only sources --check (#964)" include_only_format_check
     run_step "clippy (pinned $PINNED_CHANNEL)" cargo clippy --workspace --all-targets -- -D warnings
     quick_tests
     summary
@@ -316,6 +327,7 @@ gate_full() {
     acquire_lock
     warm_seed
     run_step "fmt --check" cargo fmt --all -- --check
+    run_step "fmt include-only sources --check (#964)" include_only_format_check
     LEAK_BEFORE="$(leak_count)"
     run_step "test --workspace" cargo test --workspace --locked --no-fail-fast
     run_step "temp-fixture leak (#851)" leak_check "$LEAK_BEFORE"
