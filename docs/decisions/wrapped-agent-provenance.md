@@ -1,6 +1,7 @@
 # Wrapped-agent pane provenance (#924)
 
-Status: proposal; no runtime trust grant or detection change is implemented here.
+Status: deferred proposal; #924 was closed as not planned during maintenance
+cleanup, not as implemented. No runtime trust grant or detection change exists here.
 
 ## Decision
 
@@ -69,7 +70,7 @@ sending commands: the owning host must revalidate immediately before mutation.
 Disconnection, replay or unavailable observations remain unknown. Do not expose
 process credentials or full command arguments in the display projection.
 
-## Required implementation evidence before closing #924
+## Required evidence before claiming a future implementation complete
 
 Use injected process/server probes, a fake private record store and fake clock;
 tests must not depend on the developer's live tmux server.
