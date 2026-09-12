@@ -34,3 +34,11 @@ examples/**/dist/
 # nova builder worktrees
 agents/
 .envrc
+
+# Spec Kit installer output is local tooling, not product source.
+# Keep authored specs/ and the ratified project constitution in Git.
+/.agents/skills/speckit-*/
+/.specify/*
+!/.specify/memory/
+/.specify/memory/*
+!/.specify/memory/constitution.md
