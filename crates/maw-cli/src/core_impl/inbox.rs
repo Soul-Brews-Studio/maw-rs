@@ -118,13 +118,24 @@ fn inbox_real_env() -> InboxEnv {
     let config_dir = maw_config_dir(&xdg);
     let state_dir = maw_state_dir(&xdg);
     let config = merged_config_value_for_env(&xdg);
-    let inbox_dir = inbox_resolve_dir(&config);
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    inbox_env_from_config(&config_dir, &state_dir, &config, &cwd)
+}
+
+fn inbox_env_from_config(
+    config_dir: &std::path::Path,
+    state_dir: &std::path::Path,
+    config: &serde_json::Value,
+    cwd: &std::path::Path,
+) -> InboxEnv {
+    let inbox_dir = inbox_resolve_dir(config, cwd);
+    let oracle = inbox_resolve_oracle(config, &inbox_dir);
     InboxEnv {
         inbox_dir,
         pending_dir: config_dir.join("pending"),
-        state_dir,
-        oracle: inbox_config_string(&config, "oracle", "local"),
-        node: inbox_config_string(&config, "node", "cli"),
+        state_dir: state_dir.to_path_buf(),
+        oracle,
+        node: inbox_config_string(config, "node", "cli"),
     }
 }
 
@@ -141,17 +152,36 @@ fn inbox_config_string(config: &serde_json::Value, key: &str, fallback: &str) ->
         .to_owned()
 }
 
-fn inbox_resolve_dir(config: &serde_json::Value) -> std::path::PathBuf {
+fn inbox_resolve_dir(config: &serde_json::Value, cwd: &std::path::Path) -> std::path::PathBuf {
     if let Some(psi) = config.get("psiPath").and_then(serde_json::Value::as_str) {
         return std::path::Path::new(psi).join("inbox");
     }
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let unicode = cwd.join("ψ").join("inbox");
     if unicode.exists() {
         unicode
     } else {
         cwd.join("psi").join("inbox")
     }
+}
+
+fn inbox_resolve_oracle(config: &serde_json::Value, inbox_dir: &std::path::Path) -> String {
+    if config
+        .get("psiPath")
+        .and_then(serde_json::Value::as_str)
+        .is_some()
+    {
+        return inbox_config_string(config, "oracle", "local");
+    }
+    inbox_oracle_from_dir(inbox_dir)
+        .unwrap_or_else(|| inbox_config_string(config, "oracle", "local"))
+}
+
+fn inbox_oracle_from_dir(inbox_dir: &std::path::Path) -> Option<String> {
+    let repo = inbox_dir.parent()?.parent()?;
+    let name = repo.file_name()?.to_str()?;
+    let name = name.split_once(".wt-").map_or(name, |(base, _)| base);
+    let name = name.strip_suffix("-oracle").unwrap_or(name);
+    (!name.is_empty()).then(|| name.to_owned())
 }
 
 fn inbox_run_list(argv: &[String], env: &InboxEnv, now_ms: u64) -> Result<String, String> {
@@ -513,7 +543,6 @@ fn inbox_parse_hours_seconds(value: &str) -> Result<u64, String> {
     }
     Ok(seconds)
 }
-
 
 
 

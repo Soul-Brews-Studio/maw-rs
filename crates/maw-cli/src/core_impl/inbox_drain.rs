@@ -292,8 +292,8 @@ fn inbox_format_drain_result(result: &InboxDrainResult) -> String {
         "archived"
     };
     let mut lines = vec![format!(
-        "{}: {verb} {}/{} safe stale inbox message(s) (scanned {}, max {})",
-        result.oracle, result.archived, result.matched, result.scanned, result.max
+        "{}: {verb} {}/{} scanned inbox message(s) (safe stale matches {}, max {})",
+        result.oracle, result.archived, result.scanned, result.matched, result.max
     )];
     if result.remaining_matches > 0 {
         lines.push(format!(

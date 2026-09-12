@@ -241,9 +241,114 @@ mod inbox_tests {
             &mut sender,
         )
         .unwrap();
-        assert!(out.contains("nova: would archive 1/1 safe stale inbox message"));
+        assert!(out.contains("nova: would archive 1/1 scanned inbox message"));
+        assert!(out.contains("safe stale matches 1"));
         assert!(out.contains("ci-green"));
         assert!(env.inbox_dir.join("2026-06-24_00-00_alice_ci.md").exists());
+    }
+
+    #[test]
+    fn inbox_drain_headline_exposes_nonempty_scanned_denominator_when_nothing_matches() {
+        let env = inbox_temp_env("drain-no-match");
+        for index in 0..95 {
+            inbox_write_fixture(
+                &env,
+                &format!("2026-06-24_00-00_alice-note-{index}.md"),
+                "alice",
+                false,
+                "ordinary message requiring review",
+            );
+        }
+        let mut sender = InboxFakeSender::default();
+
+        let out = inbox_run_test(
+            &inbox_strings(&["drain", "--safe", "--dry-run"]),
+            &env,
+            &mut sender,
+        )
+        .unwrap();
+
+        assert!(out.contains("nova: would archive 0/95 scanned inbox message"));
+        assert!(out.contains("safe stale matches 0"));
+        assert!(out.contains("no messages matched the safe stale-ack filter"));
+    }
+
+    #[test]
+    fn inbox_cwd_identity_overrides_global_oracle_and_isolates_status_cursors() {
+        let base = inbox_temp_env("cwd-identity");
+        let root = base.inbox_dir.parent().unwrap().parent().unwrap();
+        let config = serde_json::json!({"oracle": "epictetus", "node": "mac-mini"});
+        let config_dir = root.join("config");
+        let state_dir = root.join("state");
+        let first_repo = root.join("epictetus");
+        let second_repo = root.join("kakashi-oracle.wt-agent2");
+        std::fs::create_dir_all(first_repo.join("ψ/inbox")).unwrap();
+        std::fs::create_dir_all(second_repo.join("ψ/inbox")).unwrap();
+        let first = inbox_env_from_config(&config_dir, &state_dir, &config, &first_repo);
+        let second = inbox_env_from_config(&config_dir, &state_dir, &config, &second_repo);
+        for index in 0..3 {
+            inbox_write_fixture(
+                &first,
+                &format!("2026-06-25_00-00_first-{index}.md"),
+                "alice",
+                false,
+                "first inbox",
+            );
+        }
+        inbox_write_fixture(
+            &second,
+            "2026-06-25_00-00_second.md",
+            "alice",
+            false,
+            "second inbox",
+        );
+
+        let first_status = inbox_build_status(
+            &first.oracle,
+            &first.inbox_dir,
+            &first,
+            INBOX_TEST_NOW_MS,
+        )
+        .unwrap();
+        let second_status = inbox_build_status(
+            &second.oracle,
+            &second.inbox_dir,
+            &second,
+            INBOX_TEST_NOW_MS,
+        )
+        .unwrap();
+
+        assert_eq!(first.oracle, "epictetus");
+        assert_eq!(second.oracle, "kakashi");
+        assert_eq!(first_status.unread, 3);
+        assert_eq!(second_status.unread, 1);
+        assert_eq!(first_status.delta_since_last_check, 0);
+        assert_eq!(second_status.delta_since_last_check, 0);
+        let cursor = inbox_read_cursor(&state_dir);
+        assert_eq!(cursor.get("epictetus").map(|entry| entry.unread), Some(3));
+        assert_eq!(cursor.get("kakashi").map(|entry| entry.unread), Some(1));
+    }
+
+    #[test]
+    fn inbox_explicit_psi_path_keeps_configured_oracle_identity() {
+        let base = inbox_temp_env("explicit-psi");
+        let root = base.inbox_dir.parent().unwrap().parent().unwrap();
+        let explicit_psi = root.join("shared-psi");
+        let config = serde_json::json!({
+            "oracle": "profile-oracle",
+            "node": "mac-mini",
+            "psiPath": explicit_psi,
+        });
+
+        let env = inbox_env_from_config(
+            &root.join("config"),
+            &root.join("state"),
+            &config,
+            &root.join("ignored-cwd"),
+        );
+
+        assert_eq!(env.oracle, "profile-oracle");
+        assert_eq!(env.inbox_dir, root.join("shared-psi/inbox"));
     }
 
     #[test]
@@ -261,6 +366,34 @@ mod inbox_tests {
         assert!(env.state_dir.join("inbox-cursor.json").exists());
         let json = inbox_render_status(&status, true).unwrap();
         assert!(json.contains("\"oldest_age_seconds\""));
+    }
+
+    #[test]
+    fn inbox_status_treats_missing_read_state_as_unread() {
+        let env = inbox_temp_env("status-mixed-read-state");
+        inbox_write_fixture(
+            &env,
+            "2026-06-25_00-00_alice_unread.md",
+            "alice",
+            false,
+            "unread message",
+        );
+        inbox_write_fixture(
+            &env,
+            "2026-06-25_00-01_alice_read.md",
+            "alice",
+            true,
+            "read message",
+        );
+        std::fs::write(
+            env.inbox_dir.join("2026-06-25_00-02_alice_legacy.md"),
+            "---\nfrom: alice\nto: nova\ntimestamp: 2026-06-25T00:02:00.000Z\n---\n\nlegacy message\n",
+        )
+        .unwrap();
+
+        let status = inbox_build_status("nova", &env.inbox_dir, &env, INBOX_TEST_NOW_MS).unwrap();
+
+        assert_eq!(status.unread, 2);
     }
 
     #[test]
