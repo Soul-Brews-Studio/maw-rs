@@ -49,7 +49,10 @@ impl ReqwestHttpTransportIo {
                 .build()
                 .map_err(|error| format!("http client build failed: {error}"))?
         } else {
-            reqwest::Client::builder().build().map_err(|error| format!("http client build failed: {error}"))?
+            reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|error| format!("http client build failed: {error}"))?
         };
         let mut builder = client
             .request(method, &request.url)

@@ -269,14 +269,12 @@ fn net_fetch_refuses_redirects_loopback_violations_and_caps() {
         }),
     )
     .with_http_resolver_override("public.test", [IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34))]);
-    assert_eq!(
-        call(
-            &host,
-            "maw.net.fetch",
-            &json!({"endpoint":"redir","path":"/go"})
-        )["value"]["status"],
-        302
+    let redirect = call(
+        &host,
+        "maw.net.fetch",
+        &json!({"endpoint":"redir","path":"/go"}),
     );
+    assert_eq!(redirect["value"]["status"], 302, "{redirect}");
     assert_eq!(
         call(
             &host,
