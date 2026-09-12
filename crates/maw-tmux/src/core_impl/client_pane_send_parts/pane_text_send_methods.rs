@@ -176,7 +176,6 @@ where
         Ok(SendTextReport {
             used_buffer,
             enter_attempts,
-            warned_pending: false,
         })
     }
 
