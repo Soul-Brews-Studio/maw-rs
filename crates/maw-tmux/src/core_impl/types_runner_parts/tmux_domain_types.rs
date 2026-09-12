@@ -116,7 +116,6 @@ pub struct SelectPaneOptions {
 pub struct SendTextReport {
     pub used_buffer: bool,
     pub enter_attempts: u32,
-    pub warned_pending: bool,
 }
 
 /// Options for lock-protected `split-window` construction.
@@ -196,4 +195,3 @@ pub enum SendThrottle {
 pub struct TmuxSendTracker {
     entries: BTreeMap<String, SendTrackerEntry>,
 }
-
