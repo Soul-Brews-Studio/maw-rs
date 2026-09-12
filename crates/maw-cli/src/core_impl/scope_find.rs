@@ -64,12 +64,20 @@ fn run_scope_command(argv: &[String]) -> CliOutput {
         .map(String::as_str)
         .collect::<Vec<_>>();
     let Some(sub) = positional.first().copied() else {
-        return CliOutput { code: 0, stdout: format!("{}\n", scope_help()), stderr: String::new() };
+        return CliOutput {
+            code: 0,
+            stdout: format!("{}\n", scope_help()),
+            stderr: String::new(),
+        };
     };
 
     match sub {
         "list" | "ls" => match scope_list() {
-            Ok(scopes) => CliOutput { code: 0, stdout: format!("{}\n", format_scope_list(&scopes)), stderr: String::new() },
+            Ok(scopes) => CliOutput {
+                code: 0,
+                stdout: format!("{}\n", format_scope_list(&scopes)),
+                stderr: String::new(),
+            },
             Err(error) => scope_error(&error),
         },
         "create" | "new" => run_scope_create(argv, &positional),
@@ -78,7 +86,9 @@ fn run_scope_command(argv: &[String]) -> CliOutput {
         _ => CliOutput {
             code: 1,
             stdout: format!("{}\n", scope_help()),
-            stderr: format!("maw scope: unknown subcommand \"{sub}\" (expected list|create|show|delete)\n"),
+            stderr: format!(
+                "maw scope: unknown subcommand \"{sub}\" (expected list|create|show|delete)\n"
+            ),
         },
     }
 }
@@ -86,10 +96,14 @@ fn run_scope_command(argv: &[String]) -> CliOutput {
 #[allow(dead_code)]
 fn run_scope_create(argv: &[String], positional: &[&str]) -> CliOutput {
     let Some(name) = positional.get(1).copied() else {
-        return scope_error("usage: maw scope create <name> --members <a,b,c> [--lead <m>] [--ttl <iso>]");
+        return scope_error(
+            "usage: maw scope create <name> --members <a,b,c> [--lead <m>] [--ttl <iso>]",
+        );
     };
     let Some(members_raw) = flag_value(argv, "--members") else {
-        return scope_error(&format!("usage: maw scope create {name} --members <a,b,c> [--lead <m>] [--ttl <iso>]"));
+        return scope_error(&format!(
+            "usage: maw scope create {name} --members <a,b,c> [--lead <m>] [--ttl <iso>]"
+        ));
     };
     let members = members_raw
         .split(',')
@@ -97,7 +111,12 @@ fn run_scope_create(argv: &[String], positional: &[&str]) -> CliOutput {
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .collect::<Vec<_>>();
-    match scope_create(name, members, flag_value(argv, "--lead"), flag_value(argv, "--ttl")) {
+    match scope_create(
+        name,
+        members,
+        flag_value(argv, "--lead"),
+        flag_value(argv, "--ttl"),
+    ) {
         Ok(scope) => CliOutput {
             code: 0,
             stdout: format!(
@@ -123,7 +142,11 @@ fn run_scope_show(positional: &[&str]) -> CliOutput {
     }
     match load_scope(name) {
         Ok(Some(scope)) => match serde_json::to_string_pretty(&scope) {
-            Ok(json) => CliOutput { code: 0, stdout: format!("{json}\n"), stderr: String::new() },
+            Ok(json) => CliOutput {
+                code: 0,
+                stdout: format!("{json}\n"),
+                stderr: String::new(),
+            },
             Err(error) => scope_error(&format!("scope: failed to render {name}: {error}")),
         },
         Ok(None) => scope_error(&format!("scope \"{name}\" not found")),
@@ -136,7 +159,10 @@ fn run_scope_delete(argv: &[String], positional: &[&str]) -> CliOutput {
     let Some(name) = positional.get(1).copied() else {
         return scope_error("usage: maw scope delete <name> [--yes]");
     };
-    if !argv.iter().any(|arg| matches!(arg.as_str(), "--yes" | "-y")) {
+    if !argv
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "--yes" | "-y"))
+    {
         return CliOutput {
             code: 1,
             stdout: format!("refusing to delete scope \"{name}\" without --yes\n  to confirm: maw scope delete {name} --yes\n"),
@@ -144,8 +170,16 @@ fn run_scope_delete(argv: &[String], positional: &[&str]) -> CliOutput {
         };
     }
     match scope_delete(name) {
-        Ok(true) => CliOutput { code: 0, stdout: format!("deleted scope \"{name}\"\n"), stderr: String::new() },
-        Ok(false) => CliOutput { code: 0, stdout: format!("no-op: scope \"{name}\" not present\n"), stderr: String::new() },
+        Ok(true) => CliOutput {
+            code: 0,
+            stdout: format!("deleted scope \"{name}\"\n"),
+            stderr: String::new(),
+        },
+        Ok(false) => CliOutput {
+            code: 0,
+            stdout: format!("no-op: scope \"{name}\" not present\n"),
+            stderr: String::new(),
+        },
         Err(error) => scope_error(&error),
     }
 }
@@ -171,7 +205,11 @@ If scope/trust files are corrupt, peer send fails open with a loud stderr warnin
 
 #[allow(dead_code)]
 fn scope_error(message: &str) -> CliOutput {
-    CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") }
+    CliOutput {
+        code: 1,
+        stdout: String::new(),
+        stderr: format!("{message}\n"),
+    }
 }
 
 #[allow(dead_code)]
@@ -181,38 +219,67 @@ fn validate_scope_name(name: &str) -> Result<(), String> {
         return Err("invalid scope name \"\" (must match ^[a-z0-9][a-z0-9_-]{0,63}$)".to_owned());
     };
     if name.len() > 64 || !first.is_ascii_lowercase() && !first.is_ascii_digit() {
-        return Err(format!("invalid scope name \"{name}\" (must match ^[a-z0-9][a-z0-9_-]{{0,63}}$)"));
+        return Err(format!(
+            "invalid scope name \"{name}\" (must match ^[a-z0-9][a-z0-9_-]{{0,63}}$)"
+        ));
     }
     if !chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '_' | '-')) {
-        return Err(format!("invalid scope name \"{name}\" (must match ^[a-z0-9][a-z0-9_-]{{0,63}}$)"));
+        return Err(format!(
+            "invalid scope name \"{name}\" (must match ^[a-z0-9][a-z0-9_-]{{0,63}}$)"
+        ));
     }
     Ok(())
 }
 
 #[allow(dead_code)]
-fn scope_create(name: &str, members: Vec<String>, lead: Option<String>, ttl: Option<String>) -> Result<NativeScope, String> {
+fn scope_create(
+    name: &str,
+    members: Vec<String>,
+    lead: Option<String>,
+    ttl: Option<String>,
+) -> Result<NativeScope, String> {
     validate_scope_name(name)?;
     if members.is_empty() {
         return Err(format!("scope \"{name}\" must have at least one member"));
     }
     if members.iter().any(String::is_empty) {
-        return Err(format!("scope \"{name}\" has an empty/invalid member entry"));
+        return Err(format!(
+            "scope \"{name}\" has an empty/invalid member entry"
+        ));
     }
     if let Some(lead) = &lead {
         if !members.contains(lead) {
-            return Err(format!("scope \"{name}\" lead \"{lead}\" is not in members"));
+            return Err(format!(
+                "scope \"{name}\" lead \"{lead}\" is not in members"
+            ));
         }
     }
-    std::fs::create_dir_all(scopes_dir()).map_err(|error| format!("scope: create scopes dir: {error}"))?;
+    std::fs::create_dir_all(scopes_dir())
+        .map_err(|error| format!("scope: create scopes dir: {error}"))?;
     let path = scope_path(name);
     if path.exists() {
-        return Err(format!("scope \"{name}\" already exists at {} — delete it first to recreate", path.display()));
+        return Err(format!(
+            "scope \"{name}\" already exists at {} — delete it first to recreate",
+            path.display()
+        ));
     }
-    let scope = NativeScope { name: name.to_owned(), members, lead, created: now_iso_utc(), ttl: ttl.or(Some(String::new())).filter(|value| !value.is_empty()) };
+    let scope = NativeScope {
+        name: name.to_owned(),
+        members,
+        lead,
+        created: now_iso_utc(),
+        ttl: ttl
+            .or(Some(String::new()))
+            .filter(|value| !value.is_empty()),
+    };
     let tmp = path.with_extension("json.tmp");
-    let json = serde_json::to_string_pretty(&scope).map_err(|error| format!("scope: render {name}: {error}"))? + "\n";
-    std::fs::write(&tmp, json).map_err(|error| format!("scope: write {}: {error}", tmp.display()))?;
-    std::fs::rename(&tmp, &path).map_err(|error| format!("scope: rename {}: {error}", path.display()))?;
+    let json = serde_json::to_string_pretty(&scope)
+        .map_err(|error| format!("scope: render {name}: {error}"))?
+        + "\n";
+    std::fs::write(&tmp, json)
+        .map_err(|error| format!("scope: write {}: {error}", tmp.display()))?;
+    std::fs::rename(&tmp, &path)
+        .map_err(|error| format!("scope: rename {}: {error}", path.display()))?;
     Ok(scope)
 }
 
@@ -223,15 +290,18 @@ fn scope_delete(name: &str) -> Result<bool, String> {
     if !path.exists() {
         return Ok(false);
     }
-    std::fs::remove_file(&path).map_err(|error| format!("scope: delete {}: {error}", path.display()))?;
+    std::fs::remove_file(&path)
+        .map_err(|error| format!("scope: delete {}: {error}", path.display()))?;
     Ok(true)
 }
 
 #[allow(dead_code)]
 fn scope_list() -> Result<Vec<NativeScope>, String> {
-    std::fs::create_dir_all(scopes_dir()).map_err(|error| format!("scope: create scopes dir: {error}"))?;
+    std::fs::create_dir_all(scopes_dir())
+        .map_err(|error| format!("scope: create scopes dir: {error}"))?;
     let mut out = Vec::new();
-    let entries = std::fs::read_dir(scopes_dir()).map_err(|error| format!("scope: read scopes dir: {error}"))?;
+    let entries = std::fs::read_dir(scopes_dir())
+        .map_err(|error| format!("scope: read scopes dir: {error}"))?;
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().and_then(std::ffi::OsStr::to_str) != Some("json") {
@@ -253,7 +323,8 @@ fn load_scope(name: &str) -> Result<Option<NativeScope>, String> {
     if !path.exists() {
         return Ok(None);
     }
-    let text = std::fs::read_to_string(&path).map_err(|error| format!("scope: read {}: {error}", path.display()))?;
+    let text = std::fs::read_to_string(&path)
+        .map_err(|error| format!("scope: read {}: {error}", path.display()))?;
     Ok(serde_json::from_str(&text).ok())
 }
 
@@ -263,26 +334,54 @@ fn format_scope_list(rows: &[NativeScope]) -> String {
         return "no scopes".to_owned();
     }
     let header = ["name", "members", "lead", "ttl", "created"];
-    let data = rows.iter().map(|row| {
-        [row.name.clone(), row.members.join(","), row.lead.clone().unwrap_or_else(|| "-".to_owned()), row.ttl.clone().unwrap_or_else(|| "-".to_owned()), row.created.clone()]
-    }).collect::<Vec<_>>();
-    let widths = (0..header.len()).map(|idx| {
-        data.iter().map(|cols| cols[idx].len()).chain([header[idx].len()]).max().unwrap_or(0)
-    }).collect::<Vec<_>>();
+    let data = rows
+        .iter()
+        .map(|row| {
+            [
+                row.name.clone(),
+                row.members.join(","),
+                row.lead.clone().unwrap_or_else(|| "-".to_owned()),
+                row.ttl.clone().unwrap_or_else(|| "-".to_owned()),
+                row.created.clone(),
+            ]
+        })
+        .collect::<Vec<_>>();
+    let widths = (0..header.len())
+        .map(|idx| {
+            data.iter()
+                .map(|cols| cols[idx].len())
+                .chain([header[idx].len()])
+                .max()
+                .unwrap_or(0)
+        })
+        .collect::<Vec<_>>();
     let format_row = |cols: &[String]| -> String {
-        cols.iter().enumerate().map(|(idx, col)| format!("{col:<width$}", width = widths[idx])).collect::<Vec<_>>().join("  ")
+        cols.iter()
+            .enumerate()
+            .map(|(idx, col)| format!("{col:<width$}", width = widths[idx]))
+            .collect::<Vec<_>>()
+            .join("  ")
     };
     let mut lines = Vec::new();
     lines.push(format_row(&header.map(str::to_owned)));
-    lines.push(format_row(&widths.iter().map(|width| "-".repeat(*width)).collect::<Vec<_>>()));
+    lines.push(format_row(
+        &widths
+            .iter()
+            .map(|width| "-".repeat(*width))
+            .collect::<Vec<_>>(),
+    ));
     lines.extend(data.iter().map(|cols| format_row(cols)));
     lines.join("\n")
 }
 
 #[allow(dead_code)]
-fn scopes_dir() -> std::path::PathBuf { active_config_dir().join("scopes") }
+fn scopes_dir() -> std::path::PathBuf {
+    active_config_dir().join("scopes")
+}
 #[allow(dead_code)]
-fn scope_path(name: &str) -> std::path::PathBuf { scopes_dir().join(format!("{name}.json")) }
+fn scope_path(name: &str) -> std::path::PathBuf {
+    scopes_dir().join(format!("{name}.json"))
+}
 
 #[allow(dead_code)]
 fn run_find_command(argv: &[String]) -> CliOutput {
@@ -345,7 +444,8 @@ fn find_render(keyword: &str, oracle_filter: Option<&str>) -> String {
             fleet_matches.push(format!("session {}", session.name));
         }
         for window in &session.windows {
-            if window.name.to_lowercase().contains(&kw) || window.repo.to_lowercase().contains(&kw) {
+            if window.name.to_lowercase().contains(&kw) || window.repo.to_lowercase().contains(&kw)
+            {
                 let detail = if window.repo.is_empty() {
                     format!("window {}", window.name)
                 } else {
@@ -450,7 +550,11 @@ fn find_render(keyword: &str, oracle_filter: Option<&str>) -> String {
                 }
             }
             if matches.len() > 10 {
-                let _ = writeln!(out, "      \x1b[90m... and {} more\x1b[0m", matches.len() - 10);
+                let _ = writeln!(
+                    out,
+                    "      \x1b[90m... and {} more\x1b[0m",
+                    matches.len() - 10
+                );
             }
         }
         out.push('\n');
@@ -465,22 +569,41 @@ fn find_render(keyword: &str, oracle_filter: Option<&str>) -> String {
     if !code_results.is_empty() {
         parts.push(format!("{} code", code_results.len()));
     }
-    let _ = write!(out, "  \x1b[32m{total} match(es)\x1b[0m — {}\n\n", parts.join(", "));
+    let _ = write!(
+        out,
+        "  \x1b[32m{total} match(es)\x1b[0m — {}\n\n",
+        parts.join(", ")
+    );
     out
 }
 
 #[allow(dead_code)]
-fn collect_find_code_matches(name: &str, root: &std::path::Path, kw: &str, out: &mut Vec<(String, String, String)>) {
-    let Ok(entries) = std::fs::read_dir(root) else { return; };
+fn collect_find_code_matches(
+    name: &str,
+    root: &std::path::Path,
+    kw: &str,
+    out: &mut Vec<(String, String, String)>,
+) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
             collect_find_code_matches(name, &path, kw, out);
             continue;
         }
-        let Ok(text) = std::fs::read_to_string(&path) else { continue; };
-        let Some(line) = text.lines().find(|line| line.to_lowercase().contains(kw)) else { continue; };
-        let rel = path.strip_prefix(root).unwrap_or(&path).to_string_lossy().into_owned();
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Some(line) = text.lines().find(|line| line.to_lowercase().contains(kw)) else {
+            continue;
+        };
+        let rel = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .into_owned();
         out.push((name.to_owned(), rel, line.trim().to_owned()));
     }
 }
@@ -491,7 +614,8 @@ fn active_config_dir() -> std::path::PathBuf {
 }
 
 fn current_xdg_env() -> MawXdgEnv {
-    let home = std::env::var_os("HOME").map_or_else(|| std::path::PathBuf::from("."), std::path::PathBuf::from);
+    let home = std::env::var_os("HOME")
+        .map_or_else(|| std::path::PathBuf::from("."), std::path::PathBuf::from);
     let vars = [
         "MAW_HOME",
         "MAW_CONFIG_DIR",
@@ -511,7 +635,11 @@ fn current_xdg_env() -> MawXdgEnv {
 }
 
 fn ghq_root() -> std::path::PathBuf {
-    ghq_root_resolve(std::env::var_os("GHQ_ROOT"), ghq_root_from_git_config, std::env::var_os("HOME"))
+    ghq_root_resolve(
+        std::env::var_os("GHQ_ROOT"),
+        ghq_root_from_git_config,
+        std::env::var_os("HOME"),
+    )
 }
 
 // Resolution order mirrors ghq itself: $GHQ_ROOT env → `git config ghq.root` → ~/Code.
@@ -531,17 +659,27 @@ fn ghq_root_resolve(
             return ghq_root_strip_host(expanded);
         }
     }
-    home.map_or_else(|| std::path::PathBuf::from(".").join("Code"), |home| std::path::PathBuf::from(home).join("Code"))
+    home.map_or_else(
+        || std::path::PathBuf::from(".").join("Code"),
+        |home| std::path::PathBuf::from(home).join("Code"),
+    )
 }
 
 fn ghq_root_from_git_config() -> Option<String> {
-    let output = std::process::Command::new("git").args(["config", "--get", "ghq.root"]).output().ok()?;
+    let output = std::process::Command::new("git")
+        .args(["config", "--get", "ghq.root"])
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }
     let value = String::from_utf8(output.stdout).ok()?;
     let trimmed = value.trim();
-    if trimmed.is_empty() { None } else { Some(trimmed.to_owned()) }
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_owned())
+    }
 }
 
 fn ghq_root_expand_tilde(value: &str, home: Option<&std::ffi::OsStr>) -> std::path::PathBuf {
@@ -588,7 +726,10 @@ fn fleet_is_disabled_file(path: &std::path::Path) -> bool {
 }
 
 fn fleet_disabled_path(path: &std::path::Path) -> std::path::PathBuf {
-    let file = path.file_name().and_then(std::ffi::OsStr::to_str).unwrap_or("fleet.json");
+    let file = path
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or("fleet.json");
     path.with_file_name(format!("{file}.disabled"))
 }
 
@@ -604,11 +745,18 @@ fn fleet_load_entries_for_env(env: &MawXdgEnv) -> Vec<NativeFleetEntry> {
     fleet_load_entries_impl(fleet_read_dirs_for_env(env), false, "fleet").unwrap_or_default()
 }
 
-fn fleet_load_entries_result_for_env(env: &MawXdgEnv, label: &str) -> Result<Vec<NativeFleetEntry>, String> {
+fn fleet_load_entries_result_for_env(
+    env: &MawXdgEnv,
+    label: &str,
+) -> Result<Vec<NativeFleetEntry>, String> {
     fleet_load_entries_impl(fleet_read_dirs_for_env(env), true, label)
 }
 
-fn fleet_load_entries_impl(dirs: Vec<std::path::PathBuf>, strict: bool, label: &str) -> Result<Vec<NativeFleetEntry>, String> {
+fn fleet_load_entries_impl(
+    dirs: Vec<std::path::PathBuf>,
+    strict: bool,
+    label: &str,
+) -> Result<Vec<NativeFleetEntry>, String> {
     let mut entries = Vec::new();
     let mut seen_prior_dirs = BTreeSet::new();
     for dir in dirs {
@@ -621,15 +769,24 @@ fn fleet_load_entries_impl(dirs: Vec<std::path::PathBuf>, strict: bool, label: &
                 .filter(|path| fleet_is_json_file(path))
                 .collect::<Vec<_>>(),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-            Err(error) if strict => return Err(format!("{label}: read {}: {error}", dir.display())),
+            Err(error) if strict => {
+                return Err(format!("{label}: read {}: {error}", dir.display()))
+            }
             Err(_) => Vec::new(),
         };
         if let Ok(groups) = std::fs::read_dir(dir.join("squads")) {
-            files.extend(groups.flatten().map(|entry| entry.path().join("squad.json")).filter(|path| path.is_file()));
+            files.extend(
+                groups
+                    .flatten()
+                    .map(|entry| entry.path().join("squad.json"))
+                    .filter(|path| path.is_file()),
+            );
         }
         files.sort();
         for path in files {
-            let Some(entry) = fleet_parse_entry(&path, strict, label)? else { continue; };
+            let Some(entry) = fleet_parse_entry(&path, strict, label)? else {
+                continue;
+            };
             if !seen_prior_dirs.contains(&entry.session.name) {
                 seen_this_dir.insert(entry.session.name.clone());
                 entries.push(entry);
@@ -640,22 +797,39 @@ fn fleet_load_entries_impl(dirs: Vec<std::path::PathBuf>, strict: bool, label: &
     Ok(entries)
 }
 
-fn fleet_migrate_squad_files(dir: &std::path::Path, strict: bool, label: &str) -> Result<(), String> {
+fn fleet_migrate_squad_files(
+    dir: &std::path::Path,
+    strict: bool,
+    label: &str,
+) -> Result<(), String> {
     fleet_migrate_legacy_group_dir(dir, label)?;
     fleet_migrate_legacy_squad_file_names(dir, label)?;
     let files = match std::fs::read_dir(dir) {
-        Ok(values) => values.flatten().map(|entry| entry.path()).filter(|path| fleet_is_json_file(path)).collect::<Vec<_>>(),
+        Ok(values) => values
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| fleet_is_json_file(path))
+            .collect::<Vec<_>>(),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) if strict => return Err(format!("{label}: read {}: {error}", dir.display())),
         Err(_) => return Ok(()),
     };
     for path in files {
-        let Ok(text) = std::fs::read_to_string(&path) else { continue };
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
-        if !value.get("members").is_some_and(serde_json::Value::is_array) {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        if !value
+            .get("members")
+            .is_some_and(serde_json::Value::is_array)
+        {
             continue;
         }
-        let Some(stem) = path.file_stem().and_then(std::ffi::OsStr::to_str) else { continue };
+        let Some(stem) = path.file_stem().and_then(std::ffi::OsStr::to_str) else {
+            continue;
+        };
         let target_dir = dir.join("squads").join(stem);
         let target = target_dir.join("squad.json");
         fleet_move_squad_file(&path, &target_dir, &target, label)?;
@@ -665,7 +839,9 @@ fn fleet_migrate_squad_files(dir: &std::path::Path, strict: bool, label: &str) -
 
 fn fleet_migrate_legacy_group_dir(dir: &std::path::Path, label: &str) -> Result<(), String> {
     let legacy = dir.join("groups");
-    let Ok(entries) = std::fs::read_dir(&legacy) else { return Ok(()) };
+    let Ok(entries) = std::fs::read_dir(&legacy) else {
+        return Ok(());
+    };
     for entry in entries.flatten() {
         let source = entry.path().join("group.json");
         if !source.is_file() {
@@ -682,7 +858,9 @@ fn fleet_migrate_legacy_group_dir(dir: &std::path::Path, label: &str) -> Result<
 
 fn fleet_migrate_legacy_squad_file_names(dir: &std::path::Path, label: &str) -> Result<(), String> {
     let squads = dir.join("squads");
-    let Ok(entries) = std::fs::read_dir(&squads) else { return Ok(()) };
+    let Ok(entries) = std::fs::read_dir(&squads) else {
+        return Ok(());
+    };
     for entry in entries.flatten() {
         let source = entry.path().join("group.json");
         if !source.is_file() {
@@ -700,30 +878,51 @@ fn fleet_move_squad_file(
     target: &std::path::Path,
     label: &str,
 ) -> Result<(), String> {
-    std::fs::create_dir_all(target_dir).map_err(|error| format!("{label}: create {}: {error}", target_dir.display()))?;
+    std::fs::create_dir_all(target_dir)
+        .map_err(|error| format!("{label}: create {}: {error}", target_dir.display()))?;
     if target.exists() {
-        std::fs::remove_file(source).map_err(|error| format!("{label}: remove duplicate {}: {error}", source.display()))?;
+        std::fs::remove_file(source)
+            .map_err(|error| format!("{label}: remove duplicate {}: {error}", source.display()))?;
     } else {
-        std::fs::rename(source, target).map_err(|error| format!("{label}: move {} to {}: {error}", source.display(), target.display()))?;
+        std::fs::rename(source, target).map_err(|error| {
+            format!(
+                "{label}: move {} to {}: {error}",
+                source.display(),
+                target.display()
+            )
+        })?;
     }
     fleet_rewrite_squad_name(target, label)?;
-    eprintln!("fleet: migrated squad roster {} -> {}", source.display(), target.display());
+    eprintln!(
+        "fleet: migrated squad roster {} -> {}",
+        source.display(),
+        target.display()
+    );
     Ok(())
 }
 
 fn fleet_rewrite_squad_name(path: &std::path::Path, label: &str) -> Result<(), String> {
-    let text = std::fs::read_to_string(path).map_err(|error| format!("{label}: read {}: {error}", path.display()))?;
-    let mut value: serde_json::Value = serde_json::from_str(&text).map_err(|error| format!("{label}: parse {}: {error}", path.display()))?;
-    let Some(object) = value.as_object_mut() else { return Ok(()) };
+    let text = std::fs::read_to_string(path)
+        .map_err(|error| format!("{label}: read {}: {error}", path.display()))?;
+    let mut value: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|error| format!("{label}: parse {}: {error}", path.display()))?;
+    let Some(object) = value.as_object_mut() else {
+        return Ok(());
+    };
     if let Some(group_name) = object.remove("groupName") {
         object.entry("squadName").or_insert(group_name);
         let body = serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?;
-        std::fs::write(path, format!("{body}\n")).map_err(|error| format!("{label}: write {}: {error}", path.display()))?;
+        std::fs::write(path, format!("{body}\n"))
+            .map_err(|error| format!("{label}: write {}: {error}", path.display()))?;
     }
     Ok(())
 }
 
-fn fleet_parse_entry(path: &std::path::Path, strict: bool, label: &str) -> Result<Option<NativeFleetEntry>, String> {
+fn fleet_parse_entry(
+    path: &std::path::Path,
+    strict: bool,
+    label: &str,
+) -> Result<Option<NativeFleetEntry>, String> {
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(error) if strict => return Err(format!("{label}: read {}: {error}", path.display())),
@@ -744,13 +943,24 @@ fn fleet_parse_entry(path: &std::path::Path, strict: bool, label: &str) -> Resul
             .and_then(std::ffi::OsStr::to_str)
             .map_or_else(|| "squad".to_owned(), str::to_owned)
     } else {
-        path.file_name().and_then(std::ffi::OsStr::to_str).unwrap_or_default().to_owned()
+        path.file_name()
+            .and_then(std::ffi::OsStr::to_str)
+            .unwrap_or_default()
+            .to_owned()
     };
-    Ok(Some(NativeFleetEntry { file, path: path.to_path_buf(), session }))
+    Ok(Some(NativeFleetEntry {
+        file,
+        path: path.to_path_buf(),
+        session,
+    }))
 }
 
 fn load_native_fleet() -> Vec<NativeFleetSession> {
-    fleet_load_entries().into_iter().filter(fleet_entry_is_session).map(|entry| entry.session).collect()
+    fleet_load_entries()
+        .into_iter()
+        .filter(fleet_entry_is_session)
+        .map(|entry| entry.session)
+        .collect()
 }
 
 fn native_fleet_apply_role_markers(session: &mut NativeFleetSession) {
@@ -790,7 +1000,10 @@ fn native_fleet_repo_path(repo: &str) -> Option<std::path::PathBuf> {
 
 fn native_repo_kind_for_path(path: &std::path::Path) -> Option<NativeRepoKind> {
     let slugs = native_repo_slugs_for_path(path);
-    for entry in fleet_load_entries().into_iter().filter(fleet_entry_is_session) {
+    for entry in fleet_load_entries()
+        .into_iter()
+        .filter(fleet_entry_is_session)
+    {
         for window in &entry.session.windows {
             if window.kind.is_some() && native_fleet_window_matches_slugs(window, &slugs) {
                 return window.kind;
@@ -804,7 +1017,11 @@ fn native_repo_slugs_for_path(path: &std::path::Path) -> BTreeSet<String> {
     let mut slugs = BTreeSet::new();
     let root = ghq_root().join("github.com");
     if let Ok(rel) = path.strip_prefix(root) {
-        let parts = rel.components().take(2).map(|part| part.as_os_str().to_string_lossy().to_string()).collect::<Vec<_>>();
+        let parts = rel
+            .components()
+            .take(2)
+            .map(|part| part.as_os_str().to_string_lossy().to_string())
+            .collect::<Vec<_>>();
         if parts.len() == 2 {
             slugs.insert(format!("{}/{}", parts[0], parts[1]));
             slugs.insert(format!("github.com/{}/{}", parts[0], parts[1]));
@@ -822,7 +1039,10 @@ fn native_repo_slugs_for_path(path: &std::path::Path) -> BTreeSet<String> {
         github_parts.push(value.to_string());
         if github_parts.len() == 3 {
             slugs.insert(format!("{}/{}", github_parts[1], github_parts[2]));
-            slugs.insert(format!("github.com/{}/{}", github_parts[1], github_parts[2]));
+            slugs.insert(format!(
+                "github.com/{}/{}",
+                github_parts[1], github_parts[2]
+            ));
             break;
         }
     }
@@ -832,7 +1052,10 @@ fn native_repo_slugs_for_path(path: &std::path::Path) -> BTreeSet<String> {
 fn native_fleet_window_matches_slugs(window: &NativeFleetWindow, slugs: &BTreeSet<String>) -> bool {
     let repo = window.repo.trim();
     !repo.is_empty()
-        && (slugs.contains(repo) || repo.strip_prefix("github.com/").is_some_and(|stripped| slugs.contains(stripped)))
+        && (slugs.contains(repo)
+            || repo
+                .strip_prefix("github.com/")
+                .is_some_and(|stripped| slugs.contains(stripped)))
 }
 
 fn native_repo_path_is_oracle(path: &std::path::Path, fallback_name: &str) -> bool {
@@ -852,7 +1075,8 @@ fn native_repo_path_is_oracle(path: &std::path::Path, fallback_name: &str) -> bo
 // codebase; requiring `CLAUDE.md` too keeps a bare `ψ/` directory made for
 // unrelated reasons from false-positiving.
 fn native_repo_shape_looks_like_oracle(path: &std::path::Path, fallback_name: &str) -> bool {
-    fallback_name.ends_with("-oracle") || (path.join("ψ").is_dir() && path.join("CLAUDE.md").is_file())
+    fallback_name.ends_with("-oracle")
+        || (path.join("ψ").is_dir() && path.join("CLAUDE.md").is_file())
 }
 
 fn native_fleet_window_is_oracle(window: &NativeFleetWindow) -> bool {
@@ -878,7 +1102,10 @@ fn native_fleet_window_oracle_name(window: &NativeFleetWindow) -> Option<String>
             !prefix.is_empty() && !suffix.is_empty() && prefix.chars().all(|ch| ch.is_ascii_digit())
         })
         .map_or(source, |(_, suffix)| suffix);
-    let name = without_slot.strip_suffix("-oracle").unwrap_or(without_slot).trim();
+    let name = without_slot
+        .strip_suffix("-oracle")
+        .unwrap_or(without_slot)
+        .trim();
     (!name.is_empty()).then(|| name.to_owned())
 }
 
@@ -889,7 +1116,10 @@ mod native_fleet_loader_tests {
     fn fleet_loader_temp_root(name: &str) -> std::path::PathBuf {
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let seq = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let root = std::env::temp_dir().join(format!("maw-rs-fleet-loader-{name}-{}-{seq}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "maw-rs-fleet-loader-{name}-{}-{seq}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("temp root");
         root
@@ -948,12 +1178,18 @@ mod native_fleet_loader_tests {
 
         fleet_loader_env(&root, || {
             let entries = fleet_load_entries();
-            let names = entries.iter().map(|entry| entry.session.name.as_str()).collect::<Vec<_>>();
+            let names = entries
+                .iter()
+                .map(|entry| entry.session.name.as_str())
+                .collect::<Vec<_>>();
             assert_eq!(names, vec!["01-alpha", "02-beta", "03-gamma"]);
             assert_eq!(entries[0].session.windows[0].repo, "org/state");
             assert_eq!(entries[0].session.sync_peers, vec!["beta"]);
             assert_eq!(entries[0].session.project_repos, vec!["org/project"]);
-            assert_eq!(entries[0].session.skip_command, Some(serde_json::json!(true)));
+            assert_eq!(
+                entries[0].session.skip_command,
+                Some(serde_json::json!(true))
+            );
             assert_eq!(entries[0].session.budded_from.as_deref(), Some("root"));
             assert_eq!(entries[2].session.squad_name, "fallback");
             assert_eq!(fleet_disabled_count_for_env(&current_xdg_env()), 1);
@@ -1020,7 +1256,8 @@ mod native_fleet_loader_tests {
             r#"{"name":"99-session","windows":[]}"#,
         );
 
-        let first = fleet_load_entries_impl(vec![fleet.clone()], true, "fleet test").expect("first load");
+        let first =
+            fleet_load_entries_impl(vec![fleet.clone()], true, "fleet test").expect("first load");
         assert_eq!(first.len(), 4);
         let flat = fleet.join("squads/01-flat/squad.json");
         let first_body = std::fs::read_to_string(&flat).expect("migrated flat roster");
@@ -1031,11 +1268,17 @@ mod native_fleet_loader_tests {
         assert!(value.get("groupName").is_none());
         assert!(fleet.join("squads/02-groups/squad.json").exists());
         assert!(fleet.join("squads/03-squads/squad.json").exists());
-        assert!(fleet.join("99-session.json").exists(), "session snapshot stays flat");
+        assert!(
+            fleet.join("99-session.json").exists(),
+            "session snapshot stays flat"
+        );
 
         let second = fleet_load_entries_impl(vec![fleet], true, "fleet test").expect("second load");
         assert_eq!(second.len(), first.len());
-        assert_eq!(std::fs::read_to_string(flat).expect("stable roster"), first_body);
+        assert_eq!(
+            std::fs::read_to_string(flat).expect("stable roster"),
+            first_body
+        );
     }
 
     #[test]
@@ -1058,9 +1301,12 @@ mod native_fleet_loader_tests {
             );
         }
 
-        let entries = fleet_load_entries_impl(vec![fleet.clone()], true, "fleet test").expect("load");
+        let entries =
+            fleet_load_entries_impl(vec![fleet.clone()], true, "fleet test").expect("load");
         assert_eq!(entries.len(), 1);
-        let value: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(canonical).expect("canonical")).expect("json");
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(canonical).expect("canonical"))
+                .expect("json");
         assert_eq!(value["winner"], true);
         assert!(!fleet.join("04-keep.json").exists());
         assert!(!fleet.join("groups/04-keep/group.json").exists());
@@ -1074,8 +1320,14 @@ mod native_fleet_loader_tests {
             &root.join("state/fleet/01-kind.json"),
             r#"{"name":"01-kind","windows":[{"name":"plain","repo":"acme/plain","kind":"oracle"},{"name":"legacy","repo":"acme/legacy"},{"name":"marker","repo":"acme/marker"},{"name":"override","repo":"acme/override","kind":"project"}]}"#,
         );
-        fleet_loader_write(&root.join("ghq/github.com/acme/marker/.maw/role"), "oracle\n");
-        fleet_loader_write(&root.join("ghq/github.com/acme/override/.maw/role"), "oracle\n");
+        fleet_loader_write(
+            &root.join("ghq/github.com/acme/marker/.maw/role"),
+            "oracle\n",
+        );
+        fleet_loader_write(
+            &root.join("ghq/github.com/acme/override/.maw/role"),
+            "oracle\n",
+        );
 
         fleet_loader_env(&root, || {
             let entries = fleet_load_entries();
@@ -1094,23 +1346,32 @@ mod native_fleet_loader_tests {
             repo: "laris-co/3e-infra-oracle".to_owned(),
             kind: Some(NativeRepoKind::Oracle),
         };
-        assert_eq!(native_fleet_window_oracle_name(&window), Some("3e-infra".to_owned()));
+        assert_eq!(
+            native_fleet_window_oracle_name(&window),
+            Some("3e-infra".to_owned())
+        );
 
         let fallback = NativeFleetWindow {
             name: "3e-infra".to_owned(),
             repo: "laris-co/3e-infra-oracle".to_owned(),
             kind: Some(NativeRepoKind::Oracle),
         };
-        assert_eq!(native_fleet_window_oracle_name(&fallback), Some("3e-infra".to_owned()));
+        assert_eq!(
+            native_fleet_window_oracle_name(&fallback),
+            Some("3e-infra".to_owned())
+        );
     }
 }
 
 fn flag_value(argv: &[String], flag: &str) -> Option<String> {
-    argv.windows(2).find_map(|window| (window[0] == flag).then(|| window[1].clone()))
+    argv.windows(2)
+        .find_map(|window| (window[0] == flag).then(|| window[1].clone()))
 }
 
 fn now_iso_utc() -> String {
-    let seconds = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |duration| duration.as_secs());
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs());
     format!("{seconds}")
 }
 
@@ -1129,7 +1390,11 @@ mod scopefind_ghq_root_tests {
 
     #[test]
     fn env_var_wins_over_git_config() {
-        let root = ghq_root_resolve(os("/opt/Code"), || Some("/elsewhere".to_owned()), os("/Users/nat"));
+        let root = ghq_root_resolve(
+            os("/opt/Code"),
+            || Some("/elsewhere".to_owned()),
+            os("/Users/nat"),
+        );
         assert_eq!(root, PathBuf::from("/opt/Code"));
     }
 
@@ -1153,7 +1418,11 @@ mod scopefind_ghq_root_tests {
 
     #[test]
     fn git_config_github_host_suffix_is_stripped() {
-        let root = ghq_root_resolve(None, || Some("/opt/Code/github.com".to_owned()), os("/Users/nat"));
+        let root = ghq_root_resolve(
+            None,
+            || Some("/opt/Code/github.com".to_owned()),
+            os("/Users/nat"),
+        );
         assert_eq!(root, PathBuf::from("/opt/Code"));
     }
 

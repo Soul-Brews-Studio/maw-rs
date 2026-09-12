@@ -9,7 +9,9 @@
 mod fleet_tests {
     use super::*;
 
-    fn fleet_strings(values: &[&str]) -> Vec<String> { values.iter().map(|value| (*value).to_owned()).collect() }
+    fn fleet_strings(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_owned()).collect()
+    }
 
     #[test]
     fn fleet_parse_agents_skips_invalid_manifest_names() {
@@ -32,11 +34,17 @@ mod fleet_tests {
     }
 
     impl maw_tmux::TmuxRunner for FleetMockTmux {
-        fn run(&mut self, subcommand: &str, _args: &[String]) -> Result<String, maw_tmux::TmuxError> {
+        fn run(
+            &mut self,
+            subcommand: &str,
+            _args: &[String],
+        ) -> Result<String, maw_tmux::TmuxError> {
             if subcommand == "list-sessions" {
                 Ok(self.sessions.clone())
             } else {
-                Err(maw_tmux::TmuxError::new(format!("unexpected tmux command {subcommand}")))
+                Err(maw_tmux::TmuxError::new(format!(
+                    "unexpected tmux command {subcommand}"
+                )))
             }
         }
     }
@@ -52,7 +60,9 @@ mod fleet_tests {
         fn fleet_run_command(&mut self, program: &str, args: &[String]) -> Result<String, String> {
             self.commands.push((program.to_owned(), args.to_vec()));
             if program == "ghq" && args == ["root".to_owned()] {
-                self.ghq_root.clone().ok_or_else(|| "fake ghq root failed".to_owned())
+                self.ghq_root
+                    .clone()
+                    .ok_or_else(|| "fake ghq root failed".to_owned())
             } else if program == "tmux" && args.first().is_some_and(|arg| arg == "rename-session") {
                 Ok(String::new())
             } else {
@@ -84,7 +94,8 @@ mod fleet_tests {
     fn fleet_temp_root(name: &str) -> std::path::PathBuf {
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let seq = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!("maw-rs-fleet-{name}-{}-{seq}", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("maw-rs-fleet-{name}-{}-{seq}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("temp root");
         path
@@ -95,7 +106,11 @@ mod fleet_tests {
         std::fs::create_dir_all(root.join("config/fleet")).expect("fleet");
         std::fs::create_dir_all(root.join("ghq/github.com/acme/maw-rs")).expect("repo");
         std::fs::write(root.join("config/maw.config.json"), fleet_config_json()).expect("config");
-        std::fs::write(root.join("config/fleet/03-alpha.json"), fleet_session_json()).expect("session");
+        std::fs::write(
+            root.join("config/fleet/03-alpha.json"),
+            fleet_session_json(),
+        )
+        .expect("session");
         std::fs::write(root.join("config/fleet/22-dormant.disabled"), "{}\n").expect("disabled");
         root
     }
@@ -129,24 +144,47 @@ mod fleet_tests {
 
     #[test]
     fn fleet_parse_flags_and_guard_option_injection() {
-        let parsed = fleet_parse_args(&fleet_strings(&["wake", "--json", "--dry-run", "--all", "--kill", "--resume"])).expect("parse");
+        let parsed = fleet_parse_args(&fleet_strings(&[
+            "wake",
+            "--json",
+            "--dry-run",
+            "--all",
+            "--kill",
+            "--resume",
+        ]))
+        .expect("parse");
         assert_eq!(parsed.command, FleetCommand::Wake);
         assert!(parsed.json && parsed.dry_run && parsed.all && parsed.kill && parsed.resume);
-        let renumber = fleet_parse_args(&fleet_strings(&["renumber", "--include-99", "--dry-run"])).expect("renumber parse");
+        let renumber = fleet_parse_args(&fleet_strings(&["renumber", "--include-99", "--dry-run"]))
+            .expect("renumber parse");
         assert_eq!(renumber.command, FleetCommand::Renumber);
         assert!(renumber.include_99 && renumber.dry_run);
-        let only_99 = fleet_parse_args(&fleet_strings(&["renumber", "--only-99", "--dry-run"])).expect("only 99 parse");
+        let only_99 = fleet_parse_args(&fleet_strings(&["renumber", "--only-99", "--dry-run"]))
+            .expect("only 99 parse");
         assert!(only_99.only_99 && only_99.dry_run);
-        assert!(fleet_parse_args(&fleet_strings(&["--", "wake"])).expect_err("separator guard").contains("unknown argument"));
-        assert!(fleet_parse_args(&fleet_strings(&["-oProxyCommand=bad"])).expect_err("leading dash").contains("unknown argument"));
+        assert!(fleet_parse_args(&fleet_strings(&["--", "wake"]))
+            .expect_err("separator guard")
+            .contains("unknown argument"));
+        assert!(fleet_parse_args(&fleet_strings(&["-oProxyCommand=bad"]))
+            .expect_err("leading dash")
+            .contains("unknown argument"));
         let scoped = fleet_parse_args(&fleet_strings(&["wake", "3e"])).expect("group target");
-        assert_eq!((scoped.command, scoped.target.as_deref()), (FleetCommand::Wake, Some("3e")));
-        let groups = fleet_parse_args(&fleet_strings(&["ls", "--squads", "3e,drift"])).expect("squad filter");
+        assert_eq!(
+            (scoped.command, scoped.target.as_deref()),
+            (FleetCommand::Wake, Some("3e"))
+        );
+        let groups = fleet_parse_args(&fleet_strings(&["ls", "--squads", "3e,drift"]))
+            .expect("squad filter");
         assert_eq!(groups.squads, vec!["3e".to_owned(), "drift".to_owned()]);
         let alias = fleet_parse_args(&fleet_strings(&["wake-all"])).expect("alias");
         assert!(alias.all, "wake-all implies --all");
         let bare = fleet_parse_args(&fleet_strings(&["wake"])).expect_err("bare wake");
-        assert!(bare.contains("specify a squad, or --all to wake every registered session on this node"), "{bare}");
+        assert!(
+            bare.contains(
+                "specify a squad, or --all to wake every registered session on this node"
+            ),
+            "{bare}"
+        );
         let sleep = fleet_parse_args(&fleet_strings(&["sleep", "--json"])).expect_err("bare sleep");
         assert!(sleep.contains("fleet sleep: specify a squad"), "{sleep}");
     }
@@ -167,7 +205,8 @@ mod fleet_tests {
     #[test]
     fn fleet_census_lists_squads_and_filters_membership() {
         fleet_with_fixture(|root| {
-            std::fs::write(root.join("config/fleet/01-3e.json"), FLEET_SQUADRON_JSON).expect("roster");
+            std::fs::write(root.join("config/fleet/01-3e.json"), FLEET_SQUADRON_JSON)
+                .expect("roster");
             let unfiltered = run_fleet_command(&fleet_strings(&["ls", "--json"]));
             assert_eq!(unfiltered.code, 0, "{}", unfiltered.stderr);
             let raw: serde_json::Value = serde_json::from_str(&unfiltered.stdout).expect("json");
@@ -178,10 +217,14 @@ mod fleet_tests {
 
             let filtered = run_fleet_command(&fleet_strings(&["ls", "--squads", "3e", "--json"]));
             assert_eq!(filtered.code, 0, "{}", filtered.stderr);
-            let filtered_json: serde_json::Value = serde_json::from_str(&filtered.stdout).expect("json");
+            let filtered_json: serde_json::Value =
+                serde_json::from_str(&filtered.stdout).expect("json");
             assert_eq!(filtered_json["squads"][0]["name"], serde_json::json!("3e"));
             assert_eq!(filtered_json["sessionCount"], 1);
-            assert_eq!(filtered_json["sessions"][0]["name"], serde_json::json!("03-alpha"));
+            assert_eq!(
+                filtered_json["sessions"][0]["name"],
+                serde_json::json!("03-alpha")
+            );
             let muted = run_fleet_command(&fleet_strings(&["ls", "--squads", "nope", "--json"]));
             assert_eq!(muted.code, 0, "{}", muted.stderr);
             let muted_json: serde_json::Value = serde_json::from_str(&muted.stdout).expect("json");
@@ -195,11 +238,18 @@ mod fleet_tests {
     fn fleet_doctor_json_reports_seeded_missing_repo_only() {
         fleet_with_fixture(|root| {
             let mut runtime = FleetFakeRuntime::default();
-            let (code, stdout) = fleet_run_with(&fleet_strings(&["doctor", "--json"]), &mut runtime).expect("doctor");
+            let (code, stdout) =
+                fleet_run_with(&fleet_strings(&["doctor", "--json"]), &mut runtime)
+                    .expect("doctor");
             assert_eq!(code, 1);
             assert!(stdout.contains("\"node\": \"alpha\""));
             assert!(stdout.contains("\"code\": \"missing-repo\""));
-            assert!(stdout.contains(&root.join("ghq/github.com/acme/missing").display().to_string()));
+            assert!(stdout.contains(
+                &root
+                    .join("ghq/github.com/acme/missing")
+                    .display()
+                    .to_string()
+            ));
         });
     }
 
@@ -217,7 +267,8 @@ mod fleet_tests {
             )
             .expect("twin registry");
             let mut runtime = FleetFakeRuntime::default();
-            let (_, dry_run) = fleet_run_with(&fleet_strings(&["doctor", "--json"]), &mut runtime).expect("dry run");
+            let (_, dry_run) = fleet_run_with(&fleet_strings(&["doctor", "--json"]), &mut runtime)
+                .expect("dry run");
             let dry_json: serde_json::Value = serde_json::from_str(&dry_run).expect("dry json");
             let ambiguous = dry_json["findings"]
                 .as_array()
@@ -254,7 +305,8 @@ mod fleet_tests {
                 ..Default::default()
             };
 
-            let (_, dry_run) = fleet_run_with(&fleet_strings(&["doctor", "--json"]), &mut runtime).expect("dry run");
+            let (_, dry_run) = fleet_run_with(&fleet_strings(&["doctor", "--json"]), &mut runtime)
+                .expect("dry run");
             let dry_json: serde_json::Value = serde_json::from_str(&dry_run).expect("dry json");
             assert_eq!(
                 dry_json["findings"]
@@ -266,12 +318,15 @@ mod fleet_tests {
                 2
             );
             let unchanged: serde_json::Value = serde_json::from_str(
-                &std::fs::read_to_string(fleet_dir.join("04-agora.json")).expect("dry-run registry"),
+                &std::fs::read_to_string(fleet_dir.join("04-agora.json"))
+                    .expect("dry-run registry"),
             )
             .expect("dry-run json");
             assert_eq!(unchanged["windows"].as_array().expect("windows").len(), 2);
 
-            let (_, fixed) = fleet_run_with(&fleet_strings(&["doctor", "--fix", "--json"]), &mut runtime).expect("fix");
+            let (_, fixed) =
+                fleet_run_with(&fleet_strings(&["doctor", "--fix", "--json"]), &mut runtime)
+                    .expect("fix");
             let fixed_json: serde_json::Value = serde_json::from_str(&fixed).expect("fixed json");
             assert_eq!(fixed_json["repairs"].as_array().expect("repairs").len(), 2);
             for file in ["04-agora.json", "05-bud.json"] {
@@ -291,7 +346,8 @@ mod fleet_tests {
     #[test]
     fn fleet_doctor_preserves_distinct_live_windows_sharing_one_repo() {
         fleet_with_fixture(|root| {
-            std::fs::create_dir_all(root.join("ghq/github.com/acme/missing")).expect("seed missing repo");
+            std::fs::create_dir_all(root.join("ghq/github.com/acme/missing"))
+                .expect("seed missing repo");
             let path = root.join("config/fleet/41-team.json");
             std::fs::write(
                 &path,
@@ -299,11 +355,15 @@ mod fleet_tests {
             )
             .expect("team registry");
             let mut runtime = FleetFakeRuntime {
-                sessions: vec![fleet_live_session("41-team", &["coder-one", "coder-two", "coder-three"])],
+                sessions: vec![fleet_live_session(
+                    "41-team",
+                    &["coder-one", "coder-two", "coder-three"],
+                )],
                 ..Default::default()
             };
 
-            let (_, dry_run) = fleet_run_with(&fleet_strings(&["doctor", "--json"]), &mut runtime).expect("dry run");
+            let (_, dry_run) = fleet_run_with(&fleet_strings(&["doctor", "--json"]), &mut runtime)
+                .expect("dry run");
             let dry_json: serde_json::Value = serde_json::from_str(&dry_run).expect("dry json");
             let findings = dry_json["findings"].as_array().expect("findings");
             // The original alias-based dedup check must stay silent: these
@@ -311,16 +371,28 @@ mod fleet_tests {
             // names. It's a *different* claim from "wake maw-rs resolves" --
             // none of the three is literally named maw-rs, so that oracle
             // identity IS genuinely ambiguous (#711) and doctor should say so.
-            assert!(!findings.iter().any(|finding| finding["code"] == "duplicate-window-repo"), "{dry_json}");
             assert!(
-                findings.iter().any(|finding| finding["code"] == "ambiguous-oracle" && finding["subject"] == "maw-rs"),
+                !findings
+                    .iter()
+                    .any(|finding| finding["code"] == "duplicate-window-repo"),
+                "{dry_json}"
+            );
+            assert!(
+                findings
+                    .iter()
+                    .any(|finding| finding["code"] == "ambiguous-oracle"
+                        && finding["subject"] == "maw-rs"),
                 "{dry_json}"
             );
 
-            let (_, fixed) = fleet_run_with(&fleet_strings(&["doctor", "--fix", "--json"]), &mut runtime).expect("fix");
+            let (_, fixed) =
+                fleet_run_with(&fleet_strings(&["doctor", "--fix", "--json"]), &mut runtime)
+                    .expect("fix");
             let fixed_json: serde_json::Value = serde_json::from_str(&fixed).expect("fixed json");
             assert_eq!(fixed_json["repairs"], serde_json::json!([]));
-            let registry: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).expect("registry")).expect("json");
+            let registry: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(path).expect("registry"))
+                    .expect("json");
             assert_eq!(registry["windows"].as_array().expect("windows").len(), 3);
         });
     }
@@ -347,11 +419,18 @@ mod fleet_tests {
             ..Default::default()
         };
 
-        let (code, stdout) = fleet_run_with(&fleet_strings(&["doctor", "--json"]), &mut runtime).expect("doctor");
+        let (code, stdout) =
+            fleet_run_with(&fleet_strings(&["doctor", "--json"]), &mut runtime).expect("doctor");
 
         assert_eq!(code, 1);
-        assert!(runtime.commands.iter().any(|(program, args)| program == "ghq" && args == &["root".to_owned()]));
-        let single = root.join("real-ghq/github.com/Soul-Brews-Studio/missing").display().to_string();
+        assert!(runtime
+            .commands
+            .iter()
+            .any(|(program, args)| program == "ghq" && args == &["root".to_owned()]));
+        let single = root
+            .join("real-ghq/github.com/Soul-Brews-Studio/missing")
+            .display()
+            .to_string();
         assert!(stdout.contains(&single), "{stdout}");
         assert!(!stdout.contains("github.com/github.com"), "{stdout}");
         assert!(!stdout.contains("wrong-home"), "{stdout}");
@@ -394,12 +473,14 @@ mod fleet_tests {
             ..Default::default()
         };
 
-        let (code, stdout) = fleet_run_with(&fleet_strings(&["add", "188-maw-rs"]), &mut runtime).expect("add");
+        let (code, stdout) =
+            fleet_run_with(&fleet_strings(&["add", "188-maw-rs"]), &mut runtime).expect("add");
 
         assert_eq!(code, 0);
         assert!(stdout.contains("fleet add 188-maw-rs: created"), "{stdout}");
         let path = root.join("home/.maw/fleet/188-maw-rs.json");
-        let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).expect("registry")).expect("json");
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).expect("registry")).expect("json");
         assert_eq!(json["name"], "188-maw-rs");
         assert_eq!(json["created_at"], "2026-07-03T01:02:03.000Z");
         assert_eq!(json["created_by"], "maw fleet add");
@@ -410,8 +491,7 @@ mod fleet_tests {
         assert_eq!(json["windows"][0]["kind"], "oracle");
     }
 
-    const FLEET_SQUADRON_JSON: &str =
-        r#"{"name":"01-3e","squadName":"3e","windows":[],"members":[{"handle":"alpha"},{"handle":"drift"}]}"#;
+    const FLEET_SQUADRON_JSON: &str = r#"{"name":"01-3e","squadName":"3e","windows":[],"members":[{"handle":"alpha"},{"handle":"drift"}]}"#;
 
     #[test]
     fn fleet_renumber_dry_run_skips_99_by_default() {
@@ -422,7 +502,11 @@ mod fleet_tests {
             )
             .expect("bud");
             let mut runtime = FleetFakeRuntime::default();
-            let (code, stdout) = fleet_run_with(&fleet_strings(&["renumber", "--dry-run", "--json"]), &mut runtime).expect("renumber");
+            let (code, stdout) = fleet_run_with(
+                &fleet_strings(&["renumber", "--dry-run", "--json"]),
+                &mut runtime,
+            )
+            .expect("renumber");
             assert_eq!(code, 0);
             let value: serde_json::Value = serde_json::from_str(&stdout).expect("json");
             assert_eq!(value["dryRun"], true);
@@ -445,40 +529,87 @@ mod fleet_tests {
             .expect("bud");
             let mut runtime = FleetFakeRuntime {
                 sessions: vec![
-                    TmuxSession { name: "03-alpha".to_owned(), windows: Vec::new() },
-                    TmuxSession { name: "99-bud".to_owned(), windows: Vec::new() },
+                    TmuxSession {
+                        name: "03-alpha".to_owned(),
+                        windows: Vec::new(),
+                    },
+                    TmuxSession {
+                        name: "99-bud".to_owned(),
+                        windows: Vec::new(),
+                    },
                 ],
                 ..Default::default()
             };
 
-            let (code, stdout) = fleet_run_with(&fleet_strings(&["renumber", "--include-99"]), &mut runtime).expect("renumber");
+            let (code, stdout) =
+                fleet_run_with(&fleet_strings(&["renumber", "--include-99"]), &mut runtime)
+                    .expect("renumber");
 
             assert_eq!(code, 0);
-            assert!(stdout.contains("renamed 03-alpha.json -> 01-alpha.json"), "{stdout}");
-            assert!(stdout.contains("renamed 99-bud.json -> 02-bud.json"), "{stdout}");
+            assert!(
+                stdout.contains("renamed 03-alpha.json -> 01-alpha.json"),
+                "{stdout}"
+            );
+            assert!(
+                stdout.contains("renamed 99-bud.json -> 02-bud.json"),
+                "{stdout}"
+            );
             assert!(!root.join("config/fleet/03-alpha.json").exists());
             assert!(!root.join("config/fleet/99-bud.json").exists());
-            let alpha: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(root.join("config/fleet/01-alpha.json")).expect("alpha")).expect("alpha json");
-            let bud: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(root.join("config/fleet/02-bud.json")).expect("bud")).expect("bud json");
+            let alpha: serde_json::Value = serde_json::from_str(
+                &std::fs::read_to_string(root.join("config/fleet/01-alpha.json")).expect("alpha"),
+            )
+            .expect("alpha json");
+            let bud: serde_json::Value = serde_json::from_str(
+                &std::fs::read_to_string(root.join("config/fleet/02-bud.json")).expect("bud"),
+            )
+            .expect("bud json");
             assert_eq!(alpha["name"], "01-alpha");
             assert_eq!(bud["name"], "02-bud");
             assert_eq!(bud["mystery"], true);
-            assert!(runtime.commands.iter().any(|(program, args)| program == "tmux" && args == &fleet_strings(&["rename-session", "-t", "03-alpha", "01-alpha"])));
-            assert!(runtime.commands.iter().any(|(program, args)| program == "tmux" && args == &fleet_strings(&["rename-session", "-t", "99-bud", "02-bud"])));
+            assert!(runtime
+                .commands
+                .iter()
+                .any(|(program, args)| program == "tmux"
+                    && args == &fleet_strings(&["rename-session", "-t", "03-alpha", "01-alpha"])));
+            assert!(runtime
+                .commands
+                .iter()
+                .any(|(program, args)| program == "tmux"
+                    && args == &fleet_strings(&["rename-session", "-t", "99-bud", "02-bud"])));
         });
     }
-
 
     #[test]
     fn fleet_renumber_only_99_dry_run_fills_gaps_without_touching_existing() {
         fleet_with_fixture(|root| {
-            std::fs::write(root.join("config/fleet/01-root.json"), r#"{"name":"01-root","windows":[]}"#).expect("root");
-            std::fs::write(root.join("config/fleet/99-bud.json"), r#"{"name":"99-bud","windows":[],"mystery":true}"#).expect("bud");
-            std::fs::write(root.join("config/fleet/99-cat.json"), r#"{"name":"99-cat","windows":[]}"#).expect("cat");
-            std::fs::write(root.join("config/fleet/99-overview.json"), r#"{"name":"99-overview","windows":[]}"#).expect("overview");
+            std::fs::write(
+                root.join("config/fleet/01-root.json"),
+                r#"{"name":"01-root","windows":[]}"#,
+            )
+            .expect("root");
+            std::fs::write(
+                root.join("config/fleet/99-bud.json"),
+                r#"{"name":"99-bud","windows":[],"mystery":true}"#,
+            )
+            .expect("bud");
+            std::fs::write(
+                root.join("config/fleet/99-cat.json"),
+                r#"{"name":"99-cat","windows":[]}"#,
+            )
+            .expect("cat");
+            std::fs::write(
+                root.join("config/fleet/99-overview.json"),
+                r#"{"name":"99-overview","windows":[]}"#,
+            )
+            .expect("overview");
             let mut runtime = FleetFakeRuntime::default();
 
-            let (code, stdout) = fleet_run_with(&fleet_strings(&["renumber", "--only-99", "--dry-run", "--json"]), &mut runtime).expect("renumber");
+            let (code, stdout) = fleet_run_with(
+                &fleet_strings(&["renumber", "--only-99", "--dry-run", "--json"]),
+                &mut runtime,
+            )
+            .expect("renumber");
 
             assert_eq!(code, 0);
             let value: serde_json::Value = serde_json::from_str(&stdout).expect("json");
@@ -497,55 +628,120 @@ mod fleet_tests {
     #[test]
     fn fleet_renumber_only_99_rewrites_only_99_and_renames_tmux() {
         fleet_with_fixture(|root| {
-            std::fs::write(root.join("config/fleet/01-root.json"), r#"{"name":"01-root","windows":[]}"#).expect("root");
-            std::fs::write(root.join("config/fleet/99-bud.json"), r#"{"name":"99-bud","windows":[],"mystery":true}"#).expect("bud");
-            let mut runtime = FleetFakeRuntime { sessions: vec![TmuxSession { name: "99-bud".to_owned(), windows: Vec::new() }], ..Default::default() };
+            std::fs::write(
+                root.join("config/fleet/01-root.json"),
+                r#"{"name":"01-root","windows":[]}"#,
+            )
+            .expect("root");
+            std::fs::write(
+                root.join("config/fleet/99-bud.json"),
+                r#"{"name":"99-bud","windows":[],"mystery":true}"#,
+            )
+            .expect("bud");
+            let mut runtime = FleetFakeRuntime {
+                sessions: vec![TmuxSession {
+                    name: "99-bud".to_owned(),
+                    windows: Vec::new(),
+                }],
+                ..Default::default()
+            };
 
-            let (code, stdout) = fleet_run_with(&fleet_strings(&["renumber", "--only-99"]), &mut runtime).expect("renumber");
+            let (code, stdout) =
+                fleet_run_with(&fleet_strings(&["renumber", "--only-99"]), &mut runtime)
+                    .expect("renumber");
 
             assert_eq!(code, 0);
             assert!(stdout.contains("only-99: true"), "{stdout}");
-            assert!(stdout.contains("renamed 99-bud.json -> 02-bud.json"), "{stdout}");
+            assert!(
+                stdout.contains("renamed 99-bud.json -> 02-bud.json"),
+                "{stdout}"
+            );
             assert!(root.join("config/fleet/01-root.json").exists());
             assert!(root.join("config/fleet/03-alpha.json").exists());
             assert!(!root.join("config/fleet/99-bud.json").exists());
-            let bud: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(root.join("config/fleet/02-bud.json")).expect("bud")).expect("json");
+            let bud: serde_json::Value = serde_json::from_str(
+                &std::fs::read_to_string(root.join("config/fleet/02-bud.json")).expect("bud"),
+            )
+            .expect("json");
             assert_eq!(bud["name"], "02-bud");
             assert_eq!(bud["mystery"], true);
-            assert!(runtime.commands.iter().any(|(program, args)| program == "tmux" && args == &fleet_strings(&["rename-session", "-t", "99-bud", "02-bud"])));
+            assert!(runtime
+                .commands
+                .iter()
+                .any(|(program, args)| program == "tmux"
+                    && args == &fleet_strings(&["rename-session", "-t", "99-bud", "02-bud"])));
         });
     }
 
     #[test]
     fn fleet_wake_bare_errors_and_all_sweep_excludes_roster_files() {
         fleet_with_fixture(|root| {
-            std::fs::write(root.join("config/fleet/01-3e.json"), FLEET_SQUADRON_JSON).expect("roster");
+            std::fs::write(root.join("config/fleet/01-3e.json"), FLEET_SQUADRON_JSON)
+                .expect("roster");
             let bare = run_fleet_command(&fleet_strings(&["wake"]));
             assert_eq!(bare.code, 1);
-            assert!(bare.stderr.contains("specify a squad, or --all"), "{}", bare.stderr);
+            assert!(
+                bare.stderr.contains("specify a squad, or --all"),
+                "{}",
+                bare.stderr
+            );
             let all = run_fleet_command(&fleet_strings(&["wake", "--all", "--json", "--dry-run"]));
             assert_eq!(all.code, 0, "{}", all.stderr);
-            assert!(all.stdout.contains("\"action\": \"wake\"") && all.stdout.contains("\"sessionCount\": 1"), "{}", all.stdout);
-            assert!(all.stdout.contains("03-alpha") && !all.stdout.contains("01-3e"), "{}", all.stdout);
-            assert!(!all.stdout.contains("22-dormant"), "disabled entries stay skipped");
+            assert!(
+                all.stdout.contains("\"action\": \"wake\"")
+                    && all.stdout.contains("\"sessionCount\": 1"),
+                "{}",
+                all.stdout
+            );
+            assert!(
+                all.stdout.contains("03-alpha") && !all.stdout.contains("01-3e"),
+                "{}",
+                all.stdout
+            );
+            assert!(
+                !all.stdout.contains("22-dormant"),
+                "disabled entries stay skipped"
+            );
             let alias = run_fleet_command(&fleet_strings(&["wake-all", "--dry-run"]));
             assert_eq!(alias.code, 0, "{}", alias.stderr);
-            assert!(alias.stdout.contains("  - 03-alpha") && !alias.stdout.contains("01-3e"), "{}", alias.stdout);
+            assert!(
+                alias.stdout.contains("  - 03-alpha") && !alias.stdout.contains("01-3e"),
+                "{}",
+                alias.stdout
+            );
             let sleep = run_fleet_command(&fleet_strings(&["sleep", "--all", "--dry-run"]));
             assert_eq!(sleep.code, 0, "{}", sleep.stderr);
-            assert!(sleep.stdout.contains("  - 03-alpha") && !sleep.stdout.contains("01-3e"), "{}", sleep.stdout);
+            assert!(
+                sleep.stdout.contains("  - 03-alpha") && !sleep.stdout.contains("01-3e"),
+                "{}",
+                sleep.stdout
+            );
         });
     }
 
     #[test]
     fn fleet_wake_group_scopes_plan_to_squadron_members() {
         fleet_with_fixture(|root| {
-            std::fs::write(root.join("config/fleet/01-3e.json"), FLEET_SQUADRON_JSON).expect("roster");
+            std::fs::write(root.join("config/fleet/01-3e.json"), FLEET_SQUADRON_JSON)
+                .expect("roster");
             let plan = run_fleet_command(&fleet_strings(&["wake", "3e", "--dry-run"]));
             assert_eq!(plan.code, 0, "{}", plan.stderr);
-            assert!(plan.stdout.contains("squad: 3e · members: 2 · sessions: 1 · skipped: 1"), "{}", plan.stdout);
-            assert!(plan.stdout.contains("  - alpha -> 03-alpha"), "{}", plan.stdout);
-            assert!(plan.stdout.contains("  - drift skipped: no session"), "{}", plan.stdout);
+            assert!(
+                plan.stdout
+                    .contains("squad: 3e · members: 2 · sessions: 1 · skipped: 1"),
+                "{}",
+                plan.stdout
+            );
+            assert!(
+                plan.stdout.contains("  - alpha -> 03-alpha"),
+                "{}",
+                plan.stdout
+            );
+            assert!(
+                plan.stdout.contains("  - drift skipped: no session"),
+                "{}",
+                plan.stdout
+            );
             let json = run_fleet_command(&fleet_strings(&["sleep", "3e", "--json", "--dry-run"]));
             assert_eq!(json.code, 0, "{}", json.stderr);
             let value: serde_json::Value = serde_json::from_str(&json.stdout).expect("json");
@@ -554,29 +750,53 @@ mod fleet_tests {
             assert_eq!(value["dryRun"], true);
             assert_eq!(value["sessions"], serde_json::json!(["03-alpha"]));
             assert_eq!(value["members"][0]["handle"], "alpha");
-            assert_eq!(value["skipped"][0], serde_json::json!({"handle": "drift", "reason": "no session"}));
+            assert_eq!(
+                value["skipped"][0],
+                serde_json::json!({"handle": "drift", "reason": "no session"})
+            );
         });
     }
-
 
     #[test]
     fn fleet_gather_dry_run_plans_live_and_asleep_members() {
         fleet_with_fixture(|root| {
-            std::fs::write(root.join("config/fleet/01-3e.json"), FLEET_SQUADRON_JSON).expect("roster");
+            std::fs::write(root.join("config/fleet/01-3e.json"), FLEET_SQUADRON_JSON)
+                .expect("roster");
             let mut runtime = FleetFakeRuntime {
-                sessions: vec![TmuxSession { name: "03-alpha".to_owned(), windows: Vec::new() }],
+                sessions: vec![TmuxSession {
+                    name: "03-alpha".to_owned(),
+                    windows: Vec::new(),
+                }],
                 ..FleetFakeRuntime::default()
             };
-            let (code, stdout) = fleet_run_with(&fleet_strings(&["gather", "3e", "--dry-run"]), &mut runtime).expect("gather");
+            let (code, stdout) =
+                fleet_run_with(&fleet_strings(&["gather", "3e", "--dry-run"]), &mut runtime)
+                    .expect("gather");
             assert_eq!(code, 0);
             assert!(stdout.contains("fleet gather plan node: alpha"), "{stdout}");
-            assert!(stdout.contains("  - alpha live: join 03-alpha:maw"), "{stdout}");
-            assert!(stdout.contains("  - drift asleep: skipped (no auto-wake in v1)"), "{stdout}");
+            assert!(
+                stdout.contains("  - alpha live: join 03-alpha:maw"),
+                "{stdout}"
+            );
+            assert!(
+                stdout.contains("  - drift asleep: skipped (no auto-wake in v1)"),
+                "{stdout}"
+            );
             assert!(stdout.contains("  - layout: main-vertical"), "{stdout}");
-            let (code, stdout) = fleet_run_with(&fleet_strings(&["gather", "3e", "--scatter", "--dry-run"]), &mut runtime).expect("scatter");
+            let (code, stdout) = fleet_run_with(
+                &fleet_strings(&["gather", "3e", "--scatter", "--dry-run"]),
+                &mut runtime,
+            )
+            .expect("scatter");
             assert_eq!(code, 0);
-            assert!(stdout.contains("fleet scatter plan node: alpha"), "{stdout}");
-            assert!(stdout.contains("  - alpha live: break 03-alpha:maw"), "{stdout}");
+            assert!(
+                stdout.contains("fleet scatter plan node: alpha"),
+                "{stdout}"
+            );
+            assert!(
+                stdout.contains("  - alpha live: break 03-alpha:maw"),
+                "{stdout}"
+            );
             assert!(!stdout.contains("layout:"), "{stdout}");
         });
     }
@@ -591,7 +811,10 @@ mod fleet_tests {
             );
             std::fs::write(
                 root.join("config/maw.config.json"),
-                serde_json::to_string(&serde_json::json!({"node":"alpha","hooks":{"postWake":[hook]}})).expect("json"),
+                serde_json::to_string(
+                    &serde_json::json!({"node":"alpha","hooks":{"postWake":[hook]}}),
+                )
+                .expect("json"),
             )
             .expect("write config hook");
             std::fs::write(
@@ -604,7 +827,10 @@ mod fleet_tests {
 
             assert_eq!(output.code, 0, "{}", output.stderr);
             let lines = std::fs::read_to_string(&marker).expect("marker");
-            assert_eq!(lines.lines().collect::<Vec<_>>(), vec!["maw|03-alpha|maw", "ghost|03-alpha|ghost"]);
+            assert_eq!(
+                lines.lines().collect::<Vec<_>>(),
+                vec!["maw|03-alpha|maw", "ghost|03-alpha|ghost"]
+            );
         });
     }
 
@@ -613,7 +839,11 @@ mod fleet_tests {
         fleet_with_fixture(|root| {
             let missing = run_fleet_command(&fleet_strings(&["wake", "nope"]));
             assert_eq!(missing.code, 1);
-            assert!(missing.stderr.contains("fleet wake: no squad named nope"), "{}", missing.stderr);
+            assert!(
+                missing.stderr.contains("fleet wake: no squad named nope"),
+                "{}",
+                missing.stderr
+            );
             std::fs::write(
                 root.join("config/fleet/02-empty.json"),
                 r#"{"name":"02-empty","squadName":"empty","windows":[],"members":[]}"#,
@@ -621,10 +851,20 @@ mod fleet_tests {
             .expect("roster");
             let empty = run_fleet_command(&fleet_strings(&["wake", "empty"]));
             assert_eq!(empty.code, 1);
-            assert!(empty.stderr.contains("fleet wake: squad empty has no members"), "{}", empty.stderr);
+            assert!(
+                empty
+                    .stderr
+                    .contains("fleet wake: squad empty has no members"),
+                "{}",
+                empty.stderr
+            );
             let both = run_fleet_command(&fleet_strings(&["wake", "empty", "--all"]));
             assert_eq!(both.code, 1);
-            assert!(both.stderr.contains("pass a squad or --all, not both"), "{}", both.stderr);
+            assert!(
+                both.stderr.contains("pass a squad or --all, not both"),
+                "{}",
+                both.stderr
+            );
         });
     }
 
@@ -632,8 +872,7 @@ mod fleet_tests {
     fn fleet_gc_dry_run_composes_auto_legacy_and_manual_entry_rules() {
         fleet_with_fixture(|root| {
             let ghost = root.join("config/fleet/04-auto-ghost.json");
-            std::fs::create_dir_all(root.join("ghq/github.com/acme/live-repo"))
-                .expect("live repo");
+            std::fs::create_dir_all(root.join("ghq/github.com/acme/live-repo")).expect("live repo");
             std::fs::write(
                 &ghost,
                 r#"{"name":"04-auto-ghost","auto_registered":true,"windows":[{"name":"ghost","repo":"acme/live-repo"}]}"#,
@@ -654,7 +893,9 @@ mod fleet_tests {
             let mut runtime = FleetFakeRuntime::default();
             let state = fleet_load_state_with(&mut runtime).expect("state");
             let options = fleet_parse_args(&fleet_strings(&["gc", "--dry-run"])).expect("parse");
-            let mut tmux = FleetMockTmux { sessions: String::new() };
+            let mut tmux = FleetMockTmux {
+                sessions: String::new(),
+            };
             let (code, stdout) = fleet_run_gc(&state, &options, &mut tmux).expect("gc");
 
             assert_eq!(code, 0);
@@ -666,9 +907,7 @@ mod fleet_tests {
             assert!(ghost.exists());
             assert!(manual.exists());
             assert!(legacy.exists());
-            assert!(!ghost
-                .with_file_name("04-auto-ghost.json.disabled")
-                .exists());
+            assert!(!ghost.with_file_name("04-auto-ghost.json.disabled").exists());
         });
     }
 
@@ -722,7 +961,10 @@ mod fleet_tests {
         .expect("upsert");
 
         assert_eq!(written.path, root.join("home/.maw/fleet/01-3e.json"));
-        assert_eq!(std::fs::read_to_string(roster).expect("unchanged roster"), roster_body);
+        assert_eq!(
+            std::fs::read_to_string(roster).expect("unchanged roster"),
+            roster_body
+        );
     }
 
     #[test]
@@ -751,10 +993,19 @@ mod fleet_tests {
             repo: "github.com/acme/homekeeper-oracle".to_owned(),
             kind: None,
         }];
-        let written = fleet_registry_upsert_session_for_env(&current_xdg_env(), "158-homekeeper", &windows, "maw fleet add").expect("upsert");
+        let written = fleet_registry_upsert_session_for_env(
+            &current_xdg_env(),
+            "158-homekeeper",
+            &windows,
+            "maw fleet add",
+        )
+        .expect("upsert");
 
         assert_eq!(written.path, root.join("config/fleet/63-homekeeper.json"));
-        let merged = serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(&written.path).expect("registry")).expect("json");
+        let merged = serde_json::from_str::<serde_json::Value>(
+            &std::fs::read_to_string(&written.path).expect("registry"),
+        )
+        .expect("json");
         assert_eq!(merged["name"], "158-homekeeper");
         assert_eq!(merged["windows"].as_array().expect("windows").len(), 1);
         assert_eq!(merged["windows"][0]["repo"], "acme/homekeeper-oracle");
@@ -772,7 +1023,8 @@ mod fleet_tests {
         let real = root.join("ghq/github.com/acme/homekeeper-oracle");
         let linked = root.join("ghq/github.com/acme/homelab");
         std::fs::create_dir_all(&real).expect("repo");
-        #[cfg(unix)] {
+        #[cfg(unix)]
+        {
             use std::os::unix::fs::symlink;
             symlink(&real, &linked).expect("symlink repo");
         }
@@ -791,10 +1043,19 @@ mod fleet_tests {
             repo: "github.com/acme/homelab".to_owned(),
             kind: None,
         }];
-        let written = fleet_registry_upsert_session_for_env(&current_xdg_env(), "158-homelab", &windows, "maw fleet add").expect("upsert");
+        let written = fleet_registry_upsert_session_for_env(
+            &current_xdg_env(),
+            "158-homelab",
+            &windows,
+            "maw fleet add",
+        )
+        .expect("upsert");
 
         assert_eq!(written.path, root.join("state/fleet/63-homelab.json"));
-        let merged = serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(&written.path).expect("registry")).expect("json");
+        let merged = serde_json::from_str::<serde_json::Value>(
+            &std::fs::read_to_string(&written.path).expect("registry"),
+        )
+        .expect("json");
         assert_eq!(merged["name"], "158-homelab");
         assert_eq!(merged["windows"].as_array().expect("windows").len(), 1);
         assert_eq!(merged["windows"][0]["repo"], "acme/homelab");
@@ -825,8 +1086,11 @@ mod fleet_tests {
             "windows": [],
         });
         bud_fleet_ensure_window(&mut registered, &bud).expect("bud registration");
-        std::fs::write(&path, serde_json::to_string_pretty(&registered).expect("bud json"))
-            .expect("bud fleet file");
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(&registered).expect("bud json"),
+        )
+        .expect("bud fleet file");
         std::env::set_var("HOME", root.join("home"));
         std::env::set_var("MAW_CONFIG_DIR", root.join("config"));
         std::env::set_var("GHQ_ROOT", root.join("ghq"));
@@ -848,7 +1112,10 @@ mod fleet_tests {
             serde_json::from_str(&std::fs::read_to_string(path).expect("registry")).expect("json");
         assert_eq!(merged["windows"].as_array().expect("windows").len(), 1);
         assert_eq!(merged["windows"][0]["name"], "oracle-dig-ui");
-        assert_eq!(merged["windows"][0]["repo"], "Soul-Brews-Studio/oracle-dig-ui-oracle");
+        assert_eq!(
+            merged["windows"][0]["repo"],
+            "Soul-Brews-Studio/oracle-dig-ui-oracle"
+        );
     }
 
     #[test]
@@ -890,11 +1157,20 @@ mod fleet_tests {
             repo: "github.com/laris-co/mother-oracle".to_owned(),
             kind: None,
         }];
-        let written = fleet_registry_upsert_session_for_env(&current_xdg_env(), "99-mother", &windows, "maw wake").expect("upsert");
+        let written = fleet_registry_upsert_session_for_env(
+            &current_xdg_env(),
+            "99-mother",
+            &windows,
+            "maw wake",
+        )
+        .expect("upsert");
 
         assert_eq!(written.path, root.join("config/fleet/99-mother.json"));
         assert!(!written.created);
-        let revived = serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(&written.path).expect("registry")).expect("json");
+        let revived = serde_json::from_str::<serde_json::Value>(
+            &std::fs::read_to_string(&written.path).expect("registry"),
+        )
+        .expect("json");
         assert_eq!(revived["name"], "99-mother");
         assert_eq!(revived["windows"].as_array().expect("windows").len(), 1);
         let sibling = serde_json::from_str::<serde_json::Value>(

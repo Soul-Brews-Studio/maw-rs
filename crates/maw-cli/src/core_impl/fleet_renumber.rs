@@ -17,9 +17,17 @@ struct FleetRenumberItem {
     tmux_error: Option<String>,
 }
 
-fn fleet_run_renumber(state: &FleetState, options: &FleetOptions, runtime: &mut impl FleetRuntime) -> Result<(i32, String), String> {
+fn fleet_run_renumber(
+    state: &FleetState,
+    options: &FleetOptions,
+    runtime: &mut impl FleetRuntime,
+) -> Result<(i32, String), String> {
     let mut items = fleet_renumber_plan(&state.fleet_entries, options.include_99, options.only_99);
-    let live = runtime.fleet_list_all()?.into_iter().map(|session| session.name).collect::<Vec<_>>();
+    let live = runtime
+        .fleet_list_all()?
+        .into_iter()
+        .map(|session| session.name)
+        .collect::<Vec<_>>();
     if !options.dry_run {
         fleet_apply_renumber(&mut items, &live, runtime)?;
     }
@@ -29,7 +37,11 @@ fn fleet_run_renumber(state: &FleetState, options: &FleetOptions, runtime: &mut 
     Ok((0, fleet_render_renumber(state, options, &items)))
 }
 
-fn fleet_renumber_plan(entries: &[NativeFleetEntry], include_99: bool, only_99: bool) -> Vec<FleetRenumberItem> {
+fn fleet_renumber_plan(
+    entries: &[NativeFleetEntry],
+    include_99: bool,
+    only_99: bool,
+) -> Vec<FleetRenumberItem> {
     if only_99 {
         return fleet_renumber_only_99_plan(entries);
     }
@@ -41,7 +53,9 @@ fn fleet_renumber_plan(entries: &[NativeFleetEntry], include_99: bool, only_99: 
     candidates
         .into_iter()
         .enumerate()
-        .map(|(index, (_, stem, entry))| fleet_renumber_item(entry, &format!("{:02}-{stem}", index + 1)))
+        .map(|(index, (_, stem, entry))| {
+            fleet_renumber_item(entry, &format!("{:02}-{stem}", index + 1))
+        })
         .collect()
 }
 
@@ -50,7 +64,10 @@ fn fleet_renumber_only_99_plan(entries: &[NativeFleetEntry]) -> Vec<FleetRenumbe
         .iter()
         .filter_map(|entry| fleet_renumber_candidate(entry, true))
         .filter_map(|(number, _, entry)| (number != 99).then_some(entry.session.name.clone()))
-        .filter_map(|name| name.split_once('-').and_then(|(prefix, _)| prefix.parse::<u32>().ok()))
+        .filter_map(|name| {
+            name.split_once('-')
+                .and_then(|(prefix, _)| prefix.parse::<u32>().ok())
+        })
         .collect::<BTreeSet<_>>();
     let mut candidates = entries
         .iter()
@@ -82,7 +99,10 @@ fn fleet_renumber_item(entry: &NativeFleetEntry, new_name: &str) -> FleetRenumbe
     }
 }
 
-fn fleet_renumber_candidate(entry: &NativeFleetEntry, include_99: bool) -> Option<(u32, String, &NativeFleetEntry)> {
+fn fleet_renumber_candidate(
+    entry: &NativeFleetEntry,
+    include_99: bool,
+) -> Option<(u32, String, &NativeFleetEntry)> {
     if !fleet_entry_is_session(entry) {
         return None;
     }
@@ -97,7 +117,11 @@ fn fleet_renumber_candidate(entry: &NativeFleetEntry, include_99: bool) -> Optio
     Some((number, stem.to_owned(), entry))
 }
 
-fn fleet_apply_renumber(items: &mut [FleetRenumberItem], live: &[String], runtime: &mut impl FleetRuntime) -> Result<(), String> {
+fn fleet_apply_renumber(
+    items: &mut [FleetRenumberItem],
+    live: &[String],
+    runtime: &mut impl FleetRuntime,
+) -> Result<(), String> {
     for item in items.iter_mut().filter(|item| item.changed) {
         fleet_write_renumbered_config(item)?;
         let stem = fleet_session_stem(&item.old_name);
@@ -106,7 +130,15 @@ fn fleet_apply_renumber(items: &mut [FleetRenumberItem], live: &[String], runtim
             .find(|name| name.as_str() == item.old_name)
             .or_else(|| live.iter().find(|name| fleet_session_stem(name) == stem));
         if let Some(running) = running.filter(|running| running.as_str() != item.new_name) {
-            match runtime.fleet_run_command("tmux", &["rename-session".to_owned(), "-t".to_owned(), running.clone(), item.new_name.clone()]) {
+            match runtime.fleet_run_command(
+                "tmux",
+                &[
+                    "rename-session".to_owned(),
+                    "-t".to_owned(),
+                    running.clone(),
+                    item.new_name.clone(),
+                ],
+            ) {
                 Ok(_) => item.tmux = Some(running.clone()),
                 Err(error) => item.tmux_error = Some(format!("{running}: {}", error.trim())),
             }
@@ -116,32 +148,62 @@ fn fleet_apply_renumber(items: &mut [FleetRenumberItem], live: &[String], runtim
 }
 
 fn fleet_write_renumbered_config(item: &FleetRenumberItem) -> Result<(), String> {
-    let text = std::fs::read_to_string(&item.path).map_err(|error| format!("fleet renumber: read {}: {error}", item.path.display()))?;
-    let mut value: serde_json::Value = serde_json::from_str(&text).map_err(|error| format!("fleet renumber: parse {}: {error}", item.path.display()))?;
+    let text = std::fs::read_to_string(&item.path)
+        .map_err(|error| format!("fleet renumber: read {}: {error}", item.path.display()))?;
+    let mut value: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|error| format!("fleet renumber: parse {}: {error}", item.path.display()))?;
     value["name"] = serde_json::json!(item.new_name);
-    let body = serde_json::to_string_pretty(&value).map_err(|error| format!("fleet renumber: render {}: {error}", item.new_name))? + "\n";
-    let dir = item.path.parent().ok_or_else(|| format!("fleet renumber: no parent for {}", item.path.display()))?;
+    let body = serde_json::to_string_pretty(&value)
+        .map_err(|error| format!("fleet renumber: render {}: {error}", item.new_name))?
+        + "\n";
+    let dir = item
+        .path
+        .parent()
+        .ok_or_else(|| format!("fleet renumber: no parent for {}", item.path.display()))?;
     let target = dir.join(&item.new_file);
     let tmp = dir.join(format!(".tmp-{}", item.new_file));
-    std::fs::write(&tmp, body).map_err(|error| format!("fleet renumber: write {}: {error}", tmp.display()))?;
-    std::fs::rename(&tmp, &target).map_err(|error| format!("fleet renumber: rename {} -> {}: {error}", tmp.display(), target.display()))?;
+    std::fs::write(&tmp, body)
+        .map_err(|error| format!("fleet renumber: write {}: {error}", tmp.display()))?;
+    std::fs::rename(&tmp, &target).map_err(|error| {
+        format!(
+            "fleet renumber: rename {} -> {}: {error}",
+            tmp.display(),
+            target.display()
+        )
+    })?;
     if target != item.path && item.path.exists() {
-        std::fs::remove_file(&item.path).map_err(|error| format!("fleet renumber: remove {}: {error}", item.path.display()))?;
+        std::fs::remove_file(&item.path)
+            .map_err(|error| format!("fleet renumber: remove {}: {error}", item.path.display()))?;
     }
     Ok(())
 }
 
-fn fleet_render_renumber(state: &FleetState, options: &FleetOptions, items: &[FleetRenumberItem]) -> String {
+fn fleet_render_renumber(
+    state: &FleetState,
+    options: &FleetOptions,
+    items: &[FleetRenumberItem],
+) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "fleet renumber plan node: {}", state.config.node);
-    let _ = writeln!(out, "  dry-run: {} · include-99: {} · only-99: {} · configs: {}", options.dry_run, options.include_99, options.only_99, items.len());
+    let _ = writeln!(
+        out,
+        "  dry-run: {} · include-99: {} · only-99: {} · configs: {}",
+        options.dry_run,
+        options.include_99,
+        options.only_99,
+        items.len()
+    );
     if items.is_empty() {
         out.push_str("  ok: no numbered fleet configs\n");
         return out;
     }
     for item in items {
         if item.changed {
-            let verb = if options.dry_run { "would rename" } else { "renamed" };
+            let verb = if options.dry_run {
+                "would rename"
+            } else {
+                "renamed"
+            };
             let _ = write!(out, "  - {verb} {} -> {}", item.old_file, item.new_file);
             if let Some(tmux) = &item.tmux {
                 let _ = write!(out, " (tmux: {tmux} -> {})", item.new_name);
@@ -157,7 +219,11 @@ fn fleet_render_renumber(state: &FleetState, options: &FleetOptions, items: &[Fl
     out
 }
 
-fn fleet_json_renumber(state: &FleetState, options: &FleetOptions, items: &[FleetRenumberItem]) -> Result<String, String> {
+fn fleet_json_renumber(
+    state: &FleetState,
+    options: &FleetOptions,
+    items: &[FleetRenumberItem],
+) -> Result<String, String> {
     let value = serde_json::json!({
         "node": state.config.node,
         "action": "renumber",
@@ -167,7 +233,9 @@ fn fleet_json_renumber(state: &FleetState, options: &FleetOptions, items: &[Flee
         "configCount": items.len(),
         "configs": items.iter().map(fleet_json_renumber_item).collect::<Vec<_>>(),
     });
-    serde_json::to_string_pretty(&value).map(|text| format!("{text}\n")).map_err(|error| error.to_string())
+    serde_json::to_string_pretty(&value)
+        .map(|text| format!("{text}\n"))
+        .map_err(|error| error.to_string())
 }
 
 fn fleet_json_renumber_item(item: &FleetRenumberItem) -> serde_json::Value {

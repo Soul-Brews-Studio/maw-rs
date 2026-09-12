@@ -85,7 +85,10 @@ fn inbox_run_reject(argv: &[String], env: &InboxEnv, now_ms: u64) -> Result<Stri
     ))
 }
 
-fn inbox_load_pending_for_env(env: &InboxEnv, now_ms: u64) -> Result<Vec<InboxPendingMessage>, String> {
+fn inbox_load_pending_for_env(
+    env: &InboxEnv,
+    now_ms: u64,
+) -> Result<Vec<InboxPendingMessage>, String> {
     let state_dir = inbox_state_pending_dir(env);
     inbox_reap_expired_pending(&state_dir, now_ms)?;
     let mut by_id = BTreeMap::<String, InboxPendingMessage>::new();
@@ -96,7 +99,11 @@ fn inbox_load_pending_for_env(env: &InboxEnv, now_ms: u64) -> Result<Vec<InboxPe
         by_id.insert(message.id.clone(), message);
     }
     let mut rows = by_id.into_values().collect::<Vec<_>>();
-    rows.sort_by(|left, right| left.sent_at.cmp(&right.sent_at).then_with(|| left.id.cmp(&right.id)));
+    rows.sort_by(|left, right| {
+        left.sent_at
+            .cmp(&right.sent_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
     Ok(rows)
 }
 
@@ -197,8 +204,9 @@ fn inbox_reap_expired_pending(pending_dir: &std::path::Path, now_ms: u64) -> Res
             continue;
         };
         if inbox_pending_is_expired(&message, now_ms) {
-            std::fs::remove_file(&path)
-                .map_err(|error| format!("inbox: reap expired pending {}: {error}", path.display()))?;
+            std::fs::remove_file(&path).map_err(|error| {
+                format!("inbox: reap expired pending {}: {error}", path.display())
+            })?;
         }
     }
     Ok(())
@@ -236,10 +244,13 @@ fn inbox_write_0600_atomic(path: &std::path::Path, body: &str) -> Result<(), Str
         {
             std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
         }
-        let mut file = options.open(&tmp).map_err(|error| format!("tmp create failed: {error}"))?;
+        let mut file = options
+            .open(&tmp)
+            .map_err(|error| format!("tmp create failed: {error}"))?;
         std::io::Write::write_all(&mut file, body.as_bytes())
             .map_err(|error| format!("tmp write failed: {error}"))?;
-        file.sync_all().map_err(|error| format!("tmp sync failed: {error}"))?;
+        file.sync_all()
+            .map_err(|error| format!("tmp sync failed: {error}"))?;
     }
     std::fs::read_to_string(&tmp).map_err(|error| format!("tmp validate read failed: {error}"))?;
     std::fs::rename(&tmp, path).map_err(|error| format!("atomic rename failed: {error}"))?;
@@ -254,7 +265,10 @@ fn inbox_write_0600_atomic(path: &std::path::Path, body: &str) -> Result<(), Str
 
 fn inbox_tmp_path(path: &std::path::Path) -> std::path::PathBuf {
     let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
-    let name = path.file_name().and_then(std::ffi::OsStr::to_str).unwrap_or("pending.json");
+    let name = path
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or("pending.json");
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());

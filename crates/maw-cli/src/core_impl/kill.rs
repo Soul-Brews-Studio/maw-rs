@@ -288,7 +288,6 @@ where
     Ok(2)
 }
 
-
 fn kill_peer_forward(
     options: &KillOptions,
     transport: &mut impl KillPeerTransport,
@@ -297,7 +296,10 @@ fn kill_peer_forward(
     now: fn() -> i64,
 ) -> Result<String, String> {
     kill_validate_user_target(&options.target)?;
-    let alias = options.peer.as_deref().ok_or_else(|| "kill: missing --peer value".to_owned())?;
+    let alias = options
+        .peer
+        .as_deref()
+        .ok_or_else(|| "kill: missing --peer value".to_owned())?;
     kill_validate_peer_alias(alias)?;
     let peer = kill_resolve_peer(alias)?;
     let sender_oracle = resolve_hey_sender_oracle(config);
@@ -317,10 +319,10 @@ fn kill_peer_forward(
         "\x1b[32m✓\x1b[0m forwarded kill → {} ({}) — {}",
         request.peer.alias, request.peer.url, request.target
     );
-    Ok(response.output.filter(|out| !out.is_empty()).map_or_else(
-        || format!("{summary}\n"),
-        |out| format!("{summary}\n{out}"),
-    ))
+    Ok(response
+        .output
+        .filter(|out| !out.is_empty())
+        .map_or_else(|| format!("{summary}\n"), |out| format!("{summary}\n{out}")))
 }
 
 #[derive(Debug, serde::Deserialize, Default)]
@@ -351,7 +353,11 @@ fn kill_resolve_peer(alias: &str) -> Result<KillPeer, String> {
     if let Some(node) = entry.node.as_deref() {
         kill_validate_peer_alias(node).map_err(|_| format!("invalid peer node for {alias}"))?;
     }
-    Ok(KillPeer { alias: alias.to_owned(), url: url.to_owned(), node: entry.node.clone() })
+    Ok(KillPeer {
+        alias: alias.to_owned(),
+        url: url.to_owned(),
+        node: entry.node.clone(),
+    })
 }
 
 fn kill_read_peers_json() -> Result<Option<String>, String> {
@@ -380,19 +386,26 @@ fn kill_peers_path() -> std::path::PathBuf {
 }
 
 fn kill_legacy_peers_path() -> std::path::PathBuf {
-    std::env::var_os("HOME")
-        .map_or_else(|| std::path::PathBuf::from(".maw/peers.json"), |home| std::path::PathBuf::from(home).join(".maw/peers.json"))
+    std::env::var_os("HOME").map_or_else(
+        || std::path::PathBuf::from(".maw/peers.json"),
+        |home| std::path::PathBuf::from(home).join(".maw/peers.json"),
+    )
 }
 
 fn kill_validate_peer_alias(alias: &str) -> Result<(), String> {
     let mut chars = alias.chars();
-    let Some(first) = chars.next() else { return Err("peer alias must be non-empty".to_owned()); };
+    let Some(first) = chars.next() else {
+        return Err("peer alias must be non-empty".to_owned());
+    };
     let valid_first = first.is_ascii_lowercase() || first.is_ascii_digit();
-    let valid_rest = chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_' || ch == '-');
+    let valid_rest =
+        chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_' || ch == '-');
     if alias.len() <= 32 && valid_first && valid_rest {
         Ok(())
     } else {
-        Err(format!("invalid peer alias \"{alias}\" (must match ^[a-z0-9][a-z0-9_-]{{0,31}}$)"))
+        Err(format!(
+            "invalid peer alias \"{alias}\" (must match ^[a-z0-9][a-z0-9_-]{{0,31}}$)"
+        ))
     }
 }
 
@@ -400,7 +413,10 @@ fn kill_validate_peer_url(value: &str) -> Result<(), String> {
     if !(value.starts_with("http://") || value.starts_with("https://")) {
         return Err("peer url must start with http:// or https://".to_owned());
     }
-    if value.chars().any(|ch| ch == '\0' || ch.is_control() || ch.is_whitespace()) {
+    if value
+        .chars()
+        .any(|ch| ch == '\0' || ch.is_control() || ch.is_whitespace())
+    {
         return Err("peer url must not contain whitespace or control characters".to_owned());
     }
     Ok(())
@@ -419,16 +435,31 @@ fn kill_validate_peer_request(request: &KillPeerRequest) -> Result<(), String> {
 fn kill_peer_body(request: &KillPeerRequest) -> Result<String, String> {
     kill_validate_peer_request(request)?;
     let mut body = serde_json::Map::new();
-    body.insert("target".to_owned(), serde_json::Value::String(request.target.clone()));
-    if let Some(pane) = request.pane { body.insert("pane".to_owned(), serde_json::Value::from(pane)); }
-    if let Some(index) = request.index { body.insert("index".to_owned(), serde_json::Value::from(index)); }
-    if request.all { body.insert("all".to_owned(), serde_json::Value::Bool(true)); }
+    body.insert(
+        "target".to_owned(),
+        serde_json::Value::String(request.target.clone()),
+    );
+    if let Some(pane) = request.pane {
+        body.insert("pane".to_owned(), serde_json::Value::from(pane));
+    }
+    if let Some(index) = request.index {
+        body.insert("index".to_owned(), serde_json::Value::from(index));
+    }
+    if request.all {
+        body.insert("all".to_owned(), serde_json::Value::Bool(true));
+    }
     serde_json::to_string(&serde_json::Value::Object(body)).map_err(|error| error.to_string())
 }
 
-fn kill_peer_curl_argv(peer_url: &str, headers: &Headers, body: &str) -> Result<Vec<String>, String> {
+fn kill_peer_curl_argv(
+    peer_url: &str,
+    headers: &Headers,
+    body: &str,
+) -> Result<Vec<String>, String> {
     kill_validate_peer_url(peer_url)?;
-    if body.chars().any(|ch| ch == '\0' || ch.is_control()) { return Err("kill peer body must not contain NUL/control characters".to_owned()); }
+    if body.chars().any(|ch| ch == '\0' || ch.is_control()) {
+        return Err("kill peer body must not contain NUL/control characters".to_owned());
+    }
     let url = format!("{}{}", peer_url.trim_end_matches('/'), KILL_PEER_API_PATH);
     let mut argv = vec![
         "-sS".to_owned(),
@@ -454,7 +485,9 @@ fn kill_peer_curl_argv(peer_url: &str, headers: &Headers, body: &str) -> Result<
 }
 
 fn kill_validate_curl_argv(argv: &[String]) -> Result<(), String> {
-    if !argv.iter().any(|arg| arg == "--") { return Err("curl argv must include -- URL separator".to_owned()); }
+    if !argv.iter().any(|arg| arg == "--") {
+        return Err("curl argv must include -- URL separator".to_owned());
+    }
     for arg in argv {
         if arg.chars().any(|ch| ch == '\0' || ch.is_control()) {
             return Err("curl argv must not contain NUL/control characters".to_owned());
@@ -473,7 +506,10 @@ fn kill_spawn_curl(argv: &[String]) -> Result<String, String> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-        return Err(format!("curl failed: {}", if stdout.is_empty() { stderr } else { stdout }));
+        return Err(format!(
+            "curl failed: {}",
+            if stdout.is_empty() { stderr } else { stdout }
+        ));
     }
     String::from_utf8(output.stdout).map_err(|error| format!("curl stdout was not utf8: {error}"))
 }
@@ -482,28 +518,52 @@ fn kill_split_peer_http_output(raw: &str) -> Result<(u16, String), String> {
     let Some((body, status_raw)) = raw.rsplit_once(KILL_PEER_HTTP_STATUS_MARKER) else {
         return Err("curl output missing HTTP status marker".to_owned());
     };
-    let status = status_raw.trim().parse::<u16>().map_err(|_| format!("invalid HTTP status from curl: {status_raw}"))?;
+    let status = status_raw
+        .trim()
+        .parse::<u16>()
+        .map_err(|_| format!("invalid HTTP status from curl: {status_raw}"))?;
     Ok((status, body.trim_end_matches('\n').to_owned()))
 }
 
-fn kill_parse_peer_response(alias: &str, peer_url: &str, status: u16, raw: &str) -> Result<KillPeerResponse, String> {
-    let value = serde_json::from_str::<serde_json::Value>(raw)
-        .map_err(|error| format!("peer kill failed ({alias} {peer_url}): invalid json: {error}; body={raw}"))?;
+fn kill_parse_peer_response(
+    alias: &str,
+    peer_url: &str,
+    status: u16,
+    raw: &str,
+) -> Result<KillPeerResponse, String> {
+    let value = serde_json::from_str::<serde_json::Value>(raw).map_err(|error| {
+        format!("peer kill failed ({alias} {peer_url}): invalid json: {error}; body={raw}")
+    })?;
     if status == 404 {
-        return Err(format!("peer {alias} does not support /api/kill (HTTP 404 at {peer_url})"));
+        return Err(format!(
+            "peer {alias} does not support /api/kill (HTTP 404 at {peer_url})"
+        ));
     }
     if status >= 400 {
-        let detail = value.get("error").and_then(serde_json::Value::as_str).unwrap_or("request failed");
+        let detail = value
+            .get("error")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("request failed");
         return Err(format!("peer kill failed ({alias} {peer_url}): {detail}"));
     }
     if value.get("ok").and_then(serde_json::Value::as_bool) == Some(true) {
-        return Ok(KillPeerResponse { output: value.get("output").and_then(serde_json::Value::as_str).map(ToOwned::to_owned) });
+        return Ok(KillPeerResponse {
+            output: value
+                .get("output")
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned),
+        });
     }
-    let detail = value.get("error").and_then(serde_json::Value::as_str).unwrap_or("remote returned ok=false");
+    let detail = value
+        .get("error")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("remote returned ok=false");
     Err(format!("peer kill failed ({alias} {peer_url}): {detail}"))
 }
 
-fn kill_now_seconds() -> i64 { i64::try_from(current_epoch_seconds()).unwrap_or(i64::MAX) }
+fn kill_now_seconds() -> i64 {
+    i64::try_from(current_epoch_seconds()).unwrap_or(i64::MAX)
+}
 
 fn kill_parse_non_negative(value: &str, flag: &str) -> Result<u32, String> {
     if value.is_empty() || !value.chars().all(|ch| ch.is_ascii_digit()) {
@@ -1007,7 +1067,10 @@ mod kill_tests {
             if let Some(message) = &self.fail {
                 return Err(message.clone());
             }
-            Ok(self.response.clone().unwrap_or(KillPeerResponse { output: None }))
+            Ok(self
+                .response
+                .clone()
+                .unwrap_or(KillPeerResponse { output: None }))
         }
     }
 
@@ -1020,16 +1083,37 @@ mod kill_tests {
     impl KillEnvGuard {
         fn new(label: &str) -> Self {
             let lock = env_test_lock();
-            let keys = ["PEERS_FILE", "MAW_SENDER", "MAW_PEER_KEY", "HOME", "MAW_HOME", "MAW_STATE_DIR", "XDG_STATE_HOME"];
-            let saved = keys.into_iter().map(|key| (key, std::env::var_os(key))).collect::<Vec<_>>();
-            let dir = std::env::temp_dir().join(format!("maw-rs-kill-peer-{label}-{}", std::process::id()));
+            let keys = [
+                "PEERS_FILE",
+                "MAW_SENDER",
+                "MAW_PEER_KEY",
+                "HOME",
+                "MAW_HOME",
+                "MAW_STATE_DIR",
+                "XDG_STATE_HOME",
+            ];
+            let saved = keys
+                .into_iter()
+                .map(|key| (key, std::env::var_os(key)))
+                .collect::<Vec<_>>();
+            let dir = std::env::temp_dir()
+                .join(format!("maw-rs-kill-peer-{label}-{}", std::process::id()));
             let _ = std::fs::create_dir_all(&dir);
-            for key in ["MAW_HOME", "MAW_STATE_DIR", "XDG_STATE_HOME"] { std::env::remove_var(key); }
+            for key in ["MAW_HOME", "MAW_STATE_DIR", "XDG_STATE_HOME"] {
+                std::env::remove_var(key);
+            }
             std::env::set_var("HOME", &dir);
             std::env::set_var("PEERS_FILE", dir.join("peers.json"));
             std::env::set_var("MAW_SENDER", "local:test-oracle");
-            std::env::set_var("MAW_PEER_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
-            Self { saved, _lock: lock, dir }
+            std::env::set_var(
+                "MAW_PEER_KEY",
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            );
+            Self {
+                saved,
+                _lock: lock,
+                dir,
+            }
         }
 
         fn write_peers(&self, body: &str) {
@@ -1040,7 +1124,11 @@ mod kill_tests {
     impl Drop for KillEnvGuard {
         fn drop(&mut self) {
             for (key, value) in &self.saved {
-                if let Some(value) = value { std::env::set_var(key, value); } else { std::env::remove_var(key); }
+                if let Some(value) = value {
+                    std::env::set_var(key, value);
+                } else {
+                    std::env::remove_var(key);
+                }
             }
         }
     }
@@ -1051,7 +1139,11 @@ mod kill_tests {
             argv,
             tmux,
             &mut peer,
-            &HeyConfig { node: Some("local".to_owned()), oracle: Some("test-oracle".to_owned()), route: RouteConfig::default() },
+            &HeyConfig {
+                node: Some("local".to_owned()),
+                oracle: Some("test-oracle".to_owned()),
+                route: RouteConfig::default(),
+            },
             || Ok("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_owned()),
             || 1_700_000_000,
         )
@@ -1162,7 +1254,10 @@ mod kill_tests {
         assert!(!tmux.calls.iter().any(|call| call.0.starts_with("kill-")));
 
         let mut tmux = kill_fake("07-demo|||0|||work|||1|||/tmp\n07-demo|||2|||work|||0|||/tmp\n");
-        let output = kill_run_fake(&kill_strings(&["07-demo:work", "--all", "--force"]), &mut tmux);
+        let output = kill_run_fake(
+            &kill_strings(&["07-demo:work", "--all", "--force"]),
+            &mut tmux,
+        );
         assert_eq!(output.code, 0);
         assert_eq!(
             output.stdout,
@@ -1190,7 +1285,10 @@ mod kill_tests {
         let mut tmux = kill_fake("07-demo|||0|||main|||1|||/tmp\n07-demo|||1|||logs|||0|||/tmp\n");
         let output = kill_run_fake(&kill_strings(&["07-demo:logs"]), &mut tmux);
         assert_eq!(output.code, 0);
-        assert_eq!(output.stdout, "  \x1b[32m✓\x1b[0m killed window 07-demo:1\n");
+        assert_eq!(
+            output.stdout,
+            "  \x1b[32m✓\x1b[0m killed window 07-demo:1\n"
+        );
         assert_eq!(
             tmux.calls[1],
             ("kill-window".to_owned(), kill_strings(&["-t", "07-demo:1"]))
@@ -1265,8 +1363,7 @@ mod kill_tests {
 
     #[test]
     fn kill_session_is_exact_only_for_destructive_targets() {
-        let mut tmux =
-            kill_fake("ftkzz-a|||0|||main|||1|||/tmp\nftkzz-b|||0|||main|||1|||/tmp\n");
+        let mut tmux = kill_fake("ftkzz-a|||0|||main|||1|||/tmp\nftkzz-b|||0|||main|||1|||/tmp\n");
         let partial = kill_run_fake(&kill_strings(&["ftkzz"]), &mut tmux);
         assert_eq!(partial.code, 1);
         assert!(!tmux.calls.iter().any(|call| call.0 == "kill-session"));
@@ -1305,12 +1402,21 @@ mod kill_tests {
         let env = KillEnvGuard::new("forward");
         env.write_peers(r#"{"version":1,"peers":{"neo":{"url":"http://peer.example:3456","node":"neo-node","addedAt":"1"}}}"#);
         let mut tmux = kill_fake("07-demo|||0|||main|||1|||/tmp\n");
-        let mut peer = KillFakePeer { response: Some(KillPeerResponse { output: Some("remote log\n".to_owned()) }), ..KillFakePeer::default() };
+        let mut peer = KillFakePeer {
+            response: Some(KillPeerResponse {
+                output: Some("remote log\n".to_owned()),
+            }),
+            ..KillFakePeer::default()
+        };
         let output = kill_run_command_with(
             &kill_strings(&["target", "--pane", "3", "--peer", "neo"]),
             &mut tmux,
             &mut peer,
-            &HeyConfig { node: Some("local".to_owned()), oracle: Some("test-oracle".to_owned()), route: RouteConfig::default() },
+            &HeyConfig {
+                node: Some("local".to_owned()),
+                oracle: Some("test-oracle".to_owned()),
+                route: RouteConfig::default(),
+            },
             || Ok("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_owned()),
             || 1_700_000_000,
         );
@@ -1336,7 +1442,11 @@ mod kill_tests {
             &kill_strings(&["target", "--peer", "missing"]),
             &mut tmux,
             &mut peer,
-            &HeyConfig { node: Some("local".to_owned()), oracle: Some("test-oracle".to_owned()), route: RouteConfig::default() },
+            &HeyConfig {
+                node: Some("local".to_owned()),
+                oracle: Some("test-oracle".to_owned()),
+                route: RouteConfig::default(),
+            },
             || Ok("key".to_owned()),
             || 1_700_000_000,
         );
@@ -1356,7 +1466,11 @@ mod kill_tests {
             &kill_strings(&["target", "--peer", "bad;alias"]),
             &mut tmux,
             &mut peer,
-            &HeyConfig { node: Some("local".to_owned()), oracle: Some("test-oracle".to_owned()), route: RouteConfig::default() },
+            &HeyConfig {
+                node: Some("local".to_owned()),
+                oracle: Some("test-oracle".to_owned()),
+                route: RouteConfig::default(),
+            },
             || Ok("key".to_owned()),
             || 1_700_000_000,
         );
@@ -1368,7 +1482,11 @@ mod kill_tests {
     #[test]
     fn kill_peer_body_and_curl_argv_are_argv_no_shell() {
         let request = KillPeerRequest {
-            peer: KillPeer { alias: "neo".to_owned(), url: "http://peer".to_owned(), node: None },
+            peer: KillPeer {
+                alias: "neo".to_owned(),
+                url: "http://peer".to_owned(),
+                node: None,
+            },
             target: "target".to_owned(),
             pane: Some(1),
             index: Some(2),
@@ -1383,27 +1501,53 @@ mod kill_tests {
         assert_eq!(value["pane"], 1);
         assert_eq!(value["index"], 2);
         assert_eq!(value["all"], true);
-        let headers = sign_headers_v3_at("token", "key", "oracle:node", "POST", KILL_PEER_API_PATH, Some(body.as_bytes()), 1).expect("headers");
+        let headers = sign_headers_v3_at(
+            "token",
+            "key",
+            "oracle:node",
+            "POST",
+            KILL_PEER_API_PATH,
+            Some(body.as_bytes()),
+            1,
+        )
+        .expect("headers");
         let argv = kill_peer_curl_argv("http://peer/", &headers, &body).expect("argv");
         assert!(argv.iter().any(|arg| arg == "--"));
         assert!(argv.iter().any(|arg| arg == "http://peer/api/kill"));
-        assert!(argv.windows(2).any(|pair| pair == ["--data-binary", body.as_str()]));
+        assert!(argv
+            .windows(2)
+            .any(|pair| pair == ["--data-binary", body.as_str()]));
         assert!(!argv.iter().any(|arg| arg == "sh" || arg == "-c"));
     }
 
     #[test]
     fn kill_peer_response_maps_404_and_remote_errors_like_maw_js() {
         let unsupported = kill_parse_peer_response("neo", "http://peer", 404, r"{}").unwrap_err();
-        assert_eq!(unsupported, "peer neo does not support /api/kill (HTTP 404 at http://peer)");
-        let maintenance = kill_parse_peer_response("neo", "http://peer", 503, r#"{"error":"maintenance"}"#).unwrap_err();
-        assert_eq!(maintenance, "peer kill failed (neo http://peer): maintenance");
-        let ok = kill_parse_peer_response("neo", "http://peer", 200, r#"{"ok":true,"output":"remote log"}"#).expect("ok");
+        assert_eq!(
+            unsupported,
+            "peer neo does not support /api/kill (HTTP 404 at http://peer)"
+        );
+        let maintenance =
+            kill_parse_peer_response("neo", "http://peer", 503, r#"{"error":"maintenance"}"#)
+                .unwrap_err();
+        assert_eq!(
+            maintenance,
+            "peer kill failed (neo http://peer): maintenance"
+        );
+        let ok = kill_parse_peer_response(
+            "neo",
+            "http://peer",
+            200,
+            r#"{"ok":true,"output":"remote log"}"#,
+        )
+        .expect("ok");
         assert_eq!(ok.output.as_deref(), Some("remote log"));
     }
 
     #[test]
     fn kill_peer_split_http_output_reads_marker() {
-        let (status, body) = kill_split_peer_http_output("{\"ok\":true}\n__MAW_HTTP_STATUS__:200").expect("split");
+        let (status, body) =
+            kill_split_peer_http_output("{\"ok\":true}\n__MAW_HTTP_STATUS__:200").expect("split");
         assert_eq!(status, 200);
         assert_eq!(body, "{\"ok\":true}");
     }

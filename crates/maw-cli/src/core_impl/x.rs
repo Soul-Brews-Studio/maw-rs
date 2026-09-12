@@ -21,10 +21,13 @@
 // verb/native guard · 3 trust declined or non-TTY unapproved · 4 `--offline`
 // cache miss · the plugin's own exit code passes through on success.
 
-const DISPATCH_335: &[DispatcherEntry] =
-    &[DispatcherEntry { command: "x", handler: Handler::Sync(run_x_command) }];
+const DISPATCH_335: &[DispatcherEntry] = &[DispatcherEntry {
+    command: "x",
+    handler: Handler::Sync(run_x_command),
+}];
 
-const X_USAGE: &str = "usage: maw x <spec> [--sha256 <hex>] [-y|--yes] [--offline|--frozen] [--reload]
+const X_USAGE: &str =
+    "usage: maw x <spec> [--sha256 <hex>] [-y|--yes] [--offline|--frozen] [--reload]
              [--from <spec>] [--registry <owner/repo>] [--remote] [--debug]
              [-q|--quiet] [--install|--keep] [--force] [--dry-run] [--] [plugin-args...]
        maw x ls
@@ -44,10 +47,18 @@ enum XCliCommand {
     Help,
     Run(Box<XRunArgs>),
     CacheLs,
-    CacheGc { max_age_secs: Option<u64>, max_size_bytes: Option<u64>, dry_run: bool },
-    CacheRm { needle: String },
+    CacheGc {
+        max_age_secs: Option<u64>,
+        max_size_bytes: Option<u64>,
+        dry_run: bool,
+    },
+    CacheRm {
+        needle: String,
+    },
     TrustLs,
-    TrustRevoke { selector: String },
+    TrustRevoke {
+        selector: String,
+    },
 }
 
 /// Flags for the run form (spec §2.1 flag table).
@@ -143,12 +154,18 @@ fn x_trace(run: &mut XRunEnv<'_>, stage: &str, detail: &str) {
 
 fn run_x_parsed(command: &XCliCommand, run: &mut XRunEnv<'_>) -> CliOutput {
     match command {
-        XCliCommand::Help => {
-            CliOutput { code: 0, stdout: format!("{X_USAGE}\n"), stderr: String::new() }
-        }
+        XCliCommand::Help => CliOutput {
+            code: 0,
+            stdout: format!("{X_USAGE}\n"),
+            stderr: String::new(),
+        },
         XCliCommand::Run(args) => run_x_run(args, run),
         XCliCommand::CacheLs => run_x_cache_ls(&run.cache_root),
-        XCliCommand::CacheGc { max_age_secs, max_size_bytes, dry_run } => run_x_cache_gc(
+        XCliCommand::CacheGc {
+            max_age_secs,
+            max_size_bytes,
+            dry_run,
+        } => run_x_cache_gc(
             &run.cache_root,
             run.now,
             &XCacheGcOptions {
@@ -180,7 +197,9 @@ fn parse_x_cli(argv: &[String]) -> Result<XCliCommand, String> {
         }
         "gc" => parse_x_gc(&argv[1..]),
         "rm" => match (argv.get(1), argv.len()) {
-            (Some(needle), 2) => Ok(XCliCommand::CacheRm { needle: needle.clone() }),
+            (Some(needle), 2) => Ok(XCliCommand::CacheRm {
+                needle: needle.clone(),
+            }),
             _ => Err("x rm: needs exactly one <verb|artifact|sha256-prefix>".to_owned()),
         },
         "trust" => parse_x_trust(&argv[1..]),
@@ -260,26 +279,38 @@ fn parse_x_gc(rest: &[String]) -> Result<XCliCommand, String> {
         match rest[index].as_str() {
             "--dry-run" => dry_run = true,
             "--max-age" => {
-                max_age_secs =
-                    Some(parse_x_gc_duration_secs(&x_take_value(rest, index, "--max-age")?)?);
+                max_age_secs = Some(parse_x_gc_duration_secs(&x_take_value(
+                    rest,
+                    index,
+                    "--max-age",
+                )?)?);
                 index += 1;
             }
             "--max-size" => {
-                max_size_bytes =
-                    Some(parse_x_gc_size_bytes(&x_take_value(rest, index, "--max-size")?)?);
+                max_size_bytes = Some(parse_x_gc_size_bytes(&x_take_value(
+                    rest,
+                    index,
+                    "--max-size",
+                )?)?);
                 index += 1;
             }
             other => return Err(format!("x gc: unknown argument {other}")),
         }
         index += 1;
     }
-    Ok(XCliCommand::CacheGc { max_age_secs, max_size_bytes, dry_run })
+    Ok(XCliCommand::CacheGc {
+        max_age_secs,
+        max_size_bytes,
+        dry_run,
+    })
 }
 
 fn parse_x_trust(rest: &[String]) -> Result<XCliCommand, String> {
     match (rest.first().map(String::as_str), rest.len()) {
         (Some("ls"), 1) => Ok(XCliCommand::TrustLs),
-        (Some("revoke"), 2) => Ok(XCliCommand::TrustRevoke { selector: rest[1].clone() }),
+        (Some("revoke"), 2) => Ok(XCliCommand::TrustRevoke {
+            selector: rest[1].clone(),
+        }),
         _ => Err(
             "x trust: usage — maw x trust ls | maw x trust revoke <source|sha256-prefix>"
                 .to_owned(),
@@ -295,16 +326,16 @@ fn x_take_value(argv: &[String], index: usize, flag: &str) -> Result<String, Str
 
 /// Parse a gc age: `30d`, `12h`, `45m`, `10s`, or plain seconds.
 fn parse_x_gc_duration_secs(value: &str) -> Result<u64, String> {
-    x_parse_suffixed(value, &[('d', 86_400), ('h', 3_600), ('m', 60), ('s', 1)]).ok_or_else(
-        || format!("x gc: --max-age must be like 30d, 12h, 45m, or seconds, got '{value}'"),
-    )
+    x_parse_suffixed(value, &[('d', 86_400), ('h', 3_600), ('m', 60), ('s', 1)]).ok_or_else(|| {
+        format!("x gc: --max-age must be like 30d, 12h, 45m, or seconds, got '{value}'")
+    })
 }
 
 /// Parse a gc size: `2g`, `500m`, `8k`, or plain bytes.
 fn parse_x_gc_size_bytes(value: &str) -> Result<u64, String> {
-    x_parse_suffixed(value, &[('g', 1 << 30), ('m', 1 << 20), ('k', 1 << 10)]).ok_or_else(
-        || format!("x gc: --max-size must be like 2g, 500m, 8k, or bytes, got '{value}'"),
-    )
+    x_parse_suffixed(value, &[('g', 1 << 30), ('m', 1 << 20), ('k', 1 << 10)]).ok_or_else(|| {
+        format!("x gc: --max-size must be like 2g, 500m, 8k, or bytes, got '{value}'")
+    })
 }
 
 /// Shared suffixed-integer parser; suffixes compare case-insensitively.
@@ -320,7 +351,10 @@ fn x_parse_suffixed(value: &str, suffixes: &[(char, u64)]) -> Option<u64> {
                 .map(|(_, factor)| (&lower[..lower.len() - 1], *factor))
         })
         .unwrap_or((lower.as_str(), 1));
-    digits.parse::<u64>().ok().map(|amount| amount.saturating_mul(factor))
+    digits
+        .parse::<u64>()
+        .ok()
+        .map(|amount| amount.saturating_mul(factor))
 }
 
 // ─── the run form ────────────────────────────────────────────────────────
@@ -340,7 +374,11 @@ fn run_x_run(args: &XRunArgs, run: &mut XRunEnv<'_>) -> CliOutput {
         Ok(value) => value,
         Err(message) => return x_usage_error(&message),
     };
-    x_trace(run, "parse", &format!("spec '{}' → {}", args.spec, spec.source.canonical()));
+    x_trace(
+        run,
+        "parse",
+        &format!("spec '{}' → {}", args.spec, spec.source.canonical()),
+    );
 
     // Native guard + local shadow apply to bare verbs only (spec §2.2 steps
     // 1-2): scheme'd/direct specs skip both.
@@ -352,7 +390,11 @@ fn run_x_run(args: &XRunArgs, run: &mut XRunEnv<'_>) -> CliOutput {
                 "x: '{verb}' is a native maw command — refusing to shadow it; maw x runs plugins only"
             ));
         }
-        x_trace(run, "native-guard", &format!("'{verb}' is not a native verb"));
+        x_trace(
+            run,
+            "native-guard",
+            &format!("'{verb}' is not a native verb"),
+        );
         if args.remote {
             x_trace(run, "local-shadow", "bypassed (--remote)");
         } else if args.dry_run {
@@ -368,10 +410,18 @@ fn run_x_run(args: &XRunArgs, run: &mut XRunEnv<'_>) -> CliOutput {
             let shadow = x_dispatch_installed_shadow(verb, &args.plugin_args);
             drop(heartbeat);
             if let Some(output) = shadow {
-                x_trace(run, "local-shadow", &format!("ran installed '{verb}' exit={}", output.code));
+                x_trace(
+                    run,
+                    "local-shadow",
+                    &format!("ran installed '{verb}' exit={}", output.code),
+                );
                 return output;
             }
-            x_trace(run, "local-shadow", &format!("no installed '{verb}' — fetching"));
+            x_trace(
+                run,
+                "local-shadow",
+                &format!("no installed '{verb}' — fetching"),
+            );
         }
     }
 
@@ -416,7 +466,10 @@ fn run_x_run(args: &XRunArgs, run: &mut XRunEnv<'_>) -> CliOutput {
     x_trace(
         run,
         "resolve",
-        &format!("registry {registry_owner}/{registry_repo} ← {}", fetch_spec.source.canonical()),
+        &format!(
+            "registry {registry_owner}/{registry_repo} ← {}",
+            fetch_spec.source.canonical()
+        ),
     );
     let resolved = match resolve_x_spec(&fetch_spec, &registry_owner, &registry_repo, &options) {
         Ok(resolved) => resolved,
@@ -434,8 +487,14 @@ fn run_x_run(args: &XRunArgs, run: &mut XRunEnv<'_>) -> CliOutput {
             ),
         );
     }
-    let registry_pin =
-        is_default_registry && matches!(&resolved.plan, XFetchPlan::Raw { registry: Some(_), .. });
+    let registry_pin = is_default_registry
+        && matches!(
+            &resolved.plan,
+            XFetchPlan::Raw {
+                registry: Some(_),
+                ..
+            }
+        );
     // Raw plans fetch at an immutable commit whose manifest pin is committed
     // — an accountable pin. Clone plans at a named ref/HEAD are unpinned
     // unless the caller passed `--sha256` (I4).
@@ -463,9 +522,11 @@ fn run_x_run(args: &XRunArgs, run: &mut XRunEnv<'_>) -> CliOutput {
         .ok()
         .flatten()
         .and_then(|raw| x_manifest_fetch_info(&raw).ok());
-    if let (Some(requested), Some(info), true) =
-        (requested_verb.as_deref(), manifest_info.as_ref(), args.from.is_some())
-    {
+    if let (Some(requested), Some(info), true) = (
+        requested_verb.as_deref(),
+        manifest_info.as_ref(),
+        args.from.is_some(),
+    ) {
         if info.verb != requested {
             return x_usage_error(&format!(
                 "x: --from package provides verb '{}' but '{requested}' was requested",
@@ -497,8 +558,7 @@ fn run_x_run(args: &XRunArgs, run: &mut XRunEnv<'_>) -> CliOutput {
             is_default_registry_pin: registry_pin,
             pinned,
         };
-        if let Some(refusal) = x_run_trust_gate(&query, args.yes, &verb_label, &capabilities, run)
-        {
+        if let Some(refusal) = x_run_trust_gate(&query, args.yes, &verb_label, &capabilities, run) {
             return refusal;
         }
     }
@@ -558,7 +618,11 @@ fn run_x_offline(
         Ok(entries) => entries,
         Err(message) => return x_error(1, &message),
     };
-    x_trace(run, "cache", &format!("offline ls: {} entries", entries.len()));
+    x_trace(
+        run,
+        "cache",
+        &format!("offline ls: {} entries", entries.len()),
+    );
     let canonical = fetch_spec.source.canonical();
     let chosen = entries
         .into_iter()
@@ -573,7 +637,11 @@ fn run_x_offline(
             ),
         );
     };
-    x_trace(run, "cache", &format!("get {} (verify-on-read)", x_trust_sha12(&chosen.sha256)));
+    x_trace(
+        run,
+        "cache",
+        &format!("get {} (verify-on-read)", x_trust_sha12(&chosen.sha256)),
+    );
     let entry = match x_cache_get(&run.cache_root, &chosen.sha256, run.now) {
         Ok(entry) => entry,
         Err(message) => return x_error(1, &message),
@@ -621,7 +689,14 @@ fn run_x_offline(
         run,
     );
     if args.install {
-        x_apply_install(&mut output, &entry.dir, explicit_sha, &entry.meta.source, args.force, run);
+        x_apply_install(
+            &mut output,
+            &entry.dir,
+            explicit_sha,
+            &entry.meta.source,
+            args.force,
+            run,
+        );
     }
     output
 }
@@ -680,7 +755,9 @@ fn x_trust_gate_outcome(
         XTrustDecision::NeedsPrompt { reason, pinned } => {
             if yes {
                 if *pinned {
-                    XTrustGateOutcome::Proceed { record_how: Some(X_TRUST_HOW_YES_FLAG) }
+                    XTrustGateOutcome::Proceed {
+                        record_how: Some(X_TRUST_HOW_YES_FLAG),
+                    }
                 } else {
                     XTrustGateOutcome::Deny {
                         code: X_EXIT_TRUST,
@@ -690,7 +767,9 @@ fn x_trust_gate_outcome(
                     }
                 }
             } else if interactive {
-                XTrustGateOutcome::Prompt { reason: reason.clone() }
+                XTrustGateOutcome::Prompt {
+                    reason: reason.clone(),
+                }
             } else {
                 XTrustGateOutcome::Deny {
                     code: X_EXIT_TRUST,
@@ -744,7 +823,11 @@ fn x_run_trust_gate(
         XTrustGateOutcome::Proceed { record_how } => record_how,
         XTrustGateOutcome::Deny { code, message } => {
             x_trace(run, "trust", &format!("deny exit={code}"));
-            return Some(CliOutput { code, stdout: String::new(), stderr: message });
+            return Some(CliOutput {
+                code,
+                stdout: String::new(),
+                stderr: message,
+            });
         }
         XTrustGateOutcome::Prompt { reason } => {
             x_trace(run, "trust", "TOFU prompt");
@@ -756,7 +839,10 @@ fn x_run_trust_gate(
             });
             let text = format!("x: {reason}\n{card}");
             let answer = (run.prompt)(&text);
-            match answer.as_deref().map_or(XPromptAction::Deny, x_prompt_answer_action) {
+            match answer
+                .as_deref()
+                .map_or(XPromptAction::Deny, x_prompt_answer_action)
+            {
                 XPromptAction::Once => None,
                 XPromptAction::Always => Some(X_TRUST_HOW_PROMPT),
                 XPromptAction::Deny => {
@@ -797,7 +883,10 @@ fn x_execute_package(package_dir: &std::path::Path, plugin_args: Vec<String>) ->
     let plugin = match load_manifest_from_dir(package_dir) {
         Ok(Some(plugin)) => plugin,
         Ok(None) => {
-            return x_error(1, &format!("x: no plugin.json in {}", package_dir.display()));
+            return x_error(
+                1,
+                &format!("x: no plugin.json in {}", package_dir.display()),
+            );
         }
         Err(message) => return x_error(1, &message),
     };
@@ -815,7 +904,11 @@ fn x_execute_package_watched(
     quiet: bool,
     run: &mut XRunEnv<'_>,
 ) -> CliOutput {
-    x_trace(run, "invoke", &format!("start '{verb}' {}", package_dir.display()));
+    x_trace(
+        run,
+        "invoke",
+        &format!("start '{verb}' {}", package_dir.display()),
+    );
     let heartbeat = x_heartbeat_start(verb, x_heartbeat_wanted(quiet, run.heartbeat_tty));
     let output = x_execute_package(package_dir, plugin_args);
     drop(heartbeat);
@@ -862,17 +955,25 @@ fn x_heartbeat_start(verb: &str, wanted: bool) -> Option<XHeartbeat> {
         .name("maw-x-heartbeat".to_owned())
         .spawn(move || x_heartbeat_watch(&verb, &watcher_stop))
         .ok()?;
-    Some(XHeartbeat { stop, handle: Some(handle) })
+    Some(XHeartbeat {
+        stop,
+        handle: Some(handle),
+    })
 }
 
 fn x_heartbeat_watch(verb: &str, stop: &(std::sync::Mutex<bool>, std::sync::Condvar)) {
     let (lock, condvar) = stop;
-    let mut stopped = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut stopped = lock
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut secs = 0_u64;
     let mut printed = false;
     while !*stopped {
         let (guard, timeout) = condvar
-            .wait_timeout(stopped, std::time::Duration::from_secs(X_HEARTBEAT_TICK_SECS))
+            .wait_timeout(
+                stopped,
+                std::time::Duration::from_secs(X_HEARTBEAT_TICK_SECS),
+            )
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         stopped = guard;
         if *stopped {
@@ -896,7 +997,9 @@ fn x_heartbeat_watch(verb: &str, stop: &(std::sync::Mutex<bool>, std::sync::Cond
 impl Drop for XHeartbeat {
     fn drop(&mut self) {
         let (lock, condvar) = &*self.stop;
-        *lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+        *lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
         condvar.notify_all();
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
@@ -935,7 +1038,10 @@ fn x_installed_shadow_plan(verb: &str, plugin_args: &[String]) -> Option<XResolu
         .filter(|plugin| !plugin.disabled)
         .find(|plugin| plugin_cli_args(plugin, &argv).is_some())?;
     Some(XResolutionPlan {
-        source: format!("installed:{}@{}", plugin.manifest.name, plugin.manifest.version),
+        source: format!(
+            "installed:{}@{}",
+            plugin.manifest.name, plugin.manifest.version
+        ),
         commit: None,
         path: Some(plugin.dir.display().to_string()),
         sha256: plugin
@@ -961,10 +1067,20 @@ fn x_apply_install(
     run: &XRunEnv<'_>,
 ) {
     if output.code != 0 {
-        let _ = writeln!(output.stderr, "x: --install skipped (plugin exited {})", output.code);
+        let _ = writeln!(
+            output.stderr,
+            "x: --install skipped (plugin exited {})",
+            output.code
+        );
         return;
     }
-    match x_promote_install(package_dir, explicit_sha, &run.plugin_root, lock_source, force) {
+    match x_promote_install(
+        package_dir,
+        explicit_sha,
+        &run.plugin_root,
+        lock_source,
+        force,
+    ) {
         Ok(note) => output.stdout.push_str(&note),
         Err(message) => {
             let _ = writeln!(output.stderr, "x: --install failed: {message}");
@@ -987,7 +1103,11 @@ fn x_promote_install(
         }
     };
     let summary = install_plugin_dir(package_dir, plugin_root, force)?;
-    record_plugin_install_pin(&summary, verification.resolved_sha256.as_deref(), lock_source)?;
+    record_plugin_install_pin(
+        &summary,
+        verification.resolved_sha256.as_deref(),
+        lock_source,
+    )?;
     Ok(format!(
         "x: installed {}@{} {}\n",
         summary.name,
@@ -1020,7 +1140,11 @@ fn run_x_cache_ls(cache_root: &std::path::Path) -> CliOutput {
                     entry.meta.source
                 );
             }
-            CliOutput { code: 0, stdout, stderr: String::new() }
+            CliOutput {
+                code: 0,
+                stdout,
+                stderr: String::new(),
+            }
         }
     }
 }
@@ -1036,8 +1160,12 @@ fn run_x_cache_gc(
         Ok(plan) => {
             let mut stdout = String::new();
             for entry in &plan.evict {
-                let _ =
-                    writeln!(stdout, "evict {}  {}", x_trust_sha12(&entry.sha256), entry.meta.verb);
+                let _ = writeln!(
+                    stdout,
+                    "evict {}  {}",
+                    x_trust_sha12(&entry.sha256),
+                    entry.meta.verb
+                );
             }
             let suffix = if dry_run { " (dry-run)" } else { "" };
             let _ = writeln!(
@@ -1048,7 +1176,11 @@ fn run_x_cache_gc(
                 plan.keep.len(),
                 plan.kept_bytes
             );
-            CliOutput { code: 0, stdout, stderr: String::new() }
+            CliOutput {
+                code: 0,
+                stdout,
+                stderr: String::new(),
+            }
         }
     }
 }
@@ -1066,7 +1198,11 @@ fn run_x_cache_rm(cache_root: &std::path::Path, needle: &str) -> CliOutput {
                     entry.meta.verb
                 );
             }
-            CliOutput { code: 0, stdout, stderr: String::new() }
+            CliOutput {
+                code: 0,
+                stdout,
+                stderr: String::new(),
+            }
         }
     }
 }
@@ -1090,7 +1226,11 @@ fn run_x_trust_ls(store: &std::path::Path) -> CliOutput {
                     entry.source
                 );
             }
-            CliOutput { code: 0, stdout, stderr: String::new() }
+            CliOutput {
+                code: 0,
+                stdout,
+                stderr: String::new(),
+            }
         }
     }
 }
@@ -1113,8 +1253,7 @@ fn run_x_trust_revoke(store: &std::path::Path, selector: &str) -> CliOutput {
 fn x_explicit_sha256(flag: Option<&str>, inline: Option<&str>) -> Result<Option<String>, String> {
     let normalize = |value: &str| {
         normalize_plugin_install_sha256(value).map_err(|_| {
-            "x: --sha256 must be 64 lowercase hex chars (optionally 'sha256:'-prefixed)"
-                .to_owned()
+            "x: --sha256 must be 64 lowercase hex chars (optionally 'sha256:'-prefixed)".to_owned()
         })
     };
     let flag = flag.map(normalize).transpose()?;
@@ -1130,7 +1269,10 @@ fn x_explicit_sha256(flag: Option<&str>, inline: Option<&str>) -> Result<Option<
 /// `--registry owner/repo` override; defaults to the default registry.
 fn x_registry_override(value: Option<&str>) -> Result<(String, String), String> {
     let Some(value) = value else {
-        return Ok((X_DEFAULT_REGISTRY_OWNER.to_owned(), X_DEFAULT_REGISTRY_REPO.to_owned()));
+        return Ok((
+            X_DEFAULT_REGISTRY_OWNER.to_owned(),
+            X_DEFAULT_REGISTRY_REPO.to_owned(),
+        ));
     };
     match value.split_once('/') {
         Some((owner, repo)) if !owner.is_empty() && !repo.is_empty() && !repo.contains('/') => {
@@ -1155,18 +1297,33 @@ fn x_render_plan_json(plan: &XResolutionPlan) -> CliOutput {
     match serde_json::to_string(plan) {
         Ok(mut body) => {
             body.push('\n');
-            CliOutput { code: 0, stdout: body, stderr: String::new() }
+            CliOutput {
+                code: 0,
+                stdout: body,
+                stderr: String::new(),
+            }
         }
-        Err(error) => x_error(1, &format!("x: failed to encode the resolution plan: {error}")),
+        Err(error) => x_error(
+            1,
+            &format!("x: failed to encode the resolution plan: {error}"),
+        ),
     }
 }
 
 fn x_error(code: i32, message: &str) -> CliOutput {
-    CliOutput { code, stdout: String::new(), stderr: format!("{message}\n") }
+    CliOutput {
+        code,
+        stdout: String::new(),
+        stderr: format!("{message}\n"),
+    }
 }
 
 fn x_usage_error(message: &str) -> CliOutput {
-    CliOutput { code: 2, stdout: String::new(), stderr: format!("{message}\n{X_USAGE}\n") }
+    CliOutput {
+        code: 2,
+        stdout: String::new(),
+        stderr: format!("{message}\n{X_USAGE}\n"),
+    }
 }
 
 /// Real TOFU prompt edge: the card goes to stderr immediately, the answer is
@@ -1182,8 +1339,13 @@ fn x_tty_prompt(card: &str) -> Option<String> {
 }
 
 fn x_now_secs_ms() -> (u64, i64) {
-    let duration = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
-    (duration.as_secs(), i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    (
+        duration.as_secs(),
+        i64::try_from(duration.as_millis()).unwrap_or(i64::MAX),
+    )
 }
 
 #[cfg(test)]
@@ -1194,8 +1356,10 @@ mod x_wi8_tests {
 
     fn temp_root(label: &str) -> std::path::PathBuf {
         let counter = TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let dir = std::env::temp_dir()
-            .join(format!("maw-rs-x-wi8-{label}-{}-{counter}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "maw-rs-x-wi8-{label}-{}-{counter}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("temp root");
         dir
@@ -1306,10 +1470,18 @@ mod x_wi8_tests {
     fn x_cli_parse_flags_separator_and_plugin_args() {
         let hex = "a".repeat(64);
         let parsed = parse_x_cli(&args(&[
-            "costs", "--dry-run", "--sha256", &hex, "--", "--json", "extra",
+            "costs",
+            "--dry-run",
+            "--sha256",
+            &hex,
+            "--",
+            "--json",
+            "extra",
         ]))
         .expect("parse");
-        let XCliCommand::Run(run) = parsed else { panic!("run form") };
+        let XCliCommand::Run(run) = parsed else {
+            panic!("run form")
+        };
         assert_eq!(run.spec, "costs");
         assert!(run.dry_run);
         assert_eq!(run.sha256.as_deref(), Some(hex.as_str()));
@@ -1318,7 +1490,9 @@ mod x_wi8_tests {
         // npx-style: the first non-x-flag token after the spec starts the
         // plugin args verbatim.
         let parsed = parse_x_cli(&args(&["costs", "list", "--json"])).expect("parse");
-        let XCliCommand::Run(run) = parsed else { panic!("run form") };
+        let XCliCommand::Run(run) = parsed else {
+            panic!("run form")
+        };
         assert_eq!(run.plugin_args, args(&["list", "--json"]));
         assert!(!run.dry_run);
 
@@ -1333,7 +1507,9 @@ mod x_wi8_tests {
             "--install",
         ]))
         .expect("parse");
-        let XCliCommand::Run(run) = parsed else { panic!("run form") };
+        let XCliCommand::Run(run) = parsed else {
+            panic!("run form")
+        };
         assert!(run.remote && run.yes && run.offline && run.install);
         assert_eq!(run.from.as_deref(), Some("gh:acme/tools/packages/costs"));
         assert_eq!(run.registry.as_deref(), Some("acme/registry"));
@@ -1342,7 +1518,10 @@ mod x_wi8_tests {
         assert!(parse_x_cli(&args(&[])).is_err());
         assert!(parse_x_cli(&args(&["--bogus", "costs"])).is_err());
         assert!(parse_x_cli(&args(&["--sha256"])).is_err());
-        assert!(matches!(parse_x_cli(&args(&["--help"])), Ok(XCliCommand::Help)));
+        assert!(matches!(
+            parse_x_cli(&args(&["--help"])),
+            Ok(XCliCommand::Help)
+        ));
     }
 
     /// #581: `--force` is an x flag — consumed by `maw x`, never forwarded to
@@ -1351,31 +1530,47 @@ mod x_wi8_tests {
     fn x_cli_parse_force_consumed_not_forwarded() {
         // Default is off.
         let parsed = parse_x_cli(&args(&["costs"])).expect("parse");
-        let XCliCommand::Run(run) = parsed else { panic!("run form") };
+        let XCliCommand::Run(run) = parsed else {
+            panic!("run form")
+        };
         assert!(!run.force);
 
         // Consumed like --install/--keep, before or after the spec; the
         // plugin argv stays clean.
         let parsed =
             parse_x_cli(&args(&["costs", "--install", "--force", "--", "--json"])).expect("parse");
-        let XCliCommand::Run(run) = parsed else { panic!("run form") };
+        let XCliCommand::Run(run) = parsed else {
+            panic!("run form")
+        };
         assert!(run.install && run.force);
         assert_eq!(run.plugin_args, args(&["--json"]));
 
         // npx-style: once plugin args begin, --force belongs to the plugin
         // verbatim (same positional semantics as the other x flags).
         let parsed = parse_x_cli(&args(&["dream", "wake", "--force"])).expect("parse");
-        let XCliCommand::Run(run) = parsed else { panic!("run form") };
+        let XCliCommand::Run(run) = parsed else {
+            panic!("run form")
+        };
         assert!(!run.force);
         assert_eq!(run.plugin_args, args(&["wake", "--force"]));
     }
 
     #[test]
     fn x_cli_parse_housekeeping_routing() {
-        assert_eq!(parse_x_cli(&args(&["ls"])).expect("ls"), XCliCommand::CacheLs);
         assert_eq!(
-            parse_x_cli(&args(&["gc", "--max-age", "30d", "--max-size", "2g", "--dry-run"]))
-                .expect("gc"),
+            parse_x_cli(&args(&["ls"])).expect("ls"),
+            XCliCommand::CacheLs
+        );
+        assert_eq!(
+            parse_x_cli(&args(&[
+                "gc",
+                "--max-age",
+                "30d",
+                "--max-size",
+                "2g",
+                "--dry-run"
+            ]))
+            .expect("gc"),
             XCliCommand::CacheGc {
                 max_age_secs: Some(30 * 86_400),
                 max_size_bytes: Some(2 << 30),
@@ -1384,12 +1579,19 @@ mod x_wi8_tests {
         );
         assert_eq!(
             parse_x_cli(&args(&["rm", "abc123"])).expect("rm"),
-            XCliCommand::CacheRm { needle: "abc123".to_owned() }
+            XCliCommand::CacheRm {
+                needle: "abc123".to_owned()
+            }
         );
-        assert_eq!(parse_x_cli(&args(&["trust", "ls"])).expect("trust ls"), XCliCommand::TrustLs);
+        assert_eq!(
+            parse_x_cli(&args(&["trust", "ls"])).expect("trust ls"),
+            XCliCommand::TrustLs
+        );
         assert_eq!(
             parse_x_cli(&args(&["trust", "revoke", "gh:acme/tools"])).expect("trust revoke"),
-            XCliCommand::TrustRevoke { selector: "gh:acme/tools".to_owned() }
+            XCliCommand::TrustRevoke {
+                selector: "gh:acme/tools".to_owned()
+            }
         );
         assert!(parse_x_cli(&args(&["ls", "extra"])).is_err());
         assert!(parse_x_cli(&args(&["rm"])).is_err());
@@ -1418,7 +1620,11 @@ mod x_wi8_tests {
         let harness = XTestHarness::new("native-guard");
         let output = harness.run_plain(&["hey"]);
         assert_eq!(output.code, 2, "{output:?}");
-        assert!(output.stderr.contains("native maw command"), "{}", output.stderr);
+        assert!(
+            output.stderr.contains("native maw command"),
+            "{}",
+            output.stderr
+        );
         assert!(output.stderr.contains("'hey'"), "{}", output.stderr);
     }
 
@@ -1432,8 +1638,11 @@ mod x_wi8_tests {
         let plugins_dir = harness.root.join("installed");
         let package = plugins_dir.join(verb);
         std::fs::create_dir_all(&package).expect("package dir");
-        std::fs::write(package.join("plugin.wasm"), b"\0asm\x01\x00\x00\x00x-wi8-shadow")
-            .expect("wasm");
+        std::fs::write(
+            package.join("plugin.wasm"),
+            b"\0asm\x01\x00\x00\x00x-wi8-shadow",
+        )
+        .expect("wasm");
         let pin = maw_plugin_manifest::hash_file(&package.join("plugin.wasm")).expect("hash");
         std::fs::write(
             package.join("plugin.json"),
@@ -1458,7 +1667,11 @@ mod x_wi8_tests {
         // dispatch happened.
         let output = harness.run_plain(&[verb, "--remote", "--offline"]);
         assert_eq!(output.code, X_EXIT_OFFLINE_MISS, "{output:?}");
-        assert!(!output.stderr.contains("using installed"), "{}", output.stderr);
+        assert!(
+            !output.stderr.contains("using installed"),
+            "{}",
+            output.stderr
+        );
 
         drop(restore);
     }
@@ -1476,8 +1689,11 @@ mod x_wi8_tests {
         let plugins_dir = harness.root.join("installed");
         let package = plugins_dir.join(verb);
         std::fs::create_dir_all(&package).expect("package dir");
-        std::fs::write(package.join("plugin.wasm"), b"\0asm\x01\x00\x00\x00x-576-dry-shadow")
-            .expect("wasm");
+        std::fs::write(
+            package.join("plugin.wasm"),
+            b"\0asm\x01\x00\x00\x00x-576-dry-shadow",
+        )
+        .expect("wasm");
         let pin = maw_plugin_manifest::hash_file(&package.join("plugin.wasm")).expect("hash");
         std::fs::write(
             package.join("plugin.json"),
@@ -1500,12 +1716,18 @@ mod x_wi8_tests {
         );
         let plan: serde_json::Value =
             serde_json::from_str(output.stdout.trim()).expect("plan json");
-        assert_eq!(plan.get("installed").and_then(serde_json::Value::as_bool), Some(true));
+        assert_eq!(
+            plan.get("installed").and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
         assert_eq!(
             plan.get("source").and_then(serde_json::Value::as_str),
             Some(format!("installed:{verb}@1.0.0").as_str())
         );
-        assert_eq!(plan.get("sha256").and_then(serde_json::Value::as_str), Some(pin.as_str()));
+        assert_eq!(
+            plan.get("sha256").and_then(serde_json::Value::as_str),
+            Some(pin.as_str())
+        );
         assert!(
             plan.get("path")
                 .and_then(serde_json::Value::as_str)
@@ -1527,8 +1749,11 @@ mod x_wi8_tests {
         // A pin-verified wasm package dir (the verified bytes to promote).
         let package = harness.root.join("package");
         std::fs::create_dir_all(&package).expect("package dir");
-        std::fs::write(package.join("plugin.wasm"), b"\0asm\x01\x00\x00\x00x-581-force")
-            .expect("wasm");
+        std::fs::write(
+            package.join("plugin.wasm"),
+            b"\0asm\x01\x00\x00\x00x-581-force",
+        )
+        .expect("wasm");
         let pin = maw_plugin_manifest::hash_file(&package.join("plugin.wasm")).expect("hash");
         std::fs::write(
             package.join("plugin.json"),
@@ -1552,19 +1777,32 @@ mod x_wi8_tests {
         std::env::set_var("MAW_PLUGINS_LOCK", &lock_path);
 
         // Without force: the existing pin refuses and names the escape hatch.
-        let error =
-            x_promote_install(&package, None, &harness.plugin_root, "github:acme/tools", false)
-                .expect_err("stale pin must refuse without --force");
+        let error = x_promote_install(
+            &package,
+            None,
+            &harness.plugin_root,
+            "github:acme/tools",
+            false,
+        )
+        .expect_err("stale pin must refuse without --force");
         assert!(error.contains("use --force"), "{error}");
 
         // With force: the pin is replaced and the install lands.
-        let note =
-            x_promote_install(&package, None, &harness.plugin_root, "github:acme/tools", true)
-                .expect("--force replaces the pin");
+        let note = x_promote_install(
+            &package,
+            None,
+            &harness.plugin_root,
+            "github:acme/tools",
+            true,
+        )
+        .expect("--force replaces the pin");
         assert!(note.contains(&format!("installed {verb}@1.0.0")), "{note}");
         let lock = std::fs::read_to_string(&lock_path).expect("lock");
         assert!(lock.contains(&pin), "lock must carry the new pin: {lock}");
-        assert!(!lock.contains(&"b".repeat(64)), "stale pin must be gone: {lock}");
+        assert!(
+            !lock.contains(&"b".repeat(64)),
+            "stale pin must be gone: {lock}"
+        );
 
         drop(restore);
     }
@@ -1595,7 +1833,10 @@ mod x_wi8_tests {
         assert_eq!(output.code, 0, "{output:?}");
         let plan: serde_json::Value =
             serde_json::from_str(output.stdout.trim()).expect("plan json");
-        assert_eq!(plan.get("sha256").and_then(serde_json::Value::as_str), Some(pin.as_str()));
+        assert_eq!(
+            plan.get("sha256").and_then(serde_json::Value::as_str),
+            Some(pin.as_str())
+        );
         assert!(
             plan.get("source")
                 .and_then(serde_json::Value::as_str)
@@ -1603,12 +1844,19 @@ mod x_wi8_tests {
             "{plan}"
         );
         assert_eq!(
-            plan.get("capabilities").and_then(serde_json::Value::as_array).map(Vec::len),
+            plan.get("capabilities")
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len),
             Some(1)
         );
-        assert_eq!(plan.get("sdk").and_then(serde_json::Value::as_str), Some("*"));
+        assert_eq!(
+            plan.get("sdk").and_then(serde_json::Value::as_str),
+            Some("*")
+        );
         // The plan is a pure resolution artifact: no trust write, no execute.
-        assert!(x_trust_list(&harness.trust_store).expect("trust ls").is_empty());
+        assert!(x_trust_list(&harness.trust_store)
+            .expect("trust ls")
+            .is_empty());
     }
 
     // ── trust gate ──────────────────────────────────────────────────────
@@ -1620,9 +1868,17 @@ mod x_wi8_tests {
         let pin = seed_cached_package(&harness, verb, &[]);
         let output = harness.run_plain(&[verb, "--offline", "--remote"]);
         assert_eq!(output.code, X_EXIT_TRUST, "{output:?}");
-        assert!(output.stderr.contains(&pin), "must carry the observed pin: {}", output.stderr);
+        assert!(
+            output.stderr.contains(&pin),
+            "must carry the observed pin: {}",
+            output.stderr
+        );
         assert!(output.stderr.contains("--sha256"), "{}", output.stderr);
-        assert!(output.stderr.contains("maw x "), "rerun line: {}", output.stderr);
+        assert!(
+            output.stderr.contains("maw x "),
+            "rerun line: {}",
+            output.stderr
+        );
     }
 
     #[test]
@@ -1639,13 +1895,21 @@ mod x_wi8_tests {
         };
         assert_eq!(code, X_EXIT_TRUST);
         assert!(message.contains("--yes is refused"), "{message}");
-        assert!(message.contains(&sha), "carries the observed pin: {message}");
+        assert!(
+            message.contains(&sha),
+            "carries the observed pin: {message}"
+        );
 
         // The pinned counterpart proceeds and records the yes-flag approval.
-        let pinned = XTrustDecision::NeedsPrompt { reason: "first run".to_owned(), pinned: true };
+        let pinned = XTrustDecision::NeedsPrompt {
+            reason: "first run".to_owned(),
+            pinned: true,
+        };
         assert_eq!(
             x_trust_gate_outcome(&pinned, true, false, "gh:acme/tools", &sha),
-            XTrustGateOutcome::Proceed { record_how: Some(X_TRUST_HOW_YES_FLAG) }
+            XTrustGateOutcome::Proceed {
+                record_how: Some(X_TRUST_HOW_YES_FLAG)
+            }
         );
     }
 
@@ -1680,7 +1944,10 @@ mod x_wi8_tests {
 
         // Second run: the triple is trusted, no prompt fires.
         let output = harness.run_plain(&[verb, "--offline", "--remote"]);
-        assert_eq!(output.code, 1, "trusted rerun reaches execution: {output:?}");
+        assert_eq!(
+            output.code, 1,
+            "trusted rerun reaches execution: {output:?}"
+        );
 
         // Declining answers deny with exit 3.
         let miss_verb = "x-wi8-tofu-deny";
@@ -1688,7 +1955,11 @@ mod x_wi8_tests {
         let mut deny = |_card: &str| -> Option<String> { Some("n\n".to_owned()) };
         let output = harness.run(&[miss_verb, "--offline", "--remote"], true, &mut deny);
         assert_eq!(output.code, X_EXIT_TRUST, "{output:?}");
-        assert!(output.stderr.contains("trust declined"), "{}", output.stderr);
+        assert!(
+            output.stderr.contains("trust declined"),
+            "{}",
+            output.stderr
+        );
     }
 
     #[test]
@@ -1726,7 +1997,11 @@ mod x_wi8_tests {
         assert_eq!(output.code, 0);
         assert!(output.stdout.contains("removed"), "{}", output.stdout);
         let output = harness.run_plain(&["ls"]);
-        assert!(output.stdout.contains("cache is empty"), "{}", output.stdout);
+        assert!(
+            output.stdout.contains("cache is empty"),
+            "{}",
+            output.stdout
+        );
 
         x_trust_record(
             &harness.trust_store,
@@ -1740,11 +2015,19 @@ mod x_wi8_tests {
         )
         .expect("record");
         let output = harness.run_plain(&["trust", "ls"]);
-        assert!(output.stdout.contains("gh:acme/maw-tools/packages/demo"), "{}", output.stdout);
+        assert!(
+            output.stdout.contains("gh:acme/maw-tools/packages/demo"),
+            "{}",
+            output.stdout
+        );
         let output = harness.run_plain(&["trust", "revoke", "gh:acme/maw-tools/packages/demo"]);
         assert!(output.stdout.contains("revoked 1"), "{}", output.stdout);
         let output = harness.run_plain(&["trust", "ls"]);
-        assert!(output.stdout.contains("trust store is empty"), "{}", output.stdout);
+        assert!(
+            output.stdout.contains("trust store is empty"),
+            "{}",
+            output.stdout
+        );
     }
 
     #[test]
@@ -1752,11 +2035,19 @@ mod x_wi8_tests {
         let harness = XTestHarness::new("usage");
         let output = harness.run_plain(&["--help"]);
         assert_eq!(output.code, 0);
-        assert!(output.stdout.contains("usage: maw x <spec>"), "{}", output.stdout);
+        assert!(
+            output.stdout.contains("usage: maw x <spec>"),
+            "{}",
+            output.stdout
+        );
 
         let output = harness.run_plain(&["costs", "--offline", "--reload"]);
         assert_eq!(output.code, 2, "{output:?}");
-        assert!(output.stderr.contains("--reload conflicts"), "{}", output.stderr);
+        assert!(
+            output.stderr.contains("--reload conflicts"),
+            "{}",
+            output.stderr
+        );
 
         let hex_a = "a".repeat(64);
         let hex_b = "b".repeat(64);
@@ -1768,7 +2059,11 @@ mod x_wi8_tests {
         // --from requires a bare verb positional.
         let output = harness.run_plain(&["gh:acme/tools", "--from", "gh:acme/tools/packages/x"]);
         assert_eq!(output.code, 2, "{output:?}");
-        assert!(output.stderr.contains("--from requires a bare verb"), "{}", output.stderr);
+        assert!(
+            output.stderr.contains("--from requires a bare verb"),
+            "{}",
+            output.stderr
+        );
     }
 
     #[test]
@@ -1781,21 +2076,27 @@ mod x_wi8_tests {
 
     #[test]
     fn x_debug_and_quiet_flags_parse_conflict_free() {
-        let parsed = parse_x_cli(&args(&["costs", "--debug", "--quiet", "--dry-run"]))
-            .expect("parse");
-        let XCliCommand::Run(run) = parsed else { panic!("run form") };
+        let parsed =
+            parse_x_cli(&args(&["costs", "--debug", "--quiet", "--dry-run"])).expect("parse");
+        let XCliCommand::Run(run) = parsed else {
+            panic!("run form")
+        };
         assert!(run.debug && run.quiet && run.dry_run);
         assert!(run.plugin_args.is_empty());
 
         // `-q` short form.
         let parsed = parse_x_cli(&args(&["costs", "-q"])).expect("parse");
-        let XCliCommand::Run(run) = parsed else { panic!("run form") };
+        let XCliCommand::Run(run) = parsed else {
+            panic!("run form")
+        };
         assert!(run.quiet && !run.debug);
 
         // npx-style: after the first plugin token, `--debug` belongs to the
         // plugin verbatim, not to maw x.
         let parsed = parse_x_cli(&args(&["costs", "list", "--debug"])).expect("parse");
-        let XCliCommand::Run(run) = parsed else { panic!("run form") };
+        let XCliCommand::Run(run) = parsed else {
+            panic!("run form")
+        };
         assert!(!run.debug);
         assert_eq!(run.plugin_args, args(&["list", "--debug"]));
     }
@@ -1827,7 +2128,10 @@ mod x_wi8_tests {
         assert!(joined.contains("cache:"), "{joined}");
         assert!(joined.contains("verify: sha256 ok"), "{joined}");
         assert!(joined.contains("trust: proceed"), "{joined}");
-        assert!(joined.contains(&format!("invoke: start '{verb}'")), "{joined}");
+        assert!(
+            joined.contains(&format!("invoke: start '{verb}'")),
+            "{joined}"
+        );
         assert!(joined.contains("invoke: end exit="), "{joined}");
         // Stage lines never leak into stdout — it stays plugin-pure.
         assert!(!output.stdout.contains("x[debug]"), "{}", output.stdout);

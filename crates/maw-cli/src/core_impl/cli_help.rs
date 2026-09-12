@@ -32,9 +32,10 @@ fn wants_help_scan(argv: &[String], value_flags: &[&str], stop_at_first_position
 }
 
 fn help_arg_has_inline_value(arg: &str, value_flags: &[&str]) -> bool {
-    value_flags
-        .iter()
-        .any(|flag| arg.strip_prefix(flag).is_some_and(|rest| rest.starts_with('=')))
+    value_flags.iter().any(|flag| {
+        arg.strip_prefix(flag)
+            .is_some_and(|rest| rest.starts_with('='))
+    })
 }
 
 fn help_output(usage: impl AsRef<str>) -> CliOutput {
@@ -42,5 +43,9 @@ fn help_output(usage: impl AsRef<str>) -> CliOutput {
     if !stdout.ends_with('\n') {
         stdout.push('\n');
     }
-    CliOutput { code: 0, stdout, stderr: String::new() }
+    CliOutput {
+        code: 0,
+        stdout,
+        stderr: String::new(),
+    }
 }

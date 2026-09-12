@@ -44,12 +44,19 @@ fn fleet_run_gc<R: maw_tmux::TmuxRunner>(
     Ok((code, fleet_render_gc(state, options, &live, &results)))
 }
 
-fn fleet_live_session_names<R: maw_tmux::TmuxRunner>(runner: &mut R) -> Result<BTreeSet<String>, String> {
+fn fleet_live_session_names<R: maw_tmux::TmuxRunner>(
+    runner: &mut R,
+) -> Result<BTreeSet<String>, String> {
     let args = ["-F".to_owned(), "#{session_name}".to_owned()];
     let raw = match runner.run("list-sessions", &args) {
         Ok(raw) => raw,
         Err(error) if error.message.contains("no server running") => String::new(),
-        Err(error) => return Err(format!("fleet gc: cannot list tmux sessions: {}", error.message)),
+        Err(error) => {
+            return Err(format!(
+                "fleet gc: cannot list tmux sessions: {}",
+                error.message
+            ))
+        }
     };
     Ok(raw
         .lines()
@@ -61,7 +68,11 @@ fn fleet_live_session_names<R: maw_tmux::TmuxRunner>(runner: &mut R) -> Result<B
 
 fn fleet_gc_candidates(state: &FleetState, live: &BTreeSet<String>) -> Vec<FleetGcCandidate> {
     let mut candidates = Vec::new();
-    for entry in state.fleet_entries.iter().filter(|entry| fleet_entry_is_session(entry)) {
+    for entry in state
+        .fleet_entries
+        .iter()
+        .filter(|entry| fleet_entry_is_session(entry))
+    {
         if live.contains(&entry.session.name) {
             continue;
         }
@@ -92,7 +103,11 @@ fn fleet_entry_auto_registered(entry: &NativeFleetEntry) -> Option<bool> {
     std::fs::read_to_string(&entry.path)
         .ok()
         .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .and_then(|value| value.get("auto_registered").and_then(serde_json::Value::as_bool))
+        .and_then(|value| {
+            value
+                .get("auto_registered")
+                .and_then(serde_json::Value::as_bool)
+        })
 }
 
 fn fleet_session_repo_slugs(session: &NativeFleetSession) -> Vec<String> {
@@ -113,18 +128,30 @@ fn fleet_apply_gc_candidates(candidates: Vec<FleetGcCandidate>) -> Vec<FleetGcRe
         .into_iter()
         .map(|candidate| {
             if candidate.disabled_path.exists() {
-                return fleet_gc_result(candidate, "skipped", Some("disabled file already exists".to_owned()));
+                return fleet_gc_result(
+                    candidate,
+                    "skipped",
+                    Some("disabled file already exists".to_owned()),
+                );
             }
             match std::fs::rename(&candidate.path, &candidate.disabled_path) {
                 Ok(()) => fleet_gc_result(candidate, "disabled", None),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => fleet_gc_result(candidate, "skipped", Some("source file is already gone".to_owned())),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => fleet_gc_result(
+                    candidate,
+                    "skipped",
+                    Some("source file is already gone".to_owned()),
+                ),
                 Err(error) => fleet_gc_result(candidate, "failed", Some(error.to_string())),
             }
         })
         .collect()
 }
 
-fn fleet_gc_result(candidate: FleetGcCandidate, status: &str, detail: Option<String>) -> FleetGcResult {
+fn fleet_gc_result(
+    candidate: FleetGcCandidate,
+    status: &str,
+    detail: Option<String>,
+) -> FleetGcResult {
     FleetGcResult {
         name: candidate.name,
         path: candidate.path,
@@ -185,7 +212,9 @@ fn fleet_json_gc(
         "candidateCount": results.len(),
         "candidates": results.iter().map(fleet_json_gc_result).collect::<Vec<_>>(),
     });
-    serde_json::to_string_pretty(&value).map(|text| format!("{text}\n")).map_err(|error| error.to_string())
+    serde_json::to_string_pretty(&value)
+        .map(|text| format!("{text}\n"))
+        .map_err(|error| error.to_string())
 }
 
 fn fleet_json_gc_result(result: &FleetGcResult) -> serde_json::Value {

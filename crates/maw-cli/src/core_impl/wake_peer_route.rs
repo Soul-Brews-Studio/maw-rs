@@ -42,13 +42,16 @@ async fn run_wake_async_impl(raw_args: &[String]) -> CliOutput {
             target,
             node: _,
         } => {
-            let sender_oracle = resolve_hey_sender_oracle_for_from(&config, wake_args.from.as_deref());
+            let sender_oracle =
+                resolve_hey_sender_oracle_for_from(&config, wake_args.from.as_deref());
             wake_peer_target(&peer_url, &target, &wake_args, &config, &sender_oracle).await
         }
         RouteResult::Local { target } | RouteResult::SelfNode { target } => {
             wake_fail_closed_local(&wake_args.target, &target)
         }
-        RouteResult::Error { detail, hint, .. } => wake_fail_closed_route_error(&detail, hint.as_deref()),
+        RouteResult::Error { detail, hint, .. } => {
+            wake_fail_closed_route_error(&detail, hint.as_deref())
+        }
     }
 }
 
@@ -98,7 +101,9 @@ fn parse_wake_args(argv: &[String]) -> Result<WakeArgs, String> {
             value if value.starts_with("--task=") => {
                 task = Some(value["--task=".len()..].to_owned());
             }
-            value if value.starts_with('-') => return Err(format!("wake: unknown argument {value}")),
+            value if value.starts_with('-') => {
+                return Err(format!("wake: unknown argument {value}"))
+            }
             value => positional.push(value.to_owned()),
         }
         index += 1;

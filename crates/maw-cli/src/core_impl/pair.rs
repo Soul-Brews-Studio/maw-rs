@@ -1,12 +1,29 @@
-const DISPATCH_97: &[DispatcherEntry] = &[DispatcherEntry { command: "pair", handler: Handler::Sync(pair_run_command) }];
+const DISPATCH_97: &[DispatcherEntry] = &[DispatcherEntry {
+    command: "pair",
+    handler: Handler::Sync(pair_run_command),
+}];
 
 const PAIR_USAGE: &str = "usage:\n  maw pair generate [--expires <sec>] [--at <local-url>]\n  maw pair <url> <code>\n  maw pair accept <code> --at <url>";
 const PAIR_ALPHABET: &str = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const PAIR_DEFAULT_EXPIRES_SEC: u64 = 120;
 const PAIR_MIN_EXPIRES_SEC: u64 = 5;
 const PAIR_MAX_EXPIRES_SEC: u64 = 3600;
-const PAIR_BLOCKED_SUBCOMMANDS: &[&str] = &["approve", "auto-approve", "auto-pair", "pair-approve", "pair-auto", "trust"];
-const PAIR_VALUE_FLAGS: &[&str] = &["--at", "--expires", "--token", "--token-ref", "--peer-token", "--federation-token"];
+const PAIR_BLOCKED_SUBCOMMANDS: &[&str] = &[
+    "approve",
+    "auto-approve",
+    "auto-pair",
+    "pair-approve",
+    "pair-auto",
+    "trust",
+];
+const PAIR_VALUE_FLAGS: &[&str] = &[
+    "--at",
+    "--expires",
+    "--token",
+    "--token-ref",
+    "--peer-token",
+    "--federation-token",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PairAction {
@@ -61,8 +78,16 @@ struct PairConfig {
 
 trait PairHost {
     fn pair_config(&mut self) -> PairConfig;
-    fn pair_generate_live(&mut self, plan: &PairGeneratePlan, config: &PairConfig) -> Result<PairGenerateLive, String>;
-    fn pair_accept_live(&mut self, plan: &PairAcceptPlan, config: &PairConfig) -> Result<PairAcceptLive, String>;
+    fn pair_generate_live(
+        &mut self,
+        plan: &PairGeneratePlan,
+        config: &PairConfig,
+    ) -> Result<PairGenerateLive, String>;
+    fn pair_accept_live(
+        &mut self,
+        plan: &PairAcceptPlan,
+        config: &PairConfig,
+    ) -> Result<PairAcceptLive, String>;
 }
 
 struct PairSystemHost;
@@ -77,11 +102,19 @@ impl PairHost for PairSystemHost {
         }
     }
 
-    fn pair_generate_live(&mut self, plan: &PairGeneratePlan, config: &PairConfig) -> Result<PairGenerateLive, String> {
+    fn pair_generate_live(
+        &mut self,
+        plan: &PairGeneratePlan,
+        config: &PairConfig,
+    ) -> Result<PairGenerateLive, String> {
         pair_system_generate_live(plan, config)
     }
 
-    fn pair_accept_live(&mut self, plan: &PairAcceptPlan, config: &PairConfig) -> Result<PairAcceptLive, String> {
+    fn pair_accept_live(
+        &mut self,
+        plan: &PairAcceptPlan,
+        config: &PairConfig,
+    ) -> Result<PairAcceptLive, String> {
         pair_system_accept_live(plan, config)
     }
 }
@@ -112,8 +145,16 @@ fn pair_run_command(argv: &[String]) -> CliOutput {
 
 fn pair_run_command_with(argv: &[String], host: &mut impl PairHost) -> CliOutput {
     match pair_run(argv, host) {
-        Ok(stdout) => CliOutput { code: 0, stdout, stderr: String::new() },
-        Err(message) => CliOutput { code: 2, stdout: String::new(), stderr: format!("{message}\n") },
+        Ok(stdout) => CliOutput {
+            code: 0,
+            stdout,
+            stderr: String::new(),
+        },
+        Err(message) => CliOutput {
+            code: 2,
+            stdout: String::new(),
+            stderr: format!("{message}\n"),
+        },
     }
 }
 
@@ -143,16 +184,25 @@ fn pair_validate_argv(argv: &[String]) -> Result<(), String> {
 }
 
 fn pair_validate_blocked_surface(argv: &[String]) -> Result<(), String> {
-    let Some(first) = argv.first().map(String::as_str) else { return Ok(()); };
-    if first.starts_with('-') { return Err("pair subcommand must not start with '-'".to_owned()); }
-    if PAIR_BLOCKED_SUBCOMMANDS.iter().any(|blocked| blocked == &first) {
+    let Some(first) = argv.first().map(String::as_str) else {
+        return Ok(());
+    };
+    if first.starts_with('-') {
+        return Err("pair subcommand must not start with '-'".to_owned());
+    }
+    if PAIR_BLOCKED_SUBCOMMANDS
+        .iter()
+        .any(|blocked| blocked == &first)
+    {
         return Err("pair: consent mutation requires explicit human pairing flow; no auto-approve surface is exposed".to_owned());
     }
     Ok(())
 }
 
 fn pair_validate_separator(argv: &[String]) -> Result<(), String> {
-    if argv.iter().any(|arg| arg == "--") { return Err("pair: -- separator is not allowed".to_owned()); }
+    if argv.iter().any(|arg| arg == "--") {
+        return Err("pair: -- separator is not allowed".to_owned());
+    }
     Ok(())
 }
 
@@ -175,95 +225,185 @@ fn pair_is_value_flag(arg: &str) -> bool {
 }
 
 fn pair_validate_flag_value(argv: &[String], index: usize, flag: &str) -> Result<(), String> {
-    let Some(value) = argv.get(index + 1) else { return Ok(()); };
-    if value == "--" || value.starts_with('-') { return Err(format!("pair: {flag} value must not start with '-'")); }
-    if value.bytes().any(|byte| byte == 0 || byte.is_ascii_control()) { return Err(format!("pair: {flag} value must not contain control characters")); }
+    let Some(value) = argv.get(index + 1) else {
+        return Ok(());
+    };
+    if value == "--" || value.starts_with('-') {
+        return Err(format!("pair: {flag} value must not start with '-'"));
+    }
+    if value
+        .bytes()
+        .any(|byte| byte == 0 || byte.is_ascii_control())
+    {
+        return Err(format!(
+            "pair: {flag} value must not contain control characters"
+        ));
+    }
     Ok(())
 }
 
 fn pair_validate_control_free(argv: &[String]) -> Result<(), String> {
     for arg in argv {
-        if arg.bytes().any(|byte| byte == 0 || byte.is_ascii_control()) { return Err("pair: arguments must not contain control characters".to_owned()); }
+        if arg.bytes().any(|byte| byte == 0 || byte.is_ascii_control()) {
+            return Err("pair: arguments must not contain control characters".to_owned());
+        }
     }
     Ok(())
 }
 
 fn pair_parse(argv: &[String], host: &mut impl PairHost) -> Result<PairAction, String> {
-    if argv.is_empty() || argv.first().is_some_and(|arg| matches!(arg.as_str(), "help" | "--help" | "-h")) { return Ok(PairAction::Help); }
+    if argv.is_empty()
+        || argv
+            .first()
+            .is_some_and(|arg| matches!(arg.as_str(), "help" | "--help" | "-h"))
+    {
+        return Ok(PairAction::Help);
+    }
     let first = argv[0].as_str();
-    if first == "generate" { return pair_parse_generate(&argv[1..], host).map(PairAction::Generate); }
-    if first == "accept" { return pair_parse_accept_command(&argv[1..]).map(PairAction::Accept); }
-    if argv.len() >= 2 && pair_is_http_url(first) { return pair_parse_url_code(first, &argv[1]).map(PairAction::Accept); }
+    if first == "generate" {
+        return pair_parse_generate(&argv[1..], host).map(PairAction::Generate);
+    }
+    if first == "accept" {
+        return pair_parse_accept_command(&argv[1..]).map(PairAction::Accept);
+    }
+    if argv.len() >= 2 && pair_is_http_url(first) {
+        return pair_parse_url_code(first, &argv[1]).map(PairAction::Accept);
+    }
     Err(format!("maw pair: unexpected args (got \"{}\") — expected 'generate' or '<url> <code>'\n{PAIR_USAGE}", pair_positional_summary(argv)))
 }
 
-fn pair_parse_generate(argv: &[String], host: &mut impl PairHost) -> Result<PairGeneratePlan, String> {
+fn pair_parse_generate(
+    argv: &[String],
+    host: &mut impl PairHost,
+) -> Result<PairGeneratePlan, String> {
     let mut expires_sec = PAIR_DEFAULT_EXPIRES_SEC;
     let mut local_url = None::<String>;
     let mut index = 0_usize;
     while index < argv.len() {
         match argv[index].as_str() {
-            "--expires" => { expires_sec = pair_parse_expires(pair_next(argv, index, "--expires")?)?; index += 1; }
-            value if value.starts_with("--expires=") => expires_sec = pair_parse_expires(&value["--expires=".len()..])?,
-            "--at" => { local_url = Some(pair_validate_url(pair_next(argv, index, "--at")?, "--at")?); index += 1; }
-            value if value.starts_with("--at=") => local_url = Some(pair_validate_url(&value["--at=".len()..], "--at")?),
-            value if pair_is_token_value_flag(value) => { let _ = pair_next(argv, index, value)?; index += 1; }
-            value if value.starts_with('-') => return Err(format!("pair: unknown argument {value}")),
+            "--expires" => {
+                expires_sec = pair_parse_expires(pair_next(argv, index, "--expires")?)?;
+                index += 1;
+            }
+            value if value.starts_with("--expires=") => {
+                expires_sec = pair_parse_expires(&value["--expires=".len()..])?;
+            }
+            "--at" => {
+                local_url = Some(pair_validate_url(pair_next(argv, index, "--at")?, "--at")?);
+                index += 1;
+            }
+            value if value.starts_with("--at=") => {
+                local_url = Some(pair_validate_url(&value["--at=".len()..], "--at")?);
+            }
+            value if pair_is_token_value_flag(value) => {
+                let _ = pair_next(argv, index, value)?;
+                index += 1;
+            }
+            value if value.starts_with('-') => {
+                return Err(format!("pair: unknown argument {value}"))
+            }
             value => return Err(format!("pair: unexpected generate argument {value}")),
         }
         index += 1;
     }
     let config = host.pair_config();
-    Ok(PairGeneratePlan { local_url: local_url.unwrap_or_else(|| format!("http://localhost:{}", config.port)), expires_sec })
+    Ok(PairGeneratePlan {
+        local_url: local_url.unwrap_or_else(|| format!("http://localhost:{}", config.port)),
+        expires_sec,
+    })
 }
 
 fn pair_parse_accept_command(argv: &[String]) -> Result<PairAcceptPlan, String> {
-    let Some(code) = argv.first() else { return Err("pair: accept requires <code> --at <url>".to_owned()); };
+    let Some(code) = argv.first() else {
+        return Err("pair: accept requires <code> --at <url>".to_owned());
+    };
     let mut remote_url = None::<String>;
     let mut index = 1_usize;
     while index < argv.len() {
         match argv[index].as_str() {
-            "--at" => { remote_url = Some(pair_validate_url(pair_next(argv, index, "--at")?, "--at")?); index += 1; }
-            value if value.starts_with("--at=") => remote_url = Some(pair_validate_url(&value["--at=".len()..], "--at")?),
-            value if pair_is_token_value_flag(value) => { let _ = pair_next(argv, index, value)?; index += 1; }
-            value if value.starts_with('-') => return Err(format!("pair: unknown argument {value}")),
+            "--at" => {
+                remote_url = Some(pair_validate_url(pair_next(argv, index, "--at")?, "--at")?);
+                index += 1;
+            }
+            value if value.starts_with("--at=") => {
+                remote_url = Some(pair_validate_url(&value["--at=".len()..], "--at")?);
+            }
+            value if pair_is_token_value_flag(value) => {
+                let _ = pair_next(argv, index, value)?;
+                index += 1;
+            }
+            value if value.starts_with('-') => {
+                return Err(format!("pair: unknown argument {value}"))
+            }
             value => return Err(format!("pair: unexpected accept argument {value}")),
         }
         index += 1;
     }
-    let Some(url) = remote_url else { return Err("pair: accept requires --at <url>".to_owned()); };
+    let Some(url) = remote_url else {
+        return Err("pair: accept requires --at <url>".to_owned());
+    };
     pair_parse_url_code(&url, code)
 }
 
 fn pair_parse_url_code(url: &str, raw_code: &str) -> Result<PairAcceptPlan, String> {
     let remote_url = pair_validate_url(url, "url")?;
     let code_normalized = pair_normalize_code(raw_code);
-    if !pair_is_valid_code(&code_normalized) { return Err(format!("invalid code shape: {}", pair_redact_code(&code_normalized))); }
-    Ok(PairAcceptPlan { remote_url, code_redacted: pair_redact_code(&code_normalized), code_normalized })
+    if !pair_is_valid_code(&code_normalized) {
+        return Err(format!(
+            "invalid code shape: {}",
+            pair_redact_code(&code_normalized)
+        ));
+    }
+    Ok(PairAcceptPlan {
+        remote_url,
+        code_redacted: pair_redact_code(&code_normalized),
+        code_normalized,
+    })
 }
 
 fn pair_next<'a>(argv: &'a [String], index: usize, flag: &str) -> Result<&'a str, String> {
-    let Some(value) = argv.get(index + 1).map(String::as_str) else { return Err(format!("pair: missing value for {flag}")); };
-    if value.starts_with('-') { return Err(format!("pair: missing value for {flag}")); }
+    let Some(value) = argv.get(index + 1).map(String::as_str) else {
+        return Err(format!("pair: missing value for {flag}"));
+    };
+    if value.starts_with('-') {
+        return Err(format!("pair: missing value for {flag}"));
+    }
     Ok(value)
 }
 
 fn pair_parse_expires(value: &str) -> Result<u64, String> {
-    let parsed = value.parse::<u64>().map_err(|_| "--expires must be 5..3600 seconds".to_owned())?;
-    if !(PAIR_MIN_EXPIRES_SEC..=PAIR_MAX_EXPIRES_SEC).contains(&parsed) { return Err("--expires must be 5..3600 seconds".to_owned()); }
+    let parsed = value
+        .parse::<u64>()
+        .map_err(|_| "--expires must be 5..3600 seconds".to_owned())?;
+    if !(PAIR_MIN_EXPIRES_SEC..=PAIR_MAX_EXPIRES_SEC).contains(&parsed) {
+        return Err("--expires must be 5..3600 seconds".to_owned());
+    }
     Ok(parsed)
 }
 
 fn pair_validate_url(raw: &str, label: &str) -> Result<String, String> {
-    if raw.bytes().any(|byte| byte == 0 || byte.is_ascii_control()) || raw.starts_with('-') { return Err(format!("pair: invalid {label}")); }
-    let Some((scheme, rest)) = raw.split_once("://") else { return Err(format!("invalid URL \"{raw}\"")); };
-    if !matches!(scheme, "http" | "https") { return Err(format!("invalid URL \"{raw}\" (must be http:// or https://)")); }
-    if rest.is_empty() || rest.starts_with('/') || rest.contains(' ') { return Err(format!("invalid URL \"{raw}\"")); }
+    if raw.bytes().any(|byte| byte == 0 || byte.is_ascii_control()) || raw.starts_with('-') {
+        return Err(format!("pair: invalid {label}"));
+    }
+    let Some((scheme, rest)) = raw.split_once("://") else {
+        return Err(format!("invalid URL \"{raw}\""));
+    };
+    if !matches!(scheme, "http" | "https") {
+        return Err(format!(
+            "invalid URL \"{raw}\" (must be http:// or https://)"
+        ));
+    }
+    if rest.is_empty() || rest.starts_with('/') || rest.contains(' ') {
+        return Err(format!("invalid URL \"{raw}\""));
+    }
     Ok(raw.trim_end_matches('/').to_owned())
 }
 
 fn pair_is_token_value_flag(value: &str) -> bool {
-    matches!(value, "--token" | "--token-ref" | "--peer-token" | "--federation-token")
+    matches!(
+        value,
+        "--token" | "--token-ref" | "--peer-token" | "--federation-token"
+    )
 }
 
 fn pair_is_http_url(value: &str) -> bool {
@@ -271,7 +411,10 @@ fn pair_is_http_url(value: &str) -> bool {
 }
 
 fn pair_normalize_code(raw: &str) -> String {
-    raw.chars().filter(|ch| !matches!(ch, '-' | ' ' | '\t' | '\n' | '\r')).flat_map(char::to_uppercase).collect()
+    raw.chars()
+        .filter(|ch| !matches!(ch, '-' | ' ' | '\t' | '\n' | '\r'))
+        .flat_map(char::to_uppercase)
+        .collect()
 }
 
 fn pair_is_valid_code(code: &str) -> bool {
@@ -280,16 +423,28 @@ fn pair_is_valid_code(code: &str) -> bool {
 
 fn pair_redact_code(code: &str) -> String {
     let normalized = pair_normalize_code(code);
-    if normalized.len() >= 3 { format!("{}-***", &normalized[..3]) } else { "***".to_owned() }
+    if normalized.len() >= 3 {
+        format!("{}-***", &normalized[..3])
+    } else {
+        "***".to_owned()
+    }
 }
 
 fn pair_pretty_code(code: &str) -> String {
     let normalized = pair_normalize_code(code);
-    if normalized.len() == 6 { format!("{}-{}", &normalized[..3], &normalized[3..]) } else { normalized }
+    if normalized.len() == 6 {
+        format!("{}-{}", &normalized[..3], &normalized[3..])
+    } else {
+        normalized
+    }
 }
 
 fn pair_positional_summary(argv: &[String]) -> String {
-    argv.iter().filter(|arg| !arg.starts_with("--")).cloned().collect::<Vec<_>>().join(" ")
+    argv.iter()
+        .filter(|arg| !arg.starts_with("--"))
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn pair_render_generate(plan: &PairGeneratePlan, live: &PairGenerateLive) -> String {
@@ -338,14 +493,26 @@ fn pair_render_accept(plan: &PairAcceptPlan, config: &PairConfig, live: &PairAcc
 // accept side already does for the node it just paired with.
 const PAIR_GENERATE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
-fn pair_system_generate_live(plan: &PairGeneratePlan, config: &PairConfig) -> Result<PairGenerateLive, String> {
+fn pair_system_generate_live(
+    plan: &PairGeneratePlan,
+    config: &PairConfig,
+) -> Result<PairGenerateLive, String> {
     let body = serde_json::json!({ "ttlMs": plan.expires_sec.saturating_mul(1_000) }).to_string();
-    let response = pair_http_json("POST", &format!("{}/api/pair/generate", plan.local_url), Some(body))?;
-    if !(200..300).contains(&response.status) { return Err(format!("pair generate failed: HTTP {}", response.status)); }
+    let response = pair_http_json(
+        "POST",
+        &format!("{}/api/pair/generate", plan.local_url),
+        Some(body),
+    )?;
+    if !(200..300).contains(&response.status) {
+        return Err(format!("pair generate failed: HTTP {}", response.status));
+    }
     let value = pair_parse_json(&response.body, "pair generate")?;
-    let code = pair_json_string(&value, "code").ok_or_else(|| "pair generate: missing code".to_owned())?;
+    let code =
+        pair_json_string(&value, "code").ok_or_else(|| "pair generate: missing code".to_owned())?;
     let normalized = pair_normalize_code(&code);
-    if !pair_is_valid_code(&normalized) { return Err("pair generate: invalid code returned".to_owned()); }
+    if !pair_is_valid_code(&normalized) {
+        return Err("pair generate: invalid code returned".to_owned());
+    }
     pair_announce_generated_code(&normalized, plan);
     pair_system_generate_wait_and_write(plan, &normalized, config)
 }
@@ -386,12 +553,19 @@ fn pair_system_generate_wait_and_write(
                 status_polled = true;
                 if let Ok(value) = pair_parse_json(&response.body, "pair status") {
                     if value.get("consumed").and_then(serde_json::Value::as_bool) == Some(true) {
-                        return pair_system_generate_finalize(normalized_code, &value, config, status_polled);
+                        return pair_system_generate_finalize(
+                            normalized_code,
+                            &value,
+                            config,
+                            status_polled,
+                        );
                     }
                 }
             }
         }
-        if std::time::Instant::now() >= deadline { break; }
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
         std::thread::sleep(PAIR_GENERATE_POLL_INTERVAL);
     }
     Ok(PairGenerateLive {
@@ -416,7 +590,13 @@ fn pair_system_generate_finalize(
     ) else {
         // Consumed but the server didn't carry the acceptor's identity —
         // nothing safe to write; report the poll succeeded without a peer.
-        return Ok(PairGenerateLive { code_pretty, status_polled, peers_written: false, remote_node: None, remote_url: None });
+        return Ok(PairGenerateLive {
+            code_pretty,
+            status_polled,
+            peers_written: false,
+            remote_node: None,
+            remote_url: None,
+        });
     };
     pair_validate_peer_identity(&remote_node, &remote_url)?;
     pair_write_peer(&remote_node, &remote_url, config.oracle.as_deref())?;
@@ -429,18 +609,30 @@ fn pair_system_generate_finalize(
     })
 }
 
-fn pair_system_accept_live(plan: &PairAcceptPlan, config: &PairConfig) -> Result<PairAcceptLive, String> {
+fn pair_system_accept_live(
+    plan: &PairAcceptPlan,
+    config: &PairConfig,
+) -> Result<PairAcceptLive, String> {
     let body = pair_accept_body(config)?;
     let url = format!("{}/api/pair/{}", plan.remote_url, plan.code_normalized);
     let response = pair_http_json("POST", &url, Some(body))?;
-    if !(200..300).contains(&response.status) { return Err(format!("pair accept failed: HTTP {}", response.status)); }
+    if !(200..300).contains(&response.status) {
+        return Err(format!("pair accept failed: HTTP {}", response.status));
+    }
     let value = pair_parse_json(&response.body, "pair accept")?;
-    let remote_node = pair_json_string(&value, "node").ok_or_else(|| "pair accept: missing node".to_owned())?;
-    let remote_url = pair_json_string(&value, "url").ok_or_else(|| "pair accept: missing url".to_owned())?;
+    let remote_node =
+        pair_json_string(&value, "node").ok_or_else(|| "pair accept: missing node".to_owned())?;
+    let remote_url =
+        pair_json_string(&value, "url").ok_or_else(|| "pair accept: missing url".to_owned())?;
     let token_received = pair_json_string(&value, "federationToken").is_some();
     pair_validate_peer_identity(&remote_node, &remote_url)?;
     pair_write_peer(&remote_node, &remote_url, config.oracle.as_deref())?;
-    Ok(PairAcceptLive { remote_node, remote_url, token_received, peers_written: true })
+    Ok(PairAcceptLive {
+        remote_node,
+        remote_url,
+        token_received,
+        peers_written: true,
+    })
 }
 
 /// Build the accept body we publish to the remote — the payload that
@@ -473,7 +665,11 @@ fn pair_accept_body(config: &PairConfig) -> Result<String, String> {
     Ok(serde_json::json!({ "node": node, "url": local_url }).to_string())
 }
 
-fn pair_http_json(method: &str, url: &str, body: Option<String>) -> Result<maw_transport::HttpResponse, String> {
+fn pair_http_json(
+    method: &str,
+    url: &str,
+    body: Option<String>,
+) -> Result<maw_transport::HttpResponse, String> {
     let method = method.to_owned();
     let url = url.to_owned();
     // Run block_on on a fresh OS thread with no ambient runtime, so this stays callable
@@ -508,12 +704,20 @@ fn pair_parse_json(raw: &str, label: &str) -> Result<serde_json::Value, String> 
 }
 
 fn pair_json_string(value: &serde_json::Value, key: &str) -> Option<String> {
-    value.get(key).and_then(serde_json::Value::as_str).filter(|value| !value.is_empty()).map(ToOwned::to_owned)
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn pair_validate_peer_identity(node: &str, url: &str) -> Result<(), String> {
-    if let Some(message) = maw_peer::validate_peer_alias(node) { return Err(message); }
-    if let Some(message) = maw_peer::validate_peer_url(url) { return Err(message); }
+    if let Some(message) = maw_peer::validate_peer_alias(node) {
+        return Err(message);
+    }
+    if let Some(message) = maw_peer::validate_peer_url(url) {
+        return Err(message);
+    }
     Ok(())
 }
 
@@ -522,32 +726,52 @@ fn pair_write_peer(node: &str, url: &str, config_oracle: Option<&str>) -> Result
     pair_write_peer_to_env(&env, node, url, config_oracle)
 }
 
-fn pair_write_peer_to_env(env: &maw_peer::PeerStoreEnv, node: &str, url: &str, config_oracle: Option<&str>) -> Result<(), String> {
+fn pair_write_peer_to_env(
+    env: &maw_peer::PeerStoreEnv,
+    node: &str,
+    url: &str,
+    config_oracle: Option<&str>,
+) -> Result<(), String> {
     let now = now_iso_utc();
     let oracle = pair_sender_oracle(config_oracle);
     maw_peer::mutate_peer_store(env, |store| {
-        store.peers.insert(node.to_owned(), maw_peer::PeerRecord {
-            url: url.to_owned(),
-            addresses: store.peers.get(node).filter(|peer| peer.url == url).map(|peer| peer.addresses.clone()).unwrap_or_default(),
-            node: Some(node.to_owned()),
-            added_at: now.clone(),
-            last_seen: Some(now.clone()),
-            last_error: None,
-            nickname: None,
-            pubkey: None,
-            pubkey_first_seen: None,
-            identity: Some(maw_peer::PeerIdentity { oracle, node: node.to_owned() }),
-            one_way: Some(false),
-            last_symmetric_check: Some(now.clone()),
-            auth_ok: None,
-        });
-    }).map_err(|error| format!("pair peers.json write failed: {error}"))?;
+        store.peers.insert(
+            node.to_owned(),
+            maw_peer::PeerRecord {
+                url: url.to_owned(),
+                addresses: store
+                    .peers
+                    .get(node)
+                    .filter(|peer| peer.url == url)
+                    .map(|peer| peer.addresses.clone())
+                    .unwrap_or_default(),
+                node: Some(node.to_owned()),
+                added_at: now.clone(),
+                last_seen: Some(now.clone()),
+                last_error: None,
+                nickname: None,
+                pubkey: None,
+                pubkey_first_seen: None,
+                identity: Some(maw_peer::PeerIdentity {
+                    oracle,
+                    node: node.to_owned(),
+                }),
+                one_way: Some(false),
+                last_symmetric_check: Some(now.clone()),
+                auth_ok: None,
+            },
+        );
+    })
+    .map_err(|error| format!("pair peers.json write failed: {error}"))?;
     Ok(())
 }
 
 fn pair_sender_oracle(config_oracle: Option<&str>) -> String {
     let session_window = std::env::var("MAW_SESSION_WINDOW").ok();
-    if session_window.as_deref().is_some_and(|value| !value.trim().is_empty()) {
+    if session_window
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+    {
         return resolve_sender_oracle(session_window.as_deref(), None, config_oracle);
     }
     let tmux_window_name = current_tmux_window_name();
@@ -555,18 +779,33 @@ fn pair_sender_oracle(config_oracle: Option<&str>) -> String {
 }
 
 fn pair_peer_store_env() -> maw_peer::PeerStoreEnv {
-    let home = std::env::var_os("HOME").map_or_else(|| std::path::PathBuf::from("."), std::path::PathBuf::from);
+    let home = std::env::var_os("HOME")
+        .map_or_else(|| std::path::PathBuf::from("."), std::path::PathBuf::from);
     let vars = ["PEERS_FILE", "MAW_HOME", "MAW_XDG", "XDG_STATE_HOME"]
         .into_iter()
-        .filter_map(|name| std::env::var(name).ok().map(|value| (name.to_owned(), value)))
+        .filter_map(|name| {
+            std::env::var(name)
+                .ok()
+                .map(|value| (name.to_owned(), value))
+        })
         .collect::<Vec<_>>();
     maw_peer::PeerStoreEnv::with_vars(home, vars)
 }
 
 fn pair_plain_http_warning(url: &str) -> String {
-    if !url.starts_with("http://") { return String::new(); }
-    let host = url.trim_start_matches("http://").split(['/', ':']).next().unwrap_or_default();
-    if matches!(host, "localhost" | "127.0.0.1" | "::1") { String::new() } else { "   ⚠ pairing over plain HTTP — TLS recommended for cross-network pairing\n".to_owned() }
+    if !url.starts_with("http://") {
+        return String::new();
+    }
+    let host = url
+        .trim_start_matches("http://")
+        .split(['/', ':'])
+        .next()
+        .unwrap_or_default();
+    if matches!(host, "localhost" | "127.0.0.1" | "::1") {
+        String::new()
+    } else {
+        "   ⚠ pairing over plain HTTP — TLS recommended for cross-network pairing\n".to_owned()
+    }
 }
 
 fn pair_help() -> String {
@@ -584,7 +823,11 @@ mod pair_accept_body_tests {
     use super::{pair_accept_body, PairConfig};
 
     fn config(node: Option<&str>, port: u16) -> PairConfig {
-        PairConfig { node: node.map(str::to_owned), oracle: None, port }
+        PairConfig {
+            node: node.map(str::to_owned),
+            oracle: None,
+            port,
+        }
     }
 
     #[test]
@@ -603,7 +846,10 @@ mod pair_accept_body_tests {
         for missing in [None, Some(""), Some("   ")] {
             let error = pair_accept_body(&config(missing, 3458)).expect_err("must refuse");
             assert!(error.contains("no `node` name configured"), "{error}");
-            assert!(!error.contains("local"), "must not suggest the old placeholder: {error}");
+            assert!(
+                !error.contains("local"),
+                "must not suggest the old placeholder: {error}"
+            );
         }
     }
 
@@ -622,10 +868,18 @@ mod pair_tests {
 
     impl PairHost for PairFakeHost {
         fn pair_config(&mut self) -> PairConfig {
-            PairConfig { node: Some("fake-node".to_owned()), oracle: Some("fake-oracle".to_owned()), port: 5002 }
+            PairConfig {
+                node: Some("fake-node".to_owned()),
+                oracle: Some("fake-oracle".to_owned()),
+                port: 5002,
+            }
         }
 
-        fn pair_generate_live(&mut self, _plan: &PairGeneratePlan, _config: &PairConfig) -> Result<PairGenerateLive, String> {
+        fn pair_generate_live(
+            &mut self,
+            _plan: &PairGeneratePlan,
+            _config: &PairConfig,
+        ) -> Result<PairGenerateLive, String> {
             Ok(PairGenerateLive {
                 code_pretty: "W4K-7F3".to_owned(),
                 status_polled: true,
@@ -635,7 +889,11 @@ mod pair_tests {
             })
         }
 
-        fn pair_accept_live(&mut self, _plan: &PairAcceptPlan, _config: &PairConfig) -> Result<PairAcceptLive, String> {
+        fn pair_accept_live(
+            &mut self,
+            _plan: &PairAcceptPlan,
+            _config: &PairConfig,
+        ) -> Result<PairAcceptLive, String> {
             Ok(PairAcceptLive {
                 remote_node: "peer-node".to_owned(),
                 remote_url: "https://peer.example".to_owned(),
@@ -663,7 +921,15 @@ mod pair_tests {
 
     #[test]
     fn pair_generate_is_live_and_does_not_echo_fake_token() {
-        let output = pair_output(&["generate", "--expires", "60", "--at", "http://localhost:5002", "--token", "fake-test-token"]);
+        let output = pair_output(&[
+            "generate",
+            "--expires",
+            "60",
+            "--at",
+            "http://localhost:5002",
+            "--token",
+            "fake-test-token",
+        ]);
         assert_eq!(output.code, 0, "{}", output.stderr);
         assert!(output.stdout.contains("pair generate live"));
         assert!(output.stdout.contains("ttlMs: 60000"));
@@ -681,14 +947,18 @@ mod pair_tests {
         assert!(output.stdout.contains("W4K7F3"));
         assert!(output.stdout.contains("fake-node"));
         assert!(output.stdout.contains("plain HTTP"));
-        assert!(output.stdout.contains("federation token: received (redacted)"));
+        assert!(output
+            .stdout
+            .contains("federation token: received (redacted)"));
     }
 
     #[test]
     fn pair_accept_subcommand_supports_at_url() {
         let output = pair_output(&["accept", "W4K-7F3", "--at", "https://peer.example"]);
         assert_eq!(output.code, 0, "{}", output.stderr);
-        assert!(output.stdout.contains("https://peer.example/api/pair/W4K7F3"));
+        assert!(output
+            .stdout
+            .contains("https://peer.example/api/pair/W4K7F3"));
     }
 
     #[test]
@@ -714,9 +984,15 @@ mod pair_tests {
 
     #[test]
     fn pair_validates_expires_url_and_code_shape() {
-        assert!(pair_output(&["generate", "--expires", "4"]).stderr.contains("5..3600"));
-        assert!(pair_output(&["generate", "--at", "ftp://peer"]).stderr.contains("must be http"));
-        assert!(pair_output(&["https://peer", "BAD000"]).stderr.contains("invalid code shape"));
+        assert!(pair_output(&["generate", "--expires", "4"])
+            .stderr
+            .contains("5..3600"));
+        assert!(pair_output(&["generate", "--at", "ftp://peer"])
+            .stderr
+            .contains("must be http"));
+        assert!(pair_output(&["https://peer", "BAD000"])
+            .stderr
+            .contains("invalid code shape"));
     }
 
     // #734 (client side): `PairSystemHost::pair_config().port` used to be
@@ -763,7 +1039,10 @@ mod pair_tests {
 
     #[test]
     fn pair_render_generate_omits_peer_line_when_nothing_was_written() {
-        let plan = PairGeneratePlan { local_url: "http://localhost:5002".to_owned(), expires_sec: 60 };
+        let plan = PairGeneratePlan {
+            local_url: "http://localhost:5002".to_owned(),
+            expires_sec: 60,
+        };
         let live = PairGenerateLive {
             code_pretty: "W4K-7F3".to_owned(),
             status_polled: true,
@@ -815,11 +1094,14 @@ mod pair_tests {
         let _server_thread = std::thread::spawn(move || {
             let runtime = tokio::runtime::Runtime::new().expect("server runtime");
             runtime.block_on(async move {
-                let tokio_listener = tokio::net::TcpListener::from_std(listener).expect("tokio listener");
+                let tokio_listener =
+                    tokio::net::TcpListener::from_std(listener).expect("tokio listener");
                 let app = crate::serve_core::servecore_apply_pipeline(
                     crate::serve_core::modules::pairing::pair_mount(axum::Router::new()),
                 );
-                axum::serve(tokio_listener, app).await.expect("pair test server");
+                axum::serve(tokio_listener, app)
+                    .await
+                    .expect("pair test server");
             });
         });
 
@@ -849,32 +1131,46 @@ mod pair_tests {
             )
         });
 
-        let plan = PairGeneratePlan { local_url: local_url.clone(), expires_sec: 5 };
-        let config = PairConfig { node: Some("responder-node".to_owned()), oracle: Some("responder-oracle".to_owned()), port: addr.port() };
+        let plan = PairGeneratePlan {
+            local_url: local_url.clone(),
+            expires_sec: 5,
+        };
+        let config = PairConfig {
+            node: Some("responder-node".to_owned()),
+            oracle: Some("responder-oracle".to_owned()),
+            port: addr.port(),
+        };
 
-        let live = pair_system_generate_wait_and_write(&plan, &normalized, &config).expect("wait and write");
+        let live = pair_system_generate_wait_and_write(&plan, &normalized, &config)
+            .expect("wait and write");
 
-        let accept_response = acceptor.join().expect("acceptor thread").expect("accept request");
+        let accept_response = acceptor
+            .join()
+            .expect("acceptor thread")
+            .expect("accept request");
         assert_eq!(accept_response.status, 200, "{}", accept_response.body);
 
         assert!(live.status_polled);
-        assert!(live.peers_written, "expected the responder side to write a peer entry after the remote accepted");
+        assert!(
+            live.peers_written,
+            "expected the responder side to write a peer entry after the remote accepted"
+        );
         assert_eq!(live.remote_node.as_deref(), Some("acceptor-node"));
         assert_eq!(live.remote_url.as_deref(), Some("https://acceptor.example"));
 
         let raw = std::fs::read_to_string(&peers_path).expect("read peers.json");
         let value: serde_json::Value = serde_json::from_str(&raw).expect("peers json");
-        assert_eq!(value["peers"]["acceptor-node"]["url"], "https://acceptor.example");
+        assert_eq!(
+            value["peers"]["acceptor-node"]["url"],
+            "https://acceptor.example"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn pair_write_peer_uses_atomic_peer_store_path() {
-        let root = std::env::temp_dir().join(format!(
-            "maw-rs-pair-live-{}",
-            std::process::id()
-        ));
+        let root = std::env::temp_dir().join(format!("maw-rs-pair-live-{}", std::process::id()));
         let peers = root.join("state").join("peers.json");
         let env = maw_peer::PeerStoreEnv::with_vars(
             root.clone(),
@@ -882,12 +1178,32 @@ mod pair_tests {
         );
         std::fs::create_dir_all(peers.parent().expect("state parent")).expect("state dir");
         std::fs::write(&peers, r#"{"version":1,"peers":{"peer-node":{"url":"https://peer.example","addresses":["https://peer-lan.example"],"addedAt":"0"}}}"#).expect("seed peers");
-        pair_write_peer_to_env(&env, "peer-node", "https://peer.example", Some("config-oracle")).expect("write peer");
-        assert_eq!(maw_peer::load_peer_store(&env).peers["peer-node"].addresses.as_slice(), ["https://peer-lan.example"]);
+        pair_write_peer_to_env(
+            &env,
+            "peer-node",
+            "https://peer.example",
+            Some("config-oracle"),
+        )
+        .expect("write peer");
+        assert_eq!(
+            maw_peer::load_peer_store(&env).peers["peer-node"]
+                .addresses
+                .as_slice(),
+            ["https://peer-lan.example"]
+        );
         assert!(!peers.with_extension("json.tmp").exists());
-        pair_write_peer_to_env(&env, "peer-node", "https://changed.example", Some("config-oracle")).expect("re-pair peer");
+        pair_write_peer_to_env(
+            &env,
+            "peer-node",
+            "https://changed.example",
+            Some("config-oracle"),
+        )
+        .expect("re-pair peer");
         let changed = maw_peer::load_peer_store(&env);
-        assert!(changed.peers["peer-node"].url == "https://changed.example" && changed.peers["peer-node"].addresses.is_empty());
+        assert!(
+            changed.peers["peer-node"].url == "https://changed.example"
+                && changed.peers["peer-node"].addresses.is_empty()
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -898,8 +1214,17 @@ mod pair_tests {
         std::env::set_var("MAW_SESSION_WINDOW", "33-maw-rs:maw-rs");
         let root = std::env::temp_dir().join(format!("maw-rs-pair-oracle-{}", std::process::id()));
         let peers = root.join("state").join("peers.json");
-        let env = maw_peer::PeerStoreEnv::with_vars(root.clone(), [("PEERS_FILE", peers.to_string_lossy().to_string())]);
-        pair_write_peer_to_env(&env, "peer-node", "https://peer.example", Some("config-oracle")).expect("write peer");
+        let env = maw_peer::PeerStoreEnv::with_vars(
+            root.clone(),
+            [("PEERS_FILE", peers.to_string_lossy().to_string())],
+        );
+        pair_write_peer_to_env(
+            &env,
+            "peer-node",
+            "https://peer.example",
+            Some("config-oracle"),
+        )
+        .expect("write peer");
         let raw = std::fs::read_to_string(&peers).expect("read peers");
         let value: serde_json::Value = serde_json::from_str(&raw).expect("json");
         assert_eq!(value["peers"]["peer-node"]["identity"]["oracle"], "maw-rs");
@@ -925,9 +1250,11 @@ mod pair_tests {
             .enable_all()
             .build()
             .expect("runtime");
-        let result = runtime.block_on(async {
-            pair_http_json("GET", "http://127.0.0.1:1/pair-696", None)
-        });
-        assert!(result.is_err(), "unreachable peer inside a runtime must be Err, got {result:?}");
+        let result =
+            runtime.block_on(async { pair_http_json("GET", "http://127.0.0.1:1/pair-696", None) });
+        assert!(
+            result.is_err(),
+            "unreachable peer inside a runtime must be Err, got {result:?}"
+        );
     }
 }

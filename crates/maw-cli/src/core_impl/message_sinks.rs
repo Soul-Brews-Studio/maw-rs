@@ -97,23 +97,34 @@ fn send_append_jsonl(path: &std::path::Path, row: &serde_json::Value) {
 }
 
 fn send_audit_user() -> String {
-    std::env::var("USER").or_else(|_| std::env::var("LOGNAME")).unwrap_or_else(|_| "unknown".to_owned())
+    std::env::var("USER")
+        .or_else(|_| std::env::var("LOGNAME"))
+        .unwrap_or_else(|_| "unknown".to_owned())
 }
 
 fn send_hostname() -> String {
-    std::env::var("HOSTNAME").ok().filter(|value| !value.is_empty()).unwrap_or_else(|| "unknown".to_owned())
+    std::env::var("HOSTNAME")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "unknown".to_owned())
 }
 
 fn send_publish_mqtt_message(record: &MessageSinkRecord<'_>) {
-    let Some(from) = record.normalized_from else { return; };
+    let Some(from) = record.normalized_from else {
+        return;
+    };
     let value = merged_config_value_for_env(&real_xdg_env());
     let broker = value
         .get("mqttPublish")
         .and_then(|mqtt| mqtt.get("broker"))
         .and_then(serde_json::Value::as_str)
         .filter(|broker| !broker.is_empty());
-    let Some(broker) = broker else { return; };
-    let Some(node) = value.get("node").and_then(serde_json::Value::as_str) else { return; };
+    let Some(broker) = broker else {
+        return;
+    };
+    let Some(node) = value.get("node").and_then(serde_json::Value::as_str) else {
+        return;
+    };
     let payload = serde_json::json!({
         "event": "message",
         "oracle": record.sender_oracle,
@@ -139,7 +150,9 @@ fn send_write_message_ledger_record(record: &MessageSinkRecord<'_>, from: &str) 
     }
     let path = maw_data_path(&real_xdg_env(), &["message-ledger.sqlite"]);
     if let Some(parent) = path.parent() {
-        if std::fs::create_dir_all(parent).is_err() { return; }
+        if std::fs::create_dir_all(parent).is_err() {
+            return;
+        }
     } else {
         return;
     }
@@ -157,7 +170,10 @@ fn send_write_message_ledger_record(record: &MessageSinkRecord<'_>, from: &str) 
         send_sqlite_quote(record.msg),
         i32::from(record.signature.is_some()),
     );
-    let _ = std::process::Command::new("sqlite3").arg(path).arg(sql).output();
+    let _ = std::process::Command::new("sqlite3")
+        .arg(path)
+        .arg(sql)
+        .output();
 }
 
 fn send_message_ledger_schema_sql() -> &'static str {

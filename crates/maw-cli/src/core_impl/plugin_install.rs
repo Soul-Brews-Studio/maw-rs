@@ -40,28 +40,45 @@ fn parse_plugin_install_args(argv: &[String]) -> Result<PluginAction, PluginPars
             "--plan-json" => plan_json = true,
             "--force" => force = true,
             "--root" => {
-                install_root = Some(take_plugin_manifest_path(argv, index, "--root").map_err(PluginParseError::Usage)?);
+                install_root = Some(
+                    take_plugin_manifest_path(argv, index, "--root")
+                        .map_err(PluginParseError::Usage)?,
+                );
                 index += 1;
             }
             "--ref" => {
-                reference = Some(take_plugin_manifest_value(argv, index, "--ref").map_err(PluginParseError::Usage)?);
+                reference = Some(
+                    take_plugin_manifest_value(argv, index, "--ref")
+                        .map_err(PluginParseError::Usage)?,
+                );
                 index += 1;
             }
             "--sha256" => {
-                let value = take_plugin_manifest_value(argv, index, "--sha256").map_err(PluginParseError::Usage)?;
-                sha256 = Some(normalize_plugin_install_sha256(&value).map_err(PluginParseError::Usage)?);
+                let value = take_plugin_manifest_value(argv, index, "--sha256")
+                    .map_err(PluginParseError::Usage)?;
+                sha256 =
+                    Some(normalize_plugin_install_sha256(&value).map_err(PluginParseError::Usage)?);
                 index += 1;
             }
             "--path" => {
-                subpath = Some(take_plugin_manifest_path(argv, index, "--path").map_err(PluginParseError::Usage)?);
+                subpath = Some(
+                    take_plugin_manifest_path(argv, index, "--path")
+                        .map_err(PluginParseError::Usage)?,
+                );
                 index += 1;
             }
             other if !other.starts_with('-') && source.is_none() => source = Some(other.to_owned()),
-            other => return Err(PluginParseError::Usage(format!("plugin install: unknown argument {other}"))),
+            other => {
+                return Err(PluginParseError::Usage(format!(
+                    "plugin install: unknown argument {other}"
+                )))
+            }
         }
         index += 1;
     }
-    let source = source.ok_or_else(|| PluginParseError::Usage("plugin install: source dir or git url is required".to_owned()))?;
+    let source = source.ok_or_else(|| {
+        PluginParseError::Usage("plugin install: source dir or git url is required".to_owned())
+    })?;
     Ok(PluginAction::Install {
         source: classify_plugin_install_source_with_subpath(&source, reference, sha256, subpath)
             .map_err(PluginParseError::Usage)?,
@@ -92,17 +109,23 @@ fn classify_plugin_install_source_with_subpath(
             reference,
             sha256,
             warn_unpinned: false,
-            subpath: requested_subpath.map(normalize_plugin_install_subpath).transpose()?,
+            subpath: requested_subpath
+                .map(normalize_plugin_install_subpath)
+                .transpose()?,
         });
     }
 
     let path = std::path::PathBuf::from(value);
-    if let Some((github, inline_ref, derived_subpath)) = parse_github_shorthand_install_source(value, &path) {
+    if let Some((github, inline_ref, derived_subpath)) =
+        parse_github_shorthand_install_source(value, &path)
+    {
         if reference.is_some() && inline_ref.is_some() {
             return Err("plugin install: use either owner/repo@ref or --ref, not both".to_owned());
         }
         if requested_subpath.is_some() && derived_subpath.is_some() {
-            return Err("plugin install: use either owner/repo/subpath or --path, not both".to_owned());
+            return Err(
+                "plugin install: use either owner/repo/subpath or --path, not both".to_owned(),
+            );
         }
         let reference = reference.or(inline_ref);
         let warn_unpinned = reference.is_none() && sha256.is_none();
@@ -111,8 +134,10 @@ fn classify_plugin_install_source_with_subpath(
             reference,
             sha256,
             warn_unpinned,
-            subpath: requested_subpath.or(derived_subpath)
-                .map(normalize_plugin_install_subpath).transpose()?,
+            subpath: requested_subpath
+                .or(derived_subpath)
+                .map(normalize_plugin_install_subpath)
+                .transpose()?,
         });
     }
 
@@ -153,7 +178,9 @@ fn parse_github_shorthand_install_source(
     let tail = parts.collect::<Vec<_>>();
     let (repo, reference) = raw_repo
         .split_once('@')
-        .map_or((raw_repo, None), |(repo, reference)| (repo, Some(reference.to_owned())));
+        .map_or((raw_repo, None), |(repo, reference)| {
+            (repo, Some(reference.to_owned()))
+        });
     (!owner.is_empty()
         && !repo.is_empty()
         && reference.as_ref().is_none_or(|value| !value.is_empty())
@@ -168,14 +195,21 @@ fn parse_github_shorthand_install_source(
     })
 }
 
-fn normalize_plugin_install_subpath(path: std::path::PathBuf) -> Result<std::path::PathBuf, String> {
+fn normalize_plugin_install_subpath(
+    path: std::path::PathBuf,
+) -> Result<std::path::PathBuf, String> {
     let valid = !path.as_os_str().is_empty()
         && !path.is_absolute()
-        && path.components().all(|component| matches!(component, std::path::Component::Normal(_)));
+        && path
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)));
     if valid {
         Ok(path)
     } else {
-        Err("plugin install: --path must be a non-empty relative directory without '.' or '..'".to_owned())
+        Err(
+            "plugin install: --path must be a non-empty relative directory without '.' or '..'"
+                .to_owned(),
+        )
     }
 }
 
@@ -210,7 +244,10 @@ fn install_from_local_dir(
         verification.resolved_sha256.as_deref(),
         &local_install_lock_source(source),
     )?;
-    Ok(PluginInstallOutcome { summary, warning: verification.warning })
+    Ok(PluginInstallOutcome {
+        summary,
+        warning: verification.warning,
+    })
 }
 
 /// Verify a local non-wasm plugin dir before copy: when the manifest pins an
@@ -231,7 +268,10 @@ fn verify_local_artifact_install(
                 source.display()
             ));
         }
-        return Ok(PluginInstallVerification { warning: None, resolved_sha256: None });
+        return Ok(PluginInstallVerification {
+            warning: None,
+            resolved_sha256: None,
+        });
     };
     let Some(pin) = artifact.sha256.as_deref().filter(|pin| !pin.is_empty()) else {
         if expected_sha256.is_some() {
@@ -240,7 +280,10 @@ fn verify_local_artifact_install(
                 source.display()
             ));
         }
-        return Ok(PluginInstallVerification { warning: None, resolved_sha256: None });
+        return Ok(PluginInstallVerification {
+            warning: None,
+            resolved_sha256: None,
+        });
     };
     let pin = normalize_plugin_install_sha256(pin).map_err(|_| {
         format!(
@@ -287,7 +330,11 @@ fn install_plugin_dir(
         Ok(_) => std::fs::remove_file(&destination)
             .map_err(|error| format!("plugin install: remove existing failed: {error}"))?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(format!("plugin install: inspect destination failed: {error}")),
+        Err(error) => {
+            return Err(format!(
+                "plugin install: inspect destination failed: {error}"
+            ))
+        }
     }
     install_built_plugin_dir(source, root)
 }
@@ -303,7 +350,15 @@ fn install_from_git(
 ) -> Result<PluginInstallOutcome, String> {
     let tmp = create_plugin_install_temp_dir()?;
     let target = PluginInstallTarget { root, force };
-    let result = install_from_git_in_temp(url, reference, expected_sha256, warn_unpinned, subpath, target, &tmp);
+    let result = install_from_git_in_temp(
+        url,
+        reference,
+        expected_sha256,
+        warn_unpinned,
+        subpath,
+        target,
+        &tmp,
+    );
     let cleanup = std::fs::remove_dir_all(&tmp);
     match (result, cleanup) {
         (Ok(summary), Ok(())) => Ok(summary),
@@ -330,30 +385,37 @@ fn install_from_git_in_temp(
     git_clone_plugin_repo(url, reference, tmp)?;
     let source = subpath.map_or_else(|| tmp.to_owned(), |path| tmp.join(path));
     if !source.is_dir() {
-        return Err(format!("plugin install: subpath not found: {}", source.display()));
+        return Err(format!(
+            "plugin install: subpath not found: {}",
+            source.display()
+        ));
     }
-    let verification = match verify_package_dir(&source, expected_sha256, warn_unpinned, target.force)? {
-        ResolvedPackage::Wasm(verification) => verification,
-        // target=js (or absent): the JS builder owns validation and errors.
-        ResolvedPackage::NotWasm => {
-            let build = build_js_plugin_dir(&source, false)?;
-            verify_plugin_install_pin(
-                &build.name,
-                &build.version,
-                Some(&build.sha256),
-                expected_sha256,
-                warn_unpinned,
-                target.force,
-            )?
-        }
-    };
+    let verification =
+        match verify_package_dir(&source, expected_sha256, warn_unpinned, target.force)? {
+            ResolvedPackage::Wasm(verification) => verification,
+            // target=js (or absent): the JS builder owns validation and errors.
+            ResolvedPackage::NotWasm => {
+                let build = build_js_plugin_dir(&source, false)?;
+                verify_plugin_install_pin(
+                    &build.name,
+                    &build.version,
+                    Some(&build.sha256),
+                    expected_sha256,
+                    warn_unpinned,
+                    target.force,
+                )?
+            }
+        };
     let summary = install_plugin_dir(&source, target.root, target.force)?;
     record_plugin_install_pin(
         &summary,
         verification.resolved_sha256.as_deref(),
         &git_install_lock_source(url, subpath, reference),
     )?;
-    Ok(PluginInstallOutcome { summary, warning: verification.warning })
+    Ok(PluginInstallOutcome {
+        summary,
+        warning: verification.warning,
+    })
 }
 
 fn read_raw_plugin_install_manifest(
@@ -363,8 +425,8 @@ fn read_raw_plugin_install_manifest(
     if !path.exists() {
         return Ok(None);
     }
-    let text = std::fs::read_to_string(&path)
-        .map_err(|error| format!("invalid plugin.json: {error}"))?;
+    let text =
+        std::fs::read_to_string(&path).map_err(|error| format!("invalid plugin.json: {error}"))?;
     serde_json::from_str(&text)
         .map(Some)
         .map_err(|error| format!("invalid plugin.json: {error}"))
@@ -482,7 +544,11 @@ fn verify_wasm_package_install(
 
 fn normalize_plugin_install_sha256(value: &str) -> Result<String, String> {
     let hex = value.strip_prefix("sha256:").unwrap_or(value);
-    if hex.len() == 64 && hex.chars().all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase()) {
+    if hex.len() == 64
+        && hex
+            .chars()
+            .all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase())
+    {
         Ok(format!("sha256:{hex}"))
     } else {
         Err("plugin install: --sha256 must be 64 lowercase hex chars".to_owned())
@@ -563,7 +629,11 @@ fn render_plugin_install_summary(
     plan_json: bool,
 ) -> String {
     if plan_json {
-        let copied = summary.copied_files.iter().map(path_string).collect::<Vec<_>>();
+        let copied = summary
+            .copied_files
+            .iter()
+            .map(path_string)
+            .collect::<Vec<_>>();
         format!("{{\"command\":\"plugin\",\"kind\":\"install\",\"name\":{},\"version\":{},\"sourceDir\":{},\"installDir\":{},\"copiedFiles\":{}}}\n", json_string(&summary.name), json_string(&summary.version), json_string(&path_string(&summary.source_dir)), json_string(&path_string(&summary.install_dir)), json_string_array(&copied))
     } else {
         format!(

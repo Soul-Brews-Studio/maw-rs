@@ -71,11 +71,7 @@ struct WorktreeLiveRef {
 
 trait WorktreeRuntime {
     fn worktree_cwd(&self) -> std::path::PathBuf;
-    fn worktree_git(
-        &mut self,
-        cwd: &std::path::Path,
-        args: &[&str],
-    ) -> Result<String, String>;
+    fn worktree_git(&mut self, cwd: &std::path::Path, args: &[&str]) -> Result<String, String>;
     fn worktree_tmux(&mut self, subcommand: &str, args: &[String]) -> Result<String, String>;
     fn worktree_fleet_entries(&mut self) -> Result<Vec<NativeFleetEntry>, String>;
     fn worktree_path_exists(&self, path: &std::path::Path) -> bool;
@@ -89,11 +85,7 @@ impl WorktreeRuntime for WorktreeSystemRuntime {
         std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
     }
 
-    fn worktree_git(
-        &mut self,
-        cwd: &std::path::Path,
-        args: &[&str],
-    ) -> Result<String, String> {
+    fn worktree_git(&mut self, cwd: &std::path::Path, args: &[&str]) -> Result<String, String> {
         let output = std::process::Command::new("git")
             .arg("-C")
             .arg(cwd)
@@ -117,7 +109,8 @@ impl WorktreeRuntime for WorktreeSystemRuntime {
     }
 
     fn worktree_fleet_entries(&mut self) -> Result<Vec<NativeFleetEntry>, String> {
-        fleet_load_entries_result("worktree").map(|entries| entries.into_iter().filter(fleet_entry_is_session).collect())
+        fleet_load_entries_result("worktree")
+            .map(|entries| entries.into_iter().filter(fleet_entry_is_session).collect())
     }
 
     fn worktree_path_exists(&self, path: &std::path::Path) -> bool {
@@ -160,7 +153,8 @@ fn worktree_run_with(
         }
         WorktreeCommand::Clean => {
             let statuses = worktree_collect_statuses(runtime).map_err(|message| (1, message))?;
-            worktree_run_clean(runtime, &statuses, options.dry_run).map_err(|message| (1, message))?
+            worktree_run_clean(runtime, &statuses, options.dry_run)
+                .map_err(|message| (1, message))?
         }
         WorktreeCommand::Add => {
             let records = worktree_list_records(runtime).map_err(|message| (1, message))?;
@@ -182,7 +176,12 @@ fn worktree_parse_args(argv: &[String]) -> Result<WorktreeOptions<'_>, (i32, Str
         "ls" | "list" => WorktreeCommand::Ls,
         "clean" => WorktreeCommand::Clean,
         "add" => WorktreeCommand::Add,
-        value => return Err((2, format!("worktree: unknown subcommand {value}\n{WORKTREE_USAGE}"))),
+        value => {
+            return Err((
+                2,
+                format!("worktree: unknown subcommand {value}\n{WORKTREE_USAGE}"),
+            ))
+        }
     };
     let mut dry_run = false;
     let mut name = None;
@@ -193,36 +192,59 @@ fn worktree_parse_args(argv: &[String]) -> Result<WorktreeOptions<'_>, (i32, Str
         match arg.as_str() {
             "--dry-run" if matches!(command, WorktreeCommand::Clean) => dry_run = true,
             "--dry-run" => {
-                return Err((2, format!("worktree add: --dry-run is only valid with clean\n{WORKTREE_USAGE}")));
+                return Err((
+                    2,
+                    format!("worktree add: --dry-run is only valid with clean\n{WORKTREE_USAGE}"),
+                ));
             }
             "--base" if matches!(command, WorktreeCommand::Add) => {
                 index += 1;
                 let Some(value) = argv.get(index).map(String::as_str) else {
-                    return Err((2, format!("worktree add: --base requires a value\n{WORKTREE_USAGE}")));
+                    return Err((
+                        2,
+                        format!("worktree add: --base requires a value\n{WORKTREE_USAGE}"),
+                    ));
                 };
                 worktree_validate_ref(value).map_err(|message| (2, message))?;
                 base = Some(value);
             }
             "--base" => {
-                return Err((2, format!("worktree: --base is only valid with add\n{WORKTREE_USAGE}")));
+                return Err((
+                    2,
+                    format!("worktree: --base is only valid with add\n{WORKTREE_USAGE}"),
+                ));
             }
             "--help" | "-h" => return Err((2, WORKTREE_USAGE.to_owned())),
             value if value.starts_with('-') => {
-                return Err((2, format!("worktree: unknown argument {value}\n{WORKTREE_USAGE}")));
+                return Err((
+                    2,
+                    format!("worktree: unknown argument {value}\n{WORKTREE_USAGE}"),
+                ));
             }
             value if matches!(command, WorktreeCommand::Add) && name.is_none() => {
                 worktree_validate_name(value).map_err(|message| (2, message))?;
                 name = Some(value);
             }
             value if matches!(command, WorktreeCommand::Add) => {
-                return Err((2, format!("worktree add: unexpected argument {value}\n{WORKTREE_USAGE}")));
+                return Err((
+                    2,
+                    format!("worktree add: unexpected argument {value}\n{WORKTREE_USAGE}"),
+                ));
             }
-            value => return Err((2, format!("worktree: unexpected argument {value}\n{WORKTREE_USAGE}"))),
+            value => {
+                return Err((
+                    2,
+                    format!("worktree: unexpected argument {value}\n{WORKTREE_USAGE}"),
+                ))
+            }
         }
         index += 1;
     }
     if dry_run && !matches!(command, WorktreeCommand::Clean) {
-        return Err((2, format!("worktree ls: --dry-run is only valid with clean\n{WORKTREE_USAGE}")));
+        return Err((
+            2,
+            format!("worktree ls: --dry-run is only valid with clean\n{WORKTREE_USAGE}"),
+        ));
     }
     if matches!(command, WorktreeCommand::Add) && name.is_none() {
         return Err((2, format!("worktree add: missing name\n{WORKTREE_USAGE}")));
@@ -246,7 +268,10 @@ fn worktree_validate_name(value: &str) -> Result<(), String> {
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
     {
-        return Err("worktree add: name must contain only ASCII letters, digits, '.', '_' or '-'".to_owned());
+        return Err(
+            "worktree add: name must contain only ASCII letters, digits, '.', '_' or '-'"
+                .to_owned(),
+        );
     }
     Ok(())
 }
@@ -257,7 +282,9 @@ fn worktree_validate_ref(value: &str) -> Result<(), String> {
         || value.chars().any(char::is_whitespace)
         || value.chars().any(char::is_control)
     {
-        return Err("worktree add: --base must be a non-option git ref without whitespace".to_owned());
+        return Err(
+            "worktree add: --base must be a non-option git ref without whitespace".to_owned(),
+        );
     }
     Ok(())
 }
@@ -284,7 +311,9 @@ fn worktree_collect_statuses(
         .collect())
 }
 
-fn worktree_list_records(runtime: &mut impl WorktreeRuntime) -> Result<Vec<WorktreeRecord>, String> {
+fn worktree_list_records(
+    runtime: &mut impl WorktreeRuntime,
+) -> Result<Vec<WorktreeRecord>, String> {
     let cwd = runtime.worktree_cwd();
     let raw = runtime.worktree_git(&cwd, &["worktree", "list", "--porcelain"])?;
     Ok(worktree_parse_list(&raw))
@@ -336,7 +365,10 @@ fn worktree_branch_merged(
     }
     branch.is_some_and(|branch| {
         runtime
-            .worktree_git(main_path, &["merge-base", "--is-ancestor", branch, &base.reference])
+            .worktree_git(
+                main_path,
+                &["merge-base", "--is-ancestor", branch, &base.reference],
+            )
             .is_ok()
     })
 }
@@ -358,8 +390,18 @@ fn worktree_resolve_base(
     main_path: &std::path::Path,
 ) -> WorktreeBase {
     const PROBES: [&[&str]; 2] = [
-        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
-        &["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+        &[
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "@{upstream}",
+        ],
+        &[
+            "symbolic-ref",
+            "--quiet",
+            "--short",
+            "refs/remotes/origin/HEAD",
+        ],
     ];
     for probe in PROBES {
         let resolved = runtime
@@ -368,10 +410,16 @@ fn worktree_resolve_base(
             .map(|value| value.trim().to_owned())
             .filter(|value| worktree_validate_ref(value).is_ok());
         if let Some(reference) = resolved {
-            return WorktreeBase { reference, resolved: true };
+            return WorktreeBase {
+                reference,
+                resolved: true,
+            };
         }
     }
-    WorktreeBase { reference: WORKTREE_FALLBACK_BASE.to_owned(), resolved: false }
+    WorktreeBase {
+        reference: WORKTREE_FALLBACK_BASE.to_owned(),
+        resolved: false,
+    }
 }
 
 fn worktree_is_dirty(runtime: &mut impl WorktreeRuntime, path: &std::path::Path) -> bool {
@@ -468,7 +516,11 @@ fn worktree_github_roots(main_path: &std::path::Path) -> Vec<std::path::PathBuf>
 
 fn worktree_nearest_github_root(path: &std::path::Path) -> Option<std::path::PathBuf> {
     path.ancestors()
-        .find(|ancestor| ancestor.file_name().is_some_and(|name| name == "github.com"))
+        .find(|ancestor| {
+            ancestor
+                .file_name()
+                .is_some_and(|name| name == "github.com")
+        })
         .map(std::path::Path::to_path_buf)
 }
 
@@ -523,7 +575,10 @@ fn worktree_run_add(
     let branch_ref = format!("refs/heads/{branch}");
 
     if runtime.worktree_path_exists(&path) {
-        return Err(format!("worktree add: path already exists: {}", path.display()));
+        return Err(format!(
+            "worktree add: path already exists: {}",
+            path.display()
+        ));
     }
     if worktree_branch_exists(runtime, &main_path, &branch_ref) {
         return Err(format!("worktree add: branch already exists: {branch}"));
@@ -581,7 +636,11 @@ fn worktree_render_ls(statuses: &[WorktreeStatus]) -> String {
 }
 
 fn worktree_yes_no(value: bool) -> &'static str {
-    if value { "yes" } else { "no" }
+    if value {
+        "yes"
+    } else {
+        "no"
+    }
 }
 
 fn worktree_run_clean(
@@ -687,11 +746,7 @@ mod worktree_tests {
             self.cwd.clone()
         }
 
-        fn worktree_git(
-            &mut self,
-            cwd: &std::path::Path,
-            args: &[&str],
-        ) -> Result<String, String> {
+        fn worktree_git(&mut self, cwd: &std::path::Path, args: &[&str]) -> Result<String, String> {
             self.git_calls.push((
                 cwd.to_path_buf(),
                 args.iter().map(|arg| (*arg).to_owned()).collect(),
@@ -707,7 +762,9 @@ mod worktree_tests {
                     .origin_head
                     .clone()
                     .map(|head| format!("{head}\n"))
-                    .ok_or_else(|| "fatal: ref refs/remotes/origin/HEAD is not a symbolic ref".to_owned()),
+                    .ok_or_else(|| {
+                        "fatal: ref refs/remotes/origin/HEAD is not a symbolic ref".to_owned()
+                    }),
                 ["status", "--porcelain"] => {
                     if self.dirty_paths.contains(cwd) {
                         Ok(" M src/lib.rs\n".to_owned())
@@ -736,11 +793,7 @@ mod worktree_tests {
             }
         }
 
-        fn worktree_tmux(
-            &mut self,
-            subcommand: &str,
-            args: &[String],
-        ) -> Result<String, String> {
+        fn worktree_tmux(&mut self, subcommand: &str, args: &[String]) -> Result<String, String> {
             self.tmux_calls.push((subcommand.to_owned(), args.to_vec()));
             match subcommand {
                 "list-panes" => Ok(self.tmux_panes.clone()),
@@ -803,11 +856,21 @@ mod worktree_tests {
     }
 
     fn upstream_probe() -> Vec<String> {
-        strings(&["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])
+        strings(&[
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "@{upstream}",
+        ])
     }
 
     fn origin_head_probe() -> Vec<String> {
-        strings(&["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"])
+        strings(&[
+            "symbolic-ref",
+            "--quiet",
+            "--short",
+            "refs/remotes/origin/HEAD",
+        ])
     }
 
     /// Every git call this module uses to *discover* the integration branch.
@@ -824,7 +887,9 @@ mod worktree_tests {
         runtime
             .git_calls
             .iter()
-            .filter_map(|(_, args)| (args.first().map(String::as_str) == Some(command)).then_some(args.clone()))
+            .filter_map(|(_, args)| {
+                (args.first().map(String::as_str) == Some(command)).then_some(args.clone())
+            })
             .collect()
     }
 
@@ -844,7 +909,10 @@ mod worktree_tests {
             output.stdout,
             "created /repo/agents/codex-5 (branch agents/codex-5 from origin/alpha)\n"
         );
-        assert_eq!(runtime.created_dirs, vec![std::path::PathBuf::from("/repo/agents")]);
+        assert_eq!(
+            runtime.created_dirs,
+            vec![std::path::PathBuf::from("/repo/agents")]
+        );
         assert_eq!(
             runtime.git_calls,
             vec![
@@ -1003,7 +1071,11 @@ mod worktree_tests {
         let output =
             worktree_run_with(&strings(&["add", "release-fix"]), &mut runtime).expect("add output");
 
-        assert!(output.stdout.contains("from upstream/release"), "{}", output.stdout);
+        assert!(
+            output.stdout.contains("from upstream/release"),
+            "{}",
+            output.stdout
+        );
         assert_eq!(
             runtime.git_calls.last().map(|(_, args)| args.clone()),
             Some(strings(&[
@@ -1035,7 +1107,11 @@ mod worktree_tests {
         let output =
             worktree_run_with(&strings(&["add", "main-fix"]), &mut runtime).expect("add output");
 
-        assert!(output.stdout.contains("from origin/main"), "{}", output.stdout);
+        assert!(
+            output.stdout.contains("from origin/main"),
+            "{}",
+            output.stdout
+        );
         assert_eq!(
             runtime.git_calls.last().map(|(_, args)| args.clone()),
             Some(strings(&[
@@ -1062,7 +1138,11 @@ mod worktree_tests {
         let output =
             worktree_run_with(&strings(&["add", "fallback"]), &mut runtime).expect("add output");
 
-        assert!(output.stdout.contains("from origin/alpha"), "{}", output.stdout);
+        assert!(
+            output.stdout.contains("from origin/alpha"),
+            "{}",
+            output.stdout
+        );
         assert_eq!(
             base_probe_calls(&runtime),
             vec![
@@ -1096,12 +1176,19 @@ mod worktree_tests {
     fn clean_removes_merged_clean_dead_worktree_and_prunes_afterward() {
         let mut runtime = runtime_with_two_worktrees("/repo/agents/old", "agents/old");
 
-        let output =
-            worktree_run_with(&strings(&["clean"]), &mut runtime).expect("clean output");
+        let output = worktree_run_with(&strings(&["clean"]), &mut runtime).expect("clean output");
 
         assert_eq!(output.code, 0);
-        assert!(output.stdout.contains("skip /repo (main)"), "{}", output.stdout);
-        assert!(output.stdout.contains("removed /repo/agents/old"), "{}", output.stdout);
+        assert!(
+            output.stdout.contains("skip /repo (main)"),
+            "{}",
+            output.stdout
+        );
+        assert!(
+            output.stdout.contains("removed /repo/agents/old"),
+            "{}",
+            output.stdout
+        );
         let remove_index = runtime
             .git_calls
             .iter()
@@ -1130,17 +1217,16 @@ mod worktree_tests {
     #[test]
     fn clean_skips_dirty_worktree_with_reason() {
         let mut runtime = runtime_with_two_worktrees("/repo/agents/dirty", "agents/dirty");
-        runtime.dirty_paths.insert(std::path::PathBuf::from("/repo/agents/dirty"));
+        runtime
+            .dirty_paths
+            .insert(std::path::PathBuf::from("/repo/agents/dirty"));
 
-        let output =
-            worktree_run_with(&strings(&["clean"]), &mut runtime).expect("clean output");
+        let output = worktree_run_with(&strings(&["clean"]), &mut runtime).expect("clean output");
 
         assert!(output.stdout.contains("skip /repo/agents/dirty (dirty)"));
-        assert!(
-            command_calls(&runtime, "worktree")
-                .iter()
-                .all(|args| args != &strings(&["worktree", "remove", "/repo/agents/dirty"]))
-        );
+        assert!(command_calls(&runtime, "worktree")
+            .iter()
+            .all(|args| args != &strings(&["worktree", "remove", "/repo/agents/dirty"])));
     }
 
     #[test]
@@ -1148,15 +1234,12 @@ mod worktree_tests {
         let mut runtime = runtime_with_two_worktrees("/repo/agents/fresh", "agents/fresh");
         runtime.merged_branches.remove("agents/fresh");
 
-        let output =
-            worktree_run_with(&strings(&["clean"]), &mut runtime).expect("clean output");
+        let output = worktree_run_with(&strings(&["clean"]), &mut runtime).expect("clean output");
 
         assert!(output.stdout.contains("skip /repo/agents/fresh (unmerged)"));
-        assert!(
-            command_calls(&runtime, "worktree")
-                .iter()
-                .all(|args| args != &strings(&["worktree", "remove", "/repo/agents/fresh"]))
-        );
+        assert!(command_calls(&runtime, "worktree")
+            .iter()
+            .all(|args| args != &strings(&["worktree", "remove", "/repo/agents/fresh"])));
     }
 
     #[test]
@@ -1228,12 +1311,7 @@ mod worktree_tests {
             runtime.git_calls.iter().any(|(cwd, args)| {
                 cwd == &std::path::PathBuf::from("/repo")
                     && args
-                        == &strings(&[
-                            "merge-base",
-                            "--is-ancestor",
-                            "agents/old",
-                            "origin/trunk",
-                        ])
+                        == &strings(&["merge-base", "--is-ancestor", "agents/old", "origin/trunk"])
             }),
             "clean must compare against the resolved base: {:?}",
             runtime.git_calls
@@ -1258,12 +1336,7 @@ mod worktree_tests {
             runtime.git_calls.iter().any(|(cwd, args)| {
                 cwd == &std::path::PathBuf::from("/repo")
                     && args
-                        == &strings(&[
-                            "merge-base",
-                            "--is-ancestor",
-                            "agents/old",
-                            "origin/main",
-                        ])
+                        == &strings(&["merge-base", "--is-ancestor", "agents/old", "origin/main"])
             }),
             "clean must fall back to origin/HEAD: {:?}",
             runtime.git_calls
@@ -1293,7 +1366,10 @@ mod worktree_tests {
         runtime.cwd = std::path::PathBuf::from("/opt/Code/github.com/acme/widgets/agents/live");
         runtime.worktrees = worktrees(&[
             ("/opt/Code/github.com/acme/widgets", "main"),
-            ("/opt/Code/github.com/acme/widgets/agents/live", "agents/live"),
+            (
+                "/opt/Code/github.com/acme/widgets/agents/live",
+                "agents/live",
+            ),
         ]);
         runtime.fleet_entries = vec![fleet_entry(
             "188-maw-rs",
@@ -1301,8 +1377,7 @@ mod worktree_tests {
             "github.com/acme/widgets/agents/live",
         )];
 
-        let output =
-            worktree_run_with(&strings(&["clean"]), &mut runtime).expect("clean output");
+        let output = worktree_run_with(&strings(&["clean"]), &mut runtime).expect("clean output");
 
         assert!(
             output
@@ -1323,25 +1398,22 @@ mod worktree_tests {
     #[test]
     fn clean_skips_tmux_live_pane_cwd_prefix_with_reason() {
         let mut runtime = runtime_with_two_worktrees("/repo/agents/live", "agents/live");
-        runtime.tmux_panes = "188-maw-rs:maw-rs-codex-4|||/repo/agents/live/crates/maw-cli\n"
-            .to_owned();
+        runtime.tmux_panes =
+            "188-maw-rs:maw-rs-codex-4|||/repo/agents/live/crates/maw-cli\n".to_owned();
 
-        let output =
-            worktree_run_with(&strings(&["clean"]), &mut runtime).expect("clean output");
+        let output = worktree_run_with(&strings(&["clean"]), &mut runtime).expect("clean output");
 
-        assert!(
-            output
-                .stdout
-                .contains("skip /repo/agents/live (live: 188-maw-rs:maw-rs-codex-4)")
-        );
+        assert!(output
+            .stdout
+            .contains("skip /repo/agents/live (live: 188-maw-rs:maw-rs-codex-4)"));
     }
 
     #[test]
     fn dry_run_removes_nothing_and_does_not_prune() {
         let mut runtime = runtime_with_two_worktrees("/repo/agents/old", "agents/old");
 
-        let output = worktree_run_with(&strings(&["clean", "--dry-run"]), &mut runtime)
-            .expect("dry run");
+        let output =
+            worktree_run_with(&strings(&["clean", "--dry-run"]), &mut runtime).expect("dry run");
 
         assert!(output.stdout.contains("would remove /repo/agents/old"));
         assert!(!output.stdout.contains("removed /repo/agents/old"));
@@ -1359,8 +1431,8 @@ mod worktree_tests {
             ..FakeWorktreeRuntime::default()
         };
 
-        let output = worktree_run_with(&strings(&["clean", "--dry-run"]), &mut runtime)
-            .expect("dry run");
+        let output =
+            worktree_run_with(&strings(&["clean", "--dry-run"]), &mut runtime).expect("dry run");
 
         assert!(output.stdout.contains("skip /repo (main)"));
         assert!(!output.stdout.contains("would remove /repo"));
@@ -1374,7 +1446,9 @@ mod worktree_tests {
         let output = worktree_run_with(&strings(&["ls"]), &mut runtime).expect("ls output");
 
         assert_eq!(output.code, 0);
-        assert!(output.stdout.starts_with("path\tbranch\tmerged?\tdirty?\tlive?\n"));
+        assert!(output
+            .stdout
+            .starts_with("path\tbranch\tmerged?\tdirty?\tlive?\n"));
         assert!(!output.stdout.contains("/repo\tsmain"));
         assert!(output
             .stdout

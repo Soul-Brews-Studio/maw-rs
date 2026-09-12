@@ -12,7 +12,7 @@ decision = local gate; CI is a 4-hourly safety net only**).
 
 | tier | command | when | what runs |
 |---|---|---|---|
-| quick | `scripts/gate.sh quick` | while iterating; before opening a PR | `fmt --all --check` + `clippy` (stable, `-D warnings`) + `cargo test -p <crate>` for only the crates your diff vs `merge-base(origin/alpha)` touches. Root `Cargo.toml`/`Cargo.lock` changes escalate to workspace tests; changes outside `crates/` (docs, scripts, CI) skip tests. |
+| quick | `scripts/gate.sh quick` | while iterating; before opening a PR | `fmt --all --check` + explicit `rustfmt --check` for maw-cli's generated-include-only `core_impl/*.rs` + `clippy` (stable, `-D warnings`) + `cargo test -p <crate>` for only the crates your diff vs `merge-base(origin/alpha)` touches. Root `Cargo.toml`/`Cargo.lock` changes escalate to workspace tests; changes outside `crates/` (docs, scripts, CI) skip tests. |
 | full | `scripts/gate.sh full` | before merge/promote/release | all 4 CI dimensions (below) |
 | batch | `scripts/gate.sh batch <br>...` | lead, landing several PRs | merge-train: throwaway worktree at `origin/alpha`, merge every listed branch, run **one** `full` on the combined tree |
 
@@ -24,7 +24,7 @@ these pass — `gate.sh full` runs exactly this set:
 
 | # | dimension | command |
 |---|---|---|
-| 1 | format | `cargo fmt --all -- --check` |
+| 1 | format | `cargo fmt --all -- --check`, then `rustfmt --edition 2021 --check crates/maw-cli/src/core_impl/*.rs` because those sources are reached through an `OUT_DIR`-generated include list that cargo fmt cannot discover |
 | 2 | workspace tests | `cargo test --workspace --locked --no-fail-fast` |
 | 3 | clippy on the **pinned** toolchain | `cargo clippy --workspace --all-targets -- -D warnings` (one run; `rust-toolchain.toml` makes it the same rustc CI runs, and the preflight below proves it) |
 | 4 | wasm-host subset | `cargo test -p maw-cli -p maw-plugin-manifest --features wasm-host --locked --no-fail-fast` + the matching clippy |

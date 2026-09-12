@@ -10,12 +10,23 @@ fn fleet_run_wake(state: &FleetState, options: &FleetOptions) -> Result<(i32, St
         return fleet_run_group_action(state, options, "wake", group);
     }
     let sessions = fleet_sweep_targets(state);
-    if options.json { return Ok((0, fleet_json_action(state, "wake", &sessions, options)?)); }
+    if options.json {
+        return Ok((0, fleet_json_action(state, "wake", &sessions, options)?));
+    }
     let mut out = String::new();
     let _ = writeln!(out, "🌅 Fleet wake plan node: {}", state.config.node);
-    let _ = writeln!(out, "  sessions: {} · disabled skipped: {}", sessions.len(), state.disabled_count);
-    if options.kill { let _ = writeln!(out, "  preflight: sleep existing sessions first"); }
-    if options.resume { let _ = writeln!(out, "  resume: yes"); }
+    let _ = writeln!(
+        out,
+        "  sessions: {} · disabled skipped: {}",
+        sessions.len(),
+        state.disabled_count
+    );
+    if options.kill {
+        let _ = writeln!(out, "  preflight: sleep existing sessions first");
+    }
+    if options.resume {
+        let _ = writeln!(out, "  resume: yes");
+    }
     fleet_write_session_plan(&mut out, &sessions);
     Ok((0, out))
 }
@@ -28,7 +39,12 @@ fn fleet_sweep_targets(state: &FleetState) -> Vec<FleetSessionSummary> {
         .filter(|entry| entry.session.members.is_some())
         .map(|entry| entry.session.name.as_str())
         .collect::<BTreeSet<_>>();
-    state.sessions.iter().filter(|session| !rosters.contains(session.name.as_str())).cloned().collect()
+    state
+        .sessions
+        .iter()
+        .filter(|session| !rosters.contains(session.name.as_str()))
+        .cloned()
+        .collect()
 }
 
 fn fleet_run_group_action(
@@ -44,7 +60,9 @@ fn fleet_run_group_action(
         .fleet_entries
         .iter()
         .find(|entry| fleet_roster_entry_matches(entry, group))
-        .ok_or_else(|| format!("fleet {action}: no squad named {group} — try: maw fleet create {group}"))?;
+        .ok_or_else(|| {
+            format!("fleet {action}: no squad named {group} — try: maw fleet create {group}")
+        })?;
     let members = entry.session.members.as_deref().unwrap_or_default();
     if members.is_empty() {
         return Err(format!("fleet {action}: squad {group} has no members"));
@@ -61,13 +79,29 @@ fn fleet_run_group_action(
     if action == "wake" && !options.dry_run {
         fleet_run_group_post_wake_hooks(&resolved);
     }
-    if options.json { return fleet_json_group_action(state, action, group, options, &resolved, &skipped); }
+    if options.json {
+        return fleet_json_group_action(state, action, group, options, &resolved, &skipped);
+    }
     let mut out = String::new();
     let icon = if action == "wake" { "🌅" } else { "🌙" };
-    let _ = writeln!(out, "{icon} Fleet {action} plan node: {}", state.config.node);
-    let _ = writeln!(out, "  squad: {group} · members: {} · sessions: {} · skipped: {}", members.len(), resolved.len(), skipped.len());
-    for (handle, session) in &resolved { let _ = writeln!(out, "  - {handle} -> {}", session.name); }
-    for handle in &skipped { let _ = writeln!(out, "  - {handle} skipped: no session"); }
+    let _ = writeln!(
+        out,
+        "{icon} Fleet {action} plan node: {}",
+        state.config.node
+    );
+    let _ = writeln!(
+        out,
+        "  squad: {group} · members: {} · sessions: {} · skipped: {}",
+        members.len(),
+        resolved.len(),
+        skipped.len()
+    );
+    for (handle, session) in &resolved {
+        let _ = writeln!(out, "  - {handle} -> {}", session.name);
+    }
+    for handle in &skipped {
+        let _ = writeln!(out, "  - {handle} skipped: no session");
+    }
     Ok((0, out))
 }
 
@@ -99,20 +133,20 @@ fn fleet_member_hook_window(handle: &str, session: &FleetSessionSummary) -> Stri
         .map_or_else(|| session.name.clone(), |window| window.name.clone())
 }
 
-fn fleet_member_session<'a>(handle: &str, sessions: &'a [FleetSessionSummary]) -> Option<&'a FleetSessionSummary> {
+fn fleet_member_session<'a>(
+    handle: &str,
+    sessions: &'a [FleetSessionSummary],
+) -> Option<&'a FleetSessionSummary> {
     let wanted = maw_matcher::normalized_match_names(handle);
     sessions.iter().find(|session| {
         maw_matcher::normalized_match_names(&session.name)
             .iter()
             .any(|name| wanted.contains(name))
-            || session
-                .windows
-                .iter()
-                .any(|window| {
-                    maw_matcher::normalized_match_names(&window.name)
-                        .iter()
-                        .any(|name| wanted.contains(name))
-                })
+            || session.windows.iter().any(|window| {
+                maw_matcher::normalized_match_names(&window.name)
+                    .iter()
+                    .any(|name| wanted.contains(name))
+            })
     })
 }
 
@@ -134,7 +168,9 @@ fn fleet_json_group_action(
         "members": resolved.iter().map(|(handle, session)| serde_json::json!({"handle": handle, "session": session.name})).collect::<Vec<_>>(),
         "skipped": skipped.iter().map(|handle| serde_json::json!({"handle": handle, "reason": "no session"})).collect::<Vec<_>>(),
     });
-    serde_json::to_string_pretty(&value).map(|text| (0, format!("{text}\n"))).map_err(|error| error.to_string())
+    serde_json::to_string_pretty(&value)
+        .map(|text| (0, format!("{text}\n")))
+        .map_err(|error| error.to_string())
 }
 
 fn fleet_write_session_plan(out: &mut String, sessions: &[FleetSessionSummary]) {
@@ -151,30 +187,53 @@ fn fleet_run_gather(
     options: &FleetOptions,
     runtime: &mut impl FleetRuntime,
 ) -> Result<(i32, String), String> {
-    let group = options.target.as_deref().ok_or_else(|| "fleet gather: missing squad".to_owned())?;
+    let group = options
+        .target
+        .as_deref()
+        .ok_or_else(|| "fleet gather: missing squad".to_owned())?;
     let entry = state
         .fleet_entries
         .iter()
         .find(|entry| fleet_roster_entry_matches(entry, group))
-        .ok_or_else(|| format!("fleet gather: no squad named {group} — try: maw fleet create {group}"))?;
+        .ok_or_else(|| {
+            format!("fleet gather: no squad named {group} — try: maw fleet create {group}")
+        })?;
     let members = entry.session.members.as_deref().unwrap_or_default();
-    if members.is_empty() { return Err(format!("fleet gather: squad {group} has no members")); }
+    if members.is_empty() {
+        return Err(format!("fleet gather: squad {group} has no members"));
+    }
     let registered = fleet_sweep_targets(state);
-    let live = runtime.fleet_list_all()?.into_iter().map(|session| session.name).collect::<BTreeSet<_>>();
-    let plan = members.iter().map(|member| {
-        let session = fleet_member_session(&member.handle, &registered);
-        let live_session = session.filter(|candidate| live.contains(&candidate.name));
-        (member.handle.as_str(), live_session)
-    }).collect::<Vec<_>>();
-    if options.json { return fleet_json_gather(state, group, options, &plan); }
-    if options.dry_run { return Ok((0, fleet_render_gather(state, group, options, &plan, None))); }
+    let live = runtime
+        .fleet_list_all()?
+        .into_iter()
+        .map(|session| session.name)
+        .collect::<BTreeSet<_>>();
+    let plan = members
+        .iter()
+        .map(|member| {
+            let session = fleet_member_session(&member.handle, &registered);
+            let live_session = session.filter(|candidate| live.contains(&candidate.name));
+            (member.handle.as_str(), live_session)
+        })
+        .collect::<Vec<_>>();
+    if options.json {
+        return fleet_json_gather(state, group, options, &plan);
+    }
+    if options.dry_run {
+        return Ok((0, fleet_render_gather(state, group, options, &plan, None)));
+    }
 
     let mut runner = maw_tmux::CommandTmuxRunner::new();
     let target = fleet_gather_current_target(&mut runner)?;
     let mut changed = false;
     for (_, session) in &plan {
-        let Some(session) = session else { continue; };
-        let window = session.windows.first().map_or("main", |window| window.name.as_str());
+        let Some(session) = session else {
+            continue;
+        };
+        let window = session
+            .windows
+            .first()
+            .map_or("main", |window| window.name.as_str());
         let source = format!("{}:{window}", session.name);
         if options.scatter {
             tmux_break_with_runner(&[source.clone(), "--force".to_owned()], &mut runner)
@@ -189,36 +248,70 @@ fn fleet_run_gather(
         tmux_layout_current_with_runner("main-vertical", &mut runner)
             .map_err(|(_, message)| format!("fleet gather: {message}"))?;
     }
-    Ok((0, fleet_render_gather(state, group, options, &plan, Some(&target))))
+    Ok((
+        0,
+        fleet_render_gather(state, group, options, &plan, Some(&target)),
+    ))
 }
 
 fn fleet_gather_current_target<R: maw_tmux::TmuxRunner>(runner: &mut R) -> Result<String, String> {
-    let raw = runner.run("display-message", &["-p".to_owned(), "#{pane_id}".to_owned()])
-        .map_err(|error| format!("fleet gather: current tmux pane unavailable: {}", error.message))?;
+    let raw = runner
+        .run(
+            "display-message",
+            &["-p".to_owned(), "#{pane_id}".to_owned()],
+        )
+        .map_err(|error| {
+            format!(
+                "fleet gather: current tmux pane unavailable: {}",
+                error.message
+            )
+        })?;
     let pane = raw.trim();
-    if pane.is_empty() { Err("fleet gather: current tmux pane unavailable".to_owned()) } else { Ok(pane.to_owned()) }
+    if pane.is_empty() {
+        Err("fleet gather: current tmux pane unavailable".to_owned())
+    } else {
+        Ok(pane.to_owned())
+    }
 }
 
-fn fleet_render_gather(state: &FleetState, group: &str, options: &FleetOptions, plan: &[(&str, Option<&FleetSessionSummary>)], target: Option<&str>) -> String {
+fn fleet_render_gather(
+    state: &FleetState,
+    group: &str,
+    options: &FleetOptions,
+    plan: &[(&str, Option<&FleetSessionSummary>)],
+    target: Option<&str>,
+) -> String {
     let mut out = String::new();
     let action = if options.scatter { "scatter" } else { "gather" };
     let _ = writeln!(out, "fleet {action} plan node: {}", state.config.node);
     let _ = writeln!(out, "  squad: {group} · dry-run: {}", options.dry_run);
-    if let Some(target) = target { let _ = writeln!(out, "  target: {target}"); }
+    if let Some(target) = target {
+        let _ = writeln!(out, "  target: {target}");
+    }
     for (handle, session) in plan {
         if let Some(session) = session {
-            let window = session.windows.first().map_or("main", |window| window.name.as_str());
+            let window = session
+                .windows
+                .first()
+                .map_or("main", |window| window.name.as_str());
             let verb = if options.scatter { "break" } else { "join" };
             let _ = writeln!(out, "  - {handle} live: {verb} {}:{window}", session.name);
         } else {
             let _ = writeln!(out, "  - {handle} asleep: skipped (no auto-wake in v1)");
         }
     }
-    if plan.iter().any(|(_, session)| session.is_some()) && !options.scatter { out.push_str("  - layout: main-vertical\n"); }
+    if plan.iter().any(|(_, session)| session.is_some()) && !options.scatter {
+        out.push_str("  - layout: main-vertical\n");
+    }
     out
 }
 
-fn fleet_json_gather(state: &FleetState, group: &str, options: &FleetOptions, plan: &[(&str, Option<&FleetSessionSummary>)]) -> Result<(i32, String), String> {
+fn fleet_json_gather(
+    state: &FleetState,
+    group: &str,
+    options: &FleetOptions,
+    plan: &[(&str, Option<&FleetSessionSummary>)],
+) -> Result<(i32, String), String> {
     let value = serde_json::json!({
         "node": state.config.node,
         "action": if options.scatter { "scatter" } else { "gather" },
@@ -230,7 +323,9 @@ fn fleet_json_gather(state: &FleetState, group: &str, options: &FleetOptions, pl
             "session": session.map(|session| session.name.clone()),
         })).collect::<Vec<_>>(),
     });
-    serde_json::to_string_pretty(&value).map(|text| (0, format!("{text}\n"))).map_err(|error| error.to_string())
+    serde_json::to_string_pretty(&value)
+        .map(|text| (0, format!("{text}\n")))
+        .map_err(|error| error.to_string())
 }
 
 fn fleet_run_sleep(state: &FleetState, options: &FleetOptions) -> Result<(i32, String), String> {
@@ -238,19 +333,39 @@ fn fleet_run_sleep(state: &FleetState, options: &FleetOptions) -> Result<(i32, S
         return fleet_run_group_action(state, options, "sleep", group);
     }
     let sessions = fleet_sweep_targets(state);
-    if options.json { return Ok((0, fleet_json_action(state, "sleep", &sessions, options)?)); }
+    if options.json {
+        return Ok((0, fleet_json_action(state, "sleep", &sessions, options)?));
+    }
     let mut out = String::new();
     let _ = writeln!(out, "🌙 Fleet sleep plan node: {}", state.config.node);
     fleet_write_session_plan(&mut out, &sessions);
     Ok((0, out))
 }
 
-fn fleet_run_named_plan(state: &FleetState, options: &FleetOptions, action: &str) -> Result<(i32, String), String> {
-    if options.json { return Ok((0, fleet_json_action(state, action, &state.sessions, options)?)); }
+fn fleet_run_named_plan(
+    state: &FleetState,
+    options: &FleetOptions,
+    action: &str,
+) -> Result<(i32, String), String> {
+    if options.json {
+        return Ok((
+            0,
+            fleet_json_action(state, action, &state.sessions, options)?,
+        ));
+    }
     let mut out = String::new();
     let _ = writeln!(out, "fleet {action} plan node: {}", state.config.node);
-    let _ = writeln!(out, "  dry-run: {}", options.dry_run || matches!(action, "init" | "consolidate" | "resume" | "sync"));
-    let _ = writeln!(out, "  sessions: {} · peers: {}", state.sessions.len(), state.config.peers.len());
+    let _ = writeln!(
+        out,
+        "  dry-run: {}",
+        options.dry_run || matches!(action, "init" | "consolidate" | "resume" | "sync")
+    );
+    let _ = writeln!(
+        out,
+        "  sessions: {} · peers: {}",
+        state.sessions.len(),
+        state.config.peers.len()
+    );
     Ok((0, out))
 }
 
@@ -268,5 +383,7 @@ fn fleet_json_action(
         "sessionCount": sessions.len(),
         "sessions": sessions.iter().map(|session| session.name.clone()).collect::<Vec<_>>(),
     });
-    serde_json::to_string_pretty(&value).map(|text| format!("{text}\n")).map_err(|error| error.to_string())
+    serde_json::to_string_pretty(&value)
+        .map(|text| format!("{text}\n"))
+        .map_err(|error| error.to_string())
 }

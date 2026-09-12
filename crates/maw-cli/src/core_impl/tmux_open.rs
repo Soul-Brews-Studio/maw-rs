@@ -78,20 +78,35 @@ fn tmux_open_target<R: maw_tmux::TmuxRunner>(
 ) -> Result<String, (i32, String)> {
     tmux_open_validate_target(target).map_err(|message| (1, message))?;
     let args = tmux_open_strings(&["-h", "-l", "50%", "-t", target]);
-    runner
-        .run("split-window", &args)
-        .map_err(|error| (1, format!("tmux open: split-window failed: {}", error.message)))?;
+    runner.run("split-window", &args).map_err(|error| {
+        (
+            1,
+            format!("tmux open: split-window failed: {}", error.message),
+        )
+    })?;
     Ok(format!("\x1b[32m✓\x1b[0m opened {target}\n"))
 }
 
-fn tmux_open_hidden_windows<R: maw_tmux::TmuxRunner>(runner: &mut R) -> Result<String, (i32, String)> {
+fn tmux_open_hidden_windows<R: maw_tmux::TmuxRunner>(
+    runner: &mut R,
+) -> Result<String, (i32, String)> {
     let my_window = tmux_open_display(runner, "#{window_index}", "window_index")?;
     let my_pane = tmux_open_current_pane(runner)?;
-    tmux_open_validate_target(&my_window).map_err(|message| (1, format!("tmux open: current window: {message}")))?;
-    tmux_open_validate_target(&my_pane).map_err(|message| (1, format!("tmux open: current pane: {message}")))?;
+    tmux_open_validate_target(&my_window)
+        .map_err(|message| (1, format!("tmux open: current window: {message}")))?;
+    tmux_open_validate_target(&my_pane)
+        .map_err(|message| (1, format!("tmux open: current pane: {message}")))?;
     let raw = runner
-        .run("list-windows", &tmux_open_strings(&["-F", "#{window_index}:#{window_panes}"]))
-        .map_err(|error| (1, format!("tmux open: list-windows failed: {}", error.message)))?;
+        .run(
+            "list-windows",
+            &tmux_open_strings(&["-F", "#{window_index}:#{window_panes}"]),
+        )
+        .map_err(|error| {
+            (
+                1,
+                format!("tmux open: list-windows failed: {}", error.message),
+            )
+        })?;
     let hidden = tmux_open_hidden_window_indices(&raw, &my_window);
     if hidden.is_empty() {
         return Ok("\x1b[90mno hidden panes to open\x1b[0m\n".to_owned());
@@ -103,7 +118,10 @@ fn tmux_open_hidden_windows<R: maw_tmux::TmuxRunner>(runner: &mut R) -> Result<S
         }
         let source = format!(":{}", window.index);
         if runner
-            .run("join-pane", &tmux_open_strings(&["-h", "-s", &source, "-t", &my_pane]))
+            .run(
+                "join-pane",
+                &tmux_open_strings(&["-h", "-s", &source, "-t", &my_pane]),
+            )
             .is_ok()
         {
             joined += 1;
@@ -123,10 +141,20 @@ fn tmux_open_display<R: maw_tmux::TmuxRunner>(
     runner
         .run("display-message", &tmux_open_strings(&["-p", format]))
         .map(|raw| raw.trim().to_owned())
-        .map_err(|error| (1, format!("tmux open: display-message {label} failed: {}", error.message)))
+        .map_err(|error| {
+            (
+                1,
+                format!(
+                    "tmux open: display-message {label} failed: {}",
+                    error.message
+                ),
+            )
+        })
 }
 
-fn tmux_open_current_pane<R: maw_tmux::TmuxRunner>(runner: &mut R) -> Result<String, (i32, String)> {
+fn tmux_open_current_pane<R: maw_tmux::TmuxRunner>(
+    runner: &mut R,
+) -> Result<String, (i32, String)> {
     std::env::var("TMUX_PANE")
         .ok()
         .filter(|pane| !pane.trim().is_empty())
@@ -175,7 +203,6 @@ fn tmux_open_strings(values: &[&str]) -> Vec<String> {
 mod tmux_open_tests {
     use super::*;
 
-
     #[derive(Default)]
     struct OpenFakeRunner {
         calls: Vec<(String, Vec<String>)>,
@@ -186,7 +213,11 @@ mod tmux_open_tests {
     }
 
     impl maw_tmux::TmuxRunner for OpenFakeRunner {
-        fn run(&mut self, subcommand: &str, args: &[String]) -> Result<String, maw_tmux::TmuxError> {
+        fn run(
+            &mut self,
+            subcommand: &str,
+            args: &[String],
+        ) -> Result<String, maw_tmux::TmuxError> {
             self.calls.push((subcommand.to_owned(), args.to_vec()));
             match subcommand {
                 "display-message" if args.last().is_some_and(|arg| arg == "#{window_index}") => {
@@ -282,10 +313,34 @@ mod tmux_open_tests {
         let mut runner = open_runner();
         let out = tmux_open_with_runner(&[], &mut runner).expect("open hidden panes");
         assert_eq!(out, "\x1b[32m✓\x1b[0m opened 2 hidden panes\n");
-        assert_eq!(runner.calls[0], ("display-message".to_owned(), strings(&["-p", "#{window_index}"])));
-        assert_eq!(runner.calls[1], ("list-windows".to_owned(), strings(&["-F", "#{window_index}:#{window_panes}"])));
-        assert_eq!(runner.calls[2], ("join-pane".to_owned(), strings(&["-h", "-s", ":0", "-t", "%9"])));
-        assert_eq!(runner.calls[3], ("join-pane".to_owned(), strings(&["-h", "-s", ":2", "-t", "%9"])));
+        assert_eq!(
+            runner.calls[0],
+            (
+                "display-message".to_owned(),
+                strings(&["-p", "#{window_index}"])
+            )
+        );
+        assert_eq!(
+            runner.calls[1],
+            (
+                "list-windows".to_owned(),
+                strings(&["-F", "#{window_index}:#{window_panes}"])
+            )
+        );
+        assert_eq!(
+            runner.calls[2],
+            (
+                "join-pane".to_owned(),
+                strings(&["-h", "-s", ":0", "-t", "%9"])
+            )
+        );
+        assert_eq!(
+            runner.calls[3],
+            (
+                "join-pane".to_owned(),
+                strings(&["-h", "-s", ":2", "-t", "%9"])
+            )
+        );
     }
 
     #[test]
@@ -307,14 +362,21 @@ mod tmux_open_tests {
         let mut runner = open_runner();
         let out = tmux_open_with_runner(&strings(&["%42"]), &mut runner).expect("open target");
         assert_eq!(out, "\x1b[32m✓\x1b[0m opened %42\n");
-        assert_eq!(runner.calls, vec![("split-window".to_owned(), strings(&["-h", "-l", "50%", "-t", "%42"]))]);
+        assert_eq!(
+            runner.calls,
+            vec![(
+                "split-window".to_owned(),
+                strings(&["-h", "-l", "50%", "-t", "%42"])
+            )]
+        );
     }
 
     #[test]
     fn tmux_open_requires_tmux_before_runner() {
         let _env = TmuxOpenEnvGuard::outside_tmux();
         let mut runner = open_runner();
-        let err = tmux_open_with_runner(&strings(&["%42"]), &mut runner).expect_err("tmux required");
+        let err =
+            tmux_open_with_runner(&strings(&["%42"]), &mut runner).expect_err("tmux required");
         assert_eq!(err.0, 1);
         assert!(err.1.contains("not in tmux"));
         assert!(runner.calls.is_empty());
@@ -324,7 +386,8 @@ mod tmux_open_tests {
     fn tmux_open_rejects_leading_dash_before_runner() {
         let _env = TmuxOpenEnvGuard::in_tmux(Some("%9"));
         let mut runner = open_runner();
-        let err = tmux_open_with_runner(&strings(&["-oProxyCommand=bad"]), &mut runner).expect_err("guard");
+        let err = tmux_open_with_runner(&strings(&["-oProxyCommand=bad"]), &mut runner)
+            .expect_err("guard");
         assert_eq!(err.0, 2);
         assert!(err.1.contains("unknown argument"));
         assert!(runner.calls.is_empty());
@@ -334,7 +397,8 @@ mod tmux_open_tests {
     fn tmux_open_rejects_control_target_before_runner() {
         let _env = TmuxOpenEnvGuard::in_tmux(Some("%9"));
         let mut runner = open_runner();
-        let err = tmux_open_with_runner(&strings(&["bad\ntarget"]), &mut runner).expect_err("guard");
+        let err =
+            tmux_open_with_runner(&strings(&["bad\ntarget"]), &mut runner).expect_err("guard");
         assert_eq!(err.0, 1);
         assert!(err.1.contains("control"));
         assert!(runner.calls.is_empty());
@@ -346,7 +410,10 @@ mod tmux_open_tests {
         let mut runner = open_runner();
         let out = tmux_open_with_runner(&[], &mut runner).expect("open hidden panes");
         assert!(out.contains("opened 2 hidden panes"));
-        assert_eq!(runner.calls[1], ("display-message".to_owned(), strings(&["-p", "#{pane_id}"])));
+        assert_eq!(
+            runner.calls[1],
+            ("display-message".to_owned(), strings(&["-p", "#{pane_id}"]))
+        );
     }
 
     #[test]
@@ -355,8 +422,12 @@ mod tmux_open_tests {
         let _restore_ref_dir = EnvVarRestore::capture("MAW_JS_REF_DIR");
         std::env::set_var("MAW_JS_REF_DIR", "/nonexistent");
         let mut runner = open_runner();
-        let out = tmux_open_with_runner(&strings(&["session:1.0"]), &mut runner).expect("open target");
+        let out =
+            tmux_open_with_runner(&strings(&["session:1.0"]), &mut runner).expect("open target");
         assert_eq!(out, "\x1b[32m✓\x1b[0m opened session:1.0\n");
-        assert!(runner.calls.iter().all(|(subcommand, _)| subcommand != "bun"));
+        assert!(runner
+            .calls
+            .iter()
+            .all(|(subcommand, _)| subcommand != "bun"));
     }
 }

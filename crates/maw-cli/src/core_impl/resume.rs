@@ -40,7 +40,11 @@ impl ResumeSystemTmux {
 
 impl ResumeTmux for ResumeSystemTmux {
     fn resume_list_live_sessions(&mut self) -> Result<Vec<String>, String> {
-        match resume_tmux_run(&mut self.runner, "list-sessions", &["-F", "#{session_name}"]) {
+        match resume_tmux_run(
+            &mut self.runner,
+            "list-sessions",
+            &["-F", "#{session_name}"],
+        ) {
             Ok(raw) => Ok(resume_parse_live_sessions(&raw)),
             Err(_) => Ok(Vec::new()),
         }
@@ -49,13 +53,23 @@ impl ResumeTmux for ResumeSystemTmux {
     fn resume_new_session(&mut self, session: &str, window: &ResumeWindow) -> Result<(), String> {
         resume_validate_tmux_target(session)?;
         resume_validate_window(window)?;
-        resume_tmux_run_owned(&mut self.runner, "new-session", &resume_new_session_args(session, window)).map(|_| ())
+        resume_tmux_run_owned(
+            &mut self.runner,
+            "new-session",
+            &resume_new_session_args(session, window),
+        )
+        .map(|_| ())
     }
 
     fn resume_new_window(&mut self, session: &str, window: &ResumeWindow) -> Result<(), String> {
         resume_validate_tmux_target(session)?;
         resume_validate_window(window)?;
-        resume_tmux_run_owned(&mut self.runner, "new-window", &resume_new_window_args(session, window)).map(|_| ())
+        resume_tmux_run_owned(
+            &mut self.runner,
+            "new-window",
+            &resume_new_window_args(session, window),
+        )
+        .map(|_| ())
     }
 
     fn resume_restore_tab_order(&mut self, session: &str) -> Result<(), String> {
@@ -67,7 +81,11 @@ impl ResumeTmux for ResumeSystemTmux {
             let source = format!("{session}:{window_name}");
             resume_validate_tmux_target(&target)?;
             resume_validate_tmux_target(&source)?;
-            let _ = resume_tmux_run_owned(&mut self.runner, "move-window", &["-s".to_owned(), source, "-t".to_owned(), target]);
+            let _ = resume_tmux_run_owned(
+                &mut self.runner,
+                "move-window",
+                &["-s".to_owned(), source, "-t".to_owned(), target],
+            );
         }
         Ok(())
     }
@@ -83,8 +101,16 @@ fn resume_run_command_with(
     load_fleet: ResumeFleetLoader,
 ) -> CliOutput {
     match resume_run(argv, tmux, load_fleet) {
-        Ok(stdout) => CliOutput { code: 0, stdout, stderr: String::new() },
-        Err(message) => CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") },
+        Ok(stdout) => CliOutput {
+            code: 0,
+            stdout,
+            stderr: String::new(),
+        },
+        Err(message) => CliOutput {
+            code: 1,
+            stdout: String::new(),
+            stderr: format!("{message}\n"),
+        },
     }
 }
 
@@ -110,7 +136,9 @@ fn resume_run(
 }
 
 fn resume_parse_args(argv: &[String]) -> Result<(), String> {
-    let Some(arg) = argv.first() else { return Ok(()); };
+    let Some(arg) = argv.first() else {
+        return Ok(());
+    };
     match arg.as_str() {
         "--help" | "-h" | "help" => Err(RESUME_USAGE.to_owned()),
         "--" => Err("resume: -- separator is not allowed".to_owned()),
@@ -128,7 +156,10 @@ fn resume_fleet_sessions(sessions: Vec<NativeFleetSession>) -> Result<Vec<Resume
     for session in sessions {
         resume_validate_user_target(&session.name)?;
         let windows = resume_windows_from_fleet(&session)?;
-        out.push(ResumeSession { name: session.name, windows });
+        out.push(ResumeSession {
+            name: session.name,
+            windows,
+        });
     }
     out.sort_by(|left, right| left.name.cmp(&right.name));
     out.dedup_by(|left, right| left.name == right.name);
@@ -136,9 +167,16 @@ fn resume_fleet_sessions(sessions: Vec<NativeFleetSession>) -> Result<Vec<Resume
 }
 
 fn resume_windows_from_fleet(session: &NativeFleetSession) -> Result<Vec<ResumeWindow>, String> {
-    let mut windows = session.windows.iter().map(resume_window_from_fleet).collect::<Result<Vec<_>, _>>()?;
+    let mut windows = session
+        .windows
+        .iter()
+        .map(resume_window_from_fleet)
+        .collect::<Result<Vec<_>, _>>()?;
     if windows.is_empty() {
-        windows.push(ResumeWindow { name: "oracle".to_owned(), repo: String::new() });
+        windows.push(ResumeWindow {
+            name: "oracle".to_owned(),
+            repo: String::new(),
+        });
     }
     Ok(windows)
 }
@@ -146,15 +184,24 @@ fn resume_windows_from_fleet(session: &NativeFleetSession) -> Result<Vec<ResumeW
 fn resume_window_from_fleet(window: &NativeFleetWindow) -> Result<ResumeWindow, String> {
     resume_validate_tmux_target_part(&window.name, "window")?;
     resume_validate_repo(&window.repo)?;
-    Ok(ResumeWindow { name: window.name.clone(), repo: window.repo.clone() })
+    Ok(ResumeWindow {
+        name: window.name.clone(),
+        repo: window.repo.clone(),
+    })
 }
 
 fn resume_sleeping_sessions(sessions: &[ResumeSession], live: &[String]) -> Vec<ResumeSession> {
-    sessions.iter().filter(|session| !live.iter().any(|live| live == &session.name)).cloned().collect()
+    sessions
+        .iter()
+        .filter(|session| !live.iter().any(|live| live == &session.name))
+        .cloned()
+        .collect()
 }
 
 fn resume_start_session(tmux: &mut impl ResumeTmux, session: &ResumeSession) -> Result<(), String> {
-    let Some((first, rest)) = session.windows.split_first() else { return Ok(()); };
+    let Some((first, rest)) = session.windows.split_first() else {
+        return Ok(());
+    };
     resume_validate_user_target(&session.name)?;
     tmux.resume_new_session(&session.name, first)?;
     for window in rest {
@@ -164,19 +211,32 @@ fn resume_start_session(tmux: &mut impl ResumeTmux, session: &ResumeSession) -> 
 }
 
 fn resume_new_session_args(session: &str, window: &ResumeWindow) -> Vec<String> {
-    let mut args = vec!["-d".to_owned(), "-s".to_owned(), session.to_owned(), "-n".to_owned(), window.name.clone()];
+    let mut args = vec![
+        "-d".to_owned(),
+        "-s".to_owned(),
+        session.to_owned(),
+        "-n".to_owned(),
+        window.name.clone(),
+    ];
     resume_append_cwd_args(&mut args, window);
     args
 }
 
 fn resume_new_window_args(session: &str, window: &ResumeWindow) -> Vec<String> {
-    let mut args = vec!["-t".to_owned(), format!("{session}:"), "-n".to_owned(), window.name.clone()];
+    let mut args = vec![
+        "-t".to_owned(),
+        format!("{session}:"),
+        "-n".to_owned(),
+        window.name.clone(),
+    ];
     resume_append_cwd_args(&mut args, window);
     args
 }
 
 fn resume_append_cwd_args(args: &mut Vec<String>, window: &ResumeWindow) {
-    if window.repo.is_empty() { return; }
+    if window.repo.is_empty() {
+        return;
+    }
     let cwd = ghq_root().join("github.com").join(&window.repo);
     args.extend(["-c".to_owned(), cwd.display().to_string()]);
 }
@@ -192,7 +252,10 @@ fn resume_validate_user_target(value: &str) -> Result<(), String> {
     if value.is_empty() || value == "--" || value.starts_with('-') || value.trim() != value {
         return Err("resume target must be non-empty, unpadded, and not start with '-'".to_owned());
     }
-    if value.chars().any(|ch| ch.is_control() || ch.is_whitespace()) {
+    if value
+        .chars()
+        .any(|ch| ch.is_control() || ch.is_whitespace())
+    {
         return Err("resume target must not contain whitespace or control characters".to_owned());
     }
     Ok(())
@@ -200,20 +263,34 @@ fn resume_validate_user_target(value: &str) -> Result<(), String> {
 
 fn resume_validate_tmux_target(value: &str) -> Result<(), String> {
     if value.is_empty() || value == "--" || value.starts_with('-') || value.trim() != value {
-        return Err("resume tmux target must be non-empty, unpadded, and not start with '-'".to_owned());
+        return Err(
+            "resume tmux target must be non-empty, unpadded, and not start with '-'".to_owned(),
+        );
     }
-    if value.chars().any(|ch| ch.is_control() || ch.is_whitespace()) {
-        return Err("resume tmux target must not contain whitespace or control characters".to_owned());
+    if value
+        .chars()
+        .any(|ch| ch.is_control() || ch.is_whitespace())
+    {
+        return Err(
+            "resume tmux target must not contain whitespace or control characters".to_owned(),
+        );
     }
     Ok(())
 }
 
 fn resume_validate_tmux_target_part(value: &str, label: &str) -> Result<(), String> {
     if value.is_empty() || value == "--" || value.starts_with('-') || value.trim() != value {
-        return Err(format!("resume {label} must be non-empty, unpadded, and not start with '-'"));
+        return Err(format!(
+            "resume {label} must be non-empty, unpadded, and not start with '-'"
+        ));
     }
-    if value.chars().any(|ch| ch.is_control() || ch.is_whitespace()) {
-        return Err(format!("resume {label} must not contain whitespace or control characters"));
+    if value
+        .chars()
+        .any(|ch| ch.is_control() || ch.is_whitespace())
+    {
+        return Err(format!(
+            "resume {label} must not contain whitespace or control characters"
+        ));
     }
     Ok(())
 }
@@ -224,8 +301,11 @@ fn resume_validate_window(window: &ResumeWindow) -> Result<(), String> {
 }
 
 fn resume_validate_repo(repo: &str) -> Result<(), String> {
-    if repo.is_empty() { return Ok(()); }
-    if repo.starts_with('-') || repo.contains("..") || repo.starts_with('/') || repo.contains('\\') {
+    if repo.is_empty() {
+        return Ok(());
+    }
+    if repo.starts_with('-') || repo.contains("..") || repo.starts_with('/') || repo.contains('\\')
+    {
         return Err("resume repo must be a safe relative org/repo path".to_owned());
     }
     if repo.chars().any(|ch| ch.is_control() || ch.is_whitespace()) {
@@ -235,14 +315,23 @@ fn resume_validate_repo(repo: &str) -> Result<(), String> {
 }
 
 fn resume_parse_live_sessions(raw: &str) -> Vec<String> {
-    raw.lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_owned).collect()
+    raw.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 fn resume_read_tab_order(session: &str) -> Result<Vec<String>, String> {
     resume_validate_tmux_target(session)?;
-    let path = maw_state_path(&current_xdg_env(), &["tab-order", &format!("{session}.json")]);
-    let text = std::fs::read_to_string(&path).map_err(|error| format!("resume: tab-order read failed: {error}"))?;
-    let value: serde_json::Value = serde_json::from_str(&text).map_err(|error| format!("resume: tab-order json failed: {error}"))?;
+    let path = maw_state_path(
+        &current_xdg_env(),
+        &["tab-order", &format!("{session}.json")],
+    );
+    let text = std::fs::read_to_string(&path)
+        .map_err(|error| format!("resume: tab-order read failed: {error}"))?;
+    let value: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|error| format!("resume: tab-order json failed: {error}"))?;
     Ok(resume_tab_order_names(&value))
 }
 
@@ -262,7 +351,11 @@ fn resume_tmux_run<R: maw_tmux::TmuxRunner>(
     subcommand: &str,
     args: &[&str],
 ) -> Result<String, String> {
-    resume_tmux_run_owned(runner, subcommand, &args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>())
+    resume_tmux_run_owned(
+        runner,
+        subcommand,
+        &args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>(),
+    )
 }
 
 fn resume_tmux_run_owned<R: maw_tmux::TmuxRunner>(
@@ -298,17 +391,35 @@ mod resume_tests {
             Ok(self.live.clone())
         }
 
-        fn resume_new_session(&mut self, session: &str, window: &ResumeWindow) -> Result<(), String> {
+        fn resume_new_session(
+            &mut self,
+            session: &str,
+            window: &ResumeWindow,
+        ) -> Result<(), String> {
             resume_validate_tmux_target(session)?;
             resume_validate_window(window)?;
-            self.calls.push(ResumeCall::NewSession(session.to_owned(), window.name.clone()));
-            if self.fail_new.iter().any(|name| name == session) { Err("new failed".to_owned()) } else { Ok(()) }
+            self.calls.push(ResumeCall::NewSession(
+                session.to_owned(),
+                window.name.clone(),
+            ));
+            if self.fail_new.iter().any(|name| name == session) {
+                Err("new failed".to_owned())
+            } else {
+                Ok(())
+            }
         }
 
-        fn resume_new_window(&mut self, session: &str, window: &ResumeWindow) -> Result<(), String> {
+        fn resume_new_window(
+            &mut self,
+            session: &str,
+            window: &ResumeWindow,
+        ) -> Result<(), String> {
             resume_validate_tmux_target(session)?;
             resume_validate_window(window)?;
-            self.calls.push(ResumeCall::NewWindow(session.to_owned(), window.name.clone()));
+            self.calls.push(ResumeCall::NewWindow(
+                session.to_owned(),
+                window.name.clone(),
+            ));
             Ok(())
         }
 
@@ -325,8 +436,19 @@ mod resume_tests {
 
     impl ResumeEnvGuard {
         fn resume_new() -> Self {
-            let keys = ["HOME", "XDG_CONFIG_HOME", "MAW_CONFIG_DIR", "MAW_STATE_DIR", "TMUX", "PATH", "GHQ_ROOT"];
-            let saved = keys.into_iter().map(|key| (key, std::env::var_os(key))).collect::<Vec<_>>();
+            let keys = [
+                "HOME",
+                "XDG_CONFIG_HOME",
+                "MAW_CONFIG_DIR",
+                "MAW_STATE_DIR",
+                "TMUX",
+                "PATH",
+                "GHQ_ROOT",
+            ];
+            let saved = keys
+                .into_iter()
+                .map(|key| (key, std::env::var_os(key)))
+                .collect::<Vec<_>>();
             let root = std::env::temp_dir().join(format!("maw-resume-test-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&root);
             std::fs::create_dir_all(root.join("state/tab-order")).expect("state");
@@ -344,17 +466,30 @@ mod resume_tests {
     impl Drop for ResumeEnvGuard {
         fn drop(&mut self) {
             for (key, value) in self.saved.drain(..) {
-                if let Some(value) = value { std::env::set_var(key, value); } else { std::env::remove_var(key); }
+                if let Some(value) = value {
+                    std::env::set_var(key, value);
+                } else {
+                    std::env::remove_var(key);
+                }
             }
         }
     }
 
-    fn resume_strings(values: &[&str]) -> Vec<String> { values.iter().map(|value| (*value).to_owned()).collect() }
+    fn resume_strings(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_owned()).collect()
+    }
 
     fn resume_session(name: &str, windows: &[(&str, &str)]) -> NativeFleetSession {
         NativeFleetSession {
             name: name.to_owned(),
-            windows: windows.iter().map(|(name, repo)| NativeFleetWindow { name: (*name).to_owned(), repo: (*repo).to_owned(), kind: None }).collect(),
+            windows: windows
+                .iter()
+                .map(|(name, repo)| NativeFleetWindow {
+                    name: (*name).to_owned(),
+                    repo: (*repo).to_owned(),
+                    kind: None,
+                })
+                .collect(),
             ..NativeFleetSession::default()
         }
     }
@@ -379,7 +514,10 @@ mod resume_tests {
 
     #[test]
     fn resume_starts_only_missing_configured_sessions() {
-        let mut tmux = ResumeFakeTmux { live: resume_strings(&["08-gm-bo", "stray"]), ..Default::default() };
+        let mut tmux = ResumeFakeTmux {
+            live: resume_strings(&["08-gm-bo", "stray"]),
+            ..Default::default()
+        };
 
         let output = resume_run(&[], &mut tmux, resume_fleet).expect("resume");
 
@@ -402,11 +540,13 @@ mod resume_tests {
     #[test]
     fn resume_rejects_args_and_separator_before_tmux() {
         let mut tmux = ResumeFakeTmux::default();
-        let flag = resume_run(&resume_strings(&["-bad"]), &mut tmux, resume_fleet).expect_err("flag");
+        let flag =
+            resume_run(&resume_strings(&["-bad"]), &mut tmux, resume_fleet).expect_err("flag");
         assert!(flag.contains("looks like a flag"));
         let sep = resume_run(&resume_strings(&["--"]), &mut tmux, resume_fleet).expect_err("sep");
         assert!(sep.contains("-- separator"));
-        let extra = resume_run(&resume_strings(&["wish"]), &mut tmux, resume_fleet).expect_err("extra");
+        let extra =
+            resume_run(&resume_strings(&["wish"]), &mut tmux, resume_fleet).expect_err("extra");
         assert!(extra.contains("unexpected argument"));
         assert!(tmux.calls.is_empty());
     }
@@ -417,7 +557,10 @@ mod resume_tests {
         let error = resume_run(&[], &mut tmux, resume_bad_fleet).expect_err("config");
         assert!(error.contains("resume target"));
         assert!(tmux.calls.is_empty());
-        let mut tmux = ResumeFakeTmux { live: resume_strings(&["-bad"]), ..Default::default() };
+        let mut tmux = ResumeFakeTmux {
+            live: resume_strings(&["-bad"]),
+            ..Default::default()
+        };
         let error = resume_run(&[], &mut tmux, resume_fleet).expect_err("live");
         assert!(error.contains("tmux target"));
         assert_eq!(tmux.calls, vec![ResumeCall::ListLive]);
@@ -425,19 +568,31 @@ mod resume_tests {
 
     #[test]
     fn resume_counts_only_successful_sessions() {
-        let mut tmux = ResumeFakeTmux { fail_new: resume_strings(&["01-wish"]), ..Default::default() };
+        let mut tmux = ResumeFakeTmux {
+            fail_new: resume_strings(&["01-wish"]),
+            ..Default::default()
+        };
 
         let error = resume_run(&[], &mut tmux, resume_fleet).expect_err("fail");
 
         assert_eq!(error, "new failed");
-        assert_eq!(tmux.calls, vec![ResumeCall::ListLive, ResumeCall::NewSession("01-wish".to_owned(), "wish".to_owned())]);
+        assert_eq!(
+            tmux.calls,
+            vec![
+                ResumeCall::ListLive,
+                ResumeCall::NewSession("01-wish".to_owned(), "wish".to_owned())
+            ]
+        );
     }
 
     #[test]
     fn resume_builds_safe_tmux_args_with_cwd() {
         let _lock = super::env_test_lock();
         let _env = ResumeEnvGuard::resume_new();
-        let window = ResumeWindow { name: "wish".to_owned(), repo: "tonkmac/wish".to_owned() };
+        let window = ResumeWindow {
+            name: "wish".to_owned(),
+            repo: "tonkmac/wish".to_owned(),
+        };
 
         assert_eq!(
             resume_new_session_args("01-wish", &window),
@@ -448,7 +603,10 @@ mod resume_tests {
                 "-n".to_owned(),
                 "wish".to_owned(),
                 "-c".to_owned(),
-                ghq_root().join("github.com/tonkmac/wish").display().to_string(),
+                ghq_root()
+                    .join("github.com/tonkmac/wish")
+                    .display()
+                    .to_string(),
             ]
         );
         assert_eq!(
@@ -459,7 +617,10 @@ mod resume_tests {
                 "-n".to_owned(),
                 "wish".to_owned(),
                 "-c".to_owned(),
-                ghq_root().join("github.com/tonkmac/wish").display().to_string(),
+                ghq_root()
+                    .join("github.com/tonkmac/wish")
+                    .display()
+                    .to_string(),
             ]
         );
         assert!(resume_validate_repo("../bad").is_err());
@@ -471,7 +632,11 @@ mod resume_tests {
         let _lock = super::env_test_lock();
         let _env = ResumeEnvGuard::resume_new();
         let path = maw_state_path(&current_xdg_env(), &["tab-order", "01-wish.json"]);
-        std::fs::write(&path, r#"[{"index":1,"name":"logs"},{"index":0,"name":"wish"},{"name":"-bad"}]"#).expect("write");
+        std::fs::write(
+            &path,
+            r#"[{"index":1,"name":"logs"},{"index":0,"name":"wish"},{"name":"-bad"}]"#,
+        )
+        .expect("write");
 
         let names = resume_read_tab_order("01-wish").expect("read");
 

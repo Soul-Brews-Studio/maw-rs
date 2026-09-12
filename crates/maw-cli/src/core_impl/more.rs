@@ -360,7 +360,11 @@ fn more_engine_pool(engine: &str) -> &str {
         .unwrap_or("-")
 }
 
-fn more_render_codex_plan(options: &MoreCodexOptions, live: &LiveTeamState, engine: &str) -> String {
+fn more_render_codex_plan(
+    options: &MoreCodexOptions,
+    live: &LiveTeamState,
+    engine: &str,
+) -> String {
     format!(
         "would spawn {} coders in session {} with engine {}\n",
         options.count, live.session, engine

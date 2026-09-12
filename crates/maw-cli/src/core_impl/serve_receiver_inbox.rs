@@ -27,7 +27,10 @@ struct ReceiverInboxOk {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ReceiverInboxResult {
     Ok(ReceiverInboxOk),
-    Err { oracle: Option<String>, reason: String },
+    Err {
+        oracle: Option<String>,
+        reason: String,
+    },
 }
 
 fn receiver_inbox_explicit_enabled(value: Option<std::ffi::OsString>) -> Option<bool> {
@@ -40,7 +43,9 @@ fn receiver_inbox_explicit_enabled(value: Option<std::ffi::OsString>) -> Option<
 }
 
 fn receiver_inbox_auto_write_enabled() -> bool {
-    if let Some(enabled) = receiver_inbox_explicit_enabled(std::env::var_os("MAW_HEY_INBOX_AUTOWRITE")) {
+    if let Some(enabled) =
+        receiver_inbox_explicit_enabled(std::env::var_os("MAW_HEY_INBOX_AUTOWRITE"))
+    {
         return enabled;
     }
     std::env::var("MAW_TEST_MODE").ok().as_deref() != Some("1")
@@ -89,11 +94,18 @@ fn receiver_inbox_normalize_oracle_name(raw: Option<&str>) -> Option<String> {
     }
     let colon_value;
     if value.contains(':') {
-        let parts = value.split(':').filter(|part| !part.is_empty()).collect::<Vec<_>>();
+        let parts = value
+            .split(':')
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>();
         colon_value = if parts.len() >= 3 {
             parts[2]
         } else {
-            parts.get(1).copied().or_else(|| parts.first().copied()).unwrap_or(value)
+            parts
+                .get(1)
+                .copied()
+                .or_else(|| parts.first().copied())
+                .unwrap_or(value)
         };
         value = colon_value;
     }
@@ -104,7 +116,12 @@ fn receiver_inbox_normalize_oracle_name(raw: Option<&str>) -> Option<String> {
     }
     let trimmed_numeric = value
         .split_once('-')
-        .and_then(|(prefix, rest)| prefix.bytes().all(|byte| byte.is_ascii_digit()).then_some(rest))
+        .and_then(|(prefix, rest)| {
+            prefix
+                .bytes()
+                .all(|byte| byte.is_ascii_digit())
+                .then_some(rest)
+        })
         .unwrap_or(value);
     (!trimmed_numeric.is_empty()).then(|| trimmed_numeric.to_owned())
 }
@@ -129,14 +146,25 @@ fn receiver_inbox_safe_segment(value: &str) -> String {
         }
     }
     let out = out.trim_matches('-').chars().take(64).collect::<String>();
-    if out.is_empty() { "unknown".to_owned() } else { out }
+    if out.is_empty() {
+        "unknown".to_owned()
+    } else {
+        out
+    }
 }
 
 fn receiver_inbox_slugify_body(body: &str) -> String {
-    receiver_inbox_safe_segment(&body.split_whitespace().take(6).collect::<Vec<_>>().join("-").to_ascii_lowercase())
-        .chars()
-        .take(48)
-        .collect()
+    receiver_inbox_safe_segment(
+        &body
+            .split_whitespace()
+            .take(6)
+            .collect::<Vec<_>>()
+            .join("-")
+            .to_ascii_lowercase(),
+    )
+    .chars()
+    .take(48)
+    .collect()
 }
 
 fn receiver_inbox_body(from: &str, to: &str, timestamp: &str, message: &str) -> String {
@@ -158,14 +186,19 @@ fn receiver_inbox_filename_with_collision_suffix(base: &str, attempt: usize) -> 
     if attempt <= 1 {
         return base.to_owned();
     }
-    base.strip_suffix(".md")
-        .map_or_else(|| format!("{base}-{attempt}"), |prefix| format!("{prefix}-{attempt}.md"))
+    base.strip_suffix(".md").map_or_else(
+        || format!("{base}-{attempt}"),
+        |prefix| format!("{prefix}-{attempt}.md"),
+    )
 }
 
 fn receiver_inbox_strip_psi_suffix(path: &std::path::Path) -> std::path::PathBuf {
     let text = path.display().to_string();
     let stripped = text.trim_end_matches('/');
-    if let Some(prefix) = stripped.strip_suffix("/ψ").or_else(|| stripped.strip_suffix("/psi")) {
+    if let Some(prefix) = stripped
+        .strip_suffix("/ψ")
+        .or_else(|| stripped.strip_suffix("/psi"))
+    {
         std::path::PathBuf::from(prefix)
     } else {
         std::path::PathBuf::from(stripped)
@@ -197,15 +230,24 @@ fn receiver_inbox_target_cwd_parts(target: &str) -> Option<(&str, Option<&str>)>
     }
     let parts = clean.split(':').collect::<Vec<_>>();
     let (session, window) = if parts.len() >= 3 {
-        (parts.get(1).copied().unwrap_or_default(), parts.get(2).copied())
+        (
+            parts.get(1).copied().unwrap_or_default(),
+            parts.get(2).copied(),
+        )
     } else {
-        (parts.first().copied().unwrap_or_default(), parts.get(1).copied())
+        (
+            parts.first().copied().unwrap_or_default(),
+            parts.get(1).copied(),
+        )
     };
     let session = session.trim();
     if session.is_empty() {
         return None;
     }
-    Some((session, window.map(str::trim).filter(|value| !value.is_empty())))
+    Some((
+        session,
+        window.map(str::trim).filter(|value| !value.is_empty()),
+    ))
 }
 
 fn receiver_inbox_target_cwd_window<'a>(
@@ -230,7 +272,10 @@ fn receiver_inbox_resolve_target_cwd(target: &str) -> Result<Option<std::path::P
     };
     let ghq_root = receiver_inbox_ghq_root();
     let mut candidates = Vec::new();
-    for fleet in load_native_fleet().into_iter().filter(|fleet| fleet.name == session) {
+    for fleet in load_native_fleet()
+        .into_iter()
+        .filter(|fleet| fleet.name == session)
+    {
         let Some(window) = receiver_inbox_target_cwd_window(&fleet, win_ref) else {
             continue;
         };
@@ -318,10 +363,20 @@ fn receiver_inbox_push_manifest_entry_candidates(
     candidates: &mut Vec<std::path::PathBuf>,
     entry: &LocateManifestEntry,
 ) {
-    if let Some(local_path) = entry.local_path.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(local_path) = entry
+        .local_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         candidates.push(std::path::PathBuf::from(local_path));
     }
-    if let Some(repo) = entry.repo.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(repo) = entry
+        .repo
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         let ghq_root = receiver_inbox_ghq_root();
         candidates.push(ghq_root.join("github.com").join(repo));
         candidates.push(ghq_root.join(repo));
@@ -347,9 +402,10 @@ fn receiver_inbox_repo_candidates(
     let mut candidates = Vec::new();
     if let Some(psi_path) = psi_root {
         candidates.push(receiver_inbox_strip_psi_suffix(psi_path));
-    } else if let (Some(psi_path), Some(config_oracle)) =
-        (receiver_inbox_config_psi_path(), input.config.oracle.as_deref())
-    {
+    } else if let (Some(psi_path), Some(config_oracle)) = (
+        receiver_inbox_config_psi_path(),
+        input.config.oracle.as_deref(),
+    ) {
         if receiver_inbox_normalize_oracle_name(Some(config_oracle)).as_deref() == Some(oracle) {
             candidates.push(receiver_inbox_strip_psi_suffix(&psi_path));
         }
@@ -364,7 +420,11 @@ fn receiver_inbox_repo_candidates(
     let manifest = locate_load_manifest();
     if let Some(entry) = manifest.iter().find(|entry| {
         receiver_inbox_normalize_oracle_name(Some(&entry.name)).as_deref() == Some(oracle)
-            || entry.window.as_deref().and_then(|window| receiver_inbox_normalize_oracle_name(Some(window))).as_deref()
+            || entry
+                .window
+                .as_deref()
+                .and_then(|window| receiver_inbox_normalize_oracle_name(Some(window)))
+                .as_deref()
                 == Some(oracle)
     }) {
         receiver_inbox_push_manifest_entry_candidates(&mut candidates, entry);
@@ -413,11 +473,19 @@ fn persist_receiver_inbox(
     psi_root: Option<&std::path::Path>,
 ) -> ReceiverInboxResult {
     let Some(oracle) = receiver_inbox_resolve_oracle(&input) else {
-        return ReceiverInboxResult::Err { oracle: None, reason: "receiver oracle could not be inferred".to_owned() };
+        return ReceiverInboxResult::Err {
+            oracle: None,
+            reason: "receiver oracle could not be inferred".to_owned(),
+        };
     };
     let repo_candidates = match receiver_inbox_repo_candidates(&oracle, &input, psi_root) {
         Ok(candidates) => candidates,
-        Err(reason) => return ReceiverInboxResult::Err { oracle: Some(oracle), reason },
+        Err(reason) => {
+            return ReceiverInboxResult::Err {
+                oracle: Some(oracle),
+                reason,
+            }
+        }
     };
     let Some(repo_path) = repo_candidates.into_iter().next() else {
         return ReceiverInboxResult::Err {
@@ -436,20 +504,40 @@ fn persist_receiver_inbox(
     let inbox_dir = repo_path.join("ψ").join("inbox");
     let body = receiver_inbox_body(input.from, &oracle, &timestamp, input.message);
     if let Err(error) = std::fs::create_dir_all(&inbox_dir) {
-        return ReceiverInboxResult::Err { oracle: Some(oracle), reason: error.to_string() };
+        return ReceiverInboxResult::Err {
+            oracle: Some(oracle),
+            reason: error.to_string(),
+        };
     }
     for attempt in 1..=1000 {
         let filename = receiver_inbox_filename_with_collision_suffix(&base_filename, attempt);
         let path = inbox_dir.join(&filename);
-        match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
             Ok(mut file) => {
                 if let Err(error) = std::io::Write::write_all(&mut file, body.as_bytes()) {
-                    return ReceiverInboxResult::Err { oracle: Some(oracle), reason: error.to_string() };
+                    return ReceiverInboxResult::Err {
+                        oracle: Some(oracle),
+                        reason: error.to_string(),
+                    };
                 }
-                return ReceiverInboxResult::Ok(ReceiverInboxOk { oracle, inbox_dir, path, filename });
+                return ReceiverInboxResult::Ok(ReceiverInboxOk {
+                    oracle,
+                    inbox_dir,
+                    path,
+                    filename,
+                });
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(error) => return ReceiverInboxResult::Err { oracle: Some(oracle), reason: error.to_string() },
+            Err(error) => {
+                return ReceiverInboxResult::Err {
+                    oracle: Some(oracle),
+                    reason: error.to_string(),
+                }
+            }
         }
     }
     ReceiverInboxResult::Err {

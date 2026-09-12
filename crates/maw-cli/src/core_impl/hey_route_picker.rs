@@ -28,28 +28,68 @@ fn resolve_send_route_target<R: maw_tmux::TmuxRunner>(
     resolve_route_target_with_current_session(query, config, sessions, current_session.as_deref())
 }
 
-fn hey_picker_target(target: &str, config: &RouteConfig, sessions: &[RouteSession]) -> Result<String, CliOutput> {
-    if target.contains(':') || target.contains('/') || is_self_target_alias(target) { return Ok(target.to_owned()); }
-    match typed_picker_plan(target, &hey_typed_candidates(config, sessions), hey_kind_priority, hey_picker_row) {
+fn hey_picker_target(
+    target: &str,
+    config: &RouteConfig,
+    sessions: &[RouteSession],
+) -> Result<String, CliOutput> {
+    if target.contains(':') || target.contains('/') || is_self_target_alias(target) {
+        return Ok(target.to_owned());
+    }
+    match typed_picker_plan(
+        target,
+        &hey_typed_candidates(config, sessions),
+        hey_kind_priority,
+        hey_picker_row,
+    ) {
         TypedPickerPlan::Target(target) => Ok(target),
-        TypedPickerPlan::Pick { context, rows } => picker_choose_target("hey", target, context, &rows, false),
+        TypedPickerPlan::Pick { context, rows } => {
+            picker_choose_target("hey", target, context, &rows, false)
+        }
     }
 }
 
-fn hey_typed_candidates(config: &RouteConfig, sessions: &[RouteSession]) -> Vec<maw_matcher::ResolveTypedCandidate> {
-    let alive = sessions.iter().filter(|session| !session.name.ends_with("-view") && session.source.as_deref().is_none_or(|source| source == "local"))
-        .map(|session| session.name.clone()).collect::<BTreeSet<_>>();
+fn hey_typed_candidates(
+    config: &RouteConfig,
+    sessions: &[RouteSession],
+) -> Vec<maw_matcher::ResolveTypedCandidate> {
+    let alive = sessions
+        .iter()
+        .filter(|session| {
+            !session.name.ends_with("-view")
+                && session
+                    .source
+                    .as_deref()
+                    .is_none_or(|source| source == "local")
+        })
+        .map(|session| session.name.clone())
+        .collect::<BTreeSet<_>>();
     let mut candidates = resolver_live_candidates(&alive);
-    for session in sessions.iter().filter(|session| !session.name.ends_with("-view") && session.source.as_deref().is_none_or(|source| source == "local")) {
-        candidates.extend(session.windows.iter().map(|window| maw_matcher::ResolveTypedCandidate {
-            kind: maw_matcher::ResolveCandidateKind::Window,
-            name: format!("{}:{}", session.name, window.index),
-            aliases: vec![window.name.clone()],
+    for session in sessions.iter().filter(|session| {
+        !session.name.ends_with("-view")
+            && session
+                .source
+                .as_deref()
+                .is_none_or(|source| source == "local")
+    }) {
+        candidates.extend(session.windows.iter().map(|window| {
+            maw_matcher::ResolveTypedCandidate {
+                kind: maw_matcher::ResolveCandidateKind::Window,
+                name: format!("{}:{}", session.name, window.index),
+                aliases: vec![window.name.clone()],
+            }
         }));
     }
-    candidates.extend(config.agents.keys().map(|agent| maw_matcher::ResolveTypedCandidate {
-        kind: maw_matcher::ResolveCandidateKind::Peer, name: agent.clone(), aliases: Vec::new(),
-    }));
+    candidates.extend(
+        config
+            .agents
+            .keys()
+            .map(|agent| maw_matcher::ResolveTypedCandidate {
+                kind: maw_matcher::ResolveCandidateKind::Peer,
+                name: agent.clone(),
+                aliases: Vec::new(),
+            }),
+    );
     candidates
 }
 
@@ -64,8 +104,13 @@ fn hey_kind_priority(kind: maw_matcher::ResolveCandidateKind) -> u8 {
 
 fn hey_picker_row(matched: maw_matcher::ResolveMatch) -> PickerRow {
     let detail = (matched.candidate.kind == maw_matcher::ResolveCandidateKind::Window)
-        .then(|| matched.candidate.aliases.first().cloned()).flatten();
-    PickerRow { action: format!("maw hey {} <message>", matched.candidate.name), detail, matched }
+        .then(|| matched.candidate.aliases.first().cloned())
+        .flatten();
+    PickerRow {
+        action: format!("maw hey {} <message>", matched.candidate.name),
+        detail,
+        matched,
+    }
 }
 
 fn send_current_session_name<R: maw_tmux::TmuxRunner>(
@@ -81,7 +126,10 @@ fn send_current_session_name<R: maw_tmux::TmuxRunner>(
             &["-p".to_owned(), "#{session_name}".to_owned()],
         )
         .map_err(|error| {
-            format!("'me' needs a tmux context: tmux display-message failed: {}", error.message)
+            format!(
+                "'me' needs a tmux context: tmux display-message failed: {}",
+                error.message
+            )
         })?;
     let session = raw.trim();
     if session.is_empty() {

@@ -59,11 +59,17 @@ fn wake_resolve_command_from_config(
 ) -> WakeCommandResolution {
     if let Some(engine) = engine {
         if let Some(command) = wake_config_command(config, engine) {
-            return WakeCommandResolution { key: engine.to_owned(), command };
+            return WakeCommandResolution {
+                key: engine.to_owned(),
+                command,
+            };
         }
     }
     if let Some(command) = wake_config_command(config, window_name) {
-        return WakeCommandResolution { key: window_name.to_owned(), command };
+        return WakeCommandResolution {
+            key: window_name.to_owned(),
+            command,
+        };
     }
     for candidate in wake_oracle_command_keys(window_name) {
         if let Some((key, command)) = wake_config_command_entry(config, &candidate) {
@@ -74,17 +80,29 @@ fn wake_resolve_command_from_config(
         return WakeCommandResolution { key, command };
     }
     if let Some(engine) = engine {
-        return WakeCommandResolution { key: engine.to_owned(), command: engine.to_owned() };
+        return WakeCommandResolution {
+            key: engine.to_owned(),
+            command: engine.to_owned(),
+        };
     }
     if let Some(engine) = wake_engine {
         let command = wake_config_command(config, engine).unwrap_or_else(|| engine.to_owned());
-        return WakeCommandResolution { key: engine.to_owned(), command };
+        return WakeCommandResolution {
+            key: engine.to_owned(),
+            command,
+        };
     }
     if let Some(command) = wake_config_command(config, "default") {
-        return WakeCommandResolution { key: "default".to_owned(), command };
+        return WakeCommandResolution {
+            key: "default".to_owned(),
+            command,
+        };
     }
     let command = wake_config_command(config, builtin).unwrap_or_else(|| builtin.to_owned());
-    WakeCommandResolution { key: builtin.to_owned(), command }
+    WakeCommandResolution {
+        key: builtin.to_owned(),
+        command,
+    }
 }
 
 /// The alternate `commands` keys one window can legitimately be configured
@@ -107,23 +125,33 @@ fn wake_oracle_command_keys(window_name: &str) -> Vec<String> {
 /// leading or trailing `*` matches a family of window names (`agent*`,
 /// `*-oracle`). `default` is the explicit last-resort key, never a glob.
 fn wake_config_glob_command(config: &serde_json::Value, name: &str) -> Option<(String, String)> {
-    config.get("commands").and_then(serde_json::Value::as_object).and_then(|commands| {
-        commands.iter().find_map(|(pattern, value)| {
-            if pattern == "default" || pattern == name || !wake_match_command_glob(pattern, name) {
-                return None;
-            }
-            value
-                .as_str()
-                .map(str::trim)
-                .filter(|command| !command.is_empty())
-                .map(|command| (pattern.clone(), command.to_owned()))
+    config
+        .get("commands")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|commands| {
+            commands.iter().find_map(|(pattern, value)| {
+                if pattern == "default"
+                    || pattern == name
+                    || !wake_match_command_glob(pattern, name)
+                {
+                    return None;
+                }
+                value
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|command| !command.is_empty())
+                    .map(|command| (pattern.clone(), command.to_owned()))
+            })
         })
-    })
 }
 
 fn wake_match_command_glob(pattern: &str, name: &str) -> bool {
-    pattern.strip_prefix('*').is_some_and(|suffix| name.ends_with(suffix))
-        || pattern.strip_suffix('*').is_some_and(|prefix| name.starts_with(prefix))
+    pattern
+        .strip_prefix('*')
+        .is_some_and(|suffix| name.ends_with(suffix))
+        || pattern
+            .strip_suffix('*')
+            .is_some_and(|prefix| name.starts_with(prefix))
 }
 
 /// Legacy top-level `defaultEngine` (#682) — a non-empty string names the
@@ -187,12 +215,24 @@ fn wake_config_defaults(config: &serde_json::Value) -> WakeConfigDefaults {
 /// (`wake_confirm_engine_launch`, #580) instead of an in-pane printf.
 /// `cwd` stays a parameter because engine/defaults config is resolved
 /// dir-aware against the resolved repo path (#600).
-fn wake_command(window: &str, cwd: &std::path::Path, options: &WakeOptionsNative) -> (String, Vec<String>) {
+fn wake_command(
+    window: &str,
+    cwd: &std::path::Path,
+    options: &WakeOptionsNative,
+) -> (String, Vec<String>) {
     let config = merged_config_value_in_dir(cwd);
     let defaults = wake_config_defaults(&config);
-    let wake_engine = defaults.engine.clone().or_else(|| wake_config_default_engine_alias(&config));
-    let resolution =
-        wake_resolve_command_from_config(&config, window, options.engine.as_deref(), wake_engine.as_deref(), "codex");
+    let wake_engine = defaults
+        .engine
+        .clone()
+        .or_else(|| wake_config_default_engine_alias(&config));
+    let resolution = wake_resolve_command_from_config(
+        &config,
+        window,
+        options.engine.as_deref(),
+        wake_engine.as_deref(),
+        "codex",
+    );
     let engine = resolution.key;
     // Wake-defaults precedence: explicit CLI flag > repo-layer config > user
     // config > built-in. `resume`/`channels` are presence-false CLI booleans —
@@ -202,14 +242,28 @@ fn wake_command(window: &str, cwd: &std::path::Path, options: &WakeOptionsNative
     let resume = options.resume || (defaults.resume && !options.fresh);
     let channels = options.channels || defaults.channels;
     let mut warnings = Vec::new();
-    let mut engine_command =
-        wake_engine_launch_command(&engine, resolution.command, &config, resume, options.engine_command.as_deref(), &mut warnings);
-    if channels { wake_apply_channels(&mut engine_command, &engine, &config, resume, &mut warnings); }
+    let mut engine_command = wake_engine_launch_command(
+        &engine,
+        resolution.command,
+        &config,
+        resume,
+        options.engine_command.as_deref(),
+        &mut warnings,
+    );
+    if channels {
+        wake_apply_channels(&mut engine_command, &engine, &config, resume, &mut warnings);
+    }
     if let Some(prompt) = options.prompt.as_deref().or(defaults.prompt.as_deref()) {
         let separator = wake_prompt_separator(&engine_command);
         let _ = write!(engine_command, "{separator} {}", wake_shell_quote(prompt));
     }
-    (format!("MAW_SESSION_WINDOW={} {engine_command}", wake_shell_quote(window)), warnings)
+    (
+        format!(
+            "MAW_SESSION_WINDOW={} {engine_command}",
+            wake_shell_quote(window)
+        ),
+        warnings,
+    )
 }
 
 /// Resume-aware launch line (#615). Precedence when resume is in effect:
@@ -255,7 +309,9 @@ fn wake_engine_launch_command(
     }
     match wake_engine_binary(&command) {
         Some("claude") => format!("{command} --continue"),
-        Some("codex" | "omx") => wake_inject_resume_subcommand(&command).unwrap_or_else(|| format!("{command} resume")),
+        Some("codex" | "omx") => {
+            wake_inject_resume_subcommand(&command).unwrap_or_else(|| format!("{command} resume"))
+        }
         _ => {
             warnings.push(format!(
                 "wake: resume requested but engine '{engine}' has no known resume form — appending ' resume' naively; define commands.{engine}-resume with the full resume launch line"
@@ -309,8 +365,14 @@ fn wake_prompt_separator(engine_command: &str) -> &'static str {
         return "";
     }
     let words: Vec<&str> = engine_command.split_whitespace().collect();
-    let channels = words.iter().any(|word| *word == "--channels" || word.starts_with("--channels="));
-    if channels && words.last() != Some(&"--") { " --" } else { "" }
+    let channels = words
+        .iter()
+        .any(|word| *word == "--channels" || word.starts_with("--channels="));
+    if channels && words.last() != Some(&"--") {
+        " --"
+    } else {
+        ""
+    }
 }
 
 /// A non-empty `commands.<name>` entry from merged config, if present.
@@ -333,18 +395,21 @@ fn wake_config_command_entry(config: &serde_json::Value, name: &str) -> Option<(
     if let Some(command) = wake_config_command(config, name) {
         return Some((name.to_owned(), command));
     }
-    config.get("commands").and_then(serde_json::Value::as_object).and_then(|commands| {
-        commands.iter().find_map(|(key, value)| {
-            if !key.eq_ignore_ascii_case(name) {
-                return None;
-            }
-            value
-                .as_str()
-                .map(str::trim)
-                .filter(|command| !command.is_empty())
-                .map(|command| (key.clone(), command.to_owned()))
+    config
+        .get("commands")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|commands| {
+            commands.iter().find_map(|(key, value)| {
+                if !key.eq_ignore_ascii_case(name) {
+                    return None;
+                }
+                value
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|command| !command.is_empty())
+                    .map(|command| (key.clone(), command.to_owned()))
+            })
         })
-    })
 }
 
 /// Byte span of the engine binary token in a resolved command line: the first
@@ -370,10 +435,14 @@ fn wake_engine_binary_span(command: &str) -> Option<(usize, usize)> {
 }
 
 fn wake_is_env_assignment(word: &str) -> bool {
-    let Some((name, _)) = word.split_once('=') else { return false };
+    let Some((name, _)) = word.split_once('=') else {
+        return false;
+    };
     !name.is_empty()
         && !name.starts_with(|ch: char| ch.is_ascii_digit())
-        && name.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        && name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
 /// Basename of the engine binary token — decides the resume/channels family.
@@ -394,6 +463,11 @@ fn wake_inject_resume_subcommand(command: &str) -> Option<String> {
 }
 
 fn wake_shell_quote(value: &str) -> String {
-    if value.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-' | ':' | '=')) { return value.to_owned(); }
+    if value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-' | ':' | '='))
+    {
+        return value.to_owned();
+    }
     format!("'{}'", value.replace('\'', "'\\''"))
 }

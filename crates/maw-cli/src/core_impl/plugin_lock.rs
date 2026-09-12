@@ -4,7 +4,11 @@
 // records the resolved source and pin per package, so a later verify can say not
 // just "this is installed" but "this is the same thing that was installed".
 
-struct PluginLockEntry { version: String, sha256: String, source: Option<String> }
+struct PluginLockEntry {
+    version: String,
+    sha256: String,
+    source: Option<String>,
+}
 
 fn verify_plugin_install_pin(
     name: &str,
@@ -14,7 +18,8 @@ fn verify_plugin_install_pin(
     warn_unpinned: bool,
     force: bool,
 ) -> Result<PluginInstallVerification, String> {
-    let observed = observed_sha256.ok_or_else(|| "plugin install: sha256 unavailable after build".to_owned())?;
+    let observed = observed_sha256
+        .ok_or_else(|| "plugin install: sha256 unavailable after build".to_owned())?;
     let locked = read_plugin_lock_entry_full(name)?;
     let mut lock_override = false;
     if let Some(entry) = &locked {
@@ -36,13 +41,18 @@ fn verify_plugin_install_pin(
         }
     }
     let warning = if lock_override {
-        Some(format!("warning: plugin '{name}' plugins.lock pin replaced (--force): {version} {observed}"))
+        Some(format!(
+            "warning: plugin '{name}' plugins.lock pin replaced (--force): {version} {observed}"
+        ))
     } else {
         (locked.is_none() && expected_sha256.is_none() && warn_unpinned).then(|| {
             format!("warning: plugin install {name} is unpinned; use owner/repo@ref and --sha256 {observed}")
         })
     };
-    Ok(PluginInstallVerification { warning, resolved_sha256: Some(observed.to_owned()) })
+    Ok(PluginInstallVerification {
+        warning,
+        resolved_sha256: Some(observed.to_owned()),
+    })
 }
 
 /// Resolve the consumer-side lock file: `MAW_PLUGINS_LOCK` override, else
@@ -83,15 +93,32 @@ fn read_plugin_lock_entry_full(name: &str) -> Result<Option<PluginLockEntry>, St
         .map_err(|error| format!("plugins.lock: read {}: {error}", path.display()))?;
     let json: serde_json::Value = serde_json::from_str(&text)
         .map_err(|error| format!("plugins.lock: invalid JSON at {}: {error}", path.display()))?;
-    let plugins = json.get("plugins").and_then(serde_json::Value::as_object)
+    let plugins = json
+        .get("plugins")
+        .and_then(serde_json::Value::as_object)
         .ok_or_else(|| "plugins.lock: 'plugins' must be an object".to_owned())?;
-    let Some(entry) = plugins.get(name) else { return Ok(None); };
-    let version = entry.get("version").and_then(serde_json::Value::as_str)
+    let Some(entry) = plugins.get(name) else {
+        return Ok(None);
+    };
+    let version = entry
+        .get("version")
+        .and_then(serde_json::Value::as_str)
         .ok_or_else(|| format!("plugins.lock: entry '{name}' missing version"))?;
-    let sha256 = normalize_plugin_install_sha256(entry.get("sha256").and_then(serde_json::Value::as_str)
-        .ok_or_else(|| format!("plugins.lock: entry '{name}' missing sha256"))?)?;
-    let source = entry.get("source").and_then(serde_json::Value::as_str).map(str::to_owned);
-    Ok(Some(PluginLockEntry { version: version.to_owned(), sha256, source }))
+    let sha256 = normalize_plugin_install_sha256(
+        entry
+            .get("sha256")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| format!("plugins.lock: entry '{name}' missing sha256"))?,
+    )?;
+    let source = entry
+        .get("source")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    Ok(Some(PluginLockEntry {
+        version: version.to_owned(),
+        sha256,
+        source,
+    }))
 }
 
 /// All lock-pinned plugin names (empty when the lock file is absent or
@@ -99,8 +126,12 @@ fn read_plugin_lock_entry_full(name: &str) -> Result<Option<PluginLockEntry>, St
 /// `maw doctor`.
 fn plugin_lock_pinned_names() -> Vec<String> {
     let path = plugin_lock_path();
-    let Ok(text) = std::fs::read_to_string(&path) else { return Vec::new() };
-    let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else { return Vec::new() };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Vec::new();
+    };
     json.get("plugins")
         .and_then(serde_json::Value::as_object)
         .map_or_else(Vec::new, |plugins| plugins.keys().cloned().collect())
@@ -115,7 +146,9 @@ fn record_plugin_install_pin(
     resolved_sha256: Option<&str>,
     lock_source: &str,
 ) -> Result<(), String> {
-    let Some(sha256) = resolved_sha256 else { return Ok(()) };
+    let Some(sha256) = resolved_sha256 else {
+        return Ok(());
+    };
     let path = plugin_lock_path();
     let mut root = if path.exists() {
         let text = std::fs::read_to_string(&path)

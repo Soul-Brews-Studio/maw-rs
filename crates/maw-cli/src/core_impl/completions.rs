@@ -176,7 +176,11 @@ fn completions_run_command(argv: &[String]) -> CliOutput {
     match completions_parse_request(argv).and_then(completions_render_request) {
         Ok(stdout) => completions_ok(&stdout),
         Err(message) if message.is_empty() => completions_ok(COMPLETIONS_HELP),
-        Err(message) => CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") },
+        Err(message) => CliOutput {
+            code: 1,
+            stdout: String::new(),
+            stderr: format!("{message}\n"),
+        },
     }
 }
 
@@ -188,21 +192,33 @@ enum CompletionsRequest<'a> {
 }
 
 fn completions_parse_request(argv: &[String]) -> Result<CompletionsRequest<'_>, String> {
-    let Some(mode) = argv.first().map(String::as_str) else { return Err(String::new()); };
+    let Some(mode) = argv.first().map(String::as_str) else {
+        return Err(String::new());
+    };
     match (mode, argv.get(1).map(String::as_str)) {
-        ("commands", Some("--describe")) if argv.len() == 2 => return Ok(CompletionsRequest::CommandsDescribed),
+        ("commands", Some("--describe")) if argv.len() == 2 => {
+            return Ok(CompletionsRequest::CommandsDescribed)
+        }
         ("subs", Some(command)) if argv.len() == 2 => {
             if !completions_is_safe_target(command) {
                 return Err(format!("completions: invalid command name: {command}"));
             }
             return Ok(CompletionsRequest::Subs(command));
         }
-        ("subs", None) => return Err("completions: subs expects exactly one command name".to_owned()),
+        ("subs", None) => {
+            return Err("completions: subs expects exactly one command name".to_owned())
+        }
         _ => {}
     }
-    if argv.len() > 1 { return Err("completions: expected exactly one subcommand".to_owned()); }
-    if matches!(mode, "--help" | "-h" | "help") { return Err(String::new()); }
-    if mode == "--" || mode.starts_with('-') { return Err("completions: subcommand must not start with '-' or be '--'".to_owned()); }
+    if argv.len() > 1 {
+        return Err("completions: expected exactly one subcommand".to_owned());
+    }
+    if matches!(mode, "--help" | "-h" | "help") {
+        return Err(String::new());
+    }
+    if mode == "--" || mode.starts_with('-') {
+        return Err("completions: subcommand must not start with '-' or be '--'".to_owned());
+    }
     Ok(CompletionsRequest::Mode(mode))
 }
 
@@ -226,7 +242,9 @@ fn completions_render_mode(mode: &str) -> Result<String, String> {
         "zsh" => Ok(COMPLETIONS_ZSH.to_owned()),
         "bash" => Ok(COMPLETIONS_BASH.to_owned()),
         "fish" => Ok(COMPLETIONS_FISH.to_owned()),
-        _ => Err(format!("{COMPLETIONS_HELP}\nunknown completion mode: {mode}")),
+        _ => Err(format!(
+            "{COMPLETIONS_HELP}\nunknown completion mode: {mode}"
+        )),
     }
 }
 
@@ -303,7 +321,8 @@ fn completions_commands_described() -> Vec<String> {
     completions_commands()
         .into_iter()
         .map(|command| {
-            match completions_usage_for(command).map(|usage| completions_usage_description(&usage)) {
+            match completions_usage_for(command).map(|usage| completions_usage_description(&usage))
+            {
                 Some(description) if !description.is_empty() => format!("{command}\t{description}"),
                 _ => command.to_owned(),
             }
@@ -332,7 +351,9 @@ fn completions_usage_description(usage: &str) -> String {
 /// candidates directly, `<a|b|...>` / `[a|b|...]` groups contribute the first
 /// word of each alternative.
 fn completions_subs(command: &str) -> Vec<String> {
-    let Some(usage) = completions_usage_for(command) else { return Vec::new(); };
+    let Some(usage) = completions_usage_for(command) else {
+        return Vec::new();
+    };
     let mut words = std::collections::BTreeSet::new();
     for line in usage.lines() {
         if let Some(remainder) = completions_synopsis_remainder(line) {
@@ -345,11 +366,19 @@ fn completions_subs(command: &str) -> Vec<String> {
 /// Text after the first word-boundary `maw <word> ` / `maw-rs <word> ` on the line.
 fn completions_synopsis_remainder(line: &str) -> Option<&str> {
     for (index, _) in line.match_indices("maw") {
-        let at_boundary = index == 0 || line[..index].chars().next_back().is_some_and(char::is_whitespace);
-        if !at_boundary { continue; }
+        let at_boundary = index == 0
+            || line[..index]
+                .chars()
+                .next_back()
+                .is_some_and(char::is_whitespace);
+        if !at_boundary {
+            continue;
+        }
         let rest = &line[index + 3..];
         let rest = rest.strip_prefix("-rs").unwrap_or(rest);
-        let Some(rest) = rest.strip_prefix(' ') else { continue; };
+        let Some(rest) = rest.strip_prefix(' ') else {
+            continue;
+        };
         let rest = rest.trim_start();
         return rest
             .find(char::is_whitespace)
@@ -359,13 +388,20 @@ fn completions_synopsis_remainder(line: &str) -> Option<&str> {
     None
 }
 
-fn completions_collect_synopsis_words(remainder: &str, words: &mut std::collections::BTreeSet<String>) {
+fn completions_collect_synopsis_words(
+    remainder: &str,
+    words: &mut std::collections::BTreeSet<String>,
+) {
     for alternative in completions_split_alternatives(remainder) {
         let alternative = completions_strip_binary_prefix(alternative.trim());
-        let Some(chunk) = completions_first_chunk(alternative) else { continue; };
+        let Some(chunk) = completions_first_chunk(alternative) else {
+            continue;
+        };
         if let Some(inner) = completions_bracket_inner(chunk) {
             let inner_alternatives = completions_split_alternatives(inner);
-            if inner_alternatives.len() < 2 { continue; }
+            if inner_alternatives.len() < 2 {
+                continue;
+            }
             for inner_alternative in inner_alternatives {
                 if let Some(word) = completions_leading_word(inner_alternative) {
                     words.insert(word);
@@ -404,7 +440,10 @@ fn completions_split_alternatives(text: &str) -> Vec<&str> {
 /// Drop a leading `maw <command> ` / `maw-rs <command> ` repeated inside an alternative.
 fn completions_strip_binary_prefix(alternative: &str) -> &str {
     let trimmed = alternative.trim_start();
-    let Some(rest) = trimmed.strip_prefix("maw-rs ").or_else(|| trimmed.strip_prefix("maw ")) else {
+    let Some(rest) = trimmed
+        .strip_prefix("maw-rs ")
+        .or_else(|| trimmed.strip_prefix("maw "))
+    else {
         return alternative;
     };
     let rest = rest.trim_start();
@@ -429,7 +468,9 @@ fn completions_balanced_group(text: &str) -> Option<&str> {
             '<' | '[' => depth += 1,
             '>' | ']' => {
                 depth = depth.saturating_sub(1);
-                if depth == 0 { return Some(&text[..=index]); }
+                if depth == 0 {
+                    return Some(&text[..=index]);
+                }
             }
             _ => {}
         }
@@ -438,7 +479,8 @@ fn completions_balanced_group(text: &str) -> Option<&str> {
 }
 
 fn completions_bracket_inner(chunk: &str) -> Option<&str> {
-    (chunk.len() >= 2 && (chunk.starts_with('<') || chunk.starts_with('['))).then(|| &chunk[1..chunk.len() - 1])
+    (chunk.len() >= 2 && (chunk.starts_with('<') || chunk.starts_with('[')))
+        .then(|| &chunk[1..chunk.len() - 1])
 }
 
 /// First whitespace token when it is a plain word or `--flag`; placeholders and
@@ -448,7 +490,9 @@ fn completions_leading_word(alternative: &str) -> Option<String> {
     let word = token.strip_prefix("--").unwrap_or(token);
     let valid = !word.is_empty()
         && !word.starts_with('-')
-        && word.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_');
+        && word
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_');
     valid.then(|| token.to_owned())
 }
 
@@ -467,7 +511,10 @@ fn completions_squads() -> Vec<String> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CompletionsTargetKind { Oracles, Windows }
+enum CompletionsTargetKind {
+    Oracles,
+    Windows,
+}
 
 fn completions_targets(kind: CompletionsTargetKind) -> Vec<String> {
     let mut names = std::collections::BTreeSet::new();
@@ -479,8 +526,14 @@ fn completions_targets(kind: CompletionsTargetKind) -> Vec<String> {
     names.into_iter().collect()
 }
 
-fn completions_insert_target(names: &mut std::collections::BTreeSet<String>, kind: CompletionsTargetKind, name: &str) {
-    if !completions_is_safe_target(name) { return; }
+fn completions_insert_target(
+    names: &mut std::collections::BTreeSet<String>,
+    kind: CompletionsTargetKind,
+    name: &str,
+) {
+    if !completions_is_safe_target(name) {
+        return;
+    }
     match kind {
         CompletionsTargetKind::Oracles if name.ends_with("-oracle") => {
             names.insert(name.trim_end_matches("-oracle").to_owned());
@@ -497,7 +550,11 @@ fn completions_is_safe_target(value: &str) -> bool {
 }
 
 fn completions_ok(body: &str) -> CliOutput {
-    CliOutput { code: 0, stdout: format!("{body}\n"), stderr: String::new() }
+    CliOutput {
+        code: 0,
+        stdout: format!("{body}\n"),
+        stderr: String::new(),
+    }
 }
 
 #[cfg(test)]
@@ -509,7 +566,9 @@ mod completions_tests {
         EnvVarRestore, DISPATCH_99, ORACLE_USAGE,
     };
 
-    fn completions_args(values: &[&str]) -> Vec<String> { values.iter().map(|value| (*value).to_owned()).collect() }
+    fn completions_args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_owned()).collect()
+    }
 
     #[test]
     fn completions_dispatch_registers_single_native_command() {
@@ -523,10 +582,18 @@ mod completions_tests {
         assert_eq!(output.code, 0);
         assert!(output.stderr.is_empty());
         assert!(output.stdout.starts_with("# maw bash completion\n"));
-        assert!(output.stdout.contains("maw completions commands 2>/dev/null"));
-        assert!(output.stdout.contains("maw completions subs fleet 2>/dev/null"));
-        assert!(output.stdout.contains("maw completions subs oracle 2>/dev/null"));
-        assert!(output.stdout.contains("maw completions subs \"$cmd\" 2>/dev/null"));
+        assert!(output
+            .stdout
+            .contains("maw completions commands 2>/dev/null"));
+        assert!(output
+            .stdout
+            .contains("maw completions subs fleet 2>/dev/null"));
+        assert!(output
+            .stdout
+            .contains("maw completions subs oracle 2>/dev/null"));
+        assert!(output
+            .stdout
+            .contains("maw completions subs \"$cmd\" 2>/dev/null"));
         assert!(output.stdout.contains("maw completions squads 2>/dev/null"));
         assert!(output.stdout.contains("show|status|wake|sleep|token"));
         assert!(output.stdout.contains("complete -F _maw_complete maw\n"));
@@ -538,12 +605,18 @@ mod completions_tests {
         let zsh = completions_run_command(&completions_args(&["zsh"]));
         assert!(fish.stdout.contains("# maw fish completion"));
         assert!(fish.stdout.contains("__fish_use_subcommand"));
-        assert!(fish.stdout.contains("maw completions commands --describe 2>/dev/null"));
-        assert!(fish.stdout.contains("maw completions subs (commandline -opc)[2] 2>/dev/null"));
+        assert!(fish
+            .stdout
+            .contains("maw completions commands --describe 2>/dev/null"));
+        assert!(fish
+            .stdout
+            .contains("maw completions subs (commandline -opc)[2] 2>/dev/null"));
         assert!(fish.stdout.contains("maw completions squads 2>/dev/null"));
         assert!(fish.stdout.contains("-d 'Oracle (peek/send shorthand)'"));
         assert!(zsh.stdout.contains("#compdef maw"));
-        assert!(zsh.stdout.contains("maw completions commands --describe 2>/dev/null"));
+        assert!(zsh
+            .stdout
+            .contains("maw completions commands --describe 2>/dev/null"));
         assert!(zsh.stdout.contains("_maw_subs"));
         assert!(zsh.stdout.contains("'oracle shorthand'"));
         assert!(zsh.stdout.contains("'maw commands'"));
@@ -557,9 +630,17 @@ mod completions_tests {
         assert!(commands.contains(&"completions"));
         assert!(commands.contains(&"serve"));
         assert!(commands.contains(&"run"));
-        assert!(commands.contains(&"fleet"), "fleet must stay in the dispatcher-derived list");
-        assert!(commands.contains(&"oracle"), "oracle must stay in the dispatcher-derived list");
-        assert!(!commands.iter().any(|command| command.starts_with('-') || command.starts_with("__")));
+        assert!(
+            commands.contains(&"fleet"),
+            "fleet must stay in the dispatcher-derived list"
+        );
+        assert!(
+            commands.contains(&"oracle"),
+            "oracle must stay in the dispatcher-derived list"
+        );
+        assert!(!commands
+            .iter()
+            .any(|command| command.starts_with('-') || command.starts_with("__")));
         let output = completions_run_command(&completions_args(&["commands"]));
         assert_eq!(output.stdout, format!("{}\n", commands.join("\n")));
     }
@@ -568,16 +649,33 @@ mod completions_tests {
     fn completions_usage_registry_commands_stay_dispatchable() {
         let commands = native_dispatch_commands();
         for (name, usage) in completions_usage_sources() {
-            assert!(commands.contains(&name), "usage registry names unknown command: {name}");
-            assert!(!usage.is_empty(), "usage registry has empty usage for: {name}");
+            assert!(
+                commands.contains(&name),
+                "usage registry names unknown command: {name}"
+            );
+            assert!(
+                !usage.is_empty(),
+                "usage registry has empty usage for: {name}"
+            );
         }
     }
 
     #[test]
     fn completions_fleet_and_oracle_subcommands_stay_dispatchable() {
         let fleet_words = completions_subs("fleet");
-        for probe in ["add", "create", "join", "token", "wake", "sleep", "consolidate"] {
-            assert!(fleet_words.contains(&probe.to_owned()), "fleet usage lost {probe}");
+        for probe in [
+            "add",
+            "create",
+            "join",
+            "token",
+            "wake",
+            "sleep",
+            "consolidate",
+        ] {
+            assert!(
+                fleet_words.contains(&probe.to_owned()),
+                "fleet usage lost {probe}"
+            );
         }
         for word in &fleet_words {
             let mut options = fleet_default_options();
@@ -585,52 +683,114 @@ mod completions_tests {
             let parsed = fleet_set_command(&mut options, &mut seen, word).is_ok();
             let intercepted = fleet_roster_intercept(&completions_args(&[word])).is_some();
             // "token" is routed before fleet_parse_args (see run_fleet_command).
-            assert!(parsed || intercepted || word == "token", "fleet completion {word} is not dispatchable");
+            assert!(
+                parsed || intercepted || word == "token",
+                "fleet completion {word} is not dispatchable"
+            );
         }
         let oracle_words = completions_subs("oracle");
         assert_eq!(
             oracle_words,
-            ["about", "get-nickname", "ls", "prune", "recruit", "register", "scan", "search", "set-nickname"],
+            [
+                "about",
+                "get-nickname",
+                "ls",
+                "prune",
+                "recruit",
+                "register",
+                "scan",
+                "search",
+                "set-nickname"
+            ],
             "oracle words must track ORACLE_USAGE"
         );
         for word in &oracle_words {
-            assert!(ORACLE_USAGE.contains(word.as_str()), "oracle completion {word} missing from ORACLE_USAGE");
+            assert!(
+                ORACLE_USAGE.contains(word.as_str()),
+                "oracle completion {word} missing from ORACLE_USAGE"
+            );
         }
         let fleet = completions_run_command(&completions_args(&["fleet"]));
         assert_eq!(fleet.stdout, format!("{}\n", fleet_words.join("\n")));
         let oracle = completions_run_command(&completions_args(&["oracle"]));
         assert_eq!(oracle.stdout, format!("{}\n", oracle_words.join("\n")));
         let subs_fleet = completions_run_command(&completions_args(&["subs", "fleet"]));
-        assert_eq!(subs_fleet.stdout, fleet.stdout, "subs fleet is the same data as the fleet mode");
+        assert_eq!(
+            subs_fleet.stdout, fleet.stdout,
+            "subs fleet is the same data as the fleet mode"
+        );
     }
 
     #[test]
     fn completions_subs_derives_second_level_words_from_usage_strings() {
         assert_eq!(completions_subs("zai"), ["mon", "status", "test"]);
         assert_eq!(completions_subs("codex"), ["accounts"]);
-        assert_eq!(completions_subs("policy"), ["--constants", "--default-active", "--weight", "constants"]);
-        assert_eq!(completions_subs("consent"), ["approve", "list", "list-trust", "reject", "trust", "untrust"]);
+        assert_eq!(
+            completions_subs("policy"),
+            ["--constants", "--default-active", "--weight", "constants"]
+        );
+        assert_eq!(
+            completions_subs("consent"),
+            [
+                "approve",
+                "list",
+                "list-trust",
+                "reject",
+                "trust",
+                "untrust"
+            ]
+        );
         assert_eq!(completions_subs("more"), ["codex", "status"]);
         assert_eq!(completions_subs("user-setup"), ["projects"]);
         let team = completions_subs("team");
-        for probe in ["create", "status", "spawn", "spawn-from", "resume", "shutdown", "tasks", "invite"] {
+        for probe in [
+            "create",
+            "status",
+            "spawn",
+            "spawn-from",
+            "resume",
+            "shutdown",
+            "tasks",
+            "invite",
+        ] {
             assert!(team.contains(&probe.to_owned()), "team usage lost {probe}");
         }
-        assert_eq!(completions_subs("t"), team, "t alias derives the same team words");
+        assert_eq!(
+            completions_subs("t"),
+            team,
+            "t alias derives the same team words"
+        );
         let plugin = completions_subs("plugin");
         for probe in ["ls", "install", "build", "dev", "init"] {
-            assert!(plugin.contains(&probe.to_owned()), "plugin usage lost {probe}");
+            assert!(
+                plugin.contains(&probe.to_owned()),
+                "plugin usage lost {probe}"
+            );
         }
         let own = completions_subs("completions");
-        for probe in ["commands", "subs", "fleet", "oracle", "squads", "zsh", "bash", "fish"] {
-            assert!(own.contains(&probe.to_owned()), "completions usage lost {probe}");
+        for probe in [
+            "commands", "subs", "fleet", "oracle", "squads", "zsh", "bash", "fish",
+        ] {
+            assert!(
+                own.contains(&probe.to_owned()),
+                "completions usage lost {probe}"
+            );
         }
         // Placeholder-only synopses contribute nothing; uncovered commands are empty.
-        assert!(completions_subs("kill").is_empty(), "kill has no literal subcommands");
-        assert!(completions_subs("hey").is_empty(), "uncovered commands yield no subs");
+        assert!(
+            completions_subs("kill").is_empty(),
+            "kill has no literal subcommands"
+        );
+        assert!(
+            completions_subs("hey").is_empty(),
+            "uncovered commands yield no subs"
+        );
         let output = completions_run_command(&completions_args(&["subs", "policy"]));
         assert_eq!(output.code, 0, "{}", output.stderr);
-        assert_eq!(output.stdout, "--constants\n--default-active\n--weight\nconstants\n");
+        assert_eq!(
+            output.stdout,
+            "--constants\n--default-active\n--weight\nconstants\n"
+        );
     }
 
     #[test]
@@ -643,12 +803,25 @@ mod completions_tests {
                 line == command || line.starts_with(&format!("{command}\t")),
                 "describe line must be `name` or `name<TAB>description`: {line}"
             );
-            assert!(line.matches('\t').count() <= 1, "single tab separator only: {line}");
+            assert!(
+                line.matches('\t').count() <= 1,
+                "single tab separator only: {line}"
+            );
         }
-        assert!(described.contains(&"codex\tmaw codex accounts [--json] [--free] [--slots N]".to_owned()));
-        let consent = described.iter().find(|line| line.starts_with("consent\t")).expect("consent is described");
-        assert!(consent.contains("list pending requests"), "consent description from first non-empty usage line");
-        let hey = described.iter().find(|line| *line == "hey").expect("uncovered commands stay name-only");
+        assert!(described
+            .contains(&"codex\tmaw codex accounts [--json] [--free] [--slots N]".to_owned()));
+        let consent = described
+            .iter()
+            .find(|line| line.starts_with("consent\t"))
+            .expect("consent is described");
+        assert!(
+            consent.contains("list pending requests"),
+            "consent description from first non-empty usage line"
+        );
+        let hey = described
+            .iter()
+            .find(|line| *line == "hey")
+            .expect("uncovered commands stay name-only");
         assert_eq!(hey, "hey");
         let output = completions_run_command(&completions_args(&["commands", "--describe"]));
         assert_eq!(output.stdout, format!("{}\n", described.join("\n")));
@@ -657,21 +830,51 @@ mod completions_tests {
     #[test]
     fn completions_squads_lists_roster_squad_names_from_fleet_files() {
         let _guard = env_test_lock();
-        let root = std::env::temp_dir().join(format!("maw-rs-completions-squads-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("maw-rs-completions-squads-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        let _restore = ["HOME", "MAW_HOME", "MAW_CONFIG_DIR", "MAW_STATE_DIR", "MAW_CACHE_DIR", "GHQ_ROOT"].map(EnvVarRestore::capture);
+        let _restore = [
+            "HOME",
+            "MAW_HOME",
+            "MAW_CONFIG_DIR",
+            "MAW_STATE_DIR",
+            "MAW_CACHE_DIR",
+            "GHQ_ROOT",
+        ]
+        .map(EnvVarRestore::capture);
         std::env::remove_var("MAW_HOME");
-        for (key, dir) in [("HOME", "home"), ("MAW_CONFIG_DIR", "config"), ("MAW_STATE_DIR", "state"), ("MAW_CACHE_DIR", "cache"), ("GHQ_ROOT", "ghq")] {
+        for (key, dir) in [
+            ("HOME", "home"),
+            ("MAW_CONFIG_DIR", "config"),
+            ("MAW_STATE_DIR", "state"),
+            ("MAW_CACHE_DIR", "cache"),
+            ("GHQ_ROOT", "ghq"),
+        ] {
             std::env::set_var(key, root.join(dir));
         }
         let fleet_dir = root.join("state/fleet");
         std::fs::create_dir_all(&fleet_dir).expect("fleet dir");
-        std::fs::write(fleet_dir.join("01-3e.json"), r#"{"name":"01-3e","squadName":"3e","windows":[],"members":[{"handle":"atlas"}]}"#).expect("roster");
-        std::fs::write(fleet_dir.join("05-ccdc.json"), r#"{"name":"05-ccdc","windows":[],"members":[]}"#).expect("members-only roster");
-        std::fs::write(fleet_dir.join("03-alpha.json"), r#"{"name":"03-alpha","windows":[]}"#).expect("legacy file");
+        std::fs::write(
+            fleet_dir.join("01-3e.json"),
+            r#"{"name":"01-3e","squadName":"3e","windows":[],"members":[{"handle":"atlas"}]}"#,
+        )
+        .expect("roster");
+        std::fs::write(
+            fleet_dir.join("05-ccdc.json"),
+            r#"{"name":"05-ccdc","windows":[],"members":[]}"#,
+        )
+        .expect("members-only roster");
+        std::fs::write(
+            fleet_dir.join("03-alpha.json"),
+            r#"{"name":"03-alpha","windows":[]}"#,
+        )
+        .expect("legacy file");
         let output = completions_run_command(&completions_args(&["squads"]));
         assert_eq!(output.code, 0, "{}", output.stderr);
-        assert_eq!(output.stdout, "3e\nccdc\n", "squadName wins, members-only falls back to stem, legacy excluded");
+        assert_eq!(
+            output.stdout, "3e\nccdc\n",
+            "squadName wins, members-only falls back to stem, legacy excluded"
+        );
     }
 
     #[test]
@@ -684,7 +887,9 @@ mod completions_tests {
         assert!(flag.stderr.contains("expected exactly one subcommand"));
         let missing = completions_run_command(&completions_args(&["subs"]));
         assert_eq!(missing.code, 1);
-        assert!(missing.stderr.contains("subs expects exactly one command name"));
+        assert!(missing
+            .stderr
+            .contains("subs expects exactly one command name"));
         let injected = completions_run_command(&completions_args(&["subs", "--describe"]));
         assert_eq!(injected.code, 1);
         assert!(injected.stderr.contains("invalid command name"));
@@ -693,7 +898,9 @@ mod completions_tests {
         assert!(extra.stderr.contains("expected exactly one subcommand"));
         let described_typo = completions_run_command(&completions_args(&["commands", "--nope"]));
         assert_eq!(described_typo.code, 1);
-        assert!(described_typo.stderr.contains("expected exactly one subcommand"));
+        assert!(described_typo
+            .stderr
+            .contains("expected exactly one subcommand"));
         assert!(!completions_is_safe_target("-bad"));
         assert!(!completions_is_safe_target("bad target"));
     }

@@ -43,7 +43,9 @@ fn peek_with_runner<R: maw_tmux::TmuxRunner>(
         // #820: `<peer>:<target>` reads a pane on another node. Decide which
         // reading applies BEFORE validating as a tmux target, since a peer form
         // is not a tmux target and would be rejected by that validator.
-        match peek_route_for(raw_target, &peek_lookup_peer, &mut || peek_local_session_names(runner)) {
+        match peek_route_for(raw_target, &peek_lookup_peer, &mut || {
+            peek_local_session_names(runner)
+        }) {
             PeekRoute::Ambiguous { alias, target } => {
                 return Err((1, peek_ambiguous_message(&alias, &target)));
             }
@@ -59,8 +61,9 @@ fn peek_with_runner<R: maw_tmux::TmuxRunner>(
         }
         let target = peek_strip_local_marker(raw_target);
         peek_validate_tmux_target(target).map_err(|message| (1, message))?;
-        let (resolved, content) = peek_resolve_and_capture(runner, target, options.lines, options.history)
-            .map_err(|message| (1, message))?;
+        let (resolved, content) =
+            peek_resolve_and_capture(runner, target, options.lines, options.history)
+                .map_err(|message| (1, message))?;
         return Ok(CliOutput {
             code: 0,
             stdout: peek_render_target(&resolved, &content),
@@ -138,12 +141,16 @@ fn peek_parse(argv: &[String]) -> Result<PeekOptions, (i32, String)> {
             "--help" | "-h" => return Err((0, PEEK_USAGE.trim_end().to_owned())),
             "--history" => history = true,
             "--lines" => {
-                let Some(value) = iter.next() else { return Err((2, "peek: --lines requires a positive number".to_owned())); };
+                let Some(value) = iter.next() else {
+                    return Err((2, "peek: --lines requires a positive number".to_owned()));
+                };
                 lines = peek_parse_lines(value)?;
             }
             value if value.starts_with("--lines=") => lines = peek_parse_lines(&value[8..])?,
             "--" => return Err((2, "peek: -- separator is not supported".to_owned())),
-            value if value.starts_with('-') => return Err((2, format!("peek: unknown flag '{value}'"))),
+            value if value.starts_with('-') => {
+                return Err((2, format!("peek: unknown flag '{value}'")))
+            }
             value => positionals.push(value.to_owned()),
         }
     }
@@ -172,8 +179,13 @@ fn peek_validate_tmux_target(target: &str) -> Result<(), String> {
     if target.is_empty() || target.trim() != target || target.starts_with('-') || target == "--" {
         return Err("peek target must be non-empty, unpadded, and not start with '-'".to_owned());
     }
-    if target.chars().any(|ch| ch == '\0' || ch.is_control() || ch.is_whitespace()) {
-        return Err("peek target must not contain whitespace, NUL, or control characters".to_owned());
+    if target
+        .chars()
+        .any(|ch| ch == '\0' || ch.is_control() || ch.is_whitespace())
+    {
+        return Err(
+            "peek target must not contain whitespace, NUL, or control characters".to_owned(),
+        );
     }
     Ok(())
 }
@@ -184,7 +196,11 @@ fn peek_capture<R: maw_tmux::TmuxRunner>(
     lines: u32,
     history: bool,
 ) -> Result<String, String> {
-    let start = if history { "-".to_owned() } else { format!("-{lines}") };
+    let start = if history {
+        "-".to_owned()
+    } else {
+        format!("-{lines}")
+    };
     runner
         .run(
             "capture-pane",
@@ -248,7 +264,11 @@ fn peek_render_overview<R: maw_tmux::TmuxRunner>(
             ),
             Err(_) => "(unreachable)".to_owned(),
         };
-        let dot = if window.active { "\x1b[32m*\x1b[0m" } else { " " };
+        let dot = if window.active {
+            "\x1b[32m*\x1b[0m"
+        } else {
+            " "
+        };
         let _ = writeln!(
             stdout,
             "{dot} \x1b[36m{:<22}\x1b[0m {}",
@@ -262,7 +282,11 @@ fn peek_render_overview<R: maw_tmux::TmuxRunner>(
 fn peek_literal_last_line(content: &str) -> Option<String> {
     let trimmed = content.strip_suffix('\n').unwrap_or(content);
     let line = trimmed.rsplit('\n').next()?.trim_end_matches('\r');
-    if line.trim().is_empty() { None } else { Some(line.to_owned()) }
+    if line.trim().is_empty() {
+        None
+    } else {
+        Some(line.to_owned())
+    }
 }
 
 fn peek_trim_trailing_blank_lines(content: &str) -> String {
@@ -270,14 +294,27 @@ fn peek_trim_trailing_blank_lines(content: &str) -> String {
     let mut offset = 0;
     for segment in content.split_inclusive('\n') {
         offset += segment.len();
-        if !segment.trim_end_matches('\n').trim_end_matches('\r').trim().is_empty() { end = Some(offset); }
+        if !segment
+            .trim_end_matches('\n')
+            .trim_end_matches('\r')
+            .trim()
+            .is_empty()
+        {
+            end = Some(offset);
+        }
     }
-    if end.is_none() && !content.ends_with('\n') && !content.trim().is_empty() { end = Some(content.len()); }
+    if end.is_none() && !content.ends_with('\n') && !content.trim().is_empty() {
+        end = Some(content.len());
+    }
     end.map_or_else(String::new, |idx| content[..idx].to_owned())
 }
 
 fn peek_js_window_not_found_error(target: &str, resolve_error: &str) -> String {
-    if resolve_error.starts_with("no window '") && resolve_error.contains(" in session '") { resolve_error.to_owned() } else { format!("window not found: {target}") }
+    if resolve_error.starts_with("no window '") && resolve_error.contains(" in session '") {
+        resolve_error.to_owned()
+    } else {
+        format!("window not found: {target}")
+    }
 }
 
 fn peek_truncate_chars(value: &str, max: usize) -> String {
@@ -296,7 +333,11 @@ mod peek_tests {
     }
 
     impl maw_tmux::TmuxRunner for PeekFakeRunner {
-        fn run(&mut self, subcommand: &str, args: &[String]) -> Result<String, maw_tmux::TmuxError> {
+        fn run(
+            &mut self,
+            subcommand: &str,
+            args: &[String],
+        ) -> Result<String, maw_tmux::TmuxError> {
             self.calls.push((subcommand.to_owned(), args.to_vec()));
             match subcommand {
                 "list-windows" => Ok(self.list.clone()),
@@ -324,9 +365,15 @@ mod peek_tests {
     fn peek_trims_trailing_blank_padding_and_maps_session_miss_like_js() {
         assert_eq!(peek_trim_trailing_blank_lines("body\n\n  \n"), "body\n");
         assert_eq!(peek_literal_last_line("old\n\n").as_deref(), None);
-        assert_eq!(peek_js_window_not_found_error("missing", "no session named missing"), "window not found: missing");
         assert_eq!(
-            peek_js_window_not_found_error("sess:9", "no window '9' in session 'sess' — windows: sess:0 (main)"),
+            peek_js_window_not_found_error("missing", "no session named missing"),
+            "window not found: missing"
+        );
+        assert_eq!(
+            peek_js_window_not_found_error(
+                "sess:9",
+                "no window '9' in session 'sess' — windows: sess:0 (main)"
+            ),
             "no window '9' in session 'sess' — windows: sess:0 (main)"
         );
     }
@@ -343,11 +390,17 @@ mod peek_tests {
             list: "sess|||1|||main|||1|||\n".to_owned(),
             ..PeekFakeRunner::default()
         };
-        runner.captures.insert("sess:1.0".to_owned(), "pane output\n".to_owned());
+        runner
+            .captures
+            .insert("sess:1.0".to_owned(), "pane output\n".to_owned());
 
-        let output = peek_with_runner(&args(&["sess:1.0", "--lines", "12"]), &mut runner).expect("peek");
+        let output =
+            peek_with_runner(&args(&["sess:1.0", "--lines", "12"]), &mut runner).expect("peek");
 
-        assert_eq!(output.stdout, "\x1b[36m--- sess:1.0 ---\x1b[0m\npane output\n");
+        assert_eq!(
+            output.stdout,
+            "\x1b[36m--- sess:1.0 ---\x1b[0m\npane output\n"
+        );
         assert_eq!(
             runner.calls[1],
             (
@@ -379,17 +432,24 @@ mod peek_tests {
     #[test]
     fn peek_history_uses_full_capture_and_rejects_injection_before_tmux() {
         let mut runner = PeekFakeRunner::default();
-        let error = peek_with_runner(&args(&["-bad"]), &mut runner).expect_err("flag target rejected");
+        let error =
+            peek_with_runner(&args(&["-bad"]), &mut runner).expect_err("flag target rejected");
         assert_eq!(error.0, 2);
         assert!(runner.calls.is_empty());
 
-        let error = peek_with_runner(&args(&["bad\npane"]), &mut runner).expect_err("control target rejected");
+        let error = peek_with_runner(&args(&["bad\npane"]), &mut runner)
+            .expect_err("control target rejected");
         assert_eq!(error.0, 1);
         assert!(runner.calls.is_empty());
 
-        runner.captures.insert("%9".to_owned(), "history\n".to_owned());
+        runner
+            .captures
+            .insert("%9".to_owned(), "history\n".to_owned());
         let _ = peek_with_runner(&args(&["%9", "--history"]), &mut runner).expect("history");
-        assert_eq!(runner.calls[0].1, args(&["-p", "-t", "%9", "-S", "-", "-J"]));
+        assert_eq!(
+            runner.calls[0].1,
+            args(&["-p", "-t", "%9", "-S", "-", "-J"])
+        );
     }
 
     #[test]
@@ -398,7 +458,9 @@ mod peek_tests {
             list: "s\t0\tactive\t1\ns\t1\tdead\t0\n".to_owned(),
             ..PeekFakeRunner::default()
         };
-        runner.captures.insert("s:0".to_owned(), "old\n\n\n".to_owned());
+        runner
+            .captures
+            .insert("s:0".to_owned(), "old\n\n\n".to_owned());
 
         let output = peek_with_runner(&args(&[]), &mut runner).expect("overview");
 
@@ -406,7 +468,10 @@ mod peek_tests {
         assert!(output.stdout.contains("(empty)"));
         assert!(output.stdout.contains("dead"));
         assert!(output.stdout.contains("(unreachable)"));
-        assert_eq!(runner.calls[1].1, args(&["-p", "-t", "s:0", "-S", "-3", "-J"]));
+        assert_eq!(
+            runner.calls[1].1,
+            args(&["-p", "-t", "s:0", "-S", "-3", "-J"])
+        );
     }
 
     #[test]
@@ -437,14 +502,24 @@ mod peek_tests {
             .to_owned(),
             ..PeekFakeRunner::default()
         };
-        runner.captures.insert("webhook-relay-v3:2".to_owned(), "right pane\n".to_owned());
-        runner.captures.insert("arra-oracle-v3:4".to_owned(), "wrong pane\n".to_owned());
+        runner
+            .captures
+            .insert("webhook-relay-v3:2".to_owned(), "right pane\n".to_owned());
+        runner
+            .captures
+            .insert("arra-oracle-v3:4".to_owned(), "wrong pane\n".to_owned());
 
-        let output = peek_with_runner(&args(&["webhook-relay-v3:codex-1"]), &mut runner)
-            .expect("peek");
+        let output =
+            peek_with_runner(&args(&["webhook-relay-v3:codex-1"]), &mut runner).expect("peek");
 
-        assert_eq!(output.stdout, "\x1b[36m--- webhook-relay-v3:2 ---\x1b[0m\nright pane\n");
-        assert_eq!(runner.calls[1].1, args(&["-p", "-t", "webhook-relay-v3:2", "-S", "-30", "-J"]));
+        assert_eq!(
+            output.stdout,
+            "\x1b[36m--- webhook-relay-v3:2 ---\x1b[0m\nright pane\n"
+        );
+        assert_eq!(
+            runner.calls[1].1,
+            args(&["-p", "-t", "webhook-relay-v3:2", "-S", "-30", "-J"])
+        );
     }
 
     #[test]
@@ -453,14 +528,23 @@ mod peek_tests {
             list: "webhook-relay-v3|||0|||oracle|||1|||\n".to_owned(),
             ..PeekFakeRunner::default()
         };
-        runner.captures.insert("webhook-relay-v3:raw-codex".to_owned(), "raw pane\n".to_owned());
+        runner.captures.insert(
+            "webhook-relay-v3:raw-codex".to_owned(),
+            "raw pane\n".to_owned(),
+        );
 
         let output = peek_with_runner(&args(&["webhook-relay-v3:raw-codex"]), &mut runner)
             .expect("raw tmux fallback");
 
-        assert_eq!(output.stdout, "\x1b[36m--- webhook-relay-v3:raw-codex ---\x1b[0m\nraw pane\n");
+        assert_eq!(
+            output.stdout,
+            "\x1b[36m--- webhook-relay-v3:raw-codex ---\x1b[0m\nraw pane\n"
+        );
         assert_eq!(runner.calls[0].0, "list-windows");
-        assert_eq!(runner.calls[1].1, args(&["-p", "-t", "webhook-relay-v3:raw-codex", "-S", "-30", "-J"]));
+        assert_eq!(
+            runner.calls[1].1,
+            args(&["-p", "-t", "webhook-relay-v3:raw-codex", "-S", "-30", "-J"])
+        );
     }
 
     #[test]
@@ -469,15 +553,29 @@ mod peek_tests {
             list: "webhook-relay-v3|||2|||raw-codex|||1|||\n".to_owned(),
             ..PeekFakeRunner::default()
         };
-        runner.captures.insert("webhook-relay-v3:2".to_owned(), "\n  \n".to_owned());
-        runner.captures.insert("webhook-relay-v3:raw-codex".to_owned(), "raw pane\n".to_owned());
+        runner
+            .captures
+            .insert("webhook-relay-v3:2".to_owned(), "\n  \n".to_owned());
+        runner.captures.insert(
+            "webhook-relay-v3:raw-codex".to_owned(),
+            "raw pane\n".to_owned(),
+        );
 
         let output = peek_with_runner(&args(&["webhook-relay-v3:raw-codex"]), &mut runner)
             .expect("nonblank raw fallback");
 
-        assert_eq!(output.stdout, "\x1b[36m--- webhook-relay-v3:raw-codex ---\x1b[0m\nraw pane\n");
-        assert_eq!(runner.calls[1].1, args(&["-p", "-t", "webhook-relay-v3:2", "-S", "-30", "-J"]));
-        assert_eq!(runner.calls[2].1, args(&["-p", "-t", "webhook-relay-v3:raw-codex", "-S", "-30", "-J"]));
+        assert_eq!(
+            output.stdout,
+            "\x1b[36m--- webhook-relay-v3:raw-codex ---\x1b[0m\nraw pane\n"
+        );
+        assert_eq!(
+            runner.calls[1].1,
+            args(&["-p", "-t", "webhook-relay-v3:2", "-S", "-30", "-J"])
+        );
+        assert_eq!(
+            runner.calls[2].1,
+            args(&["-p", "-t", "webhook-relay-v3:raw-codex", "-S", "-30", "-J"])
+        );
     }
 
     #[test]
@@ -496,7 +594,10 @@ mod peek_tests {
 
         assert_eq!(error.0, 1);
         assert_eq!(error.1, "no window 'codex-1' in session 'webhook-relay-v3' — windows: webhook-relay-v3:0 (oracle)");
-        assert_eq!(runner.calls[1].1, args(&["-p", "-t", "webhook-relay-v3:codex-1", "-S", "-30", "-J"]));
+        assert_eq!(
+            runner.calls[1].1,
+            args(&["-p", "-t", "webhook-relay-v3:codex-1", "-S", "-30", "-J"])
+        );
         assert!(!runner
             .calls
             .iter()

@@ -1,6 +1,7 @@
-const DISPATCH_43: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "tab", handler: Handler::Sync(run_tab_command) },
-];
+const DISPATCH_43: &[DispatcherEntry] = &[DispatcherEntry {
+    command: "tab",
+    handler: Handler::Sync(run_tab_command),
+}];
 
 #[allow(non_camel_case_types)]
 type tab_Window = (i32, String, bool);
@@ -116,7 +117,12 @@ fn tab_new_with_runner<R: maw_tmux::TmuxRunner>(
     }
 
     let session_target = format!("{session}:");
-    let mut new_window_args = vec!["-t".to_owned(), session_target, "-n".to_owned(), options.name.clone()];
+    let mut new_window_args = vec![
+        "-t".to_owned(),
+        session_target,
+        "-n".to_owned(),
+        options.name.clone(),
+    ];
     if let Some(cwd) = &options.cwd {
         tab_validate_tmux_cwd(cwd).map_err(|message| (1, message))?;
         new_window_args.push("-c".to_owned());
@@ -161,7 +167,9 @@ fn tab_parse_new_options(argv: &[String]) -> Result<TabNewOptions, (i32, String)
                     return Err(tab_new_usage_error("tab new: --cmd requires a value"));
                 };
                 if value.is_empty() {
-                    return Err(tab_new_usage_error("tab new: --cmd requires a non-empty value"));
+                    return Err(tab_new_usage_error(
+                        "tab new: --cmd requires a non-empty value",
+                    ));
                 }
                 command = Some(value.clone());
             }
@@ -169,22 +177,30 @@ fn tab_parse_new_options(argv: &[String]) -> Result<TabNewOptions, (i32, String)
                 let flag = argv[index].clone();
                 index += 1;
                 let Some(value) = argv.get(index) else {
-                    return Err(tab_new_usage_error(format!("tab new: {flag} requires a value")));
+                    return Err(tab_new_usage_error(format!(
+                        "tab new: {flag} requires a value"
+                    )));
                 };
                 if value.is_empty() {
-                    return Err(tab_new_usage_error("tab new: cwd requires a non-empty value"));
+                    return Err(tab_new_usage_error(
+                        "tab new: cwd requires a non-empty value",
+                    ));
                 }
                 cwd = Some(value.clone());
             }
             value if value.starts_with("--cwd=") => {
                 let value = &value["--cwd=".len()..];
                 if value.is_empty() {
-                    return Err(tab_new_usage_error("tab new: cwd requires a non-empty value"));
+                    return Err(tab_new_usage_error(
+                        "tab new: cwd requires a non-empty value",
+                    ));
                 }
                 cwd = Some(value.to_owned());
             }
             value if value.starts_with('-') => {
-                return Err(tab_new_usage_error(format!("tab new: unexpected option {value}")));
+                return Err(tab_new_usage_error(format!(
+                    "tab new: unexpected option {value}"
+                )));
             }
             value => {
                 if session.is_some() {
@@ -212,10 +228,7 @@ fn tab_new_usage_error(message: impl Into<String>) -> (i32, String) {
 
 fn tab_current_session<R: maw_tmux::TmuxRunner>(runner: &mut R) -> Result<String, (i32, String)> {
     runner
-        .run(
-            "display-message",
-            &["-p".to_owned(), "#S".to_owned()],
-        )
+        .run("display-message", &["-p".to_owned(), "#S".to_owned()])
         .map(|session| session.trim().to_owned())
         .map_err(|_| (1, "not inside a tmux session".to_owned()))
 }
@@ -243,8 +256,11 @@ fn tab_parse_windows(raw: &str) -> Vec<tab_Window> {
         .filter(|line| !line.is_empty())
         .map(|line| {
             let mut parts = line.splitn(3, ':');
-(
-                parts.next().and_then(|value| value.parse().ok()).unwrap_or(0),
+            (
+                parts
+                    .next()
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(0),
                 parts.next().unwrap_or_default().to_owned(),
                 parts.next() == Some("1"),
             )
@@ -255,7 +271,11 @@ fn tab_parse_windows(raw: &str) -> Vec<tab_Window> {
 fn tab_render_list(session: &str, tabs: &[tab_Window]) -> String {
     let mut stdout = format!("\x1b[36m{session}\x1b[0m tabs:\n");
     for tab in tabs {
-        let marker = if tab.2 { " \x1b[32m← you are here\x1b[0m" } else { "" };
+        let marker = if tab.2 {
+            " \x1b[32m← you are here\x1b[0m"
+        } else {
+            ""
+        };
         let _ = writeln!(stdout, "  {}: {}{marker}", tab.0, tab.1);
     }
     stdout
@@ -376,7 +396,11 @@ mod tab_tests {
     }
 
     impl maw_tmux::TmuxRunner for MockTmuxRunner {
-        fn run(&mut self, subcommand: &str, args: &[String]) -> Result<String, maw_tmux::TmuxError> {
+        fn run(
+            &mut self,
+            subcommand: &str,
+            args: &[String],
+        ) -> Result<String, maw_tmux::TmuxError> {
             self.calls.push((subcommand.to_owned(), args.to_vec()));
             match subcommand {
                 "display-message" => self.display_error.as_ref().map_or_else(
@@ -418,9 +442,17 @@ mod tab_tests {
                 ("display-message".to_owned(), strings(&["-p", "#S"])),
                 (
                     "list-windows".to_owned(),
-                    strings(&["-t", "neo", "-F", "#{window_index}:#{window_name}:#{window_active}"])
+                    strings(&[
+                        "-t",
+                        "neo",
+                        "-F",
+                        "#{window_index}:#{window_name}:#{window_active}"
+                    ])
                 ),
-                ("new-window".to_owned(), strings(&["-t", "neo:", "-n", "shell"])),
+                (
+                    "new-window".to_owned(),
+                    strings(&["-t", "neo:", "-n", "shell"])
+                ),
             ]
         );
     }
@@ -432,8 +464,11 @@ mod tab_tests {
             ..MockTmuxRunner::default()
         };
 
-        let output = tab_with_runner(&strings(&["new", "alpha", "--name", "scratch"]), &mut runner)
-            .expect("tab new explicit session");
+        let output = tab_with_runner(
+            &strings(&["new", "alpha", "--name", "scratch"]),
+            &mut runner,
+        )
+        .expect("tab new explicit session");
 
         assert_eq!(output.stdout, "created → alpha:scratch\n");
         assert_eq!(
@@ -441,9 +476,17 @@ mod tab_tests {
             vec![
                 (
                     "list-windows".to_owned(),
-                    strings(&["-t", "alpha", "-F", "#{window_index}:#{window_name}:#{window_active}"])
+                    strings(&[
+                        "-t",
+                        "alpha",
+                        "-F",
+                        "#{window_index}:#{window_name}:#{window_active}"
+                    ])
                 ),
-                ("new-window".to_owned(), strings(&["-t", "alpha:", "-n", "scratch"])),
+                (
+                    "new-window".to_owned(),
+                    strings(&["-t", "alpha:", "-n", "scratch"])
+                ),
             ]
         );
     }
@@ -492,8 +535,25 @@ mod tab_tests {
         .expect("tab new --cmd");
 
         assert_eq!(output.stdout, "created → alpha:scratch\n");
-        assert_eq!(runner.calls[0], ("list-windows".to_owned(), strings(&["-t", "alpha", "-F", "#{window_index}:#{window_name}:#{window_active}"])));
-        assert_eq!(runner.calls[1], ("new-window".to_owned(), strings(&["-t", "alpha:", "-n", "scratch"])));
+        assert_eq!(
+            runner.calls[0],
+            (
+                "list-windows".to_owned(),
+                strings(&[
+                    "-t",
+                    "alpha",
+                    "-F",
+                    "#{window_index}:#{window_name}:#{window_active}"
+                ])
+            )
+        );
+        assert_eq!(
+            runner.calls[1],
+            (
+                "new-window".to_owned(),
+                strings(&["-t", "alpha:", "-n", "scratch"])
+            )
+        );
         assert_eq!(
             runner.calls[2],
             (
@@ -510,7 +570,10 @@ mod tab_tests {
         );
         assert_eq!(
             runner.calls[5],
-            ("send-keys".to_owned(), strings(&["-t", "alpha:scratch", "Enter"]))
+            (
+                "send-keys".to_owned(),
+                strings(&["-t", "alpha:scratch", "Enter"])
+            )
         );
     }
 
@@ -537,7 +600,12 @@ mod tab_tests {
                 ("display-message".to_owned(), strings(&["-p", "#S"])),
                 (
                     "list-windows".to_owned(),
-                    strings(&["-t", "neo", "-F", "#{window_index}:#{window_name}:#{window_active}"])
+                    strings(&[
+                        "-t",
+                        "neo",
+                        "-F",
+                        "#{window_index}:#{window_name}:#{window_active}"
+                    ])
                 ),
             ]
         );
@@ -559,7 +627,10 @@ mod tab_tests {
                 "tab new: session required outside tmux; pass <session>\nusage: maw tab new [<session>] [--name <window>] [-c|--cwd <dir>] [--cmd <command>]".to_owned()
             )
         );
-        assert_eq!(runner.calls, vec![("display-message".to_owned(), strings(&["-p", "#S"]))]);
+        assert_eq!(
+            runner.calls,
+            vec![("display-message".to_owned(), strings(&["-p", "#S"]))]
+        );
     }
 
     #[test]
@@ -583,7 +654,12 @@ mod tab_tests {
                 ("display-message".to_owned(), strings(&["-p", "#S"])),
                 (
                     "list-windows".to_owned(),
-                    strings(&["-t", "03-neo", "-F", "#{window_index}:#{window_name}:#{window_active}"])
+                    strings(&[
+                        "-t",
+                        "03-neo",
+                        "-F",
+                        "#{window_index}:#{window_name}:#{window_active}"
+                    ])
                 ),
             ]
         );
@@ -615,7 +691,13 @@ mod tab_tests {
 
         let error = tab_with_runner(&strings(&["1"]), &mut runner).expect_err("missing");
 
-        assert_eq!(error, (1, "available: 0, 2\ntab 1 not found in session neo".to_owned()));
+        assert_eq!(
+            error,
+            (
+                1,
+                "available: 0, 2\ntab 1 not found in session neo".to_owned()
+            )
+        );
     }
 
     #[test]
@@ -629,7 +711,13 @@ mod tab_tests {
 
         let error = tab_with_runner(&strings(&["1", "hello"]), &mut runner).expect_err("guard");
 
-        assert_eq!(error, (1, "no active Claude session in work (use --force)".to_owned()));
+        assert_eq!(
+            error,
+            (
+                1,
+                "no active Claude session in work (use --force)".to_owned()
+            )
+        );
         assert_eq!(runner.calls.len(), 3);
     }
 
@@ -641,13 +729,31 @@ mod tab_tests {
             ..MockTmuxRunner::default()
         };
 
-        let output = tab_with_runner(&strings(&["1", "--force", "--talk", "hi", "there"]), &mut runner)
-            .expect("send");
+        let output = tab_with_runner(
+            &strings(&["1", "--force", "--talk", "hi", "there"]),
+            &mut runner,
+        )
+        .expect("send");
 
         assert_eq!(output.stdout, "\x1b[32mtalk\x1b[0m → work: hi there\n");
-        assert_eq!(runner.calls[2], ("display-message".to_owned(), strings(&["-t", "work", "-p", "#{pane_in_mode}"])));
-        assert_eq!(runner.calls[4], ("send-keys".to_owned(), strings(&["-t", "work", "-l", "hi there"])));
-        assert_eq!(runner.calls[5], ("send-keys".to_owned(), strings(&["-t", "work", "Enter"])));
+        assert_eq!(
+            runner.calls[2],
+            (
+                "display-message".to_owned(),
+                strings(&["-t", "work", "-p", "#{pane_in_mode}"])
+            )
+        );
+        assert_eq!(
+            runner.calls[4],
+            (
+                "send-keys".to_owned(),
+                strings(&["-t", "work", "-l", "hi there"])
+            )
+        );
+        assert_eq!(
+            runner.calls[5],
+            ("send-keys".to_owned(), strings(&["-t", "work", "Enter"]))
+        );
     }
 
     #[test]

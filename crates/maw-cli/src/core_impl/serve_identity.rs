@@ -56,7 +56,9 @@ fn serveidentity_command(argv: &[String]) -> CliOutput {
     match serveidentity_parse_args(argv) {
         Ok(()) => CliOutput {
             code: 0,
-            stdout: "serve-identity registers GET /api/identity from the maw serve lifecycle hook\n".to_owned(),
+            stdout:
+                "serve-identity registers GET /api/identity from the maw serve lifecycle hook\n"
+                    .to_owned(),
             stderr: String::new(),
         },
         Err(message) => serveidentity_usage_error(&message),
@@ -64,7 +66,9 @@ fn serveidentity_command(argv: &[String]) -> CliOutput {
 }
 
 fn serveidentity_parse_args(argv: &[String]) -> Result<(), String> {
-    let Some(arg) = argv.first() else { return Ok(()); };
+    let Some(arg) = argv.first() else {
+        return Ok(());
+    };
     match arg.as_str() {
         "--help" | "-h" | "help" => Err(String::new()),
         "--" => Err("serve-identity: -- separator is not supported".to_owned()),
@@ -74,10 +78,17 @@ fn serveidentity_parse_args(argv: &[String]) -> Result<(), String> {
 }
 
 fn serveidentity_usage_error(message: &str) -> CliOutput {
-    let prefix = if message.is_empty() { String::new() } else { format!("{message}\n") };
-    CliOutput { code: 2, stdout: String::new(), stderr: format!("{prefix}{SERVEIDENTITY_USAGE}\n") }
+    let prefix = if message.is_empty() {
+        String::new()
+    } else {
+        format!("{message}\n")
+    };
+    CliOutput {
+        code: 2,
+        stdout: String::new(),
+        stderr: format!("{prefix}{SERVEIDENTITY_USAGE}\n"),
+    }
 }
-
 
 /// The identity read-only path can fail two very different ways: a brand-new node that has
 /// never run `maw peers add` has no peer-key file yet (expected, pre-pairing state — #867), or
@@ -100,9 +111,7 @@ impl ServeidentityIdentityError {
 
     pub(crate) fn message(&self) -> String {
         match self {
-            Self::NotPaired => {
-                "this node has not been paired yet — run `maw peers add`".to_owned()
-            }
+            Self::NotPaired => "this node has not been paired yet — run `maw peers add`".to_owned(),
             Self::Failed(message) => message.clone(),
         }
     }
@@ -115,8 +124,7 @@ pub(crate) fn serveidentity_http_payload_read_only(
     Ok(serveidentity_identity_payload(&config, &deps))
 }
 
-fn serveidentity_default_read_only_deps() -> Result<ServeidentityDeps, ServeidentityIdentityError>
-{
+fn serveidentity_default_read_only_deps() -> Result<ServeidentityDeps, ServeidentityIdentityError> {
     Ok(ServeidentityDeps {
         version: MAW_RS_BUILD_VERSION.to_owned(),
         uptime_seconds: current_epoch_seconds().saturating_sub(serveidentity_process_started_at()),
@@ -124,7 +132,9 @@ fn serveidentity_default_read_only_deps() -> Result<ServeidentityDeps, Serveiden
         peer_key: serveidentity_read_peer_key()?,
         env_node_user: std::env::var("MAW_NODE_USER").ok(),
         env_service_user: std::env::var("MAW_SERVICE_USER").ok(),
-        process_user: std::env::var("USER").ok().or_else(|| std::env::var("LOGNAME").ok()),
+        process_user: std::env::var("USER")
+            .ok()
+            .or_else(|| std::env::var("LOGNAME").ok()),
     })
 }
 
@@ -155,7 +165,10 @@ fn serveidentity_read_peer_key() -> Result<String, ServeidentityIdentityError> {
 }
 
 #[allow(dead_code)]
-fn serveidentity_identity_payload(config: &ServeidentityConfig, deps: &ServeidentityDeps) -> serde_json::Value {
+fn serveidentity_identity_payload(
+    config: &ServeidentityConfig,
+    deps: &ServeidentityDeps,
+) -> serde_json::Value {
     let resolved = serveidentity_resolve_node(config, deps);
     let agents = serveidentity_hosted_agents(config, &resolved.node, &resolved.host);
     let mut payload = serde_json::json!({
@@ -179,7 +192,11 @@ fn serveidentity_identity_payload(config: &ServeidentityConfig, deps: &Serveiden
 }
 
 #[allow(dead_code)]
-fn serveidentity_insert_optional_fields(payload: &mut serde_json::Value, user: Option<&str>, port: Option<u16>) {
+fn serveidentity_insert_optional_fields(
+    payload: &mut serde_json::Value,
+    user: Option<&str>,
+    port: Option<u16>,
+) {
     if let Some(user) = user {
         payload["user"] = serde_json::Value::String(user.to_owned());
     }
@@ -189,22 +206,36 @@ fn serveidentity_insert_optional_fields(payload: &mut serde_json::Value, user: O
 }
 
 #[allow(dead_code)]
-fn serveidentity_resolve_node(config: &ServeidentityConfig, deps: &ServeidentityDeps) -> ServeidentityResolvedNode {
-    let host = serveidentity_clean(config.node.as_deref()).unwrap_or(SERVEIDENTITY_DEFAULT_HOST).to_owned();
+fn serveidentity_resolve_node(
+    config: &ServeidentityConfig,
+    deps: &ServeidentityDeps,
+) -> ServeidentityResolvedNode {
+    let host = serveidentity_clean(config.node.as_deref())
+        .unwrap_or(SERVEIDENTITY_DEFAULT_HOST)
+        .to_owned();
     let explicit_user = serveidentity_first_clean(&[
         config.node_user.as_deref(),
         config.service_user.as_deref(),
         deps.env_node_user.as_deref(),
         deps.env_service_user.as_deref(),
     ]);
-    let inferred_user = explicit_user.or_else(|| serveidentity_infer_process_user(config.port, deps.process_user.as_deref()));
+    let inferred_user = explicit_user
+        .or_else(|| serveidentity_infer_process_user(config.port, deps.process_user.as_deref()));
     let node = canonical_node_identity(&host, inferred_user.as_deref());
     let user = inferred_user.filter(|user| node != host && !user.is_empty());
-    ServeidentityResolvedNode { node, host, user, port: config.port }
+    ServeidentityResolvedNode {
+        node,
+        host,
+        user,
+        port: config.port,
+    }
 }
 
 #[allow(dead_code)]
-fn serveidentity_infer_process_user(port: Option<u16>, process_user: Option<&str>) -> Option<String> {
+fn serveidentity_infer_process_user(
+    port: Option<u16>,
+    process_user: Option<&str>,
+) -> Option<String> {
     if port.is_some_and(|port| port != SERVEIDENTITY_DEFAULT_PORT) {
         return serveidentity_clean(process_user).map(ToOwned::to_owned);
     }
@@ -213,7 +244,9 @@ fn serveidentity_infer_process_user(port: Option<u16>, process_user: Option<&str
 
 #[allow(dead_code)]
 fn serveidentity_first_clean(values: &[Option<&str>]) -> Option<String> {
-    values.iter().find_map(|value| serveidentity_clean(*value).map(ToOwned::to_owned))
+    values
+        .iter()
+        .find_map(|value| serveidentity_clean(*value).map(ToOwned::to_owned))
 }
 
 #[allow(dead_code)]
@@ -222,7 +255,11 @@ fn serveidentity_clean(value: Option<&str>) -> Option<&str> {
 }
 
 #[allow(dead_code)]
-fn serveidentity_hosted_agents(config: &ServeidentityConfig, node: &str, host: &str) -> Vec<String> {
+fn serveidentity_hosted_agents(
+    config: &ServeidentityConfig,
+    node: &str,
+    host: &str,
+) -> Vec<String> {
     let mut agents = hosted_agents(&config.agents, node);
     if host != node {
         agents.extend(hosted_agents(&config.agents, host));
@@ -232,7 +269,11 @@ fn serveidentity_hosted_agents(config: &ServeidentityConfig, node: &str, host: &
 
 #[allow(dead_code)]
 fn serveidentity_unique_sorted(values: Vec<String>) -> Vec<String> {
-    values.into_iter().collect::<BTreeSet<_>>().into_iter().collect()
+    values
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 #[allow(dead_code)]
@@ -285,17 +326,28 @@ fn serveidentity_date_from_days(days: i64) -> (i32, u32, u32) {
     let day = doy - (153 * mp + 2) / 5 + 1;
     let month = mp + if mp < 10 { 3 } else { -9 };
     let year = y + i64::from(month <= 2);
-    (i32::try_from(year).unwrap_or(i32::MAX), u32::try_from(month).unwrap_or(1), u32::try_from(day).unwrap_or(1))
+    (
+        i32::try_from(year).unwrap_or(i32::MAX),
+        u32::try_from(month).unwrap_or(1),
+        u32::try_from(day).unwrap_or(1),
+    )
 }
 
 #[allow(dead_code)]
 fn serveidentity_json_string(value: &serde_json::Value, key: &str) -> Option<String> {
-    value.get(key).and_then(serde_json::Value::as_str).and_then(|item| serveidentity_clean(Some(item))).map(ToOwned::to_owned)
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .and_then(|item| serveidentity_clean(Some(item)))
+        .map(ToOwned::to_owned)
 }
 
 #[allow(dead_code)]
 fn serveidentity_json_port(value: &serde_json::Value) -> Option<u16> {
-    value.get("port").and_then(serde_json::Value::as_u64).and_then(|port| u16::try_from(port).ok())
+    value
+        .get("port")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|port| u16::try_from(port).ok())
 }
 
 #[allow(dead_code)]
@@ -305,7 +357,9 @@ fn serveidentity_json_agents(value: &serde_json::Value) -> HashMap<String, Strin
         .and_then(serde_json::Value::as_object)
         .map(|map| {
             map.iter()
-                .filter_map(|(key, value)| value.as_str().map(|node| (key.clone(), node.to_owned())))
+                .filter_map(|(key, value)| {
+                    value.as_str().map(|node| (key.clone(), node.to_owned()))
+                })
                 .collect::<HashMap<_, _>>()
         })
         .unwrap_or_default()
@@ -356,14 +410,23 @@ mod serveidentity_tests {
 
     #[test]
     fn serveidentity_parser_rejects_separator_and_flags_before_work() {
-        assert!(serveidentity_parse_args(&serveidentity_strings(&["--"])).unwrap_err().contains("separator"));
-        assert!(serveidentity_parse_args(&serveidentity_strings(&["--token"])).unwrap_err().contains("unknown argument"));
-        assert!(serveidentity_parse_args(&serveidentity_strings(&["value"])).unwrap_err().contains("unknown argument"));
+        assert!(serveidentity_parse_args(&serveidentity_strings(&["--"]))
+            .unwrap_err()
+            .contains("separator"));
+        assert!(
+            serveidentity_parse_args(&serveidentity_strings(&["--token"]))
+                .unwrap_err()
+                .contains("unknown argument")
+        );
+        assert!(serveidentity_parse_args(&serveidentity_strings(&["value"]))
+            .unwrap_err()
+            .contains("unknown argument"));
     }
 
     #[test]
     fn serveidentity_payload_matches_identity_route_shape_without_real_secret() {
-        let payload = serveidentity_identity_payload(&serveidentity_config(), &serveidentity_deps());
+        let payload =
+            serveidentity_identity_payload(&serveidentity_config(), &serveidentity_deps());
         assert_eq!(payload["node"], "agent@white");
         assert_eq!(payload["host"], "white");
         assert_eq!(payload["user"], "agent");
@@ -385,12 +448,17 @@ mod serveidentity_tests {
         let mut config = serveidentity_config();
         config.oracle = None;
         let payload = serveidentity_identity_payload(&config, &serveidentity_deps());
-        assert!(payload.get("oracle").is_none(), "oracle must be omitted, got {:?}", payload.get("oracle"));
+        assert!(
+            payload.get("oracle").is_none(),
+            "oracle must be omitted, got {:?}",
+            payload.get("oracle")
+        );
     }
 
     #[test]
     fn serveidentity_publishes_configured_oracle_verbatim() {
-        let payload = serveidentity_identity_payload(&serveidentity_config(), &serveidentity_deps());
+        let payload =
+            serveidentity_identity_payload(&serveidentity_config(), &serveidentity_deps());
         assert_eq!(payload["oracle"], "gm-bo");
     }
 
@@ -423,10 +491,8 @@ mod serveidentity_tests {
         let _restore_maw_state = EnvVarRestore::capture("MAW_STATE_DIR");
         let _restore_maw_config = EnvVarRestore::capture("MAW_CONFIG_DIR");
         let _restore_peer = EnvVarRestore::capture("MAW_PEER_KEY");
-        let root = std::env::temp_dir().join(format!(
-            "maw-rs-serveidentity-{}",
-            current_epoch_seconds()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("maw-rs-serveidentity-{}", current_epoch_seconds()));
         let state = root.join("state");
         let config = root.join("config");
         std::fs::create_dir_all(&state).expect("state");
@@ -500,6 +566,9 @@ mod serveidentity_tests {
 
     #[test]
     fn serveidentity_unix_time_format_is_stable() {
-        assert_eq!(serveidentity_utc_from_unix(1_780_884_184), (2026, 6, 8, 2, 3, 4));
+        assert_eq!(
+            serveidentity_utc_from_unix(1_780_884_184),
+            (2026, 6, 8, 2, 3, 4)
+        );
     }
 }

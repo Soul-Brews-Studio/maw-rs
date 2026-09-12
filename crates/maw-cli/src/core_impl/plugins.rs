@@ -33,8 +33,16 @@ struct PluginsOptions {
 
 fn plugins_run_command(argv: &[String]) -> CliOutput {
     match plugins_run(argv) {
-        Ok(stdout) => CliOutput { code: 0, stdout, stderr: String::new() },
-        Err(message) => CliOutput { code: 2, stdout: String::new(), stderr: format!("{message}\n{PLUGINS_USAGE}\n") },
+        Ok(stdout) => CliOutput {
+            code: 0,
+            stdout,
+            stderr: String::new(),
+        },
+        Err(message) => CliOutput {
+            code: 2,
+            stdout: String::new(),
+            stderr: format!("{message}\n{PLUGINS_USAGE}\n"),
+        },
     }
 }
 
@@ -45,12 +53,18 @@ fn plugins_run(argv: &[String]) -> Result<String, String> {
     let profile = plugins_read_profile(&roots[0]);
     let report = plugins_discover(&roots, &disabled, profile.as_deref());
     match options.action.unwrap_or(PluginsAction::Ls) {
-        PluginsAction::Ls => Ok(plugins_render_ls(&report.plugins, &report.warnings, &options)),
+        PluginsAction::Ls => Ok(plugins_render_ls(
+            &report.plugins,
+            &report.warnings,
+            &options,
+        )),
         PluginsAction::Info => plugins_info(&report.plugins, &options),
         PluginsAction::Enable => plugins_enable(&roots[0], &report.plugins, &options),
         PluginsAction::Disable => plugins_disable(&roots[0], &report.plugins, &options),
         PluginsAction::Lean => plugins_set_profile(&roots[0], &report.plugins, "lean", &options),
-        PluginsAction::Standard => plugins_set_profile(&roots[0], &report.plugins, "standard", &options),
+        PluginsAction::Standard => {
+            plugins_set_profile(&roots[0], &report.plugins, "standard", &options)
+        }
         PluginsAction::Full => plugins_set_profile(&roots[0], &report.plugins, "full", &options),
         PluginsAction::Remove => plugins_remove(&roots[0], &report.plugins, &options, false),
         PluginsAction::Nuke => plugins_remove(&roots[0], &report.plugins, &options, true),
@@ -69,7 +83,9 @@ fn plugins_parse_args(argv: &[String]) -> Result<PluginsOptions, String> {
             "-v" | "--verbose" => options.verbose = true,
             "--yes" | "-y" => options.yes = true,
             "--scan-dir" => {
-                options.scan_dirs.push(plugins_take_path(argv, index, "--scan-dir")?);
+                options
+                    .scan_dirs
+                    .push(plugins_take_path(argv, index, "--scan-dir")?);
                 index += 1;
             }
             "--confirm" => {
@@ -110,15 +126,23 @@ fn plugins_parse_positional(options: &mut PluginsOptions, value: &str) -> Result
 }
 
 fn plugins_take_value(argv: &[String], index: usize, flag: &str) -> Result<String, String> {
-    let Some(value) = argv.get(index + 1) else { return Err(format!("plugins: {flag} requires a value")); };
+    let Some(value) = argv.get(index + 1) else {
+        return Err(format!("plugins: {flag} requires a value"));
+    };
     if value.starts_with('-') {
         return Err(format!("plugins: {flag} value must not start with '-'"));
     }
     Ok(value.clone())
 }
 
-fn plugins_take_path(argv: &[String], index: usize, flag: &str) -> Result<std::path::PathBuf, String> {
-    Ok(std::path::PathBuf::from(plugins_take_value(argv, index, flag)?))
+fn plugins_take_path(
+    argv: &[String],
+    index: usize,
+    flag: &str,
+) -> Result<std::path::PathBuf, String> {
+    Ok(std::path::PathBuf::from(plugins_take_value(
+        argv, index, flag,
+    )?))
 }
 
 fn plugins_flag_like_value(value: &str) -> String {
@@ -196,29 +220,71 @@ fn plugins_visible_rows<'a>(
 fn plugins_render_ls_compact(rows: &[PluginsRow<'_>]) -> String {
     let active = rows.iter().filter(|row| !row.disabled).count();
     let disabled = rows.len() - active;
-    format!("{} plugin{} ({} active, {} disabled)\n", rows.len(), if rows.len() == 1 { "" } else { "s" }, active, disabled)
+    format!(
+        "{} plugin{} ({} active, {} disabled)\n",
+        rows.len(),
+        if rows.len() == 1 { "" } else { "s" },
+        active,
+        disabled
+    )
 }
 
 fn plugins_render_ls_verbose(rows: &[PluginsRow<'_>]) -> String {
     let mut out = String::new();
     for row in rows {
-        let _ = writeln!(out, "{}\t{}\t{}\t{}\t{}", row.name, row.version, row.tier.as_str(), if row.disabled { "disabled" } else { "enabled" }, row.dir);
+        let _ = writeln!(
+            out,
+            "{}\t{}\t{}\t{}\t{}",
+            row.name,
+            row.version,
+            row.tier.as_str(),
+            if row.disabled { "disabled" } else { "enabled" },
+            row.dir
+        );
     }
     out
 }
 
-fn plugins_render_ls_json(plugins: &[maw_plugin_manifest::LoadedPlugin], warnings: &[String]) -> String {
-    let rows = plugins.iter().map(plugins_plugin_json).collect::<Vec<_>>().join(",");
-    format!("{{\"command\":\"plugins\",\"kind\":\"ls\",\"plugins\":[{rows}],\"warnings\":{}}}\n", json_string_array(warnings))
+fn plugins_render_ls_json(
+    plugins: &[maw_plugin_manifest::LoadedPlugin],
+    warnings: &[String],
+) -> String {
+    let rows = plugins
+        .iter()
+        .map(plugins_plugin_json)
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "{{\"command\":\"plugins\",\"kind\":\"ls\",\"plugins\":[{rows}],\"warnings\":{}}}\n",
+        json_string_array(warnings)
+    )
 }
 
-fn plugins_info(plugins: &[maw_plugin_manifest::LoadedPlugin], options: &PluginsOptions) -> Result<String, String> {
+fn plugins_info(
+    plugins: &[maw_plugin_manifest::LoadedPlugin],
+    options: &PluginsOptions,
+) -> Result<String, String> {
     let name = plugins_required_target(options)?;
     let plugin = plugins_find(plugins, &name)?;
     if options.json {
-        return Ok(format!("{{\"command\":\"plugins\",\"kind\":\"info\",\"plugin\":{}}}\n", plugins_plugin_json(plugin)));
+        return Ok(format!(
+            "{{\"command\":\"plugins\",\"kind\":\"info\",\"plugin\":{}}}\n",
+            plugins_plugin_json(plugin)
+        ));
     }
-    Ok(format!("{} v{} ({})\n  tier: {}\n  status: {}\n  dir: {}\n", plugin.manifest.name, plugin.manifest.version, plugin.kind.as_str(), maw_plugin_manifest::effective_tier(&plugin.manifest).as_str(), if plugin.disabled { "disabled" } else { "enabled" }, path_string(&plugin.dir)))
+    Ok(format!(
+        "{} v{} ({})\n  tier: {}\n  status: {}\n  dir: {}\n",
+        plugin.manifest.name,
+        plugin.manifest.version,
+        plugin.kind.as_str(),
+        maw_plugin_manifest::effective_tier(&plugin.manifest).as_str(),
+        if plugin.disabled {
+            "disabled"
+        } else {
+            "enabled"
+        },
+        path_string(&plugin.dir)
+    ))
 }
 
 fn plugins_enable(
@@ -258,14 +324,26 @@ fn plugins_set_profile(
 ) -> Result<String, String> {
     let selected = plugins
         .iter()
-        .filter(|plugin| plugins_profile_includes(Some(profile), maw_plugin_manifest::effective_tier(&plugin.manifest)))
+        .filter(|plugin| {
+            plugins_profile_includes(
+                Some(profile),
+                maw_plugin_manifest::effective_tier(&plugin.manifest),
+            )
+        })
         .map(|plugin| plugin.manifest.name.clone())
         .collect::<Vec<_>>();
     plugins_write_profile(root, profile)?;
     if options.json {
-        return Ok(format!("{{\"command\":\"plugins\",\"kind\":\"profile\",\"profile\":{},\"plugins\":{}}}\n", json_string(profile), json_string_array(&selected)));
+        return Ok(format!(
+            "{{\"command\":\"plugins\",\"kind\":\"profile\",\"profile\":{},\"plugins\":{}}}\n",
+            json_string(profile),
+            json_string_array(&selected)
+        ));
     }
-    Ok(format!("plugins profile {profile}: {} selected\n", selected.len()))
+    Ok(format!(
+        "plugins profile {profile}: {} selected\n",
+        selected.len()
+    ))
 }
 
 fn plugins_remove(
@@ -288,31 +366,55 @@ fn plugins_remove(
 
 fn plugins_render_state_change(action: &str, name: &str, options: &PluginsOptions) -> String {
     if options.json {
-        format!("{{\"command\":\"plugins\",\"kind\":{},\"plugin\":{}}}\n", json_string(action), json_string(name))
+        format!(
+            "{{\"command\":\"plugins\",\"kind\":{},\"plugin\":{}}}\n",
+            json_string(action),
+            json_string(name)
+        )
     } else {
         format!("plugins {action}: {name}\n")
     }
 }
 
-fn plugins_render_remove(action: &str, name: &str, path: &std::path::Path, options: &PluginsOptions) -> String {
+fn plugins_render_remove(
+    action: &str,
+    name: &str,
+    path: &std::path::Path,
+    options: &PluginsOptions,
+) -> String {
     if options.json {
-        format!("{{\"command\":\"plugins\",\"kind\":{},\"plugin\":{},\"removedDir\":{}}}\n", json_string(action), json_string(name), json_string(&path_string(path)))
+        format!(
+            "{{\"command\":\"plugins\",\"kind\":{},\"plugin\":{},\"removedDir\":{}}}\n",
+            json_string(action),
+            json_string(name),
+            json_string(&path_string(path))
+        )
     } else {
         format!("plugins {action}: removed {name} ({})\n", path.display())
     }
 }
 
 fn plugins_required_target(options: &PluginsOptions) -> Result<String, String> {
-    let Some(target) = options.target.as_ref() else { return Err("plugins: target plugin name is required".to_owned()); };
+    let Some(target) = options.target.as_ref() else {
+        return Err("plugins: target plugin name is required".to_owned());
+    };
     plugins_validate_name(target)?;
     Ok(target.clone())
 }
 
 fn plugins_validate_name(name: &str) -> Result<(), String> {
-    if name.is_empty() || name.starts_with('-') || name.contains('/') || name.contains('\\') || name.contains("..") {
+    if name.is_empty()
+        || name.starts_with('-')
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains("..")
+    {
         return Err("plugins: target rejected by #67 guard".to_owned());
     }
-    if !name.chars().all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-') {
+    if !name
+        .chars()
+        .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
+    {
         return Err("plugins: target must be a plugin slug".to_owned());
     }
     Ok(())
@@ -322,7 +424,9 @@ fn plugins_confirm_destructive(options: &PluginsOptions, name: &str) -> Result<(
     if options.yes || options.confirm.as_deref() == Some(name) {
         return Ok(());
     }
-    Err(format!("plugins: refusing destructive action for {name}; rerun with --yes or --confirm {name}"))
+    Err(format!(
+        "plugins: refusing destructive action for {name}; rerun with --yes or --confirm {name}"
+    ))
 }
 
 fn plugins_find<'a>(
@@ -339,8 +443,12 @@ fn plugins_validate_delete_target(
     root: &std::path::Path,
     target: &std::path::Path,
 ) -> Result<std::path::PathBuf, String> {
-    let root = root.canonicalize().map_err(|error| format!("plugins: root: {error}"))?;
-    let target = target.canonicalize().map_err(|error| format!("plugins: target: {error}"))?;
+    let root = root
+        .canonicalize()
+        .map_err(|error| format!("plugins: root: {error}"))?;
+    let target = target
+        .canonicalize()
+        .map_err(|error| format!("plugins: target: {error}"))?;
     if target == root || !target.starts_with(&root) || target.file_name().is_none() {
         return Err("plugins: delete target rejected by #67 guard".to_owned());
     }
@@ -360,32 +468,60 @@ fn plugins_read_disabled(root: &std::path::Path) -> Vec<String> {
 }
 
 fn plugins_write_disabled(root: &std::path::Path, disabled: &[String]) -> Result<(), String> {
-    plugins_write_json(root, &plugins_disabled_path(root), &format!("{{\"disabled\":{}}}\n", json_string_array(disabled)))
+    plugins_write_json(
+        root,
+        &plugins_disabled_path(root),
+        &format!("{{\"disabled\":{}}}\n", json_string_array(disabled)),
+    )
 }
 
 fn plugins_read_profile(root: &std::path::Path) -> Option<String> {
     let raw = std::fs::read_to_string(plugins_profile_path(root)).ok()?;
-    serde_json::from_str::<serde_json::Value>(&raw).ok()?.get("profile")?.as_str().map(str::to_owned)
+    serde_json::from_str::<serde_json::Value>(&raw)
+        .ok()?
+        .get("profile")?
+        .as_str()
+        .map(str::to_owned)
 }
 
 fn plugins_write_profile(root: &std::path::Path, profile: &str) -> Result<(), String> {
-    plugins_write_json(root, &plugins_profile_path(root), &format!("{{\"profile\":{}}}\n", json_string(profile)))
+    plugins_write_json(
+        root,
+        &plugins_profile_path(root),
+        &format!("{{\"profile\":{}}}\n", json_string(profile)),
+    )
 }
 
-fn plugins_write_json(root: &std::path::Path, path: &std::path::Path, text: &str) -> Result<(), String> {
-    std::fs::create_dir_all(root).map_err(|error| format!("plugins: create root failed: {error}"))?;
+fn plugins_write_json(
+    root: &std::path::Path,
+    path: &std::path::Path,
+    text: &str,
+) -> Result<(), String> {
+    std::fs::create_dir_all(root)
+        .map_err(|error| format!("plugins: create root failed: {error}"))?;
     std::fs::write(path, text).map_err(|error| format!("plugins: write failed: {error}"))
 }
 
 fn plugins_read_string_array(path: &std::path::Path, key: &str) -> Vec<String> {
-    let Ok(raw) = std::fs::read_to_string(path) else { return Vec::new(); };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else { return Vec::new(); };
-    value.get(key).and_then(serde_json::Value::as_array).map_or_else(Vec::new, |items| {
-        let mut out = items.iter().filter_map(serde_json::Value::as_str).map(str::to_owned).collect::<Vec<_>>();
-        out.sort();
-        out.dedup();
-        out
-    })
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return Vec::new();
+    };
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_array)
+        .map_or_else(Vec::new, |items| {
+            let mut out = items
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            out.sort();
+            out.dedup();
+            out
+        })
 }
 
 fn plugins_plugin_json(plugin: &maw_plugin_manifest::LoadedPlugin) -> String {
@@ -447,7 +583,11 @@ mod plugins_tests {
     fn plugins_seed(root: &std::path::Path, name: &str, tier: &str) {
         let dir = root.join(name);
         std::fs::create_dir_all(&dir).expect("plugin dir");
-        std::fs::write(dir.join("index.ts"), "export default function handler() {}\n").expect("entry");
+        std::fs::write(
+            dir.join("index.ts"),
+            "export default function handler() {}\n",
+        )
+        .expect("entry");
         std::fs::write(
             dir.join("plugin.json"),
             format!(r#"{{"name":"{name}","version":"1.0.0","sdk":"^1.0.0","entry":"index.ts","tier":"{tier}","cli":{{"command":"{name}"}},"description":"{name} plugin"}}"#),
@@ -466,11 +606,21 @@ mod plugins_tests {
         let root = plugins_temp("ls");
         plugins_seed(&root, "alpha", "core");
         plugins_seed(&root, "beta", "standard");
-        let output = plugins_run_command(&plugins_strings(&["ls", "--scan-dir", root.to_str().unwrap(), "--json"]));
+        let output = plugins_run_command(&plugins_strings(&[
+            "ls",
+            "--scan-dir",
+            root.to_str().unwrap(),
+            "--json",
+        ]));
         assert_eq!(output.code, 0, "{}", output.stderr);
         assert!(output.stdout.contains("\"alpha\""));
         assert!(output.stdout.contains("\"beta\""));
-        let info = plugins_run_command(&plugins_strings(&["info", "alpha", "--scan-dir", root.to_str().unwrap()]));
+        let info = plugins_run_command(&plugins_strings(&[
+            "info",
+            "alpha",
+            "--scan-dir",
+            root.to_str().unwrap(),
+        ]));
         assert_eq!(info.code, 0, "{}", info.stderr);
         assert!(info.stdout.contains("alpha v1.0.0"));
     }
@@ -480,11 +630,27 @@ mod plugins_tests {
         let root = plugins_temp("profile");
         plugins_seed(&root, "alpha", "core");
         plugins_seed(&root, "beta", "extra");
-        let disabled = plugins_run_command(&plugins_strings(&["disable", "beta", "--scan-dir", root.to_str().unwrap()]));
+        let disabled = plugins_run_command(&plugins_strings(&[
+            "disable",
+            "beta",
+            "--scan-dir",
+            root.to_str().unwrap(),
+        ]));
         assert_eq!(disabled.code, 0, "{}", disabled.stderr);
-        let listed = plugins_run_command(&plugins_strings(&["ls", "--all", "--scan-dir", root.to_str().unwrap(), "--json"]));
+        let listed = plugins_run_command(&plugins_strings(&[
+            "ls",
+            "--all",
+            "--scan-dir",
+            root.to_str().unwrap(),
+            "--json",
+        ]));
         assert!(listed.stdout.contains("\"disabled\":true"));
-        let lean = plugins_run_command(&plugins_strings(&["lean", "--scan-dir", root.to_str().unwrap(), "--json"]));
+        let lean = plugins_run_command(&plugins_strings(&[
+            "lean",
+            "--scan-dir",
+            root.to_str().unwrap(),
+            "--json",
+        ]));
         assert_eq!(lean.code, 0, "{}", lean.stderr);
         assert!(lean.stdout.contains("\"profile\":\"lean\""));
     }
@@ -493,12 +659,30 @@ mod plugins_tests {
     fn plugins_remove_requires_confirm_and_validates_target() {
         let root = plugins_temp("remove");
         plugins_seed(&root, "alpha", "core");
-        let refused = plugins_run_command(&plugins_strings(&["remove", "alpha", "--scan-dir", root.to_str().unwrap()]));
+        let refused = plugins_run_command(&plugins_strings(&[
+            "remove",
+            "alpha",
+            "--scan-dir",
+            root.to_str().unwrap(),
+        ]));
         assert_ne!(refused.code, 0);
         assert!(root.join("alpha").exists());
-        let bad = plugins_run_command(&plugins_strings(&["remove", "--bad", "--scan-dir", root.to_str().unwrap(), "--yes"]));
+        let bad = plugins_run_command(&plugins_strings(&[
+            "remove",
+            "--bad",
+            "--scan-dir",
+            root.to_str().unwrap(),
+            "--yes",
+        ]));
         assert_ne!(bad.code, 0);
-        let removed = plugins_run_command(&plugins_strings(&["remove", "alpha", "--scan-dir", root.to_str().unwrap(), "--confirm", "alpha"]));
+        let removed = plugins_run_command(&plugins_strings(&[
+            "remove",
+            "alpha",
+            "--scan-dir",
+            root.to_str().unwrap(),
+            "--confirm",
+            "alpha",
+        ]));
         assert_eq!(removed.code, 0, "{}", removed.stderr);
         assert!(!root.join("alpha").exists());
     }

@@ -1,4 +1,7 @@
-const DISPATCH_64: &[DispatcherEntry] = &[DispatcherEntry { command: "wake", handler: Handler::Async(wake_async_native) }];
+const DISPATCH_64: &[DispatcherEntry] = &[DispatcherEntry {
+    command: "wake",
+    handler: Handler::Async(wake_async_native),
+}];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)]
@@ -44,7 +47,6 @@ struct WakeOptionsNative {
     yes: bool,
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WakeResolvedNative {
     oracle: String,
@@ -59,22 +61,30 @@ struct WakeResolvedNative {
     target: String,
 }
 
-
-
-
-
-
-
 trait WakeTmuxNative {
     fn wake_list(&mut self) -> Result<Vec<TmuxSession>, String>;
     fn wake_list_for_initial_creation(&mut self) -> Result<Vec<TmuxSession>, String> {
         self.wake_list()
     }
     fn wake_has_session(&mut self, name: &str) -> bool;
-    fn wake_new_session(&mut self, name: &str, window: &str, cwd: &std::path::Path) -> Result<(), String>;
-    fn wake_new_window(&mut self, session: &str, window: &str, cwd: &std::path::Path) -> Result<(), String>;
+    fn wake_new_session(
+        &mut self,
+        name: &str,
+        window: &str,
+        cwd: &std::path::Path,
+    ) -> Result<(), String>;
+    fn wake_new_window(
+        &mut self,
+        session: &str,
+        window: &str,
+        cwd: &std::path::Path,
+    ) -> Result<(), String>;
     fn wake_send_text(&mut self, target: &str, text: &str) -> Result<(), String>;
-    fn wake_send_text_detached(&mut self, target: String, text: String) -> Result<Option<std::thread::JoinHandle<()>>, String> {
+    fn wake_send_text_detached(
+        &mut self,
+        target: String,
+        text: String,
+    ) -> Result<Option<std::thread::JoinHandle<()>>, String> {
         self.wake_send_text(&target, &text)?;
         Ok(None)
     }
@@ -82,7 +92,9 @@ trait WakeTmuxNative {
     fn wake_target_pane_id(&mut self, target: &str) -> Result<String, String>;
     fn wake_pane_current_command(&mut self, target: &str) -> Result<String, String>;
     fn wake_pane_capture(&mut self, target: &str) -> Result<String, String>;
-    fn wake_confirm_poll_sleep(&mut self, delay: std::time::Duration) { std::thread::sleep(delay); }
+    fn wake_confirm_poll_sleep(&mut self, delay: std::time::Duration) {
+        std::thread::sleep(delay);
+    }
 }
 
 struct WakeNativeTmux<R = maw_tmux::CommandTmuxRunner> {
@@ -110,9 +122,16 @@ impl<R: maw_tmux::TmuxRunner> WakeTmuxNative for WakeNativeTmux<R> {
             .map_err(|error| format!("tmux unreachable: {error}"))
     }
 
-    fn wake_has_session(&mut self, name: &str) -> bool { self.client.has_session(name) }
+    fn wake_has_session(&mut self, name: &str) -> bool {
+        self.client.has_session(name)
+    }
 
-    fn wake_new_session(&mut self, name: &str, window: &str, cwd: &std::path::Path) -> Result<(), String> {
+    fn wake_new_session(
+        &mut self,
+        name: &str,
+        window: &str,
+        cwd: &std::path::Path,
+    ) -> Result<(), String> {
         wake_validate_tmux_name(name, "session")?;
         wake_validate_tmux_name(window, "window")?;
         wake_validate_cwd(cwd)?;
@@ -123,22 +142,39 @@ impl<R: maw_tmux::TmuxRunner> WakeTmuxNative for WakeNativeTmux<R> {
             command: None,
             print_format: None,
         };
-        self.client.new_session(name, &opts).map(|_| ()).map_err(|error| error.to_string())
+        self.client
+            .new_session(name, &opts)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
     }
 
-    fn wake_new_window(&mut self, session: &str, window: &str, cwd: &std::path::Path) -> Result<(), String> {
+    fn wake_new_window(
+        &mut self,
+        session: &str,
+        window: &str,
+        cwd: &std::path::Path,
+    ) -> Result<(), String> {
         wake_validate_tmux_name(session, "session")?;
         wake_validate_tmux_name(window, "window")?;
         wake_validate_cwd(cwd)?;
-        self.client.new_window(session, window, Some(&cwd.display().to_string())).map_err(|error| error.to_string())
+        self.client
+            .new_window(session, window, Some(&cwd.display().to_string()))
+            .map_err(|error| error.to_string())
     }
 
     fn wake_send_text(&mut self, target: &str, text: &str) -> Result<(), String> {
         wake_validate_tmux_target(target)?;
-        self.client.send_text(target, text).map(|_| ()).map_err(|error| error.to_string())
+        self.client
+            .send_text(target, text)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
     }
 
-    fn wake_send_text_detached(&mut self, target: String, text: String) -> Result<Option<std::thread::JoinHandle<()>>, String> {
+    fn wake_send_text_detached(
+        &mut self,
+        target: String,
+        text: String,
+    ) -> Result<Option<std::thread::JoinHandle<()>>, String> {
         wake_validate_tmux_target(&target)?;
         std::thread::Builder::new()
             .name("maw-wake-send-text".to_owned())
@@ -152,7 +188,9 @@ impl<R: maw_tmux::TmuxRunner> WakeTmuxNative for WakeNativeTmux<R> {
 
     fn wake_pane_current_command(&mut self, target: &str) -> Result<String, String> {
         wake_validate_tmux_target(target)?;
-        self.client.display_pane_current_command(target).map_err(|error| error.to_string())
+        self.client
+            .display_pane_current_command(target)
+            .map_err(|error| error.to_string())
     }
 
     fn wake_target_pane_id(&mut self, target: &str) -> Result<String, String> {
@@ -172,7 +210,10 @@ impl<R: maw_tmux::TmuxRunner> WakeTmuxNative for WakeNativeTmux<R> {
             .output()
             .map_err(|error| format!("wake: failed to execute tmux capture-pane: {error}"))?;
         if !output.status.success() {
-            return Err(format!("wake: tmux capture-pane exited with status {}", output.status));
+            return Err(format!(
+                "wake: tmux capture-pane exited with status {}",
+                output.status
+            ));
         }
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
@@ -195,7 +236,13 @@ impl<R: maw_tmux::TmuxRunner> WakeTmuxNative for WakeNativeTmux<R> {
             .stderr(std::process::Stdio::inherit())
             .status()
             .map_err(|error| format!("wake: failed to execute tmux attach-session: {error}"))?;
-        if status.success() { Ok(()) } else { Err(format!("wake: tmux attach-session exited with status {status}")) }
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "wake: tmux attach-session exited with status {status}"
+            ))
+        }
     }
 }
 
@@ -207,7 +254,11 @@ fn wake_async_native(args: Vec<String>) -> Pin<Box<dyn Future<Output = CliOutput
         match wake_parse_args(&args) {
             Ok(options) if wake_should_use_peer_target(&options) => run_wake_async(args).await,
             Ok(_) => run_wake_command(&args),
-            Err(message) => CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") },
+            Err(message) => CliOutput {
+                code: 1,
+                stdout: String::new(),
+                stderr: format!("{message}\n"),
+            },
         }
     })
 }
@@ -227,7 +278,13 @@ fn run_wake_command_with(
 ) -> CliOutput {
     let options = match wake_parse_args(argv) {
         Ok(options) => options,
-        Err(message) => return CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") },
+        Err(message) => {
+            return CliOutput {
+                code: 1,
+                stdout: String::new(),
+                stderr: format!("{message}\n"),
+            }
+        }
     };
     let sessions = match if options.list || options.all {
         tmux.wake_list()
@@ -235,12 +292,28 @@ fn run_wake_command_with(
         tmux.wake_list_for_initial_creation()
     } {
         Ok(sessions) => sessions,
-        Err(message) => return CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") },
+        Err(message) => {
+            return CliOutput {
+                code: 1,
+                stdout: String::new(),
+                stderr: format!("{message}\n"),
+            }
+        }
     };
-    if let Some(output) = wake_picker_output(&options, &sessions, tmux, fleet_wake) { return output; }
+    if let Some(output) = wake_picker_output(&options, &sessions, tmux, fleet_wake) {
+        return output;
+    }
     match wake_run_options(&options, &sessions, tmux) {
-        Ok((code, stdout)) => CliOutput { code, stdout, stderr: String::new() },
-        Err(message) => CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") },
+        Ok((code, stdout)) => CliOutput {
+            code,
+            stdout,
+            stderr: String::new(),
+        },
+        Err(message) => CliOutput {
+            code: 1,
+            stdout: String::new(),
+            stderr: format!("{message}\n"),
+        },
     }
 }
 
@@ -254,17 +327,33 @@ fn wake_run(argv: &[String], tmux: &mut impl WakeTmuxNative) -> Result<(i32, Str
     wake_run_options(&options, &sessions, tmux)
 }
 
-fn wake_run_options(options: &WakeOptionsNative, sessions: &[TmuxSession], tmux: &mut impl WakeTmuxNative) -> Result<(i32, String), String> {
-    if options.list { return Ok((0, wake_render_list(options, sessions))); }
-    if options.all { return Ok((0, wake_render_all_plan(options, sessions))); }
+fn wake_run_options(
+    options: &WakeOptionsNative,
+    sessions: &[TmuxSession],
+    tmux: &mut impl WakeTmuxNative,
+) -> Result<(i32, String), String> {
+    if options.list {
+        return Ok((0, wake_render_list(options, sessions)));
+    }
+    if options.all {
+        return Ok((0, wake_render_all_plan(options, sessions)));
+    }
     if let Some(result) = wake_attach_live_registry_session(options, sessions, tmux) {
         return result;
     }
     let mut out = String::new();
     let started = std::time::Instant::now();
     let mut resolved = wake_resolve(options, sessions)?;
-    wake_record_phase(&resolved, "resolve", wake_elapsed_ms(started), &mut out, true);
-    if options.dry_run { return Ok((0, wake_render_dry_run(options, &resolved)?)); }
+    wake_record_phase(
+        &resolved,
+        "resolve",
+        wake_elapsed_ms(started),
+        &mut out,
+        true,
+    );
+    if options.dry_run {
+        return Ok((0, wake_render_dry_run(options, &resolved)?));
+    }
     wake_prepare_worktree(options, sessions, &mut resolved, &mut out)?;
     wake_apply(options, &resolved, tmux, &mut out)?;
     Ok((0, out))
@@ -275,7 +364,9 @@ fn wake_attach_live_registry_session(
     sessions: &[TmuxSession],
     tmux: &mut impl WakeTmuxNative,
 ) -> Option<Result<(i32, String), String>> {
-    if options.wt.is_some() || options.task.is_some() { return None; }
+    if options.wt.is_some() || options.task.is_some() {
+        return None;
+    }
     let requested_session = options.parent.as_deref()?;
     if !options.attach || options.dry_run || options.target != requested_session {
         return None;
@@ -287,10 +378,19 @@ fn wake_attach_live_registry_session(
     if !registry_has_session {
         return None;
     }
-    let live = sessions.iter().find(|session| session.name == requested_session)?;
-    let window = live.windows.iter().find(|window| window.active).or_else(|| live.windows.first())?;
+    let live = sessions
+        .iter()
+        .find(|session| session.name == requested_session)?;
+    let window = live
+        .windows
+        .iter()
+        .find(|window| window.active)
+        .or_else(|| live.windows.first())?;
     let target = format!("{requested_session}:{}", window.name);
-    Some(tmux.wake_select_window(&target).map(|()| (0, String::new())))
+    Some(
+        tmux.wake_select_window(&target)
+            .map(|()| (0, String::new())),
+    )
 }
 
 fn wake_picker_output(
@@ -303,9 +403,12 @@ fn wake_picker_output(
     let execute_without_prompt = rows.len() == 1
         && (options.yes
             || (options.dry_run
-                && rows[0].matched.candidate.kind == maw_matcher::ResolveCandidateKind::FleetSquad));
+                && rows[0].matched.candidate.kind
+                    == maw_matcher::ResolveCandidateKind::FleetSquad));
     if execute_without_prompt {
-        return Some(wake_run_picker_row(&rows[0], options, sessions, tmux, fleet_wake));
+        return Some(wake_run_picker_row(
+            &rows[0], options, sessions, tmux, fleet_wake,
+        ));
     }
     if !wake_stdin_is_terminal() {
         return Some(CliOutput {
@@ -314,10 +417,16 @@ fn wake_picker_output(
             stderr: String::new(),
         });
     }
-    Some(wake_prompt_picker(&options.target, context, &rows).map_or_else(
-        || CliOutput { code: 1, stdout: String::new(), stderr: "wake: picker cancelled\n".to_owned() },
-        |row| wake_run_picker_row(&row, options, sessions, tmux, fleet_wake),
-    ))
+    Some(
+        wake_prompt_picker(&options.target, context, &rows).map_or_else(
+            || CliOutput {
+                code: 1,
+                stdout: String::new(),
+                stderr: "wake: picker cancelled\n".to_owned(),
+            },
+            |row| wake_run_picker_row(&row, options, sessions, tmux, fleet_wake),
+        ),
+    )
 }
 
 fn wake_stdin_is_terminal() -> bool {
@@ -333,20 +442,34 @@ fn wake_prompt_picker(target: &str, context: &str, rows: &[PickerRow]) -> Option
         eprint!("pick [1-{}]{yes_hint} or q: ", rows.len());
         let _ = std::io::stderr().flush();
         let mut line = String::new();
-        if std::io::stdin().read_line(&mut line).is_err() { return None; }
+        if std::io::stdin().read_line(&mut line).is_err() {
+            return None;
+        }
         match picker_parse_selection(&line, rows.len()) {
             PickerSelection::Pick(index) => return rows.get(index).cloned(),
             PickerSelection::Quit => return None,
-            PickerSelection::Invalid => eprintln!("wake: enter a number from 1 to {} or q", rows.len()),
+            PickerSelection::Invalid => {
+                eprintln!("wake: enter a number from 1 to {} or q", rows.len());
+            }
         }
     }
 }
 
-fn wake_picker_rows(options: &WakeOptionsNative, sessions: &[TmuxSession]) -> Option<(&'static str, Vec<PickerRow>)> {
-    if options.list || options.all || options.target.contains(':') || wake_should_bypass_typed_resolution(options) {
+fn wake_picker_rows(
+    options: &WakeOptionsNative,
+    sessions: &[TmuxSession],
+) -> Option<(&'static str, Vec<PickerRow>)> {
+    if options.list
+        || options.all
+        || options.target.contains(':')
+        || wake_should_bypass_typed_resolution(options)
+    {
         return None;
     }
-    let alive = sessions.iter().map(|session| session.name.clone()).collect::<BTreeSet<_>>();
+    let alive = sessions
+        .iter()
+        .map(|session| session.name.clone())
+        .collect::<BTreeSet<_>>();
     let candidates = local_resolver_candidates(&alive);
     let (context, matches) = match maw_matcher::resolve_typed_target(&options.target, &candidates) {
         maw_matcher::ResolveTypedResult::Match { matched }
@@ -367,24 +490,41 @@ fn wake_picker_rows(options: &WakeOptionsNative, sessions: &[TmuxSession]) -> Op
             }
             ("matches multiple targets", preferred)
         }
-        maw_matcher::ResolveTypedResult::None =>
-            ("was not found exactly", deadend_closest_matches(&options.target, &candidates)),
+        maw_matcher::ResolveTypedResult::None => (
+            "was not found exactly",
+            deadend_closest_matches(&options.target, &candidates),
+        ),
         maw_matcher::ResolveTypedResult::Match { .. } => return None,
     };
-    let rows = matches.into_iter().filter_map(wake_picker_row).collect::<Vec<_>>();
+    let rows = matches
+        .into_iter()
+        .filter_map(wake_picker_row)
+        .collect::<Vec<_>>();
     (!rows.is_empty()).then_some((context, rows))
 }
 
-fn wake_preferred_matches(candidates: Vec<maw_matcher::ResolveMatch>) -> Vec<maw_matcher::ResolveMatch> {
-    let Some(priority) = candidates.iter().map(|matched| wake_kind_priority(matched.candidate.kind)).min() else { return Vec::new(); };
-    candidates.into_iter().filter(|matched| wake_kind_priority(matched.candidate.kind) == priority).collect()
+fn wake_preferred_matches(
+    candidates: Vec<maw_matcher::ResolveMatch>,
+) -> Vec<maw_matcher::ResolveMatch> {
+    let Some(priority) = candidates
+        .iter()
+        .map(|matched| wake_kind_priority(matched.candidate.kind))
+        .min()
+    else {
+        return Vec::new();
+    };
+    candidates
+        .into_iter()
+        .filter(|matched| wake_kind_priority(matched.candidate.kind) == priority)
+        .collect()
 }
 
 fn wake_kind_priority(kind: maw_matcher::ResolveCandidateKind) -> u8 {
     match kind {
         maw_matcher::ResolveCandidateKind::SleepingRegistry => 0,
         maw_matcher::ResolveCandidateKind::Oracle | maw_matcher::ResolveCandidateKind::Repo => 1,
-        maw_matcher::ResolveCandidateKind::LiveSession | maw_matcher::ResolveCandidateKind::Window => 2,
+        maw_matcher::ResolveCandidateKind::LiveSession
+        | maw_matcher::ResolveCandidateKind::Window => 2,
         maw_matcher::ResolveCandidateKind::FleetSquad => 3,
         maw_matcher::ResolveCandidateKind::Peer => 4,
     }
@@ -392,11 +532,17 @@ fn wake_kind_priority(kind: maw_matcher::ResolveCandidateKind) -> u8 {
 
 fn wake_picker_row(matched: maw_matcher::ResolveMatch) -> Option<PickerRow> {
     let action = match matched.candidate.kind {
-        maw_matcher::ResolveCandidateKind::FleetSquad => format!("maw fleet wake {}", matched.candidate.name),
+        maw_matcher::ResolveCandidateKind::FleetSquad => {
+            format!("maw fleet wake {}", matched.candidate.name)
+        }
         maw_matcher::ResolveCandidateKind::Peer => return None,
         _ => format!("maw wake {}", matched.candidate.name),
     };
-    Some(PickerRow { detail: attach_picker_detail(&matched), matched, action })
+    Some(PickerRow {
+        detail: attach_picker_detail(&matched),
+        matched,
+        action,
+    })
 }
 
 fn wake_run_picker_row(
@@ -407,13 +553,23 @@ fn wake_run_picker_row(
     fleet_wake: &mut impl FnMut(&[String]) -> CliOutput,
 ) -> CliOutput {
     if let Err(message) = wake_validate_target_value(&row.matched.candidate.name, "picker target") {
-        return CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") };
+        return CliOutput {
+            code: 1,
+            stdout: String::new(),
+            stderr: format!("{message}\n"),
+        };
     }
     if row.matched.candidate.kind == maw_matcher::ResolveCandidateKind::FleetSquad {
         let mut args = vec!["wake".to_owned(), row.matched.candidate.name.clone()];
-        if options.dry_run { args.push("--dry-run".to_owned()); }
-        if options.kill { args.push("--kill".to_owned()); }
-        if options.resume { args.push("--resume".to_owned()); }
+        if options.dry_run {
+            args.push("--dry-run".to_owned());
+        }
+        if options.kill {
+            args.push("--kill".to_owned());
+        }
+        if options.resume {
+            args.push("--resume".to_owned());
+        }
         return fleet_wake(&args);
     }
     let mut selected = options.clone();
@@ -421,44 +577,51 @@ fn wake_run_picker_row(
     selected.pick = false;
     selected.yes = false;
     match wake_run_options(&selected, sessions, tmux) {
-        Ok((code, stdout)) => CliOutput { code, stdout, stderr: String::new() },
-        Err(message) => CliOutput { code: 1, stdout: String::new(), stderr: format!("{message}\n") },
+        Ok((code, stdout)) => CliOutput {
+            code,
+            stdout,
+            stderr: String::new(),
+        },
+        Err(message) => CliOutput {
+            code: 1,
+            stdout: String::new(),
+            stderr: format!("{message}\n"),
+        },
     }
 }
 
 fn wake_should_use_peer_target(options: &WakeOptionsNative) -> bool {
-    if options.dry_run || options.list || options.all || options.repo.is_some() || options.incubate.is_some() { return false; }
-    if workon_github_slug(&options.target).is_some() { return false; }
+    if options.dry_run
+        || options.list
+        || options.all
+        || options.repo.is_some()
+        || options.incubate.is_some()
+    {
+        return false;
+    }
+    if workon_github_slug(&options.target).is_some() {
+        return false;
+    }
     options.target.contains(':') || options.peer.is_some()
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 fn wake_render_list(options: &WakeOptionsNative, sessions: &[TmuxSession]) -> String {
     let mut out = String::new();
-    let _ = writeln!(out, "\x1b[36mwake\x1b[0m live sessions for {}", wake_label(options));
-    if sessions.is_empty() { out.push_str("  no live sessions\n"); }
+    let _ = writeln!(
+        out,
+        "\x1b[36mwake\x1b[0m live sessions for {}",
+        wake_label(options)
+    );
+    if sessions.is_empty() {
+        out.push_str("  no live sessions\n");
+    }
     for session in sessions {
-        let _ = writeln!(out, "  - {} ({} windows)", session.name, session.windows.len());
+        let _ = writeln!(
+            out,
+            "  - {} ({} windows)",
+            session.name,
+            session.windows.len()
+        );
     }
     out
 }
@@ -468,27 +631,52 @@ fn wake_render_all_plan(options: &WakeOptionsNative, sessions: &[TmuxSession]) -
     let _ = writeln!(out, "\x1b[36mwake\x1b[0m all plan");
     let _ = writeln!(out, "  all-local: {}", options.all_local);
     let _ = writeln!(out, "  dry-run: {}", options.dry_run);
-    for session in sessions { let _ = writeln!(out, "  - {}", session.name); }
+    for session in sessions {
+        let _ = writeln!(out, "  - {}", session.name);
+    }
     out
 }
 
 fn wake_label(options: &WakeOptionsNative) -> String {
-    if options.target.is_empty() { "all".to_owned() } else { options.target.clone() }
+    if options.target.is_empty() {
+        "all".to_owned()
+    } else {
+        options.target.clone()
+    }
 }
 
-fn wake_resolve(options: &WakeOptionsNative, sessions: &[TmuxSession]) -> Result<WakeResolvedNative, String> {
-    let fleet_entries = fleet_load_entries().into_iter().filter(fleet_entry_is_session).collect::<Vec<_>>();
+fn wake_resolve(
+    options: &WakeOptionsNative,
+    sessions: &[TmuxSession],
+) -> Result<WakeResolvedNative, String> {
+    let fleet_entries = fleet_load_entries()
+        .into_iter()
+        .filter(fleet_entry_is_session)
+        .collect::<Vec<_>>();
     let initial_oracle = wake_oracle(options)?;
     let typed = wake_typed_resolution(options, &initial_oracle, &fleet_entries, sessions)?;
-    let typed_session_hint = typed.as_ref().and_then(|resolution| resolution.session_hint.clone());
-    let matched_window = typed.as_ref().and_then(|resolution| resolution.matched_window.clone());
-    let oracle = typed.as_ref().map_or_else(|| initial_oracle.clone(), |resolution| resolution.oracle.clone());
-    let repo = typed.map_or_else(|| wake_repo_path(options, &oracle, &fleet_entries), |resolution| Ok(resolution.repo))?;
+    let typed_session_hint = typed
+        .as_ref()
+        .and_then(|resolution| resolution.session_hint.clone());
+    let matched_window = typed
+        .as_ref()
+        .and_then(|resolution| resolution.matched_window.clone());
+    let oracle = typed.as_ref().map_or_else(
+        || initial_oracle.clone(),
+        |resolution| resolution.oracle.clone(),
+    );
+    let repo = typed.map_or_else(
+        || wake_repo_path(options, &oracle, &fleet_entries),
+        |resolution| Ok(resolution.repo),
+    )?;
     let mut repo_path = repo.path;
     if options.wt.is_some() || options.task.is_some() {
-        repo_path = workon_resolve_repo_from_path(&repo_path).map_or(repo_path.clone(), |repo| repo.repo_path);
+        repo_path = workon_resolve_repo_from_path(&repo_path)
+            .map_or(repo_path.clone(), |repo| repo.repo_path);
     }
-    let session_hint = typed_session_hint.or_else(|| wake_registry_session_hint(&initial_oracle, &repo_path, &fleet_entries, sessions));
+    let session_hint = typed_session_hint.or_else(|| {
+        wake_registry_session_hint(&initial_oracle, &repo_path, &fleet_entries, sessions)
+    });
     let session = options
         .parent
         .clone()
@@ -499,7 +687,9 @@ fn wake_resolve(options: &WakeOptionsNative, sessions: &[TmuxSession]) -> Result
     let window = wake_window_name(options, &oracle, matched_window.as_deref())?;
     let target = format!("{session}:{window}");
     let (command, mut command_warnings) = wake_command(&window, &repo_path, options);
-    if let Some(warning) = wake_worktree_priority_warning(options) { command_warnings.push(warning); }
+    if let Some(warning) = wake_worktree_priority_warning(options) {
+        command_warnings.push(warning);
+    }
     Ok(WakeResolvedNative {
         oracle,
         session,
@@ -514,72 +704,32 @@ fn wake_resolve(options: &WakeOptionsNative, sessions: &[TmuxSession]) -> Result
     })
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-fn wake_render_dry_run(options: &WakeOptionsNative, resolved: &WakeResolvedNative) -> Result<String, String> {
+fn wake_render_dry_run(
+    options: &WakeOptionsNative,
+    resolved: &WakeResolvedNative,
+) -> Result<String, String> {
     let mut out = String::new();
-    if let Some(warning) = &resolved.repo_warning { let _ = writeln!(out, "\x1b[33mwarning:\x1b[0m {warning}"); }
-    for warning in &resolved.command_warnings { let _ = writeln!(out, "\x1b[33mwarning:\x1b[0m {warning}"); }
+    if let Some(warning) = &resolved.repo_warning {
+        let _ = writeln!(out, "\x1b[33mwarning:\x1b[0m {warning}");
+    }
+    for warning in &resolved.command_warnings {
+        let _ = writeln!(out, "\x1b[33mwarning:\x1b[0m {warning}");
+    }
     if let Some(name) = &resolved.repo_fuzzy_match {
         let _ = writeln!(out, "\x1b[36m→\x1b[0m fuzzy match: {name}");
     }
-    let _ = writeln!(out, "\x1b[36m→\x1b[0m found \x1b[1m{}\x1b[0m ({})", resolved.oracle, resolved.repo_path.display());
+    let _ = writeln!(
+        out,
+        "\x1b[36m→\x1b[0m found \x1b[1m{}\x1b[0m ({})",
+        resolved.oracle,
+        resolved.repo_path.display()
+    );
     out.push_str("\x1b[90mdry-run — no tmux sessions/windows will be changed\x1b[0m\n");
-    let _ = writeln!(out, "\x1b[32m+\x1b[0m would wake window '{}' in session '{}'", resolved.window, resolved.session);
+    let _ = writeln!(
+        out,
+        "\x1b[32m+\x1b[0m would wake window '{}' in session '{}'",
+        resolved.window, resolved.session
+    );
     // #761 stayed invisible for two days because dry-run printed only the
     // target: an operator could not see that wake had silently resolved
     // `commands.default` instead of their per-agent entry. Print the launch
@@ -591,9 +741,17 @@ fn wake_render_dry_run(options: &WakeOptionsNative, resolved: &WakeResolvedNativ
     Ok(out)
 }
 
-fn wake_elapsed_ms(started: std::time::Instant) -> u64 { u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX) }
+fn wake_elapsed_ms(started: std::time::Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
 
-fn wake_record_phase(resolved: &WakeResolvedNative, phase: &str, ms: u64, out: &mut String, pre_attach: bool) {
+fn wake_record_phase(
+    resolved: &WakeResolvedNative,
+    phase: &str,
+    ms: u64,
+    out: &mut String,
+    pre_attach: bool,
+) {
     if pre_attach && ms > 300 {
         let _ = writeln!(out, "\x1b[36m→\x1b[0m wake {phase} took {ms}ms");
     }
@@ -622,16 +780,30 @@ fn wake_prepare_worktree(
     resolved: &mut WakeResolvedNative,
     out: &mut String,
 ) -> Result<(), String> {
-    let Some(slug) = wake_worktree_slug(options)? else { return Ok(()) };
+    let Some(slug) = wake_worktree_slug(options)? else {
+        return Ok(());
+    };
     let repo = workon_resolve_repo_from_path(&resolved.base_repo_path)
         .map_err(|error| wake_worktree_error(&error, &resolved.oracle))?;
     resolved.base_repo_path.clone_from(&repo.repo_path);
-    let layout = if options.layout.as_deref() == Some("legacy") { WorkonLayout::Legacy } else { WorkonLayout::Nested };
+    let layout = if options.layout.as_deref() == Some("legacy") {
+        WorkonLayout::Legacy
+    } else {
+        WorkonLayout::Nested
+    };
     let worktrees = workon_find_worktrees(&repo.parent_dir, &repo.repo_name);
-    let branches = workon_agent_branches(&repo.repo_path).map_err(|error| wake_worktree_error(&error, &resolved.oracle))?;
-    let request = WorkonResolvedWorktreeName { slug, named: false };
-    let plan = workon_plan_worktree(&repo, &request, options.fresh, layout, &worktrees, &branches)
+    let branches = workon_agent_branches(&repo.repo_path)
         .map_err(|error| wake_worktree_error(&error, &resolved.oracle))?;
+    let request = WorkonResolvedWorktreeName { slug, named: false };
+    let plan = workon_plan_worktree(
+        &repo,
+        &request,
+        options.fresh,
+        layout,
+        &worktrees,
+        &branches,
+    )
+    .map_err(|error| wake_worktree_error(&error, &resolved.oracle))?;
     let planned_path = match &plan {
         WorkonWorktreePlan::Reuse { path } => path,
         WorkonWorktreePlan::Create { wt_path, .. } => wt_path,
@@ -639,19 +811,35 @@ fn wake_prepare_worktree(
     wake_require_worktree_window_cwd(sessions, resolved, planned_path)?;
     resolved.repo_path = match plan {
         WorkonWorktreePlan::Reuse { path } => {
-            let _ = writeln!(out, "\x1b[33m⚡\x1b[0m reusing worktree: {}", path.display());
+            let _ = writeln!(
+                out,
+                "\x1b[33m⚡\x1b[0m reusing worktree: {}",
+                path.display()
+            );
             path
         }
-        WorkonWorktreePlan::Create { wt_path, branch, branch_exists, .. } => {
+        WorkonWorktreePlan::Create {
+            wt_path,
+            branch,
+            branch_exists,
+            ..
+        } => {
             workon_create_worktree(&repo, &wt_path, &branch, branch_exists, layout)
                 .map_err(|error| wake_worktree_error(&error, &resolved.oracle))?;
             let suffix = if branch_exists { ", reused branch" } else { "" };
-            let _ = writeln!(out, "\x1b[32m+\x1b[0m worktree: {} ({branch}{suffix})", wt_path.display());
+            let _ = writeln!(
+                out,
+                "\x1b[32m+\x1b[0m worktree: {} ({branch}{suffix})",
+                wt_path.display()
+            );
             wt_path
         }
     };
-    (resolved.command, resolved.command_warnings) = wake_command(&resolved.window, &resolved.repo_path, options);
-    if let Some(warning) = wake_worktree_priority_warning(options) { resolved.command_warnings.push(warning); }
+    (resolved.command, resolved.command_warnings) =
+        wake_command(&resolved.window, &resolved.repo_path, options);
+    if let Some(warning) = wake_worktree_priority_warning(options) {
+        resolved.command_warnings.push(warning);
+    }
     Ok(())
 }
 
@@ -663,16 +851,32 @@ fn wake_require_worktree_window_cwd(
     let Some(window) = sessions
         .iter()
         .find(|session| session.name == resolved.session)
-        .and_then(|session| session.windows.iter().find(|window| window.name == resolved.window))
-    else { return Ok(()) };
+        .and_then(|session| {
+            session
+                .windows
+                .iter()
+                .find(|window| window.name == resolved.window)
+        })
+    else {
+        return Ok(());
+    };
     let Some(cwd) = window.cwd.as_deref() else {
-        return Err(format!("wake: existing window '{}' has no reported cwd; close it with `maw done {}` and retry", resolved.target, resolved.target));
+        return Err(format!(
+            "wake: existing window '{}' has no reported cwd; close it with `maw done {}` and retry",
+            resolved.target, resolved.target
+        ));
     };
     let cwd = std::path::Path::new(cwd);
-    let actual = workon_resolve_repo_from_path(cwd)
-        .map_or_else(|_| cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf()), |repo| repo.repo_path.canonicalize().unwrap_or(repo.repo_path));
-    let planned = planned_path.canonicalize().unwrap_or_else(|_| planned_path.to_path_buf());
-    if actual == planned { return Ok(()) }
+    let actual = workon_resolve_repo_from_path(cwd).map_or_else(
+        |_| cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf()),
+        |repo| repo.repo_path.canonicalize().unwrap_or(repo.repo_path),
+    );
+    let planned = planned_path
+        .canonicalize()
+        .unwrap_or_else(|_| planned_path.to_path_buf());
+    if actual == planned {
+        return Ok(());
+    }
     Err(format!(
         "wake: existing window '{}' uses '{}', not planned worktree '{}'; close it with `maw done {}` and retry",
         resolved.target,
@@ -692,8 +896,9 @@ fn wake_worktree_error(error: &str, oracle: &str) -> String {
 }
 
 fn wake_worktree_priority_warning(options: &WakeOptionsNative) -> Option<String> {
-    (options.wt.is_some() && options.task.is_some())
-        .then(|| "wake: both --wt and --task were supplied; --wt takes priority over --task".to_owned())
+    (options.wt.is_some() && options.task.is_some()).then(|| {
+        "wake: both --wt and --task were supplied; --wt takes priority over --task".to_owned()
+    })
 }
 
 fn wake_apply(
@@ -703,44 +908,85 @@ fn wake_apply(
     out: &mut String,
 ) -> Result<(), String> {
     let started = std::time::Instant::now();
-    if !resolved.repo_path.is_dir() { return Err(format!("wake: repo path missing: {}", resolved.repo_path.display())); }
+    if !resolved.repo_path.is_dir() {
+        return Err(format!(
+            "wake: repo path missing: {}",
+            resolved.repo_path.display()
+        ));
+    }
     wake_record_phase(resolved, "repo-check", wake_elapsed_ms(started), out, true);
-    if let Some(warning) = &resolved.repo_warning { let _ = writeln!(out, "\x1b[33mwarning:\x1b[0m {warning}"); }
-    for warning in &resolved.command_warnings { let _ = writeln!(out, "\x1b[33mwarning:\x1b[0m {warning}"); }
+    if let Some(warning) = &resolved.repo_warning {
+        let _ = writeln!(out, "\x1b[33mwarning:\x1b[0m {warning}");
+    }
+    for warning in &resolved.command_warnings {
+        let _ = writeln!(out, "\x1b[33mwarning:\x1b[0m {warning}");
+    }
     if let Some(name) = &resolved.repo_fuzzy_match {
         let _ = writeln!(out, "\x1b[36m→\x1b[0m fuzzy match: {name}");
     }
     let started = std::time::Instant::now();
     let session_exists = tmux.wake_has_session(&resolved.session);
-    wake_record_phase(resolved, "session-probe", wake_elapsed_ms(started), out, true);
+    wake_record_phase(
+        resolved,
+        "session-probe",
+        wake_elapsed_ms(started),
+        out,
+        true,
+    );
     let started = std::time::Instant::now();
     let deferred_send = if session_exists {
         wake_create_or_reuse_window(options, resolved, tmux, out)?
     } else {
         wake_create_session(options, resolved, tmux, out)?
     };
-    wake_record_phase(resolved, "first-window", wake_elapsed_ms(started), out, true);
+    wake_record_phase(
+        resolved,
+        "first-window",
+        wake_elapsed_ms(started),
+        out,
+        true,
+    );
     if options.attach {
         let send_thread = if deferred_send {
             tmux.wake_send_text_detached(resolved.target.clone(), resolved.command.clone())?
-        } else { None };
+        } else {
+            None
+        };
         wake_record_phase(resolved, "attach", 0, out, false);
         let attach_result = tmux.wake_select_window(&resolved.target);
         if let Some(send_thread) = send_thread {
-            send_thread.join().map_err(|_| "wake: engine sender thread panicked".to_owned())?;
+            send_thread
+                .join()
+                .map_err(|_| "wake: engine sender thread panicked".to_owned())?;
         }
         attach_result?;
     }
     let started = std::time::Instant::now();
     wake_register_fleet_session(resolved, tmux)?;
-    wake_record_phase(resolved, "fleet-upsert", wake_elapsed_ms(started), out, false);
+    wake_record_phase(
+        resolved,
+        "fleet-upsert",
+        wake_elapsed_ms(started),
+        out,
+        false,
+    );
     let started = std::time::Instant::now();
     let hooks = wake_post_wake_hooks(options, &resolved.repo_path);
-    wake_run_post_wake_hooks(&resolved.oracle, &resolved.session, &resolved.window, &hooks);
-    wake_record_phase(resolved, "post-wake-hooks", wake_elapsed_ms(started), out, false);
+    wake_run_post_wake_hooks(
+        &resolved.oracle,
+        &resolved.session,
+        &resolved.window,
+        &hooks,
+    );
+    wake_record_phase(
+        resolved,
+        "post-wake-hooks",
+        wake_elapsed_ms(started),
+        out,
+        false,
+    );
     Ok(())
 }
-
 
 fn wake_post_wake_hooks(options: &WakeOptionsNative, cwd: &std::path::Path) -> Vec<String> {
     let mut hooks = wake_config_post_wake_hooks(Some(cwd));
@@ -767,7 +1013,12 @@ fn wake_config_post_wake_hooks(cwd: Option<&std::path::Path>) -> Vec<String> {
 }
 
 fn wake_run_post_wake_hooks(oracle: &str, session: &str, window: &str, hooks: &[String]) {
-    for hook in hooks.iter().map(String::as_str).map(str::trim).filter(|hook| !hook.is_empty()) {
+    for hook in hooks
+        .iter()
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|hook| !hook.is_empty())
+    {
         let _ = std::process::Command::new("sh")
             .arg("-c")
             .arg(hook)
@@ -780,26 +1031,29 @@ fn wake_run_post_wake_hooks(oracle: &str, session: &str, window: &str, hooks: &[
     }
 }
 
-
-
-
-
-
-
-
-
-
-
-fn wake_create_session(options: &WakeOptionsNative, resolved: &WakeResolvedNative, tmux: &mut impl WakeTmuxNative, out: &mut String) -> Result<bool, String> {
+fn wake_create_session(
+    options: &WakeOptionsNative,
+    resolved: &WakeResolvedNative,
+    tmux: &mut impl WakeTmuxNative,
+    out: &mut String,
+) -> Result<bool, String> {
     tmux.wake_new_session(&resolved.session, &resolved.window, &resolved.repo_path)?;
     wake_wait_for_shell_ready(tmux, &resolved.target);
     if options.attach {
-        let _ = writeln!(out, "\x1b[32m+\x1b[0m created session '{}' (main: {})", resolved.session, resolved.window);
+        let _ = writeln!(
+            out,
+            "\x1b[32m+\x1b[0m created session '{}' (main: {})",
+            resolved.session, resolved.window
+        );
         return Ok(true);
     }
     tmux.wake_send_text(&resolved.target, &resolved.command)?;
     wake_confirm_engine_launch(tmux, &resolved.target, &resolved.command)?;
-    let _ = writeln!(out, "\x1b[32m+\x1b[0m created session '{}' (attach: maw a {})", resolved.session, resolved.session);
+    let _ = writeln!(
+        out,
+        "\x1b[32m+\x1b[0m created session '{}' (attach: maw a {})",
+        resolved.session, resolved.session
+    );
     Ok(false)
 }
 
@@ -809,7 +1063,12 @@ fn wake_create_or_reuse_window(
     tmux: &mut impl WakeTmuxNative,
     out: &mut String,
 ) -> Result<bool, String> {
-    let windows = tmux.wake_list()?.into_iter().find(|session| session.name == resolved.session).map(|session| session.windows).unwrap_or_default();
+    let windows = tmux
+        .wake_list()?
+        .into_iter()
+        .find(|session| session.name == resolved.session)
+        .map(|session| session.windows)
+        .unwrap_or_default();
     let mut self_pane_launch = false;
     if !options.new_window && windows.iter().any(|window| window.name == resolved.window) {
         self_pane_launch = wake_target_is_current_pane(tmux, &resolved.target);
@@ -817,7 +1076,11 @@ fn wake_create_or_reuse_window(
             match tmux.wake_pane_current_command(&resolved.target) {
                 Ok(command) if wake_pane_command_is_shell(&command) => {}
                 Ok(_) | Err(_) => {
-                    let _ = writeln!(out, "\x1b[32m⚡\x1b[0m '{}' running in {}", resolved.window, resolved.session);
+                    let _ = writeln!(
+                        out,
+                        "\x1b[32m⚡\x1b[0m '{}' running in {}",
+                        resolved.window, resolved.session
+                    );
                     return Ok(false);
                 }
             }
@@ -827,14 +1090,26 @@ fn wake_create_or_reuse_window(
         wake_wait_for_shell_ready(tmux, &resolved.target);
     }
     if options.attach {
-        let _ = writeln!(out, "\x1b[32m✅\x1b[0m woke '{}' in {} → {}", resolved.window, resolved.session, resolved.repo_path.display());
+        let _ = writeln!(
+            out,
+            "\x1b[32m✅\x1b[0m woke '{}' in {} → {}",
+            resolved.window,
+            resolved.session,
+            resolved.repo_path.display()
+        );
         return Ok(true);
     }
     tmux.wake_send_text(&resolved.target, &resolved.command)?;
     if !self_pane_launch {
         wake_confirm_engine_launch(tmux, &resolved.target, &resolved.command)?;
     }
-    let _ = writeln!(out, "\x1b[32m✅\x1b[0m woke '{}' in {} → {}", resolved.window, resolved.session, resolved.repo_path.display());
+    let _ = writeln!(
+        out,
+        "\x1b[32m✅\x1b[0m woke '{}' in {} → {}",
+        resolved.window,
+        resolved.session,
+        resolved.repo_path.display()
+    );
     Ok(false)
 }
 
@@ -859,7 +1134,9 @@ fn wake_registry_windows(
         .wake_list()?
         .into_iter()
         .find(|session| session.name == resolved.session)
-        .map_or_else(Vec::new, |session| fleet_registry_windows_from_tmux(&session.windows, None));
+        .map_or_else(Vec::new, |session| {
+            fleet_registry_windows_from_tmux(&session.windows, None)
+        });
     // Every window `wake` is actually touching here -- the one it just
     // created and any sibling already registered against the same repo (a
     // fan-out, or a `--task`/`--wt` follow-up window on the same repo path)
@@ -871,7 +1148,10 @@ fn wake_registry_windows(
     // recomputing it that way on every wake call would keep re-breaking a
     // sibling window each time a *different* window on the same repo is the
     // one being freshly touched (#783). Windows on other repos are untouched.
-    let kind = Some(wake_registration_kind(&resolved.base_repo_path, &resolved.window));
+    let kind = Some(wake_registration_kind(
+        &resolved.base_repo_path,
+        &resolved.window,
+    ));
     if let Some(repo) = fleet_repo_slug_from_path(&resolved.base_repo_path, None) {
         let repo_key = fleet_repo_canonical_key(&repo);
         for window in &mut windows {
@@ -883,7 +1163,11 @@ fn wake_registry_windows(
             }
         }
         if !windows.iter().any(|window| window.name == resolved.window) {
-            windows.push(FleetWindowSummary { name: resolved.window.clone(), repo, kind });
+            windows.push(FleetWindowSummary {
+                name: resolved.window.clone(),
+                repo,
+                kind,
+            });
         }
     }
     Ok(windows)
@@ -899,6 +1183,13 @@ fn wake_registry_windows(
 // instead: its own directory name (not the stripped window name) for the
 // `-oracle` suffix, or the ψ/+CLAUDE.md shape every bud/awaken produces.
 fn wake_registration_kind(repo_path: &std::path::Path, window_name: &str) -> NativeRepoKind {
-    let repo_name = repo_path.file_name().and_then(std::ffi::OsStr::to_str).unwrap_or(window_name);
-    if native_repo_shape_looks_like_oracle(repo_path, repo_name) { NativeRepoKind::Oracle } else { NativeRepoKind::Project }
+    let repo_name = repo_path
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or(window_name);
+    if native_repo_shape_looks_like_oracle(repo_path, repo_name) {
+        NativeRepoKind::Oracle
+    } else {
+        NativeRepoKind::Project
+    }
 }

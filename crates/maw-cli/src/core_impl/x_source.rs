@@ -297,8 +297,9 @@ pub fn resolve_x_registry_verb(
     registry_owner: &str,
     registry_repo: &str,
 ) -> Result<ResolvedFetch, String> {
-    let package_path = normalize_x_subpath(&entry.path)
-        .map_err(|error| format!("x resolve: registry entry for '{verb}' has an unsafe path — {error}"))?;
+    let package_path = normalize_x_subpath(&entry.path).map_err(|error| {
+        format!("x resolve: registry entry for '{verb}' has an unsafe path — {error}")
+    })?;
     if !matches!(classify_x_git_ref(&entry.commit), XGitRef::Commit(_)) {
         return Err(format!(
             "x resolve: registry entry for '{verb}' has a non-commit pin '{}' — registry entries must pin a 40-hex commit SHA",
@@ -442,8 +443,7 @@ pub fn x_manifest_fetch_info(raw: &serde_json::Value) -> Result<XManifestFetchIn
         .and_then(serde_json::Value::as_str)
         .filter(|value| !value.is_empty())
         .map_or_else(|| name.clone(), str::to_owned);
-    let target_wasm =
-        raw.get("target").and_then(serde_json::Value::as_str) == Some("wasm");
+    let target_wasm = raw.get("target").and_then(serde_json::Value::as_str) == Some("wasm");
     let artifact = raw.get("artifact").and_then(serde_json::Value::as_object);
     let artifact_path = artifact
         .and_then(|object| object.get("path"))
@@ -462,7 +462,10 @@ pub fn x_manifest_fetch_info(raw: &serde_json::Value) -> Result<XManifestFetchIn
         })
         .transpose()?;
     let mut bundled = Vec::new();
-    if let Some(entries) = raw.get("bundledArtifacts").and_then(serde_json::Value::as_array) {
+    if let Some(entries) = raw
+        .get("bundledArtifacts")
+        .and_then(serde_json::Value::as_array)
+    {
         for entry in entries {
             let object = entry
                 .as_object()
@@ -481,15 +484,21 @@ pub fn x_manifest_fetch_info(raw: &serde_json::Value) -> Result<XManifestFetchIn
                     })
                 })
                 .transpose()?;
-            bundled.push(XBundledArtifact { path: normalize_x_manifest_file(path)?, sha256 });
+            bundled.push(XBundledArtifact {
+                path: normalize_x_manifest_file(path)?,
+                sha256,
+            });
         }
     }
-    let capabilities = raw.get("capabilities").and_then(serde_json::Value::as_array).map(|list| {
-        list.iter()
-            .filter_map(serde_json::Value::as_str)
-            .map(str::to_owned)
-            .collect::<Vec<_>>()
-    });
+    let capabilities = raw
+        .get("capabilities")
+        .and_then(serde_json::Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        });
     let sdk = raw
         .get("sdk")
         .and_then(serde_json::Value::as_str)
@@ -568,7 +577,12 @@ pub fn verify_x_fetched_artifact(bytes: &[u8], url: &str, pin: &str) -> Result<(
 #[must_use]
 pub fn x_resolution_plan(resolved: &ResolvedFetch) -> XResolutionPlan {
     match &resolved.plan {
-        XFetchPlan::Raw { commit, package_path, registry, .. } => XResolutionPlan {
+        XFetchPlan::Raw {
+            commit,
+            package_path,
+            registry,
+            ..
+        } => XResolutionPlan {
             source: resolved.canonical_source.clone(),
             commit: Some(commit.clone()),
             path: (!package_path.is_empty()).then(|| package_path.clone()),
@@ -731,7 +745,13 @@ pub fn resolve_x_spec(
                 &verb,
                 &format!("{registry_owner}/{registry_repo}"),
             )?;
-            resolve_x_registry_verb(&verb, reference.as_ref(), entry, registry_owner, registry_repo)
+            resolve_x_registry_verb(
+                &verb,
+                reference.as_ref(),
+                entry,
+                registry_owner,
+                registry_repo,
+            )
         }
     }
 }
@@ -750,16 +770,29 @@ pub fn execute_x_fetch(
     options: &XFetchOptions<'_>,
 ) -> Result<XFetchedPackage, String> {
     match &resolved.plan {
-        XFetchPlan::Raw { owner, repo, commit, package_path, registry } => {
-            execute_x_raw_fetch(
-                resolved,
-                &RawFetchTarget { owner, repo, commit, package_path },
-                registry.as_ref(),
-                explicit_sha256,
-                options,
-            )
-        }
-        XFetchPlan::Clone { url, reference, subpath } => execute_x_clone_fetch(
+        XFetchPlan::Raw {
+            owner,
+            repo,
+            commit,
+            package_path,
+            registry,
+        } => execute_x_raw_fetch(
+            resolved,
+            &RawFetchTarget {
+                owner,
+                repo,
+                commit,
+                package_path,
+            },
+            registry.as_ref(),
+            explicit_sha256,
+            options,
+        ),
+        XFetchPlan::Clone {
+            url,
+            reference,
+            subpath,
+        } => execute_x_clone_fetch(
             resolved,
             url,
             reference.as_deref(),
@@ -789,7 +822,12 @@ fn execute_x_raw_fetch(
     explicit_sha256: Option<&str>,
     options: &XFetchOptions<'_>,
 ) -> Result<XFetchedPackage, String> {
-    let RawFetchTarget { owner, repo, commit, package_path } = *target;
+    let RawFetchTarget {
+        owner,
+        repo,
+        commit,
+        package_path,
+    } = *target;
     let manifest_url = x_raw_file_url(owner, repo, commit, package_path, "plugin.json");
     let manifest_bytes = x_http_get(&manifest_url, options.timeout_secs)?;
     let raw: serde_json::Value = serde_json::from_slice(&manifest_bytes)
@@ -878,8 +916,15 @@ fn execute_x_clone_fetch(
     options: &XFetchOptions<'_>,
 ) -> Result<XFetchedPackage, String> {
     let tmp = create_plugin_install_temp_dir()?;
-    let result =
-        execute_x_clone_fetch_in_temp(resolved, url, reference, subpath, explicit_sha256, options, &tmp);
+    let result = execute_x_clone_fetch_in_temp(
+        resolved,
+        url,
+        reference,
+        subpath,
+        explicit_sha256,
+        options,
+        &tmp,
+    );
     let cleanup = std::fs::remove_dir_all(&tmp);
     match (result, cleanup) {
         (Ok(fetched), Ok(())) => Ok(fetched),
@@ -901,7 +946,10 @@ fn execute_x_clone_fetch_in_temp(
     let commit = x_git_head_commit(tmp)?;
     let package_dir = subpath.map_or_else(|| tmp.to_owned(), |path| tmp.join(path));
     if !package_dir.is_dir() {
-        return Err(format!("x fetch: subpath not found in {url}: {}", package_dir.display()));
+        return Err(format!(
+            "x fetch: subpath not found in {url}: {}",
+            package_dir.display()
+        ));
     }
     // The ONE shared verify fork (WI-1): manifest pin, traversal guard,
     // digest match, --sha256 mismatch fatal.
@@ -978,7 +1026,12 @@ fn execute_x_local(
         let raw = read_raw_plugin_install_manifest(&dir)?
             .ok_or_else(|| format!("x fetch: no plugin.json in {path}"))?;
         let info = x_manifest_fetch_info(&raw)?;
-        (info.artifact_sha256, info.capabilities, info.sdk, path.to_owned())
+        (
+            info.artifact_sha256,
+            info.capabilities,
+            info.sdk,
+            path.to_owned(),
+        )
     } else {
         (None, None, None, path.to_owned())
     };
@@ -1101,8 +1154,8 @@ mod x_source_tests {
             .enable_all()
             .build()
             .expect("outer runtime");
-        let result = runtime
-            .block_on(async { x_http_get("http://127.0.0.1:9/x-576-regression.json", 1) });
+        let result =
+            runtime.block_on(async { x_http_get("http://127.0.0.1:9/x-576-regression.json", 1) });
         let error = result.expect_err("unreachable URL must fail with an error, not a panic");
         assert!(error.contains("x fetch:"), "{error}");
     }
@@ -1114,7 +1167,10 @@ mod x_source_tests {
         let route = route_x_spec(&parse_x_spec("costs").expect("parse")).expect("route");
         assert_eq!(
             route,
-            XRoute::Registry { verb: "costs".to_owned(), reference: None }
+            XRoute::Registry {
+                verb: "costs".to_owned(),
+                reference: None
+            }
         );
         let route = route_x_spec(&parse_x_spec("costs@main").expect("parse")).expect("route");
         assert_eq!(
@@ -1140,7 +1196,10 @@ mod x_source_tests {
                 registry: None,
             }
         );
-        assert_eq!(fetch.canonical_source, format!("gh:acme/tools@{HEX40}/packages/costs"));
+        assert_eq!(
+            fetch.canonical_source,
+            format!("gh:acme/tools@{HEX40}/packages/costs")
+        );
     }
 
     #[test]
@@ -1179,14 +1238,20 @@ mod x_source_tests {
             }
         );
         let fetch = resolved("file:./plugins/costs");
-        assert_eq!(fetch.plan, XFetchPlan::Local { path: "./plugins/costs".to_owned() });
+        assert_eq!(
+            fetch.plan,
+            XFetchPlan::Local {
+                path: "./plugins/costs".to_owned()
+            }
+        );
         assert_eq!(fetch.canonical_source, "file:./plugins/costs");
     }
 
     #[test]
     fn unsupported_schemes_name_their_milestone() {
-        let error = route_x_spec(&parse_x_spec("gh-release:acme/tools@v1#x.tar.gz").expect("parse"))
-            .expect_err("gh-release unsupported");
+        let error =
+            route_x_spec(&parse_x_spec("gh-release:acme/tools@v1#x.tar.gz").expect("parse"))
+                .expect_err("gh-release unsupported");
         assert!(error.contains("not yet supported (V1.1)"), "{error}");
         let error = route_x_spec(&parse_x_spec("npm:@maw-rs/costs").expect("parse"))
             .expect_err("npm unsupported");
@@ -1214,7 +1279,14 @@ mod x_source_tests {
             X_DEFAULT_REGISTRY_REPO,
         )
         .expect("resolve");
-        let XFetchPlan::Raw { owner, repo, commit, package_path, registry } = &fetch.plan else {
+        let XFetchPlan::Raw {
+            owner,
+            repo,
+            commit,
+            package_path,
+            registry,
+        } = &fetch.plan
+        else {
             panic!("registry verb should raw-fetch");
         };
         assert_eq!(
@@ -1254,7 +1326,13 @@ mod x_source_tests {
         )
         .expect("resolve");
         assert!(
-            matches!(&fetch.plan, XFetchPlan::Raw { registry: Some(_), .. }),
+            matches!(
+                &fetch.plan,
+                XFetchPlan::Raw {
+                    registry: Some(_),
+                    ..
+                }
+            ),
             "own commit keeps registry meta"
         );
         // A foreign commit is raw-fetchable but the registry sha no longer vouches.
@@ -1293,11 +1371,13 @@ mod x_source_tests {
     fn registry_rejects_unsafe_entries() {
         let mut entry = costs_entry();
         entry.path = "../escape".to_owned();
-        let error = resolve_x_registry_verb("costs", None, &entry, "o", "r").expect_err("traversal");
+        let error =
+            resolve_x_registry_verb("costs", None, &entry, "o", "r").expect_err("traversal");
         assert!(error.contains("unsafe path"), "{error}");
         let mut entry = costs_entry();
         entry.commit = "main".to_owned();
-        let error = resolve_x_registry_verb("costs", None, &entry, "o", "r").expect_err("non-commit");
+        let error =
+            resolve_x_registry_verb("costs", None, &entry, "o", "r").expect_err("non-commit");
         assert!(error.contains("40-hex commit"), "{error}");
     }
 
@@ -1309,7 +1389,10 @@ mod x_source_tests {
         let registry = parse_x_registry(&body).expect("parse");
         assert_eq!(registry.len(), 2);
         assert_eq!(registry["costs"], costs_entry());
-        assert!(registry["atlas"].capabilities.is_empty(), "capabilities default to empty");
+        assert!(
+            registry["atlas"].capabilities.is_empty(),
+            "capabilities default to empty"
+        );
 
         let entry = lookup_x_registry_verb(&registry, "costs", "Soul-Brews-Studio/maw-plugins")
             .expect("hit");
@@ -1342,7 +1425,11 @@ mod x_source_tests {
         assert_eq!(info.verb, "costs");
         assert_eq!(info.version, "1.0.0");
         assert!(info.target_wasm);
-        assert_eq!(info.artifact_path.as_deref(), Some("plugin.wasm"), "./ stripped");
+        assert_eq!(
+            info.artifact_path.as_deref(),
+            Some("plugin.wasm"),
+            "./ stripped"
+        );
         assert_eq!(info.artifact_sha256.as_deref(), Some(COSTS_SHA));
         assert_eq!(info.bundled.len(), 1);
         assert_eq!(info.bundled[0].path, "data/model.bin");
@@ -1370,14 +1457,22 @@ mod x_source_tests {
         assert_eq!(pin, COSTS_SHA);
         // Bare hex normalizes to the prefixed form.
         let bare = COSTS_SHA.strip_prefix("sha256:").expect("prefixed");
-        assert_eq!(check_x_pin_chain(bare, None, None).expect("normalize"), COSTS_SHA);
+        assert_eq!(
+            check_x_pin_chain(bare, None, None).expect("normalize"),
+            COSTS_SHA
+        );
 
         let other = format!("sha256:{HEX40}{}", &HEX40[..24]);
-        let error = check_x_pin_chain(COSTS_SHA, Some(&other), None).expect_err("registry mismatch");
+        let error =
+            check_x_pin_chain(COSTS_SHA, Some(&other), None).expect_err("registry mismatch");
         assert!(error.contains("registry sha256 disagrees"), "{error}");
-        assert!(error.contains(COSTS_SHA) && error.contains(&other), "names both pins: {error}");
+        assert!(
+            error.contains(COSTS_SHA) && error.contains(&other),
+            "names both pins: {error}"
+        );
 
-        let error = check_x_pin_chain(COSTS_SHA, None, Some(&other)).expect_err("explicit mismatch");
+        let error =
+            check_x_pin_chain(COSTS_SHA, None, Some(&other)).expect_err("explicit mismatch");
         assert!(error.contains("--sha256 does not match"), "{error}");
         assert!(error.contains("--force-proof"), "{error}");
 
@@ -1452,8 +1547,11 @@ mod x_source_tests {
 
         let package = root.join("pkg");
         std::fs::create_dir_all(&package).expect("package dir");
-        std::fs::write(package.join("plugin.wasm"), b"\0asm\x01\x00\x00\x00x-source-local")
-            .expect("wasm");
+        std::fs::write(
+            package.join("plugin.wasm"),
+            b"\0asm\x01\x00\x00\x00x-source-local",
+        )
+        .expect("wasm");
         let sha256 = maw_plugin_manifest::hash_file(&package.join("plugin.wasm")).expect("hash");
         std::fs::write(
             package.join("plugin.json"),
@@ -1464,7 +1562,11 @@ mod x_source_tests {
         .expect("manifest");
 
         let cache_root = root.join("cache");
-        let options = XFetchOptions { cache_root: &cache_root, timeout_secs: 1, now: 1_000 };
+        let options = XFetchOptions {
+            cache_root: &cache_root,
+            timeout_secs: 1,
+            now: 1_000,
+        };
         let spec = parse_x_spec(&format!("file:{}", package.display())).expect("parse");
         let fetch = match route_x_spec(&spec).expect("route") {
             XRoute::Resolved(resolved) => resolved,
@@ -1478,8 +1580,11 @@ mod x_source_tests {
         assert!(!cache_root.exists(), "no cache write for local dirs");
 
         // A tampered local artifact refuses through the shared WI-1 fork.
-        std::fs::write(package.join("plugin.wasm"), b"\0asm\x01\x00\x00\x00TAMPERED")
-            .expect("tamper");
+        std::fs::write(
+            package.join("plugin.wasm"),
+            b"\0asm\x01\x00\x00\x00TAMPERED",
+        )
+        .expect("tamper");
         let error = execute_x_fetch(&fetch, None, &options).expect_err("refused");
         assert!(error.contains("sha256 mismatch"), "{error}");
 
@@ -1540,7 +1645,11 @@ mod x_source_tests {
         }
 
         let cache_root = root.join("cache");
-        let options = XFetchOptions { cache_root: &cache_root, timeout_secs: 1, now: 2_000 };
+        let options = XFetchOptions {
+            cache_root: &cache_root,
+            timeout_secs: 1,
+            now: 2_000,
+        };
         let fetch = ResolvedFetch {
             canonical_source: format!("file://{}", repo.display()),
             commit: None,
@@ -1552,8 +1661,16 @@ mod x_source_tests {
         };
         let fetched = execute_x_fetch(&fetch, None, &options).expect("clone execute");
         assert!(fetched.cached);
-        let commit = fetched.resolution.commit.as_deref().expect("resolved commit");
-        assert_eq!(commit.len(), 40, "clone resolves a full commit SHA: {commit}");
+        let commit = fetched
+            .resolution
+            .commit
+            .as_deref()
+            .expect("resolved commit");
+        assert_eq!(
+            commit.len(),
+            40,
+            "clone resolves a full commit SHA: {commit}"
+        );
         assert_eq!(fetched.resolution.sha256.as_deref(), Some(sha256.as_str()));
         assert_eq!(fetched.resolution.path.as_deref(), Some("packages/demo"));
         assert_eq!(
@@ -1592,7 +1709,11 @@ mod x_source_tests {
     fn live_fetch_costs_via_registry() {
         let root = temp_root("live");
         let cache_root = root.join("cache");
-        let options = XFetchOptions { cache_root: &cache_root, timeout_secs: 30, now: 1_000 };
+        let options = XFetchOptions {
+            cache_root: &cache_root,
+            timeout_secs: 30,
+            now: 1_000,
+        };
         let spec = parse_x_spec("costs").expect("parse");
         let fetch = resolve_x_spec(
             &spec,
@@ -1601,7 +1722,10 @@ mod x_source_tests {
             &options,
         )
         .expect("registry resolution");
-        assert!(matches!(&fetch.plan, XFetchPlan::Raw { .. }), "bare verb raw-fetches");
+        assert!(
+            matches!(&fetch.plan, XFetchPlan::Raw { .. }),
+            "bare verb raw-fetches"
+        );
         let fetched = execute_x_fetch(&fetch, None, &options).expect("raw fetch + verify");
         assert!(fetched.cached);
         let pin = fetched.resolution.sha256.as_deref().expect("pinned");

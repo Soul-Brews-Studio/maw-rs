@@ -158,9 +158,7 @@ mod known_verb_tests {
 
     #[test]
     fn refusal_warning_wins_over_missing_message() {
-        let warnings = vec![
-            "plugin 'atlas' artifact hash mismatch — refusing to load.".to_owned(),
-        ];
+        let warnings = vec!["plugin 'atlas' artifact hash mismatch — refusing to load.".to_owned()];
         let output = missing_plugin_output("atlas", &warnings).expect("known verb");
         assert_eq!(output.code, 1);
         assert!(output.stderr.contains("refused to load"));

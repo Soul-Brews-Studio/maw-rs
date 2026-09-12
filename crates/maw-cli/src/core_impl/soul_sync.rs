@@ -137,11 +137,7 @@ fn soulsync_find_oracle_repo(
                 .file_name()
                 .to_string_lossy()
                 .eq_ignore_ascii_case(&wanted)
-                && soulsync_repo_is_oracle(
-                    &repo.path(),
-                    &repo.file_name().to_string_lossy(),
-                    fleet,
-                )
+                && soulsync_repo_is_oracle(&repo.path(), &repo.file_name().to_string_lossy(), fleet)
             {
                 return Some(repo.path());
             }
@@ -183,10 +179,7 @@ fn soulsync_sync_dirs(
 ) -> Vec<(String, usize)> {
     let mut synced = Vec::new();
     for dir in SOULSYNC_DIRS {
-        let count = soulsync_sync_dir(
-            &from_path.join("ψ").join(dir),
-            &to_path.join("ψ").join(dir),
-        );
+        let count = soulsync_sync_dir(&from_path.join("ψ").join(dir), &to_path.join("ψ").join(dir));
         if count > 0 {
             synced.push(((*dir).to_owned(), count));
         }
@@ -261,10 +254,7 @@ fn soulsync_render_oracle_result(output: &mut String, result: &SoulsyncSyncResul
 
 fn soulsync_render_total(output: &mut String, total: usize, verb: &str) {
     if total > 0 {
-        let _ = writeln!(
-            output,
-            "\n  \x1b[32m{total} file(s) {verb}.\x1b[0m\n"
-        );
+        let _ = writeln!(output, "\n  \x1b[32m{total} file(s) {verb}.\x1b[0m\n");
     } else {
         output.push('\n');
     }

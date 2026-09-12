@@ -1,7 +1,10 @@
 use axum::{
     body::{Body, Bytes},
     extract::{ws::WebSocketUpgrade, ConnectInfo, Path as AxumPath, Query, State},
-    http::{header::{CACHE_CONTROL, CONTENT_TYPE}, HeaderMap, HeaderValue, Method, Request, StatusCode, Uri},
+    http::{
+        header::{CACHE_CONTROL, CONTENT_TYPE},
+        HeaderMap, HeaderValue, Method, Request, StatusCode, Uri,
+    },
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{any, get, post},
@@ -11,6 +14,8 @@ use futures_util::{SinkExt, StreamExt};
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+#[cfg(test)]
+use std::net::Ipv4Addr;
 use std::{
     collections::HashSet,
     net::{IpAddr, SocketAddr, TcpListener, TcpStream},
@@ -19,8 +24,6 @@ use std::{
     sync::{Arc, Mutex},
     time::Instant,
 };
-#[cfg(test)]
-use std::net::Ipv4Addr;
 
 const DEFAULT_SERVE_PORT: u16 = 3456;
 const DEFAULT_SERVE_BIND: &str = "0.0.0.0";
@@ -60,9 +63,6 @@ struct ServeState {
     bound_port: u16,
 }
 
-
-
-
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct ServeApiTokenAuth {
     token: Option<String>,
@@ -81,15 +81,27 @@ struct ServeApiGateState {
 
 tokio::task_local! { static SERVE_OPERATOR_CONTEXT: (); }
 
-fn serve_mark_operator_authenticated(req: &mut Request<Body>) { req.extensions_mut().insert(ServeOperatorAuth); }
+fn serve_mark_operator_authenticated(req: &mut Request<Body>) {
+    req.extensions_mut().insert(ServeOperatorAuth);
+}
 
-pub(crate) fn serve_operator_authenticated(req: &Request<Body>) -> bool { req.extensions().get::<ServeOperatorAuth>().is_some() }
+pub(crate) fn serve_operator_authenticated(req: &Request<Body>) -> bool {
+    req.extensions().get::<ServeOperatorAuth>().is_some()
+}
 
-fn serve_operator_context_authenticated() -> bool { SERVE_OPERATOR_CONTEXT.try_with(|()| ()).is_ok() }
+fn serve_operator_context_authenticated() -> bool {
+    SERVE_OPERATOR_CONTEXT.try_with(|()| ()).is_ok()
+}
 
 impl ServeApiTokenAuth {
     #[cfg(test)]
-    fn open() -> Self { Self { token: None, loopback_exempt: true, forced_open: true } }
+    fn open() -> Self {
+        Self {
+            token: None,
+            loopback_exempt: true,
+            forced_open: true,
+        }
+    }
 
     /// The banner names what is ENFORCED, not just how the token resolved:
     /// the websocket surface never falls open the way `/api/` does, so an
@@ -107,7 +119,9 @@ impl ServeApiTokenAuth {
     }
 
     fn token_matches(&self, headers: &HeaderMap) -> bool {
-        let Some(token) = self.token.as_deref() else { return true; };
+        let Some(token) = self.token.as_deref() else {
+            return true;
+        };
         let bearer = headers
             .get(axum::http::header::AUTHORIZATION)
             .and_then(|value| value.to_str().ok())
@@ -149,8 +163,16 @@ impl ServeWakeExecutor for ServeSystemWakeExecutor {
             return Ok(output.stdout);
         }
         let stderr = output.stderr.trim();
-        let detail = if stderr.is_empty() { output.stdout.trim() } else { stderr };
-        let detail = if detail.is_empty() { "wake failed" } else { detail };
+        let detail = if stderr.is_empty() {
+            output.stdout.trim()
+        } else {
+            stderr
+        };
+        let detail = if detail.is_empty() {
+            "wake failed"
+        } else {
+            detail
+        };
         Err(format!("wake exited {}: {detail}", output.code))
     }
 }
@@ -174,7 +196,8 @@ impl ServeReceiverInbox for ServeSystemReceiverInbox {
         let enabled = {
             #[cfg(test)]
             {
-                self.enabled.unwrap_or_else(receiver_inbox_auto_write_enabled)
+                self.enabled
+                    .unwrap_or_else(receiver_inbox_auto_write_enabled)
             }
             #[cfg(not(test))]
             {
@@ -190,7 +213,8 @@ impl ServeReceiverInbox for ServeSystemReceiverInbox {
         let now_millis = {
             #[cfg(test)]
             {
-                self.fixed_now_millis.unwrap_or_else(receiver_inbox_now_millis)
+                self.fixed_now_millis
+                    .unwrap_or_else(receiver_inbox_now_millis)
             }
             #[cfg(not(test))]
             {
@@ -219,12 +243,15 @@ impl ServeDelivery for ServeSystemDelivery {
 
     fn send_literal_enter(&self, target: &str, text: &str) -> Result<(), String> {
         let mut tmux = TmuxClient::local();
-        tmux.send_text(target, text).map(|_| ()).map_err(|error| error.to_string())
+        tmux.send_text(target, text)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
     }
 
     fn capture_tail(&self, target: &str, lines: u32) -> Result<String, String> {
         let mut tmux = TmuxClient::local();
-        tmux.capture(target, Some(lines)).map_err(|error| error.to_string())
+        tmux.capture(target, Some(lines))
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -250,7 +277,9 @@ async fn run_serve_async_impl(raw_args: &[String]) -> CliOutput {
     if wants_help(raw_args, &["--host", "--bind", "--port", "--cached-pubkey"]) {
         return help_output(serve_usage_text());
     }
-    if let Some(output) = serve_lifecycle_subcommand152(raw_args) { return output; }
+    if let Some(output) = serve_lifecycle_subcommand152(raw_args) {
+        return output;
+    }
     let args = match parse_serve_args(raw_args) {
         Ok(args) => args,
         Err(message) => return serve_usage_error(&message),
@@ -454,7 +483,9 @@ fn parse_serve_args(argv: &[String]) -> Result<ServeArgs, String> {
             value if value.starts_with("--cached-pubkey=") => {
                 cached_pubkey = Some(value["--cached-pubkey=".len()..].to_owned());
             }
-            value if value.starts_with('-') => return Err(format!("serve: unknown argument {value}")),
+            value if value.starts_with('-') => {
+                return Err(format!("serve: unknown argument {value}"))
+            }
             value => return Err(format!("serve: unexpected argument {value}")),
         }
         index += 1;
@@ -606,7 +637,9 @@ fn serve_router_with_ws_tickets(
         serve_api_token_gate,
     ));
     let router = router
-        .layer(middleware::from_fn(crate::serve_core::servecore_cors_preflight))
+        .layer(middleware::from_fn(
+            crate::serve_core::servecore_cors_preflight,
+        ))
         .layer(Extension(origin_policy));
     let router = crate::serve_core::servecore_with_shared_state(router, serve_core_state);
     router.with_state(state)
@@ -675,7 +708,11 @@ async fn serve_api_token_gate(
 }
 
 fn serve_token_unauthorized() -> Response {
-    (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized", "auth": "maw-serve-token"}))).into_response()
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({"error": "unauthorized", "auth": "maw-serve-token"})),
+    )
+        .into_response()
 }
 
 /// Same `{"error", …}` envelope the origin gate already answers with, so a
@@ -683,7 +720,11 @@ fn serve_token_unauthorized() -> Response {
 /// was instead of an empty body (#955). `reason` is a fixed slug from the
 /// list below — never request-derived text, so nothing can leak.
 fn serve_ws_ticket_bad_request(reason: &'static str) -> Response {
-    (StatusCode::BAD_REQUEST, Json(json!({"error": "bad-request", "reason": reason}))).into_response()
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({"error": "bad-request", "reason": reason})),
+    )
+        .into_response()
 }
 
 #[derive(Deserialize)]
@@ -712,7 +753,10 @@ async fn api_ws_ticket(
         .and_then(|value| value.to_str().ok())
         .map(ToOwned::to_owned);
     let query_present = req.uri().query().is_some();
-    let json_content_type = req.headers().get(CONTENT_TYPE).and_then(|value| value.to_str().ok())
+    let json_content_type = req
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value == "application/json" || value.starts_with("application/json;"));
     // Order is reporting-only: each guard rejects exactly the requests it
     // rejected before, and a request that trips several still gets one 400.
@@ -748,25 +792,6 @@ async fn api_ws_ticket(
     )
         .into_response()
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 async fn api_send(
     State(state): State<Arc<ServeState>>,
@@ -812,7 +837,7 @@ async fn api_feed_get(
     Json(json!({"events": events, "total": events.len(), "active_oracles": active_oracles}))
 }
 
-
+#[allow(clippy::too_many_lines)]
 fn serve_deliver_send(
     state: &ServeState,
     headers: &HeaderMap,
@@ -831,7 +856,15 @@ fn serve_deliver_send(
     let log_to = serve_local_identity(&config, &sender_oracle);
 
     if target.trim().is_empty() {
-        serve_log_delivery_failed(state, &target, &message, &log_from, &log_to, "empty-target", "validate");
+        serve_log_delivery_failed(
+            state,
+            &target,
+            &message,
+            &log_from,
+            &log_to,
+            "empty-target",
+            "validate",
+        );
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({"ok": false, "error": "empty-target", "state": "failed"})),
@@ -854,8 +887,21 @@ fn serve_deliver_send(
     let sessions = match state.delivery.route_sessions() {
         Ok(sessions) => sessions,
         Err(error) => {
-            serve_log_delivery_failed(state, &target, &message, &log_from, &log_to, &error, "route-list");
-            return serve_delivery_error(StatusCode::SERVICE_UNAVAILABLE, "route-list-failed", &target, &error);
+            serve_log_delivery_failed(
+                state,
+                &target,
+                &message,
+                &log_from,
+                &log_to,
+                &error,
+                "route-list",
+            );
+            return serve_delivery_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "route-list-failed",
+                &target,
+                &error,
+            );
         }
     };
 
@@ -871,27 +917,38 @@ fn serve_deliver_send(
                 resolved: &resolved,
                 message: &message,
                 idempotency_key: serve_delivery_idempotency_key(
-                    headers,
-                    &log_from,
-                    &resolved,
-                    &message,
+                    headers, &log_from, &resolved, &message,
                 ),
             };
             serve_deliver_local(state, &context)
         }
         RouteResult::Peer { node, .. } => {
             let error = format!("peer-forward-unavailable:{node}");
-            serve_log_delivery_failed(state, &target, &message, &log_from, &log_to, &error, "peer-forward");
-            serve_delivery_error(StatusCode::BAD_GATEWAY, "peer-forward-unavailable", &target, &error)
+            serve_log_delivery_failed(
+                state,
+                &target,
+                &message,
+                &log_from,
+                &log_to,
+                &error,
+                "peer-forward",
+            );
+            serve_delivery_error(
+                StatusCode::BAD_GATEWAY,
+                "peer-forward-unavailable",
+                &target,
+                &error,
+            )
         }
         RouteResult::Error { reason, detail, .. } => {
             let error = format!("{reason}: {detail}");
-            serve_log_delivery_failed(state, &target, &message, &log_from, &log_to, &error, "resolve");
+            serve_log_delivery_failed(
+                state, &target, &message, &log_from, &log_to, &error, "resolve",
+            );
             serve_delivery_error(StatusCode::NOT_FOUND, &reason, &target, &detail)
         }
     }
 }
-
 
 struct ServeInboxContext<'a> {
     config: &'a HeyConfig,
@@ -902,6 +959,7 @@ struct ServeInboxContext<'a> {
     message: &'a str,
 }
 
+#[allow(clippy::too_many_lines)]
 fn serve_deliver_inbox(
     state: &ServeState,
     headers: &HeaderMap,
@@ -916,16 +974,42 @@ fn serve_deliver_inbox(
     let sessions = match state.delivery.route_sessions() {
         Ok(sessions) => sessions,
         Err(error) => {
-            serve_log_delivery_failed(state, target, message, log_from, log_to, &error, "route-list");
-            return serve_delivery_error(StatusCode::SERVICE_UNAVAILABLE, "route-list-failed", target, &error);
+            serve_log_delivery_failed(
+                state,
+                target,
+                message,
+                log_from,
+                log_to,
+                &error,
+                "route-list",
+            );
+            return serve_delivery_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "route-list-failed",
+                target,
+                &error,
+            );
         }
     };
     let resolved = match resolve_route_target(target, &config.route, &sessions) {
         RouteResult::Local { target } | RouteResult::SelfNode { target } => target,
         RouteResult::Peer { node, .. } => {
             let error = format!("peer-forward-unavailable:{node}");
-            serve_log_delivery_failed(state, target, message, log_from, log_to, &error, "peer-forward");
-            return serve_delivery_error(StatusCode::BAD_GATEWAY, "peer-forward-unavailable", target, &error);
+            serve_log_delivery_failed(
+                state,
+                target,
+                message,
+                log_from,
+                log_to,
+                &error,
+                "peer-forward",
+            );
+            return serve_delivery_error(
+                StatusCode::BAD_GATEWAY,
+                "peer-forward-unavailable",
+                target,
+                &error,
+            );
         }
         RouteResult::Error { reason, detail, .. } => {
             let error = format!("{reason}: {detail}");
@@ -938,19 +1022,22 @@ fn serve_deliver_inbox(
         serve_log_delivery_failed(state, target, message, log_from, log_to, &error, "inbox");
         return serve_delivery_error(StatusCode::NOT_FOUND, "target-not-live", target, &error);
     }
-    let idempotency_key = match serve_claim_inbox_idempotency(state, headers, parsed, &resolved, context) {
-        ServeInboxIdempotencyClaim::Claimed(key) => key,
-        ServeInboxIdempotencyClaim::Duplicate(response) => return *response,
-    };
+    let idempotency_key =
+        match serve_claim_inbox_idempotency(state, headers, parsed, &resolved, context) {
+            ServeInboxIdempotencyClaim::Claimed(key) => key,
+            ServeInboxIdempotencyClaim::Duplicate(response) => return *response,
+        };
     let from = serve_display_from(headers, config, context.sender_oracle);
-    match state.receiver_inbox.write_receiver_inbox(ReceiverInboxInput {
-        query: target,
-        target: Some(&resolved),
-        to: Some(target),
-        from: &from,
-        message,
-        config,
-    }) {
+    match state
+        .receiver_inbox
+        .write_receiver_inbox(ReceiverInboxInput {
+            query: target,
+            target: Some(&resolved),
+            to: Some(target),
+            from: &from,
+            message,
+            config,
+        }) {
         ReceiverInboxResult::Ok(inbox) => {
             let reason = "--inbox requested; pane injection skipped";
             if let Some(key) = idempotency_key.clone() {
@@ -997,29 +1084,15 @@ fn serve_deliver_inbox(
                 serve_delivery_idempotency_cancel(state, key);
             }
             serve_log_delivery_failed(state, target, message, log_from, log_to, &reason, "inbox");
-            serve_delivery_error(StatusCode::BAD_GATEWAY, "receiver-inbox-unavailable", target, &reason)
+            serve_delivery_error(
+                StatusCode::BAD_GATEWAY,
+                "receiver-inbox-unavailable",
+                target,
+                &reason,
+            )
         }
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 struct ServeDeliverContext<'a> {
     config: &'a HeyConfig,
@@ -1033,13 +1106,7 @@ struct ServeDeliverContext<'a> {
     idempotency_key: Option<DeliveryIdempotencyKey>,
 }
 
-
-
-
-
-
-
-
+#[allow(clippy::too_many_lines)]
 fn serve_deliver_local(
     state: &ServeState,
     context: &ServeDeliverContext<'_>,
@@ -1047,19 +1114,49 @@ fn serve_deliver_local(
     let fresh_sessions = match state.delivery.route_sessions() {
         Ok(sessions) => sessions,
         Err(error) => {
-            serve_log_delivery_failed(state, context.requested, context.message, context.log_from, context.log_to, &error, "toctou-list");
-            return serve_delivery_error(StatusCode::SERVICE_UNAVAILABLE, "route-list-failed", context.requested, &error);
+            serve_log_delivery_failed(
+                state,
+                context.requested,
+                context.message,
+                context.log_from,
+                context.log_to,
+                &error,
+                "toctou-list",
+            );
+            return serve_delivery_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "route-list-failed",
+                context.requested,
+                &error,
+            );
         }
     };
     if !serve_resolved_target_exists(&fresh_sessions, context.resolved) {
         let error = format!("target disappeared before delivery: {}", context.resolved);
-        serve_log_delivery_failed(state, context.requested, context.message, context.log_from, context.log_to, &error, "toctou");
-        return serve_delivery_error(StatusCode::NOT_FOUND, "target-disappeared", context.requested, &error);
+        serve_log_delivery_failed(
+            state,
+            context.requested,
+            context.message,
+            context.log_from,
+            context.log_to,
+            &error,
+            "toctou",
+        );
+        return serve_delivery_error(
+            StatusCode::NOT_FOUND,
+            "target-disappeared",
+            context.requested,
+            &error,
+        );
     }
 
     let idempotency_key = context.idempotency_key.clone();
     if let Some(key) = idempotency_key.clone() {
-        match serve_delivery_idempotency_claim(state, key.clone(), serve_delivery_idempotency_now(state)) {
+        match serve_delivery_idempotency_claim(
+            state,
+            key.clone(),
+            serve_delivery_idempotency_now(state),
+        ) {
             DeliveryIdempotencyClaim::Duplicate(record) => {
                 serve_log_delivery_deduped(
                     state,
@@ -1087,15 +1184,34 @@ fn serve_deliver_local(
         context.sender_oracle,
         context.from,
     );
-    if let Err(error) = state.delivery.send_literal_enter(context.resolved, &outbound) {
+    if let Err(error) = state
+        .delivery
+        .send_literal_enter(context.resolved, &outbound)
+    {
         if let Some(key) = idempotency_key.as_ref() {
             serve_delivery_idempotency_cancel(state, key);
         }
-        serve_log_delivery_failed(state, context.requested, context.message, context.log_from, context.log_to, &error, "tmux-send");
-        return serve_delivery_error(StatusCode::BAD_GATEWAY, "tmux-send-failed", context.resolved, &error);
+        serve_log_delivery_failed(
+            state,
+            context.requested,
+            context.message,
+            context.log_from,
+            context.log_to,
+            &error,
+            "tmux-send",
+        );
+        return serve_delivery_error(
+            StatusCode::BAD_GATEWAY,
+            "tmux-send-failed",
+            context.resolved,
+            &error,
+        );
     }
 
-    let capture = state.delivery.capture_tail(context.resolved, 8).unwrap_or_default();
+    let capture = state
+        .delivery
+        .capture_tail(context.resolved, 8)
+        .unwrap_or_default();
     let state_name = if capture.contains("Press up to edit queued messages") {
         "queued"
     } else {
@@ -1263,7 +1379,10 @@ fn serve_truncate(value: &str, max: usize) -> String {
     if value.len() <= max {
         return value.to_owned();
     }
-    let mut out = value.chars().take(max.saturating_sub(1)).collect::<String>();
+    let mut out = value
+        .chars()
+        .take(max.saturating_sub(1))
+        .collect::<String>();
     out.push('…');
     out
 }
@@ -1274,11 +1393,7 @@ fn serve_local_identity(config: &HeyConfig, sender_oracle: &str) -> String {
 }
 
 fn serve_oracle_from_target(target: &str) -> String {
-    target
-        .split([':', '.'])
-        .next()
-        .unwrap_or(target)
-        .to_owned()
+    target.split([':', '.']).next().unwrap_or(target).to_owned()
 }
 
 fn serve_display_from(headers: &HeaderMap, config: &HeyConfig, sender_oracle: &str) -> String {
@@ -1296,32 +1411,6 @@ fn serve_display_from(headers: &HeaderMap, config: &HeyConfig, sender_oracle: &s
     }
     raw.to_owned()
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 async fn api_feed_post(
     State(state): State<Arc<ServeState>>,
@@ -1453,7 +1542,8 @@ async fn api_probe(
     if let Some(response) = verify_protected_request(&state, peer, &method, &uri, &headers, &body) {
         response
     } else {
-        Json(json!({"ok": true, "transport": "local", "source": "maw-rs", "sessions": []})).into_response()
+        Json(json!({"ok": true, "transport": "local", "source": "maw-rs", "sessions": []}))
+            .into_response()
     }
 }
 
@@ -1537,10 +1627,28 @@ async fn api_message_ledger(
     let mut messages = serve_feed_snapshot(&state, None)
         .into_iter()
         .filter(|event| event.get("kind").and_then(Value::as_str) == Some("message"))
-        .filter(|event| query.from.as_ref().is_none_or(|from| event.get("from").and_then(Value::as_str) == Some(from.as_str())))
-        .filter(|event| query.to.as_ref().is_none_or(|to| event.get("to").and_then(Value::as_str) == Some(to.as_str())))
-        .filter(|event| query.direction.as_ref().is_none_or(|direction| event.get("direction").and_then(Value::as_str) == Some(direction.as_str())))
-        .filter(|event| query.state.as_ref().is_none_or(|state| event.get("state").and_then(Value::as_str) == Some(state.as_str())))
+        .filter(|event| {
+            query
+                .from
+                .as_ref()
+                .is_none_or(|from| event.get("from").and_then(Value::as_str) == Some(from.as_str()))
+        })
+        .filter(|event| {
+            query
+                .to
+                .as_ref()
+                .is_none_or(|to| event.get("to").and_then(Value::as_str) == Some(to.as_str()))
+        })
+        .filter(|event| {
+            query.direction.as_ref().is_none_or(|direction| {
+                event.get("direction").and_then(Value::as_str) == Some(direction.as_str())
+            })
+        })
+        .filter(|event| {
+            query.state.as_ref().is_none_or(|state| {
+                event.get("state").and_then(Value::as_str) == Some(state.as_str())
+            })
+        })
         .filter(|event| {
             query.q.as_ref().is_none_or(|q| {
                 let haystack = event.to_string().to_lowercase();
@@ -1560,7 +1668,9 @@ async fn api_requests(
     State(state): State<Arc<ServeState>>,
     Query(query): Query<RequestListQuery>,
 ) -> impl IntoResponse {
-    let requests = with_request_store(&state, |store| store.list(query.oracle.as_deref(), query.status.as_deref()));
+    let requests = with_request_store(&state, |store| {
+        store.list(query.oracle.as_deref(), query.status.as_deref())
+    });
     Json(json!({"requests": requests, "total": requests.len()}))
 }
 
@@ -1577,13 +1687,23 @@ async fn api_reply(
     AxumPath(correlation_id): AxumPath<String>,
     Json(body): Json<ReplyBody>,
 ) -> impl IntoResponse {
-    with_request_store(&state, |store| match store.reply(&correlation_id, body.reply, body.data) {
-        ReplyResult::Ok => Json(json!({"ok": true, "correlationId": correlation_id})).into_response(),
-        ReplyResult::NotFound => (StatusCode::NOT_FOUND, Json(json!({"error": "request not found"}))).into_response(),
-        ReplyResult::AlreadyReplied => Json(json!({"error": "already replied", "correlationId": correlation_id})).into_response(),
+    with_request_store(&state, |store| {
+        match store.reply(&correlation_id, body.reply, body.data) {
+            ReplyResult::Ok => {
+                Json(json!({"ok": true, "correlationId": correlation_id})).into_response()
+            }
+            ReplyResult::NotFound => (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "request not found"})),
+            )
+                .into_response(),
+            ReplyResult::AlreadyReplied => {
+                Json(json!({"error": "already replied", "correlationId": correlation_id}))
+                    .into_response()
+            }
+        }
     })
 }
-
 
 async fn api_trust_list(State(state): State<Arc<ServeState>>) -> impl IntoResponse {
     match trust_read_store(&state.trust_store_path) {
@@ -1625,7 +1745,10 @@ async fn api_trust_revoke(
     Json(body): Json<TrustRevokeBody>,
 ) -> impl IntoResponse {
     if !body.yes.unwrap_or(false) {
-        return trust_http_error(StatusCode::BAD_REQUEST, "trust revoke: missing explicit yes");
+        return trust_http_error(
+            StatusCode::BAD_REQUEST,
+            "trust revoke: missing explicit yes",
+        );
     }
     match trust_store_remove(&state.trust_store_path, &body.sender, &body.target) {
         Ok(true) => Json(json!({"ok": true, "state": "revoked"})).into_response(),
@@ -1665,31 +1788,9 @@ fn unix_millis_i64() -> i64 {
     i64::try_from(unix_millis()).unwrap_or(i64::MAX)
 }
 
-
-
-
-
-
-
-
 async fn api_not_found() -> impl IntoResponse {
     (StatusCode::NOT_FOUND, Json(json!({"error": "not_found"})))
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 fn random_hex(bytes: usize) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -1714,7 +1815,6 @@ fn unix_millis() -> u64 {
     u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
 }
 
-
 fn load_serve_api_token_auth() -> ServeApiTokenAuth {
     let config = merged_config_value_for_env(&real_xdg_env());
     let serve = config.get("serve");
@@ -1724,7 +1824,10 @@ fn load_serve_api_token_auth() -> ServeApiTokenAuth {
         .is_some_and(|mode| mode.eq_ignore_ascii_case("open"))
         || serve.and_then(|v| v.get("open")).and_then(Value::as_bool) == Some(true);
     let loopback_exempt = serve
-        .and_then(|v| v.get("loopbackExempt").or_else(|| v.get("authLoopbackExempt")))
+        .and_then(|v| {
+            v.get("loopbackExempt")
+                .or_else(|| v.get("authLoopbackExempt"))
+        })
         .and_then(Value::as_bool)
         .unwrap_or(true);
     let config_token = serve
@@ -1740,7 +1843,11 @@ fn load_serve_api_token_auth() -> ServeApiTokenAuth {
     let env_overrides = env_token.is_some();
     let token = env_token.or(config_token);
     ServeApiTokenAuth {
-        token: if forced_open && !env_overrides { None } else { token },
+        token: if forced_open && !env_overrides {
+            None
+        } else {
+            token
+        },
         loopback_exempt,
         forced_open: forced_open && !env_overrides,
     }
@@ -1754,13 +1861,17 @@ fn load_serve_origin_policy() -> crate::serve_core::ServecoreOriginPolicy {
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
     match std::env::var("MAW_SERVE_ALLOWED_ORIGINS") {
-        Ok(origins) => crate::serve_core::ServecoreOriginPolicy::from_comma_separated(Some(origins)),
+        Ok(origins) => {
+            crate::serve_core::ServecoreOriginPolicy::from_comma_separated(Some(origins))
+        }
         Err(std::env::VarError::NotPresent) => {
             crate::serve_core::ServecoreOriginPolicy::from_comma_separated(configured)
         }
-        Err(std::env::VarError::NotUnicode(_)) => crate::serve_core::ServecoreOriginPolicy::invalid(
-            "MAW_SERVE_ALLOWED_ORIGINS contains non-Unicode data",
-        ),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            crate::serve_core::ServecoreOriginPolicy::invalid(
+                "MAW_SERVE_ALLOWED_ORIGINS contains non-Unicode data",
+            )
+        }
     }
 }
 
@@ -1780,20 +1891,6 @@ fn load_serve_workspace_key() -> Option<String> {
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 #[derive(Default, Deserialize)]
 struct SendBody {
@@ -1936,15 +2033,6 @@ struct ReplyBody {
     reply: String,
     data: Option<Value>,
 }
-
-
-
-
-
-
-
-
-
 
 #[derive(Deserialize)]
 struct SessionsQuery {

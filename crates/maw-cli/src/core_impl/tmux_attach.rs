@@ -1,7 +1,16 @@
 const DISPATCH_305: &[DispatcherEntry] = &[
-    DispatcherEntry { command: "send-enter", handler: Handler::Sync(run_send_enter_command) },
-    DispatcherEntry { command: "send-key", handler: Handler::Sync(run_send_key_command) },
-    DispatcherEntry { command: "send-escape", handler: Handler::Sync(run_send_escape_command) },
+    DispatcherEntry {
+        command: "send-enter",
+        handler: Handler::Sync(run_send_enter_command),
+    },
+    DispatcherEntry {
+        command: "send-key",
+        handler: Handler::Sync(run_send_key_command),
+    },
+    DispatcherEntry {
+        command: "send-escape",
+        handler: Handler::Sync(run_send_escape_command),
+    },
 ];
 
 fn run_attach_plan(argv: &[String]) -> CliOutput {
@@ -63,7 +72,11 @@ fn run_attach_plan(argv: &[String]) -> CliOutput {
         } else {
             render_attach_remote_plan_text(&target, &node, &session_name, &alias, yes)
         };
-        return CliOutput { code: 0, stdout, stderr: String::new() };
+        return CliOutput {
+            code: 0,
+            stdout,
+            stderr: String::new(),
+        };
     }
     if alive.is_empty() {
         let mut client = TmuxClient::local();
@@ -88,7 +101,8 @@ fn run_attach_plan(argv: &[String]) -> CliOutput {
         }
     };
     let in_tmux = std::env::var_os("TMUX").is_some();
-    let action = decide_tmux_attach_action(&resolved_target, &alive, print || plan_json, false, in_tmux);
+    let action =
+        decide_tmux_attach_action(&resolved_target, &alive, print || plan_json, false, in_tmux);
     let session = attach_action_session(&action);
     let stdout = if plan_json {
         render_attach_plan_json(&target, session, &action, readonly)
@@ -134,7 +148,6 @@ fn attach_usage_text() -> String {
     "usage: maw-rs attach <target> [--print] [--readonly|-r]\n       maw-rs a <target> [--print] [--readonly|-r]\n".to_owned()
 }
 
-
 fn parse_explicit_remote_attach_target(target: &str) -> Option<(String, String)> {
     let (node, session_name) = target.split_once(':')?;
     let node = node.trim();
@@ -142,12 +155,12 @@ fn parse_explicit_remote_attach_target(target: &str) -> Option<(String, String)>
     if node.is_empty() || session_name.is_empty() {
         return None;
     }
-    if session_name
-        .split_once('.')
-        .map_or_else(|| session_name.chars().all(|c| c.is_ascii_digit()), |(window, pane)| {
+    if session_name.split_once('.').map_or_else(
+        || session_name.chars().all(|c| c.is_ascii_digit()),
+        |(window, pane)| {
             window.chars().all(|c| c.is_ascii_digit()) && pane.chars().all(|c| c.is_ascii_digit())
-        })
-    {
+        },
+    ) {
         return None;
     }
     Some((node.to_owned(), session_name.to_owned()))
@@ -249,7 +262,13 @@ fn attach_command_args(action: &TmuxAttachAction, readonly: bool) -> Vec<String>
         ];
     }
     tmux_attach_spawn_command(action).map_or_else(
-        || vec!["attach".to_owned(), "-t".to_owned(), attach_action_session(action).to_owned()],
+        || {
+            vec![
+                "attach".to_owned(),
+                "-t".to_owned(),
+                attach_action_session(action).to_owned(),
+            ]
+        },
         |command| command.args,
     )
 }
@@ -262,7 +281,6 @@ fn attach_action_session(action: &TmuxAttachAction) -> &str {
         | TmuxAttachAction::Recover { session } => session,
     }
 }
-
 
 fn run_send_enter_command(argv: &[String]) -> CliOutput {
     if wants_help(argv, &["--N", "-N", "--n"]) {
@@ -311,7 +329,6 @@ fn send_enter_resolved(
         stderr: String::new(),
     }
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SendKeyCommandArgs {
@@ -415,7 +432,11 @@ fn send_key_allowed_tmux_name(raw: &str) -> Result<&'static str, String> {
 }
 
 fn send_key_plan_output(options: &SendKeyCommandArgs) -> CliOutput {
-    let args = ["-t".to_owned(), options.target.clone(), options.key.to_owned()];
+    let args = [
+        "-t".to_owned(),
+        options.target.clone(),
+        options.key.to_owned(),
+    ];
     let stdout = if options.plan_json {
         format!(
             "{{\"command\":\"send-key\",\"target\":{},\"key\":{},\"tmuxArgs\":{}}}\n",
@@ -520,7 +541,6 @@ fn send_enter_usage() -> &'static str {
     "usage: maw-rs send-enter <target> [--N <count>]"
 }
 
-
 #[cfg(test)]
 mod tmux_attach_send_key_tests {
     use super::*;
@@ -611,10 +631,7 @@ mod tmux_attach_send_key_tests {
         assert_eq!(send_key_allowed_tmux_name("left").expect("left"), "Left");
         assert_eq!(send_key_allowed_tmux_name("right").expect("right"), "Right");
         assert_eq!(send_key_allowed_tmux_name("tab").expect("tab"), "Tab");
-        assert_eq!(
-            send_key_allowed_tmux_name("ctrl-c").expect("ctrl-c"),
-            "C-c"
-        );
+        assert_eq!(send_key_allowed_tmux_name("ctrl-c").expect("ctrl-c"), "C-c");
     }
 
     #[test]
@@ -635,6 +652,8 @@ mod tmux_attach_send_key_tests {
         let output = run_send_escape_command(&strings(&["%7", "--plan-json"]));
         assert_eq!(output.code, 0);
         assert!(output.stdout.contains("\"key\":\"Escape\""));
-        assert!(output.stdout.contains("\"tmuxArgs\":[\"-t\",\"%7\",\"Escape\"]"));
+        assert!(output
+            .stdout
+            .contains("\"tmuxArgs\":[\"-t\",\"%7\",\"Escape\"]"));
     }
 }

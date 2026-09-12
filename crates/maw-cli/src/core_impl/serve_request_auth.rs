@@ -153,10 +153,7 @@ fn extract_auth_headers(headers: &HeaderMap) -> Headers {
             "x-maw-ed25519-pubkey",
             header_to_string(headers, "x-maw-ed25519-pubkey"),
         ),
-        (
-            "x-maw-pubkey",
-            header_to_string(headers, "x-maw-pubkey"),
-        ),
+        ("x-maw-pubkey", header_to_string(headers, "x-maw-pubkey")),
         (
             "x-maw-peer-pubkey",
             header_to_string(headers, "x-maw-peer-pubkey"),
@@ -359,7 +356,9 @@ fn object_from_identities(value: &Value, key_hint: Option<&str>) -> Vec<String> 
             map.get("oracle").and_then(Value::as_str),
             map.get("node").and_then(Value::as_str),
         ) {
-            if let Some(from) = normalize_from_identity(&format!("{}:{}", oracle.trim(), node.trim())) {
+            if let Some(from) =
+                normalize_from_identity(&format!("{}:{}", oracle.trim(), node.trim()))
+            {
                 identities.push(from);
             }
         }

@@ -19,7 +19,10 @@ fn ctq_run_command(argv: &[String]) -> CliOutput {
 
 fn ctq_dispatch(argv: &[String]) -> Result<CliOutput, (i32, String)> {
     ctq_validate_argv(argv).map_err(|message| (2, message))?;
-    if argv.iter().any(|arg| matches!(arg.as_str(), "--help" | "-h" | "help")) {
+    if argv
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "--help" | "-h" | "help"))
+    {
         return Ok(ctq_ok(&format!("{CTQ_USAGE}\n")));
     }
     if let Some(arg) = argv.iter().find(|arg| !matches!(arg.as_str(), "--json")) {
@@ -44,14 +47,20 @@ fn ctq_validate_argv(argv: &[String]) -> Result<(), String> {
 }
 
 fn ctq_ok(stdout: &str) -> CliOutput {
-    CliOutput { code: 0, stdout: stdout.to_owned(), stderr: String::new() }
+    CliOutput {
+        code: 0,
+        stdout: stdout.to_owned(),
+        stderr: String::new(),
+    }
 }
 
 #[cfg(test)]
 mod ctq_tests {
     use super::*;
 
-    fn ctq_args(values: &[&str]) -> Vec<String> { values.iter().map(|value| (*value).to_owned()).collect() }
+    fn ctq_args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_owned()).collect()
+    }
 
     #[test]
     fn ctq_dispatch_registers_native_and_empty_contract() {

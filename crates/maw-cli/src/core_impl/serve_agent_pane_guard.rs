@@ -25,10 +25,15 @@ fn serve_pane_looks_like_agent(command: &str, title: &str) -> bool {
 /// against the session list before any pane lookup can work at all; without
 /// this step a naive string match against `resolved` silently never finds
 /// the pane (caught by this fix's own test before it shipped).
-fn serve_window_name_for_resolved_target(sessions: &[RouteSession], resolved: &str) -> Option<String> {
+fn serve_window_name_for_resolved_target(
+    sessions: &[RouteSession],
+    resolved: &str,
+) -> Option<String> {
     let (session_name, window_part) = resolved.split_once(':')?;
     let window_part = window_part.split('.').next().unwrap_or(window_part);
-    let session = sessions.iter().find(|session| session.name == session_name)?;
+    let session = sessions
+        .iter()
+        .find(|session| session.name == session_name)?;
     if let Ok(index) = window_part.parse::<u32>() {
         session
             .windows
@@ -53,7 +58,10 @@ fn serve_pane_for_resolved_target<'a>(
     window_name: &str,
 ) -> Option<&'a TmuxPane> {
     let prefix = format!("{session_name}:{window_name}.");
-    let mut matches: Vec<&TmuxPane> = panes.iter().filter(|pane| pane.target.starts_with(&prefix)).collect();
+    let mut matches: Vec<&TmuxPane> = panes
+        .iter()
+        .filter(|pane| pane.target.starts_with(&prefix))
+        .collect();
     matches.sort_by(|left, right| left.target.cmp(&right.target));
     matches.into_iter().next()
 }
