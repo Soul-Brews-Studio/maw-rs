@@ -1804,7 +1804,7 @@ fn servecore_invalid_web_origin_reason(origin: &str) -> &'static str {
     let suffix = authority.as_str().strip_prefix(authority.host());
     let port_valid = matches!(suffix, Some(""))
         || suffix.is_some_and(|part| part.starts_with(':') && authority.port_u16().is_some());
-    if matches!(scheme, "http" | "https")
+    if matches!(scheme, "http" | "https" | "chrome-extension")
         && !authority.host().is_empty()
         && port_valid
         && !origin.contains('@')
@@ -3218,6 +3218,7 @@ mod tests {
             "http://localhost:",
             "http://localhost:abc",
             "http://localhost:99999",
+            "chrome-extension://ckahnoplifjlkbennikhalnecadkeepe/path",
         ] {
             assert!(!servecore_origin_allowed_with(origin, None), "{origin}");
         }
@@ -3225,6 +3226,10 @@ mod tests {
         assert!(servecore_origin_allowed_with(
             "https://office.example",
             configured
+        ));
+        assert!(servecore_origin_allowed_with(
+            "chrome-extension://ckahnoplifjlkbennikhalnecadkeepe",
+            Some("chrome-extension://ckahnoplifjlkbennikhalnecadkeepe")
         ));
         assert!(!servecore_origin_allowed_with(
             "https://office.example.evil",
