@@ -26,8 +26,21 @@ fn parse_cli_rejects_malformed_cli_shapes_and_preserves_optional_fields() {
         parsed.flags.expect("flags present").get("verbose"),
         Some(&CliFlagKind::Boolean)
     );
+    // #992: the interactive opt-in is absent here, so it stays off.
+    assert!(!parsed.interactive);
+
+    let interactive = parse_cli(&json!({
+        "cli": { "command": "demo", "interactive": true }
+    }))
+    .expect("valid cli")
+    .expect("cli present");
+    assert!(interactive.interactive);
 
     expect_error(&json!({ "cli": [] }), "plugin.json: cli must be an object");
+    expect_error(
+        &json!({ "cli": { "command": "x", "interactive": "yes" } }),
+        "plugin.json: cli.interactive must be a boolean",
+    );
     expect_error(
         &json!({ "cli": { "command": "" } }),
         "plugin.json: cli.command must be a non-empty string",

@@ -44,6 +44,11 @@ artifact that the runtime hashes and capability-gates.
   }
   ```
 
+- `cli.interactive: true` (optional boolean, default `false`) opts a dev-tier command into
+  inheriting the terminal's stdin, for a plugin that launches a full-screen/interactive
+  program (`maw herdr a` attaching a TUI). Without it the plugin child gets closed stdin and
+  reads EOF. It only takes effect on the streaming path — when maw's own stderr is a terminal;
+  piped/captured invocations (CI, HTTP/API dispatch, `| jq`) are unaffected either way.
 - Every committed `plugin.wasm` must be pinned by either `plugin.json` or
   `plugin.source.json`; prose-only pins do not count.
 

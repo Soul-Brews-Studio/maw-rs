@@ -78,6 +78,7 @@ fn invoke_plugin_help_matches_anywhere_and_renders_declared_metadata() {
         help: Some("maw helper <thing>".to_owned()),
         aliases: Some(vec!["hp".to_owned()]),
         flags: Some(BTreeMap::from([("--name".to_owned(), CliFlagKind::String)])),
+        interactive: false,
     });
     plugin.manifest.api = Some(PluginApi {
         path: "/api/helper".to_owned(),
