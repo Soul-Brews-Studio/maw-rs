@@ -920,6 +920,14 @@ mod ts_plugin_dispatch_decision_tests {
     }
 
     fn load_ts_plugin(label: &str, runtime: Option<&str>) -> (std::path::PathBuf, LoadedPlugin) {
+        load_ts_plugin_with_cli(label, runtime, &json!({ "command": label }))
+    }
+
+    fn load_ts_plugin_with_cli(
+        label: &str,
+        runtime: Option<&str>,
+        cli: &serde_json::Value,
+    ) -> (std::path::PathBuf, LoadedPlugin) {
         let dir = temp_plugin_dir(label);
         std::fs::write(
             dir.join("index.ts"),
@@ -932,7 +940,7 @@ mod ts_plugin_dispatch_decision_tests {
             "sdk": "*",
             "target": "js",
             "entry": "index.ts",
-            "cli": { "command": label }
+            "cli": cli
         });
         if let Some(runtime) = runtime {
             manifest["runtime"] = json!(runtime);
@@ -1060,6 +1068,39 @@ mod ts_plugin_dispatch_decision_tests {
         // Not a terminal (tests, CI, HTTP/API dispatch, piped output) -> the
         // original piped+capture behavior, unchanged.
         assert_eq!(bun_dev_io_mode(false), BunDevIoMode::Captured);
+    }
+
+    #[test]
+    fn bun_dev_stdin_mode_decision_matrix() {
+        // #992: opted in -> the child gets the terminal's stdin (TUI attach).
+        assert_eq!(bun_dev_stdin_mode(true), BunDevStdinMode::Inherit);
+        // Default -> stdin stays closed, exactly as before the opt-in existed.
+        assert_eq!(bun_dev_stdin_mode(false), BunDevStdinMode::Null);
+    }
+
+    #[test]
+    fn plugin_interactive_opt_in_flows_from_manifest_to_stdin_mode() {
+        let (interactive_dir, interactive_plugin) = load_ts_plugin_with_cli(
+            "bun-dev-interactive",
+            Some("bun-dev"),
+            &json!({ "command": "bun-dev-interactive", "interactive": true }),
+        );
+        assert!(plugin_wants_interactive_stdin(&interactive_plugin));
+        assert_eq!(
+            bun_dev_stdin_mode(plugin_wants_interactive_stdin(&interactive_plugin)),
+            BunDevStdinMode::Inherit
+        );
+
+        // Same manifest without the flag: unchanged, stdin stays null.
+        let (plain_dir, plain_plugin) = load_ts_plugin("bun-dev-not-interactive", Some("bun-dev"));
+        assert!(!plugin_wants_interactive_stdin(&plain_plugin));
+        assert_eq!(
+            bun_dev_stdin_mode(plugin_wants_interactive_stdin(&plain_plugin)),
+            BunDevStdinMode::Null
+        );
+
+        std::fs::remove_dir_all(interactive_dir).expect("cleanup interactive");
+        std::fs::remove_dir_all(plain_dir).expect("cleanup plain");
     }
 
     #[cfg(unix)]
@@ -1343,6 +1384,11 @@ fn dispatch_bun_dev_plugin_with_tty(
 /// set beforehand — so this path uses `spawn()` + `wait()` instead. There is
 /// nothing to capture, so the banner-prepend and "exited 0 with no output"
 /// silence-note heuristics from the piped branch don't apply here.
+///
+/// #992: stdin stays closed unless the manifest opts in with
+/// `cli.interactive: true`, which hands the child the terminal's stdin so a
+/// full-screen program (`maw herdr a`) can read keys — see
+/// [`bun_dev_stdin_mode`].
 fn dispatch_bun_dev_plugin_streamed(
     plugin: &LoadedPlugin,
     entry_path: &Path,
@@ -1353,7 +1399,7 @@ fn dispatch_bun_dev_plugin_streamed(
         .arg(entry_path)
         .args(args)
         .current_dir(cwd)
-        .stdin(std::process::Stdio::null())
+        .stdin(bun_dev_stdin_mode(plugin_wants_interactive_stdin(plugin)).stdio())
         .stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit())
         .spawn();
@@ -1426,6 +1472,49 @@ fn bun_dev_io_mode(stderr_is_tty: bool) -> BunDevIoMode {
     } else {
         BunDevIoMode::Captured
     }
+}
+
+/// Which stdin the bun child gets on the streamed path (#992). Closed is the
+/// default and the only behavior maw ever had; a plugin that declares
+/// `cli.interactive: true` is saying it may run a full-screen program, which
+/// cannot work without the terminal's own stdin. Kept as a pure decision in
+/// the `bun_dev_io_mode` style so the opt-in is unit-testable without a real
+/// fd: inherit-vs-null is not observable from inside a spawned child under
+/// `cargo test` (the test process's stdin is not a tty either, so both spell
+/// "immediate EOF" to a shim).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BunDevStdinMode {
+    /// Closed stdin — a plugin that reads it sees EOF immediately.
+    Null,
+    /// Inherit the terminal's stdin so an interactive/TUI plugin can read keys.
+    Inherit,
+}
+
+impl BunDevStdinMode {
+    fn stdio(self) -> std::process::Stdio {
+        match self {
+            Self::Null => std::process::Stdio::null(),
+            Self::Inherit => std::process::Stdio::inherit(),
+        }
+    }
+}
+
+fn bun_dev_stdin_mode(interactive: bool) -> BunDevStdinMode {
+    if interactive {
+        BunDevStdinMode::Inherit
+    } else {
+        BunDevStdinMode::Null
+    }
+}
+
+/// Read the `cli.interactive` opt-in off a loaded manifest. A plugin with no
+/// `cli` section (api/hook-only) is never interactive.
+fn plugin_wants_interactive_stdin(plugin: &LoadedPlugin) -> bool {
+    plugin
+        .manifest
+        .cli
+        .as_ref()
+        .is_some_and(|cli| cli.interactive)
 }
 
 fn bun_dev_banner(plugin_name: &str) -> String {

@@ -24,6 +24,7 @@ fn help_rendering_covers_empty_aliases_and_sparse_hooks() {
             "--verbose".to_owned(),
             CliFlagKind::Boolean,
         )])),
+        interactive: false,
     });
     plugin.manifest.api = Some(PluginApi {
         path: "/api/sparse".to_owned(),

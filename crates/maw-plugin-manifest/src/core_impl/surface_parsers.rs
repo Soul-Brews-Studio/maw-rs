@@ -25,6 +25,10 @@ pub struct PluginCli {
     pub aliases: Option<Vec<String>>,
     pub help: Option<String>,
     pub flags: Option<BTreeMap<String, CliFlagKind>>,
+    /// Opt-in (#992): the command may run a full-screen/interactive program,
+    /// so the host should hand it the terminal's stdin instead of closing it.
+    /// Absent means `false` — stdin stays closed, as it always has.
+    pub interactive: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -186,6 +190,9 @@ impl HookPolicy {
 
 /// Parse the optional `cli` section.
 ///
+/// `cli.interactive` is a maw-rs-only opt-in (#992) with no maw-js
+/// counterpart; absent means `false`, so maw-js manifests parse unchanged.
+///
 /// # Errors
 ///
 /// Returns maw-js-compatible validation messages for malformed `cli` shapes.
@@ -243,11 +250,19 @@ pub fn parse_cli(manifest: &Value) -> Result<Option<PluginCli>, String> {
         None
     };
 
+    let interactive = match cli.get("interactive") {
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| "plugin.json: cli.interactive must be a boolean".to_owned())?,
+        None => false,
+    };
+
     Ok(Some(PluginCli {
         command: command.to_owned(),
         aliases,
         help: cli.get("help").and_then(Value::as_str).map(str::to_owned),
         flags,
+        interactive,
     }))
 }
 
