@@ -4,15 +4,19 @@
 /// actionable install hint instead of the bare `unknown command` exit 2
 /// (issue #522 defense 4 — a missing plugin must never read as a typo).
 ///
-/// Rows: (cli verb, plugin name, `Soul-Brews-Studio/maw-plugins`
-/// `packages/` dir). The plugins themselves live in the external
-/// `Soul-Brews-Studio/maw-plugins` monorepo (extracted from this repo's
-/// former `fleet-plugins/` on 2026-07-15, repo split phase 1); the parity
-/// test in `crates/maw-cli/tests/plugin_missing_verb_cli.rs` is `#[ignore]`d
-/// until it is repointed at that repo's manifests (repo-split test rework).
+/// Rows: (cli verb, plugin name, install source — a bare
+/// `packages/` dir, or a whole `owner/repo` for a plugin that ships from its
+/// own repo; the `/` is what tells the two apart, which keeps a standalone
+/// plugin expressible without widening every row). Most plugins live in the
+/// external `Soul-Brews-Studio/maw-plugins` monorepo (extracted from this
+/// repo's former `fleet-plugins/` on 2026-07-15, repo split phase 1); the
+/// parity test in `crates/maw-cli/tests/plugin_missing_verb_cli.rs` is
+/// `#[ignore]`d until it is repointed at that repo's manifests (repo-split
+/// test rework).
 pub const KNOWN_FLEET_PLUGIN_VERBS: &[(&str, &str, &str)] = &[
     ("atlas", "atlas", "atlas"),
     ("cross-team-queue", "cross-team-queue", "cross-team-queue"),
+    ("herdr", "herdr", "Soul-Brews-Studio/maw-herdr-plugin"),
     ("hermes", "hermes", "hermes"),
     ("menubar", "maw-menubar", "maw-menubar"),
     ("p2p-share", "p2p-share", "p2p-share"),
@@ -82,7 +86,11 @@ pub fn resolve_plugin_source(verb: &str) -> Option<ResolvedPluginSource> {
         return Some(ResolvedPluginSource {
             verb: verb.to_owned(),
             plugin_name: (*plugin).to_owned(),
-            source: Some(format!("Soul-Brews-Studio/maw-plugins/packages/{dir}")),
+            source: Some(if dir.contains('/') {
+                (*dir).to_owned()
+            } else {
+                format!("Soul-Brews-Studio/maw-plugins/packages/{dir}")
+            }),
             sha256: None,
         });
     }
@@ -153,6 +161,17 @@ mod known_verb_tests {
         assert_eq!(
             resolved.install_hint(),
             "maw plugin install Soul-Brews-Studio/maw-plugins/packages/maw-menubar"
+        );
+    }
+
+    // #993: herdr ships from its own repo, not `maw-plugins/packages/`, so its
+    // row carries the whole `owner/repo` and must not get the monorepo prefix.
+    #[test]
+    fn standalone_repo_row_keeps_its_own_source() {
+        let resolved = resolve_plugin_source("herdr").expect("herdr known");
+        assert_eq!(
+            resolved.install_hint(),
+            "maw plugin install Soul-Brews-Studio/maw-herdr-plugin"
         );
     }
 

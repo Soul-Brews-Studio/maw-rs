@@ -90,3 +90,25 @@ executes the *target repo's* committed `.maw` config — the woken repo chooses
 its own launch command. That is the same command `maw work` in that repo
 already runs, and the route is signature-gated, but committed config is
 executable: review `.maw/maw.config.*.json` changes like code.
+
+## `multiplexer` — which backend `maw a` drives (#993)
+
+`{ "multiplexer": "herdr" }` — `"tmux"` (the default when the key is absent) or
+`"herdr"`. Anything else exits 2 naming the value rather than falling back to
+tmux while the config says otherwise. Set to `"herdr"`, `maw a <target>
+[--print]` re-dispatches to `maw herdr a <target>`, and flags with no herdr
+meaning (`--readonly`/`-r`, `--plan-json`/`--dry-run`, `--yes`/`-y`,
+`--ssh-alias`, `--alive`) are refused rather than dropped. The explicit verbs
+always bypass the switch: `maw tmux attach` / `maw tmux a` stay on tmux,
+`maw herdr a` stays on herdr.
+
+**Mixed-world caveat.** Only `attach` follows the switch — `maw hey`, `maw run`,
+`maw split` and `maw ls` stay tmux-only, because herdr cannot see tmux panes and
+tmux cannot see herdr's, so a pane address means nothing across the two.
+
+While the switch is on tmux, a `maw a <target>` that finds no live tmux session
+adds a `herdr <name> → maw herdr a <name>` row to the "Found nearby" list for a
+herdr session matching the target. That needs the
+[herdr plugin](https://github.com/Soul-Brews-Studio/maw-herdr-plugin)
+(`maw plugin install Soul-Brews-Studio/maw-herdr-plugin --root ~/.maw/plugins`);
+without it the output is unchanged.

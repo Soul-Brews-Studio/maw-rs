@@ -94,7 +94,7 @@ fn picker_choose_target(
             stderr: String::new(),
         });
     }
-    let row = picker_prompt(command, target, context, rows).ok_or_else(|| CliOutput {
+    let row = picker_prompt(command, target, context, rows, "").ok_or_else(|| CliOutput {
         code: 1,
         stdout: String::new(),
         stderr: format!("{command}: picker cancelled\n"),
