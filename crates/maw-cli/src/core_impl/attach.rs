@@ -22,9 +22,71 @@ const ATTACH_FLAG_READONLY: u8 = 1 << 1;
 const ATTACH_FLAG_PLAN_JSON: u8 = 1 << 2;
 const ATTACH_FLAG_YES: u8 = 1 << 3;
 
+/// Which multiplexer the bare `maw a`/`maw attach` drives, from the
+/// merged-config `"multiplexer"` key (#993). Unset is tmux, so an untouched
+/// config keeps today's behaviour byte for byte; a value that is neither name
+/// is a config typo, not a silent fallback that would send the user to tmux
+/// while their config says herdr. The explicit verbs never consult it —
+/// `maw tmux attach`/`maw tmux a` stay tmux and `maw herdr a` stays herdr, so
+/// naming a backend always means that backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Multiplexer {
+    Tmux,
+    Herdr,
+}
+
+fn multiplexer_choice(config_value: Option<&str>) -> Result<Multiplexer, String> {
+    match config_value {
+        None | Some("tmux") => Ok(Multiplexer::Tmux),
+        Some("herdr") => Ok(Multiplexer::Herdr),
+        Some(other) => Err(format!(
+            "attach: unknown multiplexer {other:?} in config — expected \"tmux\" or \"herdr\"\n"
+        )),
+    }
+}
+
+/// Pure routing half of #993: `maw a <target> [flags]` → the `maw herdr a …`
+/// argv it re-dispatches as, or the rejection for a tmux-only flag. herdr has
+/// no read-only client, no ssh tier and no plan JSON, so forwarding one of
+/// those would quietly do something other than what was asked.
+fn attach_herdr_argv(argv: &[String]) -> Result<Vec<String>, String> {
+    const TMUX_ONLY: &str =
+        "--readonly --read-only -r --plan-json --dry-run --yes -y --ssh-alias --alive";
+    for arg in argv {
+        let flag = arg.split_once('=').map_or(arg.as_str(), |(name, _)| name);
+        if TMUX_ONLY.split(' ').any(|only| only == flag) {
+            return Err(format!(
+                "attach: {flag} is tmux-only; use maw tmux attach\n"
+            ));
+        }
+    }
+    let mut forwarded = vec!["herdr".to_owned(), "a".to_owned()];
+    forwarded.extend(argv.iter().cloned());
+    Ok(forwarded)
+}
+
 fn attach_run_command(argv: &[String]) -> CliOutput {
-    match attach_run_with_runner(argv, &mut maw_tmux::CommandTmuxRunner::new()) {
-        Ok(output) | Err(output) => output,
+    let exit2 = |stderr| CliOutput {
+        code: 2,
+        stdout: String::new(),
+        stderr,
+    };
+    let config = merged_config_value();
+    let configured = config
+        .get("multiplexer")
+        .and_then(serde_json::Value::as_str);
+    // `--help` still describes the native verb, whichever backend is wired.
+    let help = argv
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "--help" | "-h"));
+    match multiplexer_choice(configured) {
+        Err(message) => exit2(message),
+        Ok(Multiplexer::Herdr) if !help => {
+            attach_herdr_argv(argv).map_or_else(exit2, |forwarded| run_cli(&forwarded))
+        }
+        Ok(_) => match attach_run_with_runner(argv, &mut maw_tmux::CommandTmuxRunner::new()) {
+            Ok(output) | Err(output) => output,
+        },
     }
 }
 
@@ -263,9 +325,61 @@ fn attach_not_found_output(
 ) -> Result<String, CliOutput> {
     Err(CliOutput {
         code: 1,
-        stdout: deadend_suggestions_text("attach", target, candidates),
+        stdout: deadend_suggestions_text("attach", target, candidates)
+            + &attach_herdr_hint_block(target),
         stderr: String::new(),
     })
+}
+
+/// The `herdr <name> → maw herdr a <name>` rows for a tmux miss, read from the
+/// plugin's own `ls --json` envelope: exact match first, else a unique prefix.
+///
+/// Pure half of the zero-config hint (#993), so the merge is testable from a
+/// sample envelope with no plugin installed. A prefix matching several sessions
+/// names none of them in particular, so it renders nothing rather than a list
+/// to disambiguate a second time — and so does anything that is not the
+/// envelope, which is how herdr's absence stays invisible.
+fn attach_herdr_hint_text(target: &str, ls_json: &str) -> String {
+    use std::fmt::Write as _;
+
+    let query = target.to_lowercase();
+    let listed = serde_json::from_str::<serde_json::Value>(ls_json).unwrap_or_default();
+    let names = listed["sessions"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|session| session["session"].as_str())
+        .collect::<Vec<_>>();
+    let mut hits = names
+        .iter()
+        .filter(|name| name.to_lowercase() == query)
+        .map(|name| (*name).to_owned())
+        .collect::<Vec<_>>();
+    if hits.is_empty() {
+        hits = names
+            .into_iter()
+            .filter(|name| name.to_lowercase().starts_with(&query))
+            .map(ToOwned::to_owned)
+            .collect();
+        hits.truncate(usize::from(hits.len() == 1));
+    }
+    let mut out = String::new();
+    for name in hits {
+        let _ = writeln!(out, "  herdr {name}   → maw herdr a {name}");
+    }
+    out
+}
+
+/// `attach_herdr_hint_text` over live herdr, empty when it is not installed:
+/// a missing plugin exits non-zero and must never change tmux attach's output.
+fn attach_herdr_hint_block(target: &str) -> String {
+    let listed = run_cli(&["herdr".to_owned(), "ls".to_owned(), "--json".to_owned()]);
+    if listed.code == 0 {
+        attach_herdr_hint_text(target, &listed.stdout)
+    } else {
+        String::new()
+    }
 }
 
 fn attach_alive_covers_name(alive: &BTreeSet<String>, name: &str) -> bool {
@@ -354,11 +468,17 @@ fn attach_picker_output(
     if attach_has_flag(options, ATTACH_FLAG_YES) && rows.len() == 1 {
         return attach_run_picker_row(target, rows[0].clone());
     }
+    // The plan JSON is a contract, so the hint stays out of it.
+    let herdr_hint = if json {
+        String::new()
+    } else {
+        attach_herdr_hint_block(target)
+    };
     if json || attach_has_flag(options, ATTACH_FLAG_PRINT) || !attach_stdin_is_terminal() {
         let stdout = if json {
             picker_render_json("attach", target, context, &rows)
         } else {
-            picker_render_text("attach", target, context, &rows)
+            picker_render_text("attach", target, context, &rows) + &herdr_hint
         };
         return Err(CliOutput {
             code: 1,
@@ -366,7 +486,7 @@ fn attach_picker_output(
             stderr: String::new(),
         });
     }
-    picker_prompt("attach", target, context, &rows).map_or_else(
+    picker_prompt("attach", target, context, &rows, &herdr_hint).map_or_else(
         || {
             Err(CliOutput {
                 code: 1,
@@ -481,9 +601,11 @@ fn picker_prompt(
     target: &str,
     context: &str,
     rows: &[PickerRow],
+    hint: &str,
 ) -> Option<PickerRow> {
     use std::io::Write as _;
-    eprint!("{}", picker_render_text(command, target, context, rows));
+    let listing = picker_render_text(command, target, context, rows);
+    eprint!("{listing}{hint}");
     let yes_hint = if rows.len() == 1 { ", Enter/y" } else { "" };
     loop {
         eprint!("pick [1-{}]{yes_hint} or q: ", rows.len());
@@ -1309,6 +1431,58 @@ mod attach_tests {
             ]),
             None,
             "fleet-squad tie keeps the picker"
+        );
+    }
+
+    #[test]
+    fn multiplexer_choice_defaults_to_tmux_and_names_a_bad_value() {
+        assert_eq!(multiplexer_choice(None), Ok(Multiplexer::Tmux));
+        assert_eq!(multiplexer_choice(Some("tmux")), Ok(Multiplexer::Tmux));
+        assert_eq!(multiplexer_choice(Some("herdr")), Ok(Multiplexer::Herdr));
+        let error = multiplexer_choice(Some("zellij")).unwrap_err();
+        assert!(error.contains("\"zellij\""), "{error}");
+        assert!(error.contains("expected \"tmux\" or \"herdr\""), "{error}");
+    }
+
+    #[test]
+    fn attach_herdr_argv_forwards_target_and_print_but_refuses_tmux_only_flags() {
+        assert_eq!(
+            attach_herdr_argv(&attach_strings(&["x", "--print"])),
+            Ok(attach_strings(&["herdr", "a", "x", "--print"]))
+        );
+        let refused = |flag: &str| attach_herdr_argv(&attach_strings(&["x", flag])).unwrap_err();
+        for flag in ["--readonly", "-r", "--plan-json", "--yes", "--alive"] {
+            assert!(
+                refused(flag).contains("is tmux-only; use maw tmux attach"),
+                "{flag}"
+            );
+        }
+        assert!(refused("--ssh-alias=m5").contains("--ssh-alias is tmux-only"));
+    }
+
+    // Zero-config hint (#993): the rows are merged from the plugin's own
+    // `ls --json` envelope, so the merge is asserted on a sample of it rather
+    // than on a live herdr.
+    #[test]
+    fn attach_herdr_hint_takes_exact_then_unique_prefix_and_nothing_else() {
+        let listed = r#"{"command":"ls","mode":"compact","scope":"herdr","json":true,"sessions":[{"session":"default","status":"active","panes":1,"agents":1},{"session":"digger-oracle","status":"active","panes":5,"agents":3},{"session":"digger-lab","status":"active","panes":2,"agents":1}]}"#;
+        assert_eq!(
+            attach_herdr_hint_text("digger-oracle", listed),
+            "  herdr digger-oracle   → maw herdr a digger-oracle\n"
+        );
+        assert_eq!(
+            attach_herdr_hint_text("def", listed),
+            "  herdr default   → maw herdr a default\n",
+            "a prefix hitting one session names it"
+        );
+        assert!(
+            attach_herdr_hint_text("digger", listed).is_empty(),
+            "a prefix hitting two sessions names neither"
+        );
+        assert!(attach_herdr_hint_text("zzz", listed).is_empty());
+        assert!(
+            attach_herdr_hint_text("digger-oracle", "herdr: not installed").is_empty(),
+            "non-JSON stdout must never reach the hint"
         );
     }
 

@@ -215,16 +215,20 @@ fn resolved_plugin_source_exposes_verb_source_and_pin_programmatically() {
         "maw plugin install Soul-Brews-Studio/maw-plugins/packages/maw-menubar"
     );
 
-    // Every baked fleet verb resolves, with the packages/<dir> source and
-    // no pin (the static table carries none).
+    // Every baked fleet verb resolves with no pin (the static table carries
+    // none). A third column holding a `/` is a plugin shipping from its own
+    // repo and is already the whole source; a bare dir is a packages/<dir> of
+    // the maw-plugins monorepo (#993).
     for (verb, plugin, dir) in KNOWN_FLEET_PLUGIN_VERBS {
         let resolved = resolve_plugin_source(verb).expect("fleet verb resolves");
         assert_eq!(resolved.verb, *verb);
         assert_eq!(resolved.plugin_name, *plugin);
-        assert_eq!(
-            resolved.source.as_deref(),
-            Some(format!("Soul-Brews-Studio/maw-plugins/packages/{dir}").as_str())
-        );
+        let expected = if dir.contains('/') {
+            (*dir).to_owned()
+        } else {
+            format!("Soul-Brews-Studio/maw-plugins/packages/{dir}")
+        };
+        assert_eq!(resolved.source.as_deref(), Some(expected.as_str()));
         assert_eq!(resolved.sha256, None);
     }
 

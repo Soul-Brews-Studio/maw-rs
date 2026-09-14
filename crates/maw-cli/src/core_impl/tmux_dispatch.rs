@@ -22,8 +22,11 @@ const TMUX_BUILTIN_SUBS: &[TmuxSubcommandEntry] = &[
         names: &["split"],
         handler: run_tmux_split,
     },
+    // `a` is the alias everywhere else in maw, and `maw tmux attach` is the
+    // escape hatch from the `multiplexer` config switch (#993) — the escape
+    // hatch has to be as quick to type as the thing it escapes.
     TmuxSubcommandEntry {
-        names: &["attach"],
+        names: &["attach", "a"],
         handler: run_attach_plan,
     },
 ];
@@ -159,5 +162,21 @@ fn run_tmux_split(argv: &[String]) -> CliOutput {
             stderr: String::new(),
         },
         Err(error) => command_target_error("tmux split", &error.message),
+    }
+}
+
+#[cfg(test)]
+mod tmux_dispatch_tests {
+    use super::*;
+
+    // #993: `maw tmux a` is the escape hatch from the `multiplexer` switch, so
+    // it has to route like `maw tmux attach` and not read as a typo. `--help`
+    // keeps the assertion off a live tmux.
+    #[test]
+    fn tmux_a_aliases_attach() {
+        let output = run_tmux_command(&["a".to_owned(), "--help".to_owned()]);
+        assert_eq!(output.code, 0, "{}{}", output.stdout, output.stderr);
+        assert_eq!(output.stdout, attach_usage_text());
+        assert!(output.stderr.is_empty(), "{}", output.stderr);
     }
 }
