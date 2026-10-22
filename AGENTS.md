@@ -1,3 +1,5 @@
+type: tool · product: maw · owner: Hephaestus
+
 # maw-rs agent contract
 
 Read this once before taking an issue. Keep changes small, verified, and sourced from repo truth.
