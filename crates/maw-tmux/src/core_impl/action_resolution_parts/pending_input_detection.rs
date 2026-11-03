@@ -116,7 +116,11 @@ fn prompt_line(line: &str) -> PromptLine {
         return PromptLine::None;
     }
     let input = input.trim_end();
-    if input.is_empty() {
+    // Codex renders this placeholder in an idle composer. It is not a draft,
+    // even though the prompt row is non-empty and the status bar follows it.
+    // Limit the exception to Codex's prompt marker and exact placeholder so
+    // ordinary typed input remains protected.
+    if input.is_empty() || (marker == '›' && input == "Ask Codex to do anything") {
         PromptLine::Empty
     } else {
         PromptLine::Pending(input.to_owned())

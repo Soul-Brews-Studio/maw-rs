@@ -11,6 +11,29 @@
         .join("\n");
         assert_eq!(pane_pending_input_from_capture(&idle_empty), None);
 
+        // Athena's idle Codex v0.153.4 capture: the composer always renders
+        // this placeholder, and the model/status row is the last visible row.
+        let idle_placeholder = [
+            "────────────────────────────────────────────────────────────────────────────────",
+            "",
+            "",
+            "› Ask Codex to do anything",
+            "",
+            "  gpt-5.6-sol low fast · ~/repos/nh/oracles/luffy",
+        ]
+        .join("\n");
+        assert_eq!(pane_pending_input_from_capture(&idle_placeholder), None);
+        assert!(!pane_input_pending_from_capture(&idle_placeholder));
+
+        let typed_draft = idle_placeholder.replace(
+            "› Ask Codex to do anything",
+            "› Explain this codebase",
+        );
+        assert_eq!(
+            pane_pending_input_from_capture(&typed_draft),
+            Some("Explain this codebase".to_owned())
+        );
+
         let pending = [
             "─ Worked for 20m 43s ─────────────────────────",
             "",
@@ -59,6 +82,22 @@
         ]
         .join("\n");
         assert_eq!(pane_pending_input_from_capture(&idle_empty), None);
+
+        // Synthetic shape from Sakura's 22:15 report: a weekly-limit notice
+        // remains after reset, while the current Claude composer is empty.
+        // Historical notice text and the status bar must not become a draft.
+        let idle_after_limit_notice = [
+            "You've reached your weekly limit",
+            "Your limit has reset; you can continue",
+            "────────────────────────────────────────",
+            "❯\u{a0}",
+            "────────────────────────────────────────",
+            "  🖥 mac-mini · Claude Sonnet",
+            "  📡 02-sakura:0",
+        ]
+        .join("\n");
+        assert_eq!(pane_pending_input_from_capture(&idle_after_limit_notice), None);
+        assert!(!pane_input_pending_from_capture(&idle_after_limit_notice));
 
         let pending = [
             "field report duplicate delivery 2x",
